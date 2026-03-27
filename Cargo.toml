@@ -1,0 +1,16 @@
+[package]
+name = "mdopus"
+version = "0.1.0"
+edition = "2024"
+build = "tests/harness/build.rs"
+autobenches = false
+autotests = false
+
+[dependencies]
+
+[build-dependencies]
+cc = "1"
+
+[[bin]]
+name = "mdopus-compare"
+path = "tests/harness/main.rs"
