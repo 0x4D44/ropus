@@ -1445,6 +1445,9 @@ impl OpusEncoder {
             mode = MODE_SILK_ONLY;
         }
 
+        // Store finalized mode for use in encode_frame_native
+        self.mode = mode;
+
         // --- Multi-frame handling ---
         let max_silk_frame = 3 * self.fs / 50; // 60ms
         let max_celt_frame = self.fs / 50; // 20ms
@@ -1460,7 +1463,7 @@ impl OpusEncoder {
                 frame_size,
                 data,
                 max_data_bytes,
-                out_data_bytes,
+                max_data_bytes,
                 lsb_depth,
                 mode,
                 bitrate_bps,
@@ -1479,7 +1482,7 @@ impl OpusEncoder {
             frame_size,
             data,
             max_data_bytes,
-            out_data_bytes,
+            max_data_bytes,
             is_silence,
             redundancy,
             celt_to_silk,
@@ -1965,10 +1968,12 @@ impl OpusEncoder {
 
             // --- Finalize or prepare for CELT ---
             if self.mode == MODE_SILK_ONLY {
+                let bits_before_done = enc.tell();
                 ret = (enc.tell() + 7) >> 3;
                 enc.done();
                 nb_compr_bytes = ret;
                 range_final = enc.get_rng();
+                eprintln!("[OPUS DEBUG] SILK bits={} nb_compr_bytes={}", bits_before_done, nb_compr_bytes);
             } else {
                 nb_compr_bytes = (max_data_bytes - 1) - redundancy_bytes;
                 enc.shrink(nb_compr_bytes as u32);
@@ -2161,11 +2166,14 @@ impl OpusEncoder {
         }
 
         // Strip trailing zeros (SILK-only, no redundancy)
+        let ret_before_strip = ret;
         if self.mode == MODE_SILK_ONLY && !redundancy {
             while ret > 2 && data[ret as usize - 1] == 0 {
                 ret -= 1;
             }
         }
+        eprintln!("[OPUS DEBUG] ret_before_strip={} ret_after_strip={} data[0..min(ret,16)]={:02x?}",
+            ret_before_strip, ret, &data[..ret.min(16) as usize]);
 
         // --- CBR padding ---
         if self.use_vbr == 0 && ret < orig_max_data_bytes {

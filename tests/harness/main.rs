@@ -334,19 +334,87 @@ fn c_decode(encoded: &[u8], sample_rate: i32, channels: i32) -> Vec<i16> {
 // ---------------------------------------------------------------------------
 
 fn rust_encode(
-    _pcm: &[i16],
-    _sample_rate: i32,
-    _channels: i32,
-    _bitrate: i32,
-    _complexity: i32,
+    pcm: &[i16],
+    sample_rate: i32,
+    channels: i32,
+    bitrate: i32,
+    complexity: i32,
 ) -> Vec<u8> {
-    eprintln!("NOTE: Rust encoder not yet implemented, returning empty");
-    Vec::new()
+    use mdopus::opus::encoder::{OpusEncoder, OPUS_APPLICATION_AUDIO};
+
+    let mut enc = match OpusEncoder::new(sample_rate, channels, OPUS_APPLICATION_AUDIO) {
+        Ok(e) => e,
+        Err(code) => {
+            eprintln!("ERROR: Rust OpusEncoder::new failed: {}", code);
+            return Vec::new();
+        }
+    };
+    enc.set_bitrate(bitrate);
+    enc.set_complexity(complexity);
+    enc.set_vbr(0); // CBR for deterministic output
+
+    let frame_size = (sample_rate / 50) as usize; // 20ms frames
+    let samples_per_frame = frame_size * channels as usize;
+    let max_packet = 4000;
+    let mut output = Vec::new();
+    let mut packet = vec![0u8; max_packet];
+
+    let mut pos = 0;
+    while pos + samples_per_frame <= pcm.len() {
+        match enc.encode(&pcm[pos..pos + samples_per_frame], frame_size as i32,
+                         &mut packet, max_packet as i32) {
+            Ok(ret) => {
+                let ret = ret as usize;
+                output.extend_from_slice(&(ret as u16).to_le_bytes());
+                output.extend_from_slice(&packet[..ret]);
+            }
+            Err(code) => {
+                eprintln!("ERROR: Rust encode failed at frame {}: {}", pos / samples_per_frame, code);
+                return output; // Return partial output for debugging
+            }
+        }
+        pos += samples_per_frame;
+    }
+    output
 }
 
-fn rust_decode(_encoded: &[u8], _sample_rate: i32, _channels: i32) -> Vec<i16> {
-    eprintln!("NOTE: Rust decoder not yet implemented, returning empty");
-    Vec::new()
+fn rust_decode(encoded: &[u8], sample_rate: i32, channels: i32) -> Vec<i16> {
+    use mdopus::opus::decoder::OpusDecoder;
+
+    let mut dec = match OpusDecoder::new(sample_rate, channels) {
+        Ok(d) => d,
+        Err(code) => {
+            eprintln!("ERROR: Rust OpusDecoder::new failed: {}", code);
+            return Vec::new();
+        }
+    };
+
+    let frame_size = (sample_rate / 50) as usize; // 20ms
+    let mut pcm = vec![0i16; frame_size * channels as usize];
+    let mut output = Vec::new();
+
+    let mut pos = 0;
+    while pos + 2 <= encoded.len() {
+        let pkt_len = u16::from_le_bytes([encoded[pos], encoded[pos + 1]]) as usize;
+        pos += 2;
+        if pos + pkt_len > encoded.len() {
+            eprintln!("ERROR: truncated packet at offset {}", pos);
+            break;
+        }
+
+        match dec.decode(Some(&encoded[pos..pos + pkt_len]), &mut pcm,
+                         frame_size as i32, false) {
+            Ok(ret) => {
+                output.extend_from_slice(&pcm[..ret as usize * channels as usize]);
+            }
+            Err(code) => {
+                eprintln!("ERROR: Rust decode failed at packet offset {}: {}", pos, code);
+                return output; // Return partial for debugging
+            }
+        }
+        pos += pkt_len;
+    }
+    output
 }
 
 // ---------------------------------------------------------------------------

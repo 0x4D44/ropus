@@ -576,9 +576,9 @@ pub fn remove_doubling(
     yy_lookup[0] = xx;
     let mut yy = xx;
     for i in 1..=(maxperiod as usize) {
-        // Slide window: add x[-i]², subtract x[N-i]²
-        yy = yy + mult16_16(x[base - i], x[base - i])
-               - mult16_16(x[base + n - i], x[base + n - i]);
+        // Slide window: add x[-i]², subtract x[N-i]² (wrapping matches C)
+        yy = yy.wrapping_add(mult16_16(x[base - i], x[base - i]))
+               .wrapping_sub(mult16_16(x[base + n - i], x[base + n - i]));
         yy_lookup[i] = max32(0, yy);
     }
 
@@ -614,8 +614,8 @@ pub fn remove_doubling(
             &x[base - t1b as usize..],
             n,
         );
-        let xy_avg = half32(xy_new + xy2);
-        let yy_avg = half32(yy_lookup[t1 as usize] + yy_lookup[t1b as usize]);
+        let xy_avg = half32(xy_new.wrapping_add(xy2));
+        let yy_avg = half32(yy_lookup[t1 as usize].wrapping_add(yy_lookup[t1b as usize]));
         let g1 = compute_pitch_gain(xy_avg, xx, yy_avg);
 
         // Continuity bias: favor pitches close to the previous frame's pitch
@@ -674,12 +674,12 @@ pub fn remove_doubling(
     }
 
     let offset;
-    if (xcorr_arr[2] - xcorr_arr[0])
-        > mult16_32_q15(qconst16(0.7, 15), xcorr_arr[1] - xcorr_arr[0])
+    if xcorr_arr[2].wrapping_sub(xcorr_arr[0])
+        > mult16_32_q15(qconst16(0.7, 15), xcorr_arr[1].wrapping_sub(xcorr_arr[0]))
     {
         offset = 1;
-    } else if (xcorr_arr[0] - xcorr_arr[2])
-        > mult16_32_q15(qconst16(0.7, 15), xcorr_arr[1] - xcorr_arr[2])
+    } else if xcorr_arr[0].wrapping_sub(xcorr_arr[2])
+        > mult16_32_q15(qconst16(0.7, 15), xcorr_arr[1].wrapping_sub(xcorr_arr[2]))
     {
         offset = -1;
     } else {

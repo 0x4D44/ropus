@@ -345,7 +345,7 @@ pub(crate) fn clt_mdct_forward(
     stride: i32,
     fft_state: &KissFftState,
 ) {
-    let n = (960 >> shift) as usize;
+    let n = fft_state.nfft as usize * 4;
     let n2 = n >> 1;
     let n4 = n >> 2;
     let ov = overlap as usize;
@@ -354,56 +354,56 @@ pub(crate) fn clt_mdct_forward(
     let scale_shift = fft_state.scale_shift as i32 - 1;
 
     // Step 1: Window, shuffle, fold into f[0..N/2-1]
+    // Matches C clt_mdct_forward_c() using signed index arithmetic.
     let mut f = vec![0i32; n2];
     {
-        let half_ov = ov >> 1;
+        let half_ov = (ov >> 1) as i32;
+        let n2i = n2 as i32;
+        let n4i = n4 as i32;
+        let ov_quarter = ((ov as i32) + 3) >> 2;
+
         let mut yp = 0usize;
         let mut xp1 = half_ov;
-        let mut xp2 = n2 - 1 + half_ov;
+        let mut xp2 = n2i - 1 + half_ov;
         let mut wp1 = half_ov;
-        let mut wp2 = half_ov;
+        let mut wp2 = half_ov - 1;
 
         // First region: overlap windowed
-        let ov_quarter = (ov + 3) >> 2;
         for _i in 0..ov_quarter {
-            if wp2 == 0 { break; }
-            wp2 -= 1;
-            let w1 = window[wp1] as i32;
-            let w2 = window[wp2] as i32;
-            // S_MUL = MULT16_32_Q15 for non-QEXT
-            f[yp] = mult16_32_q15(w2, input[xp1 + n2]) + mult16_32_q15(w1, input[xp2]);
-            f[yp + 1] = mult16_32_q15(w1, input[xp1]) - mult16_32_q15(w2, input[xp2.wrapping_sub(n2)]);
+            let w1 = window[wp1 as usize] as i32;
+            let w2 = window[wp2 as usize] as i32;
+            f[yp] = mult16_32_q15(w2, input[(xp1 + n2i) as usize]) + mult16_32_q15(w1, input[xp2 as usize]);
+            f[yp + 1] = mult16_32_q15(w1, input[xp1 as usize]) - mult16_32_q15(w2, input[(xp2 - n2i) as usize]);
             xp1 += 2;
-            if xp2 >= 2 { xp2 -= 2; } else { xp2 = 0; }
+            xp2 -= 2;
             wp1 += 2;
-            if wp2 >= 2 { wp2 -= 2; } else { wp2 = 0; }
+            wp2 -= 2;
             yp += 2;
         }
 
         // Middle region: no windowing
-        let mid_end = n4 - ov_quarter;
         let mut i = ov_quarter;
-        while i < mid_end {
-            f[yp] = input[xp2];
-            f[yp + 1] = input[xp1];
+        while i < n4i - ov_quarter {
+            f[yp] = input[xp2 as usize];
+            f[yp + 1] = input[xp1 as usize];
             xp1 += 2;
-            if xp2 >= 2 { xp2 -= 2; }
+            xp2 -= 2;
             yp += 2;
             i += 1;
         }
 
         // Last region: overlap windowed (tail)
         wp1 = 0;
-        wp2 = ov - 1;
-        while i < n4 {
-            let w1 = window[wp1] as i32;
-            let w2 = window[wp2] as i32;
-            f[yp] = -mult16_32_q15(w1, input[xp1.wrapping_sub(n2)]) + mult16_32_q15(w2, input[xp2]);
-            f[yp + 1] = mult16_32_q15(w2, input[xp1]) + mult16_32_q15(w1, input[xp2 + n2]);
+        wp2 = ov as i32 - 1;
+        while i < n4i {
+            let w1 = window[wp1 as usize] as i32;
+            let w2 = window[wp2 as usize] as i32;
+            f[yp] = -mult16_32_q15(w1, input[(xp1 - n2i) as usize]) + mult16_32_q15(w2, input[xp2 as usize]);
+            f[yp + 1] = mult16_32_q15(w2, input[xp1 as usize]) + mult16_32_q15(w1, input[(xp2 + n2i) as usize]);
             xp1 += 2;
-            if xp2 >= 2 { xp2 -= 2; }
+            xp2 -= 2;
             wp1 += 2;
-            if wp2 >= 2 { wp2 -= 2; }
+            wp2 -= 2;
             yp += 2;
             i += 1;
         }
@@ -532,7 +532,7 @@ fn compute_mdcts(
                 mode.window,
                 overlap,
                 shift,
-                if short_blocks != 0 { b } else { 1 },
+                1, // stride=1 into temp buffer; real stride applied in copy below
                 fft_st,
             );
             // Copy with stride
@@ -688,7 +688,7 @@ fn transient_analysis(
         for i in 0..len2 {
             let val = sround16(tmp[i], 2);
             let e = mult16_16(val, val);
-            accum = accum - shr32(accum, forward_shift) + e;
+            accum = accum.wrapping_sub(shr32(accum, forward_shift)).wrapping_add(e);
             forward[i] = accum;
         }
 
@@ -698,7 +698,7 @@ fn transient_analysis(
         for i in (0..len2).rev() {
             let val = sround16(tmp[i], 2);
             let e = mult16_16(val, val);
-            accum = accum - shr32(accum, 3) + e;
+            accum = accum.wrapping_sub(shr32(accum, 3)).wrapping_add(e);
             backward[i] = accum;
         }
 
@@ -707,7 +707,7 @@ fn transient_analysis(
         for i in 0..len2 {
             let f = forward[i].max(1);
             let b = backward[i].max(1);
-            let id = (128 * f / (f + b)).max(0).min(127) as usize;
+            let id = (128i64 * f as i64 / (f as i64 + b as i64)).max(0).min(127) as usize;
             unmask += INV_TABLE[id] as i32;
         }
 
@@ -738,9 +738,9 @@ fn transient_analysis(
     }
 
     // Compute tf_estimate for VBR
-    tf_max = (celt_sqrt(27 * mask_metric.max(0).min(600)) - 42).max(0);
-    let tf_tmp = mult16_16(qconst16(0.0069, 15), 14 * tf_max.min(163));
-    let tf_tmp2 = shl32(tf_tmp, 14) - qconst32(0.139, 28);
+    tf_max = (celt_sqrt(27 * mask_metric.max(0)) - 42).max(0);
+    let tf_tmp = mult16_16(qconst16(0.0069, 14), tf_max.min(163));
+    let tf_tmp2 = shl32(tf_tmp, 14).wrapping_sub(qconst32(0.139, 28));
     *tf_estimate = celt_sqrt(tf_tmp2.max(0));
 
     is_transient
@@ -1265,9 +1265,10 @@ fn dynalloc_analysis(
             offsets[i] = offsets[i].max(surr_boost);
         }
 
-        // Importance based on follower level
-        let follow_norm = (follower[i] >> (DB_SHIFT - 2)).max(-4).min(4);
-        importance[i] = 13 * celt_exp2(follow_norm.min(4) << (DB_SHIFT - 2)).max(1);
+        // Importance based on follower level (C: PSHR32(13*celt_exp2_db(MIN(follower,4.f)),16))
+        let follow_clamped = follower[i].min(4 << DB_SHIFT);
+        let exp_val = celt_exp2(follow_clamped.min(4 << DB_SHIFT));
+        importance[i] = (13i64 * exp_val as i64 >> 16).max(1) as i32;
         spread_weight[i] = (width << lm).max(1);
     }
 
@@ -1412,7 +1413,7 @@ fn run_prefilter(
     let ds_len = pitch_buf_len / 2;
     let mut x_lp = vec![0i32; ds_len];
     let input_refs: [&[i32]; 1] = [&pitch_buf];
-    pitch_downsample(&input_refs, &mut x_lp, pitch_buf_len, 1, 2);
+    pitch_downsample(&input_refs, &mut x_lp, ds_len, 1, 2);
 
     // Coarse pitch search
     let mut t0 = pitch_search(
@@ -1780,7 +1781,7 @@ pub fn celt_encode_with_ec(
         // Encode pitch octave + fine period
         let octave = celt_ilog2(pitch_index) - 5;
         enc_ref.encode_uint(octave.max(0) as u32, 6);
-        let fine = pitch_index - (16 << octave);
+        let fine = pitch_index.wrapping_sub(16 << octave);
         enc_ref.encode_bits(fine as u32, (4 + octave) as u32);
         // Encode gain (3 bits)
         enc_ref.encode_bits(qg as u32, 3);

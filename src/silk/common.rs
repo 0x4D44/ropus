@@ -221,7 +221,7 @@ pub fn silk_bwexpander_32(ar: &mut [i32], d: usize, mut chirp_q16: i32) {
     let chirp_minus_one_q16 = chirp_q16 - 65536;
     for i in 0..d {
         ar[i] = mult32_32_q16(chirp_q16, ar[i]);
-        chirp_q16 += (chirp_q16 as i64 * chirp_minus_one_q16 as i64 >> 16) as i32;
+        chirp_q16 = chirp_q16.wrapping_add((chirp_q16 as i64 * chirp_minus_one_q16 as i64 >> 16) as i32);
     }
 }
 
@@ -646,7 +646,7 @@ pub fn silk_add_sat16(a: i16, b: i16) -> i16 {
     a.saturating_add(b)
 }
 
-/// Round shift: `(a + (1 << (shift-1))) >> shift`.
+/// Round shift: `(a + (1 << (shift-1))) >> shift`. Wrapping addition matches C.
 #[inline(always)]
 pub fn silk_rshift_round(a: i32, shift: i32) -> i32 {
     if shift <= 0 {
@@ -654,7 +654,7 @@ pub fn silk_rshift_round(a: i32, shift: i32) -> i32 {
     } else if shift >= 32 {
         0
     } else {
-        (a + (1 << (shift - 1))) >> shift
+        a.wrapping_add(1 << (shift - 1)) >> shift
     }
 }
 
@@ -670,6 +670,26 @@ pub fn silk_smlawb(a: i32, b: i32, c: i16) -> i32 {
 #[inline(always)]
 pub fn silk_smulwb(a: i32, b: i16) -> i32 {
     ((a as i64 * b as i64) >> 16) as i32
+}
+
+/// `silk_SMULWB` variant taking i32 and extracting low 16 bits.
+#[inline(always)]
+pub fn silk_smulwb_i32(a: i32, b: i32) -> i32 {
+    ((a as i64 * (b as i16 as i64)) >> 16) as i32
+}
+
+/// `silk_SMLAWB` variant taking i32 c and extracting low 16 bits.
+/// Matches C: `silk_SMLAWB(a32, b32, c32)` = `a + (b * (int16)c) >> 16`.
+#[inline(always)]
+pub fn silk_smlawb_i32(a: i32, b: i32, c: i32) -> i32 {
+    a + ((b as i64 * (c as i16 as i64)) >> 16) as i32
+}
+
+/// `silk_SMLAWT(a32, b32, c32)` = `a + (b * (c >> 16)) >> 16`.
+/// Matches C: `silk_SMLAWT`.
+#[inline(always)]
+pub fn silk_smlawt(a: i32, b: i32, c: i32) -> i32 {
+    a + ((b as i64 * ((c >> 16) as i64)) >> 16) as i32
 }
 
 /// Signed multiply word-by-word: `(a * b) >> 16`.
@@ -714,6 +734,153 @@ pub fn silk_rshift(a: i32, shift: i32) -> i32 {
 #[inline(always)]
 pub fn silk_add_lshift32(a: i32, b: i32, shift: i32) -> i32 {
     a + shl32(b, shift)
+}
+
+/// `silk_ADD_RSHIFT32(a, b, shift)`: `a + (b >> shift)`.
+#[inline(always)]
+pub fn silk_add_rshift32(a: i32, b: i32, shift: i32) -> i32 {
+    a + (b >> shift)
+}
+
+/// `silk_SUB_RSHIFT32(a, b, shift)`: `a - (b >> shift)`.
+#[inline(always)]
+pub fn silk_sub_rshift32(a: i32, b: i32, shift: i32) -> i32 {
+    a - (b >> shift)
+}
+
+/// `silk_SMMUL(a, b)`: upper 32 bits of 64-bit product `(a * b) >> 32`.
+#[inline(always)]
+pub fn silk_smmul(a: i32, b: i32) -> i32 {
+    ((a as i64 * b as i64) >> 32) as i32
+}
+
+/// `silk_SMLAWW(a, b, c)`: `a + ((b * c) >> 16)` (32×32 MAC >> 16).
+#[inline(always)]
+pub fn silk_smlaww(a: i32, b: i32, c: i32) -> i32 {
+    a + ((b as i64 * c as i64) >> 16) as i32
+}
+
+/// `silk_SMLABB_ovflw(a, b, c)`: wrapping `a + (i16)b * (i16)c`.
+#[inline(always)]
+pub fn silk_smlabb_ovflw(a: i32, b: i32, c: i32) -> i32 {
+    (a as u32).wrapping_add(((b as i16 as i32) * (c as i16 as i32)) as u32) as i32
+}
+
+/// `silk_DIV32_varQ(a32, b32, q_res)`: divide with variable Q result.
+/// Returns `(a32 << q_res) / b32` with overflow protection.
+#[inline(always)]
+pub fn silk_div32_varq(a32: i32, b32: i32, q_res: i32) -> i32 {
+    let a_headrm = (if a32 >= 0 { a32 } else { !a32 }).leading_zeros() as i32 - 1;
+    let a32_nrm = a32 << a_headrm;
+    let b_headrm = (if b32 >= 0 { b32 } else { !b32 }).leading_zeros() as i32 - 1;
+    let b32_nrm = b32 << b_headrm;
+    let b32_inv = ((i32::MAX >> 2) / (b32_nrm >> 16)) << 16;
+    let result = silk_smmul(a32_nrm, b32_inv);
+    let lshift = q_res - a_headrm + b_headrm + 1;
+    if lshift < 0 {
+        silk_rshift(result, -lshift)
+    } else if lshift < 32 {
+        silk_lshift_sat32(result, lshift)
+    } else {
+        0
+    }
+}
+
+/// `silk_ADD_POS_SAT32(a, b)`: saturating add for positive values.
+#[inline(always)]
+pub fn silk_add_pos_sat32(a: i32, b: i32) -> i32 {
+    let result = a as u32 + b as u32;
+    if result & 0x80000000 != 0 { i32::MAX } else { result as i32 }
+}
+
+/// `silk_MUL(a, b)`: plain 32-bit multiply.
+#[inline(always)]
+pub fn silk_mul(a: i32, b: i32) -> i32 {
+    a * b
+}
+
+/// `silk_LSHIFT32(a, shift)` alias.
+#[inline(always)]
+pub fn silk_lshift32(a: i32, shift: i32) -> i32 {
+    shl32(a, shift)
+}
+
+/// `silk_RSHIFT32(a, shift)` alias.
+#[inline(always)]
+pub fn silk_rshift32(a: i32, shift: i32) -> i32 {
+    a >> shift
+}
+
+/// `silk_RSHIFT64(a, shift)`.
+#[inline(always)]
+pub fn silk_rshift64(a: i64, shift: i32) -> i64 {
+    a >> shift
+}
+
+/// `silk_LSHIFT64(a, shift)`.
+#[inline(always)]
+pub fn silk_lshift64(a: i64, shift: i32) -> i64 {
+    a << shift
+}
+
+/// `silk_SMULL(a, b)`: 32×32 → 64 multiply.
+#[inline(always)]
+pub fn silk_smull(a: i32, b: i32) -> i64 {
+    a as i64 * b as i64
+}
+
+/// `silk_abs_int32(a)`.
+#[inline(always)]
+pub fn silk_abs_int32(a: i32) -> i32 {
+    if a < 0 { -a } else { a }
+}
+
+/// `silk_CHECK_FIT32(a)`: truncate i64 to i32.
+#[inline(always)]
+pub fn silk_check_fit32(a: i64) -> i32 {
+    a as i32
+}
+
+/// `silk_CHECK_FIT16(a)`: truncate i32 to i16.
+#[inline(always)]
+pub fn silk_check_fit16(a: i32) -> i16 {
+    a as i16
+}
+
+/// `silk_SAT16(a)`: saturate to i16 range.
+#[inline(always)]
+pub fn silk_sat16(a: i32) -> i32 {
+    if a > 32767 { 32767 } else if a < -32768 { -32768 } else { a }
+}
+
+/// `silk_DIV32_16(a, b)`: i32 / i16.
+#[inline(always)]
+pub fn silk_div32_16(a: i32, b: i32) -> i32 {
+    a / b
+}
+
+/// `silk_RSHIFT_ROUND(a, shift)`.
+#[inline(always)]
+pub fn silk_rshift_round_fn(a: i32, shift: i32) -> i32 {
+    if shift <= 0 { a } else { (a + (1 << (shift - 1))) >> shift }
+}
+
+/// `silk_RSHIFT_ROUND64(a, shift)`.
+#[inline(always)]
+pub fn silk_rshift_round64(a: i64, shift: i32) -> i64 {
+    if shift <= 0 { a } else { (a + (1i64 << (shift - 1))) >> shift }
+}
+
+/// `silk_CLZ64(x)`: count leading zeros in i64.
+#[inline(always)]
+pub fn silk_clz64_fn(x: i64) -> i32 {
+    if x == 0 { 64 } else { (x as u64).leading_zeros() as i32 }
+}
+
+/// `silk_LIMIT(val, min, max)`.
+#[inline(always)]
+pub fn silk_limit(val: i32, min_val: i32, max_val: i32) -> i32 {
+    if val < min_val { min_val } else if val > max_val { max_val } else { val }
 }
 
 // ===========================================================================

@@ -37,10 +37,10 @@ pub fn isqrt32(mut val: u32) -> u32 {
 // Integer log2
 // ===========================================================================
 
-/// Integer log2. Returns `EC_ILOG(x) - 1`. Undefined for x <= 0.
+/// Integer log2. Returns `EC_ILOG(x) - 1`. Safe for x <= 0 (returns 0).
 #[inline(always)]
 pub fn celt_ilog2(x: i32) -> i32 {
-    debug_assert!(x > 0, "celt_ilog2: x must be > 0");
+    if x <= 0 { return 0; }
     ec_ilog(x as u32) - 1
 }
 

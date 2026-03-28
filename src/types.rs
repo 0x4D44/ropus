@@ -348,10 +348,10 @@ pub fn mult16_16su(a: i32, b: i32) -> i32 {
     (a as i16 as i32) * (b as u16 as i32)
 }
 
-/// 16×16 multiply-accumulate.
+/// 16×16 multiply-accumulate (wrapping, matches C overflow semantics).
 #[inline(always)]
 pub fn mac16_16(c: i32, a: i32, b: i32) -> i32 {
-    c + mult16_16(a, b)
+    c.wrapping_add(mult16_16(a, b))
 }
 
 // --- Shifted 16×16 multiplies ---

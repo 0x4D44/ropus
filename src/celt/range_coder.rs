@@ -79,6 +79,25 @@ fn tell_frac_impl(nbits_total: i32, rng: u32) -> u32 {
 // RangeEncoder
 // ============================================================================
 
+/// Snapshot of a `RangeEncoder`'s scalar state (everything except the buffer).
+/// Used by the SILK rate control loop to save/restore the encoder state.
+#[derive(Clone)]
+pub struct RangeEncoderSnapshot {
+    pub storage: u32,
+    pub end_offs: u32,
+    pub end_window: u32,
+    pub nend_bits: i32,
+    pub nbits_total: i32,
+    pub offs: u32,
+    pub rng: u32,
+    pub val: u32,
+    pub rem: i32,
+    pub ext: u32,
+    pub error: i32,
+    /// Saved front-of-buffer data (range-coded bytes, up to `offs`).
+    pub buf_front: Vec<u8>,
+}
+
 /// Range encoder. Writes entropy-coded symbols into a byte buffer.
 ///
 /// Corresponds to `ec_enc` (typedef for `ec_ctx`) in the C reference.
@@ -136,6 +155,44 @@ impl<'a> RangeEncoder<'a> {
     #[inline(always)]
     pub fn range_bytes(&self) -> u32 {
         self.offs
+    }
+
+    /// Save a snapshot of the encoder state (scalars + front buffer).
+    /// Matches C `memcpy(&sRangeEnc_copy, psRangeEnc, sizeof(ec_enc))` +
+    /// buffer save.
+    pub fn save_snapshot(&self) -> RangeEncoderSnapshot {
+        let front_len = self.offs as usize;
+        RangeEncoderSnapshot {
+            storage: self.storage,
+            end_offs: self.end_offs,
+            end_window: self.end_window,
+            nend_bits: self.nend_bits,
+            nbits_total: self.nbits_total,
+            offs: self.offs,
+            rng: self.rng,
+            val: self.val,
+            rem: self.rem,
+            ext: self.ext,
+            error: self.error,
+            buf_front: self.buf[..front_len].to_vec(),
+        }
+    }
+
+    /// Restore from a previously saved snapshot.
+    pub fn restore_snapshot(&mut self, snap: &RangeEncoderSnapshot) {
+        self.storage = snap.storage;
+        self.end_offs = snap.end_offs;
+        self.end_window = snap.end_window;
+        self.nend_bits = snap.nend_bits;
+        self.nbits_total = snap.nbits_total;
+        self.offs = snap.offs;
+        self.rng = snap.rng;
+        self.val = snap.val;
+        self.rem = snap.rem;
+        self.ext = snap.ext;
+        self.error = snap.error;
+        let front_len = snap.buf_front.len();
+        self.buf[..front_len].copy_from_slice(&snap.buf_front);
     }
 
     /// Returns the current internal range value.
@@ -238,11 +295,11 @@ impl<'a> RangeEncoder<'a> {
     pub fn encode(&mut self, fl: u32, fh: u32, ft: u32) {
         let r = self.rng / ft;
         if fl > 0 {
-            self.val += self.rng - r * (ft - fl);
-            self.rng = r * (fh - fl);
+            self.val = self.val.wrapping_add(self.rng.wrapping_sub(r.wrapping_mul(ft.wrapping_sub(fl))));
+            self.rng = r.wrapping_mul(fh.wrapping_sub(fl));
         } else {
             // First-symbol optimization: keep the division residual in the range
-            self.rng -= r * (ft - fh);
+            self.rng = self.rng.wrapping_sub(r.wrapping_mul(ft.wrapping_sub(fh)));
         }
         self.normalize();
     }
