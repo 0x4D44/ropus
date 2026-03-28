@@ -4590,10 +4590,10 @@ pub fn silk_process_gains_fix(
 
     ps_enc_ctrl.lambda_q10 = ((LAMBDA_OFFSET * 1024.0) + 0.5) as i32
         + silk_smulbb(((LAMBDA_DELAYED_DECISIONS * 1024.0) + 0.5) as i32, ps_enc.s_cmn.n_states_delayed_decision)
-        + silk_smulwb(((LAMBDA_SPEECH_ACT * 262144.0) + 0.5) as i16 as i32, ps_enc.s_cmn.speech_activity_q8 as i16)
-        + silk_smulwb(((LAMBDA_INPUT_QUALITY * 4096.0) + 0.5) as i16 as i32, ps_enc_ctrl.input_quality_q14 as i16)
-        + silk_smulwb(((LAMBDA_CODING_QUALITY * 4096.0) + 0.5) as i16 as i32, ps_enc_ctrl.coding_quality_q14 as i16)
-        + silk_smulwb(((LAMBDA_QUANT_OFFSET * 65536.0) + 0.5) as i16 as i32, quant_offset_q10 as i16);
+        + silk_smulwb(((LAMBDA_SPEECH_ACT * 262144.0) + 0.5) as i32, ps_enc.s_cmn.speech_activity_q8 as i16)
+        + silk_smulwb(((LAMBDA_INPUT_QUALITY * 4096.0) + 0.5) as i32, ps_enc_ctrl.input_quality_q14 as i16)
+        + silk_smulwb(((LAMBDA_CODING_QUALITY * 4096.0) + 0.5) as i32, ps_enc_ctrl.coding_quality_q14 as i16)
+        + silk_smulwb(((LAMBDA_QUANT_OFFSET * 65536.0) + 0.5) as i32, quant_offset_q10 as i16);
 }
 
 // ===========================================================================
@@ -4974,6 +4974,9 @@ pub fn silk_noise_shape_analysis_fix(
 
     // SNR adjustment
     let snr_adj_db_q7 = ps_enc.s_cmn.snr_db_q7;
+    eprintln!("[RS SNR INIT] SNR_dB_Q7={} speech_activity={} useCBR={} signalType={}",
+        ps_enc.s_cmn.snr_db_q7, ps_enc.s_cmn.speech_activity_q8,
+        ps_enc.s_cmn.use_cbr as i32, ps_enc.s_cmn.indices.signal_type);
     let input_quality_q14 = ((ps_enc.s_cmn.input_quality_bands_q15[0]
         + ps_enc.s_cmn.input_quality_bands_q15[1]) >> 2) as i32;
     let coding_quality_q14 = silk_sigm_q15(silk_rshift_round(snr_adj_db_q7 - ((20.0 * 128.0) as i32), 4)) >> 1;
@@ -4988,7 +4991,7 @@ pub fn silk_noise_shape_analysis_fix(
         let b_q8 = silk_smulwb_i32(b_q8 << 8, b_q8);
         snr_adj_db_q7 = silk_smlawb_i32(
             snr_adj_db_q7,
-            silk_smulbb(((-3.0 * 128.0) as i32) >> 5, b_q8), // BG_SNR_DECR_dB=3.0
+            silk_smulbb(((-2.0 * 128.0) as i32) >> 5, b_q8), // BG_SNR_DECR_dB=2.0
             silk_smulwb_i32((1 << 14) + input_quality_q14, coding_quality_q14),
         );
     }
@@ -4996,7 +4999,7 @@ pub fn silk_noise_shape_analysis_fix(
     if ps_enc.s_cmn.indices.signal_type as i32 == TYPE_VOICED {
         snr_adj_db_q7 = silk_smlawb_i32(
             snr_adj_db_q7,
-            ((3.0 * 256.0) as i32), // HARM_SNR_INCR_dB=3.0 in Q8
+            ((2.0 * 256.0) as i32), // HARM_SNR_INCR_dB=2.0 in Q8
             ps_enc.ltp_corr_q15,
         );
     } else {
@@ -5043,10 +5046,10 @@ pub fn silk_noise_shape_analysis_fix(
 
     // Bandwidth expansion
     let pred_gain_q16 = ps_enc_ctrl.pred_gain_q16;
-    let strength_q16 = silk_smulwb(imax(pred_gain_q16, 1), ((WHITE_NOISE_FRACTION * 65536.0) as i16));
+    let strength_q16 = silk_smulwb(imax(pred_gain_q16, 1), ((FIND_PITCH_WHITE_NOISE_FRACTION * 65536.0 + 0.5) as i16));
     let bw_exp_q16 = silk_div32_varq(
         ((BANDWIDTH_EXPANSION * 65536.0 + 0.5) as i32),
-        (1 << 16) + silk_smmul(strength_q16, strength_q16),
+        silk_smlaww((1 << 16), strength_q16, strength_q16),
         16,
     );
 
@@ -5115,6 +5118,7 @@ pub fn silk_noise_shape_analysis_fix(
         auto_corr[0] += imax(silk_smulwb(auto_corr[0] >> 4, ((SHAPE_WHITE_NOISE_FRACTION * (1 << 20) as f64) as i16)), 1);
 
         // Schur recursion
+        eprintln!("[RS NSHAPE] k={} scale={}", k, scale);
         let mut nrg = silk_schur64(&mut refl_coef_q16, &auto_corr, shaping_lpc_order);
 
         // Convert to AR coefficients
@@ -5131,6 +5135,7 @@ pub fn silk_noise_shape_analysis_fix(
         let tmp32 = silk_sqrt_approx(nrg);
         q_nrg >>= 1; // range: -6...15
         ps_enc_ctrl.gains_q16[k] = silk_lshift_sat32(tmp32, 16 - q_nrg);
+        eprintln!("[RS NSHAPE] k={} nrg={} Qnrg={} sqrt={} gain={} warping={}", k, nrg, q_nrg, tmp32, ps_enc_ctrl.gains_q16[k], ps_enc.s_cmn.warping_q16);
 
         // Adjust gain for warping
         if warping_q16 > 0 {
@@ -5174,7 +5179,7 @@ pub fn silk_noise_shape_analysis_fix(
         ((0.16 * 65536.0) + 0.5) as i16,
     ));
 
-    eprintln!("[SHAPE TRACE] snr_adj_db_q7={} gain_mult_q16={} gain_add_q16={} gains_before_tweaking={:?}",
+    eprintln!("[RS SHAPE TRACE] SNR_adj_dB_Q7={} gain_mult_Q16={} gain_add_Q16={} gains_before={:?}",
         snr_adj_db_q7, gain_mult_q16, gain_add_q16, &ps_enc_ctrl.gains_q16[..nb_subfr]);
 
     for k in 0..nb_subfr {
@@ -5490,6 +5495,17 @@ pub fn silk_encode_frame_fix(
                 };
 
                 // Encode indices
+                {
+                    let idx = &ps_enc.s_cmn.indices;
+                    eprintln!("[RS INDICES_PRE] sigtype={} qofftype={} gains=[{},{},{},{}] nlsf0={} nlsfR=[{},{},{},{},{},{},{},{},{},{}] interpQ2={} seed={}",
+                        idx.signal_type, idx.quant_offset_type,
+                        idx.gains_indices[0], idx.gains_indices[1], idx.gains_indices[2], idx.gains_indices[3],
+                        idx.nlsf_indices[0],
+                        idx.nlsf_indices[1], idx.nlsf_indices[2], idx.nlsf_indices[3], idx.nlsf_indices[4], idx.nlsf_indices[5],
+                        idx.nlsf_indices[6], idx.nlsf_indices[7], idx.nlsf_indices[8], idx.nlsf_indices[9], idx.nlsf_indices[10],
+                        idx.nlsf_interp_coef_q2, idx.seed);
+                    eprintln!("[RS EC_PRE_IDX] tell={} rng={} val={} offs={}", range_enc.tell(), range_enc.get_rng(), range_enc.get_val(), range_enc.range_bytes());
+                }
                 silk_encode_indices(
                     &ps_enc.s_cmn,
                     range_enc,
@@ -5497,6 +5513,7 @@ pub fn silk_encode_frame_fix(
                     false,
                     cond_coding,
                 );
+                eprintln!("[RS EC_POST_IDX] tell={} rng={} val={} offs={}", range_enc.tell(), range_enc.get_rng(), range_enc.get_val(), range_enc.range_bytes());
 
                 // Encode pulses
                 silk_encode_pulses(
@@ -5508,6 +5525,7 @@ pub fn silk_encode_frame_fix(
                 );
 
                 n_bits = range_enc.tell();
+                eprintln!("[RS EC_POST_PLS] tell={} rng={} val={} offs={}", range_enc.tell(), range_enc.get_rng(), range_enc.get_val(), range_enc.range_bytes());
 
                 // Damage control: last iteration, no lower bound, still over budget
                 if iter == max_iter && !found_lower && n_bits > max_bits {
