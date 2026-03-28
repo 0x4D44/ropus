@@ -1779,6 +1779,33 @@ impl OpusEncoder {
                 self.silk_mode.max_bits =
                     (max_data_bytes - 1) * 8 - if redundancy { redundancy_bytes * 8 + 8 } else { 0 };
 
+                if self.silk_mode.use_cbr != 0 {
+                    // When in CBR mode but encoding hybrid, switch SILK to
+                    // VBR with cap. Variations are absorbed by CELT/DRED.
+                    if self.mode == MODE_HYBRID {
+                        let other_bits = 0i16.max(
+                            (self.silk_mode.max_bits
+                                - self.silk_mode.bit_rate * frame_size / self.fs) as i16,
+                        );
+                        self.silk_mode.max_bits =
+                            0.max(self.silk_mode.max_bits - (other_bits as i32) * 3 / 4);
+                        self.silk_mode.use_cbr = 0;
+                    }
+                } else {
+                    // Constrained VBR
+                    if self.mode == MODE_HYBRID {
+                        let max_rate = compute_silk_rate_for_hybrid(
+                            self.silk_mode.max_bits * self.fs / frame_size,
+                            self.bandwidth,
+                            frame_size == self.fs / 50,
+                            self.use_vbr,
+                            self.silk_mode.use_in_band_fec,
+                            self.stream_channels,
+                        );
+                        self.silk_mode.max_bits = max_rate * frame_size / self.fs;
+                    }
+                }
+
                 // Prefill SILK on mode transition
                 if prefill != 0 {
                     if let Some(ref mut silk) = self.silk_enc {
