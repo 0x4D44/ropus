@@ -2003,6 +2003,11 @@ impl OpusEncoder {
                 nb_compr_bytes = ret;
                 range_final = enc.get_rng();
                 eprintln!("[OPUS DEBUG] SILK bits={} nb_compr_bytes={}", bits_before_done, nb_compr_bytes);
+                {
+                    let b = enc.buffer();
+                    eprintln!("[RS OPUS_ENC_DONE] ret={} rng={} buf=[{:02x},{:02x},{:02x},{:02x},{:02x},{:02x},{:02x},{:02x}]",
+                        ret, enc.get_rng(), b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
+                }
             } else {
                 nb_compr_bytes = (max_data_bytes - 1) - redundancy_bytes;
                 enc.shrink(nb_compr_bytes as u32);
@@ -2201,8 +2206,11 @@ impl OpusEncoder {
                 ret -= 1;
             }
         }
-        eprintln!("[OPUS DEBUG] ret_before_strip={} ret_after_strip={} data[0..min(ret,16)]={:02x?}",
-            ret_before_strip, ret, &data[..ret.min(16) as usize]);
+        {
+            let dbg_max = ret.min(16) as usize;
+            let hex: Vec<String> = data[..dbg_max].iter().map(|b| format!("{:02x}", b)).collect();
+            eprintln!("[RS OPUS_FINAL] ret={} data=[{}]", ret, hex.join(","));
+        }
 
         // --- CBR padding ---
         if self.use_vbr == 0 && ret < orig_max_data_bytes {

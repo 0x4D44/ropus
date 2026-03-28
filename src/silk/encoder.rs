@@ -5335,6 +5335,8 @@ pub fn silk_encode_frame_fix(
 
     ps_enc.s_cmn.indices.seed = ((ps_enc.s_cmn.frame_counter as u8) & 3) as i8;
     ps_enc.s_cmn.frame_counter += 1;
+    eprintln!("[RS FRAME_SEED] frameCounter={} seed={} nFramesEncoded={}",
+        ps_enc.s_cmn.frame_counter, ps_enc.s_cmn.indices.seed, ps_enc.s_cmn.n_frames_encoded);
 
     // x_frame points into x_buf at offset ltp_mem_length
     let x_frame_offset = ltp_mem;
@@ -5694,6 +5696,12 @@ pub fn silk_encode_frame_fix(
     // Payload size
     ps_enc.s_cmn.first_frame_after_reset = 0;
     *pn_bytes_out = (range_enc.tell() + 7) >> 3;
+    {
+        let buf = range_enc.buffer();
+        eprintln!("[RS FRAME_DONE] nbytes={} tell={} rng={} offs={} buf=[{:02x},{:02x},{:02x},{:02x},{:02x},{:02x},{:02x},{:02x}]",
+            *pn_bytes_out, range_enc.tell(), range_enc.get_rng(), range_enc.range_bytes(),
+            buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
+    }
 
     ret
 }
@@ -6137,11 +6145,75 @@ pub fn silk_encode(
         return SILK_NO_ERROR;
     }
 
-    // Prefill mode: just warm up filters, no output
+    // Prefill mode: warm up filters by calling encode_frame (matching C behavior).
+    // C's silk_Encode falls through to its while(1) encode loop during prefill,
+    // calling encode_frame for each frame of input. encode_frame handles prefill
+    // internally: it increments frame_counter, runs LP variable cutoff, updates
+    // x_buf, then returns early without entropy coding.
     if prefill_flag != 0 {
+        loop {
+            // Encode the buffered frame per channel (matches C: silk_encode_frame_Fxx)
+            for n in 0..n_channels_internal {
+                let mut dummy_bytes = 0i32;
+                silk_encode_frame_fix(
+                    &mut enc.state_fxx[n],
+                    &mut dummy_bytes,
+                    range_enc,
+                    CODE_INDEPENDENTLY,
+                    0,
+                    0,
+                );
+                enc.state_fxx[n].s_cmn.controlled_since_last_payload = 0;
+                enc.state_fxx[n].s_cmn.input_buf_ix = 0;
+                enc.state_fxx[n].s_cmn.n_frames_encoded += 1;
+            }
+
+            // Try to buffer next frame from remaining input (matches C while(1) loop)
+            if n_samples_remaining <= 0 {
+                break;
+            }
+
+            let mut n_stb = (frame_length - enc.state_fxx[0].s_cmn.input_buf_ix) as usize;
+            n_stb = n_stb.min(n_samples_to_buffer_max);
+            let n_sfi = if fs_khz * 1000 != 0 {
+                ((n_stb as i64 * enc_control.api_sample_rate as i64)
+                    / (fs_khz as i64 * 1000)) as usize
+            } else {
+                0
+            };
+            if n_sfi == 0 {
+                break;
+            }
+
+            for n in 0..n_channels_internal {
+                let api_in = &samples_in[samples_offset..];
+                let input: Vec<i16> = if enc_control.n_channels_api == 2 {
+                    (0..n_sfi).map(|i| api_in[i * 2 + n]).collect()
+                } else {
+                    api_in[..n_sfi].to_vec()
+                };
+                let mut buf = vec![0i16; n_stb];
+                silk_resampler_run(
+                    &mut enc.state_fxx[n].s_cmn.resampler_state,
+                    &mut buf,
+                    &input,
+                );
+                let buf_ix = enc.state_fxx[n].s_cmn.input_buf_ix as usize;
+                let copy_len = n_stb.min(MAX_FRAME_LENGTH + 2 - buf_ix);
+                enc.state_fxx[n].s_cmn.input_buf[buf_ix..buf_ix + copy_len]
+                    .copy_from_slice(&buf[..copy_len]);
+                enc.state_fxx[n].s_cmn.input_buf_ix += n_stb as i32;
+            }
+
+            samples_offset += n_sfi * enc_control.n_channels_api as usize;
+            n_samples_remaining -= n_sfi as i32;
+
+            if enc.state_fxx[0].s_cmn.input_buf_ix < frame_length {
+                break;
+            }
+        }
+
         for n in 0..n_channels_internal {
-            enc.state_fxx[n].s_cmn.input_buf_ix = 0;
-            enc.state_fxx[n].s_cmn.controlled_since_last_payload = 0;
             enc.state_fxx[n].s_cmn.prefill_flag = 0;
         }
         *n_bytes_out = 0;
@@ -6150,6 +6222,9 @@ pub fn silk_encode(
 
     // Encode LBRR data from previous packet (if any)
     if enc.state_fxx[0].s_cmn.n_frames_encoded == 0 {
+        eprintln!("[RS VAD_PLACEHOLDER] nFramesPkt={} nChInt={} lbrr_enabled={} tell_before={}",
+            n_frames_per_packet, n_channels_internal,
+            enc.state_fxx[0].s_cmn.lbrr_enabled, range_enc.tell());
         // LBRR flags
         if enc.state_fxx[0].s_cmn.lbrr_enabled != 0 {
             let _lbrr_flag0 = enc.state_fxx[0].s_cmn.lbrr_flag;
@@ -6251,6 +6326,7 @@ pub fn silk_encode(
         }
         if prefill_flag == 0 {
             let n_bits = ((n_frames_per_packet + 1) * n_channels_internal as i32) as u32;
+            eprintln!("[RS VAD_PATCH] flags={} nbits={} tell={}", flags, n_bits, range_enc.tell());
             range_enc.patch_initial_bits(flags, n_bits);
         }
 

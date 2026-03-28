@@ -202,6 +202,11 @@ impl<'a> RangeEncoder<'a> {
         self.rng
     }
 
+    /// Returns the current low end of the coding interval (debug).
+    pub fn get_val(&self) -> u32 {
+        self.val
+    }
+
     /// Reference to the output buffer.
     #[inline(always)]
     pub fn buffer(&self) -> &[u8] {
