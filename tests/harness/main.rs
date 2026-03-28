@@ -250,6 +250,7 @@ fn c_encode(pcm: &[i16], sample_rate: i32, channels: i32, bitrate: i32, complexi
         let mut packet = vec![0u8; max_packet];
 
         let mut pos = 0;
+        let mut frame_num = 0usize;
         while pos + samples_per_frame <= pcm.len() {
             let ret = bindings::opus_encode(
                 enc,
@@ -258,6 +259,10 @@ fn c_encode(pcm: &[i16], sample_rate: i32, channels: i32, bitrate: i32, complexi
                 packet.as_mut_ptr(),
                 max_packet as i32,
             );
+            if frame_num < 2 {
+                bindings::debug_dump_silk_indices(enc);
+            }
+            frame_num += 1;
             if ret < 0 {
                 eprintln!(
                     "ERROR: C opus_encode failed: {}",

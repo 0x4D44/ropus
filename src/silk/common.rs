@@ -126,45 +126,34 @@ pub fn silk_clz64(x: i64) -> i32 {
 
 /// Sigmoid function in Q15 domain. Input in Q5.
 /// Matches C: `silk_sigm_Q15`.
-pub fn silk_sigm_q15(x: i32) -> i32 {
-    if x <= 0 {
-        if x <= -6554 {
-            // For very negative inputs
+/// Approximate sigmoid function.
+/// Matches C: `silk_sigm_Q15` from sigm_Q15.c.
+/// Input is in Q5 format, output is in Q15 format.
+pub fn silk_sigm_q15(in_q5: i32) -> i32 {
+    if in_q5 < 0 {
+        let abs_in = -in_q5;
+        if abs_in >= 6 * 32 {
             0
         } else {
-            let y = -x;
-            let ind = (y >> 10) as usize;
-            if ind >= 6 { return 0; }
-            let frac_q10 = y & 0x3FF;
-            let val = SILK_SIGM_TAB[ind] as i32;
-            let next = if ind + 1 < SILK_SIGM_TAB.len() {
-                SILK_SIGM_TAB[ind + 1] as i32
-            } else {
-                0
-            };
-            // Linear interpolation
-            val - ((val - next) * frac_q10 >> 10)
+            let ind = (abs_in >> 5) as usize;
+            let frac = abs_in & 0x1F;
+            SIGM_LUT_NEG_Q15[ind] as i32 - (SIGM_LUT_SLOPE_Q10[ind] as i32 * frac)
         }
     } else {
-        if x >= 6554 {
+        if in_q5 >= 6 * 32 {
             32767
         } else {
-            let ind = (x >> 10) as usize;
-            if ind >= 6 { return 32767; }
-            let frac_q10 = x & 0x3FF;
-            let val = SILK_SIGM_TAB[ind] as i32;
-            let next = if ind + 1 < SILK_SIGM_TAB.len() {
-                SILK_SIGM_TAB[ind + 1] as i32
-            } else {
-                32767
-            };
-            32767 - val + ((val - next) * frac_q10 >> 10)
+            let ind = (in_q5 >> 5) as usize;
+            let frac = in_q5 & 0x1F;
+            SIGM_LUT_POS_Q15[ind] as i32 + (SIGM_LUT_SLOPE_Q10[ind] as i32 * frac)
         }
     }
 }
 
-/// Sigmoid lookup table (from sigm_Q15.c)
-const SILK_SIGM_TAB: [i16; 6] = [16384, 8812, 3906, 1554, 589, 213];
+/// Sigmoid lookup tables (from sigm_Q15.c)
+const SIGM_LUT_SLOPE_Q10: [i32; 6] = [237, 153, 73, 30, 12, 7];
+const SIGM_LUT_POS_Q15: [i32; 6] = [16384, 23955, 28861, 31213, 32178, 32548];
+const SIGM_LUT_NEG_Q15: [i32; 6] = [16384, 8812, 3906, 1554, 589, 219];
 
 // ===========================================================================
 // Log/Lin conversion (silk specific)
@@ -682,7 +671,7 @@ pub fn silk_smulwb_i32(a: i32, b: i32) -> i32 {
 /// Matches C: `silk_SMLAWB(a32, b32, c32)` = `a + (b * (int16)c) >> 16`.
 #[inline(always)]
 pub fn silk_smlawb_i32(a: i32, b: i32, c: i32) -> i32 {
-    a + ((b as i64 * (c as i16 as i64)) >> 16) as i32
+    a.wrapping_add(((b as i64 * (c as i16 as i64)) >> 16) as i32)
 }
 
 /// `silk_SMLAWT(a32, b32, c32)` = `a + (b * (c >> 16)) >> 16`.

@@ -96,10 +96,12 @@ pub fn clt_mdct_backward(
     let post_shift: i32;
     let fft_shift: i32;
     {
+        let input_len = input.len();
         let mut sumval: i32 = n2;
         let mut maxval: i32 = 0;
         for i in 0..n2 as usize {
-            let sample = input[i * stride as usize];
+            let idx = i * stride as usize;
+            let sample = if idx < input_len { input[idx] } else { 0 };
             maxval = max32(maxval, abs32(sample));
             sumval = add32_ovflw(sumval, abs32(shr32(sample, 11)));
         }
@@ -116,6 +118,7 @@ pub fn clt_mdct_backward(
     {
         let half_ov = (overlap >> 1) as usize;
         let st = l.kfft[shift as usize];
+        let input_len = input.len();
         let mut xp1_idx: usize = 0;                           // walks forward by 2*stride
         let mut xp2_idx: usize = (n2 - 1) as usize;           // walks backward
         // Note: xp1 and xp2 index into input[] with stride spacing
@@ -123,8 +126,10 @@ pub fn clt_mdct_backward(
 
         for i in 0..n4 as usize {
             let rev = st.bitrev[i] as usize;
-            let x1 = shl32_ovflw(input[xp1_idx * stride as usize], pre_shift);
-            let x2 = shl32_ovflw(input[xp2_idx * stride as usize], pre_shift);
+            let idx1 = xp1_idx * stride as usize;
+            let idx2 = xp2_idx * stride as usize;
+            let x1 = shl32_ovflw(if idx1 < input_len { input[idx1] } else { 0 }, pre_shift);
+            let x2 = shl32_ovflw(if idx2 < input_len { input[idx2] } else { 0 }, pre_shift);
 
             let yr = add32_ovflw(
                 s_mul(x2, trig[i] as i32),

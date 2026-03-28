@@ -877,18 +877,20 @@ fn silk_vad_get_noise_levels(px: &[i32; VAD_N_BANDS], vad: &mut SilkVadState) {
         } else if nrg < nl {
             VAD_NOISE_LEVEL_SMOOTH_COEF_Q16
         } else {
-            silk_smulwb(silk_smulww(inv_nrg, nl), (VAD_NOISE_LEVEL_SMOOTH_COEF_Q16 << 1) as i16) as i32
+            // C: silk_SMULWB(silk_SMULWW(inv_nrg, nl), VAD_NOISE_LEVEL_SMOOTH_COEF_Q16 << 1)
+            // silk_SMULWB takes i32,i32 and internally extracts low 16 bits of second arg
+            silk_smulwb_i32(silk_smulww(inv_nrg, nl), VAD_NOISE_LEVEL_SMOOTH_COEF_Q16 << 1)
         };
 
         // Initially faster smoothing
         let coef = imax(coef, min_coef);
 
         // Smooth inverse energies
-        vad.inv_nl[k] = silk_smlawb(vad.inv_nl[k], inv_nrg - vad.inv_nl[k], coef as i16) as i32;
-        vad.inv_nl[k] = imax(vad.inv_nl[k], 1);
+        // C: silk_SMLAWB(inv_NL[k], inv_nrg - inv_NL[k], coef)
+        vad.inv_nl[k] = silk_smlawb_i32(vad.inv_nl[k], inv_nrg - vad.inv_nl[k], coef);
 
         // Compute noise level by inverting again
-        let nl = i32::MAX / vad.inv_nl[k];
+        let nl = i32::MAX / imax(vad.inv_nl[k], 1);
 
         // Limit noise levels (guarantee 7 bits of head room)
         vad.nl[k] = imin(nl, 0x00FFFFFF);
@@ -994,53 +996,106 @@ pub fn silk_vad_get_sa_q8(ps_enc: &mut SilkEncoderState, p_in: &[i16]) -> i32 {
 
     // Get noise levels
     silk_vad_get_noise_levels(&xnrg, vad);
+    eprintln!("[VAD TRACE] xnrg={:?} nl={:?} inv_nl={:?}", xnrg, vad.nl, vad.inv_nl);
 
-    // Compute SNR per band and speech activity
-    let mut nrg_to_noise_ratio_q8 = [0i32; VAD_N_BANDS];
+    // Signal-plus-noise to noise ratio estimation
+    // Matches C: VAD.c lines 200-291
+    let mut sum_squared = 0i32;
     let mut input_tilt = 0i32;
+    let mut nrg_to_noise_ratio_q8 = [0i32; VAD_N_BANDS];
 
     for b in 0..VAD_N_BANDS {
-        // SNR = signal energy / noise level
-        nrg_to_noise_ratio_q8[b] = silk_div32_var_q(xnrg[b], vad.nl[b], 8);
-        // Smooth the ratio
-        vad.nrg_ratio_smth_q8[b] = vad.nrg_ratio_smth_q8[b]
-            + ((nrg_to_noise_ratio_q8[b] - vad.nrg_ratio_smth_q8[b]) >> 4);
+        let speech_nrg = xnrg[b] - vad.nl[b];
+        if speech_nrg > 0 {
+            // Divide, with sufficient resolution
+            if (xnrg[b] & 0xFF800000u32 as i32) == 0 {
+                nrg_to_noise_ratio_q8[b] = (xnrg[b] << 8) / (vad.nl[b] + 1);
+            } else {
+                nrg_to_noise_ratio_q8[b] = xnrg[b] / ((vad.nl[b] >> 8) + 1);
+            }
 
-        // Frequency tilt contribution
-        input_tilt += silk_smulwb(TILT_WEIGHTS[b], vad.nrg_ratio_smth_q8[b] as i16);
-    }
+            // Convert to log domain
+            let snr_q7 = silk_lin2log(nrg_to_noise_ratio_q8[b]) - 8 * 128;
 
-    // Convert to dB and compute speech probability
-    // Compute root-mean-square of SNR across bands
-    let mut sum_snr_q7: i32 = 0;
-    for b in 0..VAD_N_BANDS {
-        let snr_q7 = if vad.nrg_ratio_smth_q8[b] >= 256 {
-            // 3 * silk_lin2log(nrg_ratio) - 3 * 8 * 128
-            3 * silk_lin2log(vad.nrg_ratio_smth_q8[b]) - 3 * 8 * 128
+            // Sum-of-squares (Q14)
+            sum_squared = silk_smlabb(sum_squared, snr_q7, snr_q7);
+
+            // Tilt measure
+            let snr_for_tilt = if speech_nrg < (1 << 20) {
+                // Scale down SNR value for small subband speech energies
+                silk_smulwb_i32(silk_sqrt_approx(speech_nrg) << 6, snr_q7)
+            } else {
+                snr_q7
+            };
+            input_tilt = silk_smlawb_i32(input_tilt, TILT_WEIGHTS[b], snr_for_tilt);
         } else {
-            0
-        };
-        let snr_q7 = imax(snr_q7, 0);
-        sum_snr_q7 += snr_q7;
+            nrg_to_noise_ratio_q8[b] = 256;
+        }
     }
 
-    // Speech activity = sigmoid(SNR - offset)
-    let sa_q15 = silk_sigm_q15(
-        (sum_snr_q7 - VAD_NEGATIVE_OFFSET_Q5 * (VAD_N_BANDS as i32) * 128) >> 5,
+    // Mean-of-squares
+    sum_squared = sum_squared / (VAD_N_BANDS as i32); // Q14
+
+    // Root-mean-square approximation, scale to dBs
+    let p_snr_db_q7 = (3 * silk_sqrt_approx(sum_squared)) as i16 as i32; // Q7
+
+    // Speech Probability Estimation
+    let mut sa_q15 = silk_sigm_q15(
+        silk_smulwb_i32(VAD_SNR_FACTOR_Q16, p_snr_db_q7) - VAD_NEGATIVE_OFFSET_Q5,
     );
 
-    // Scale to Q8
-    ps_enc.speech_activity_q8 = imin(sa_q15 >> 7, 255);
-    ps_enc.input_tilt_q15 = input_tilt;
+    // Frequency Tilt Measure
+    ps_enc.input_tilt_q15 = (silk_sigm_q15(input_tilt) - 16384) << 1;
 
-    // Per-band input quality
+    // Scale the sigmoid output based on power levels
+    let mut speech_nrg_total = 0i32;
     for b in 0..VAD_N_BANDS {
-        let snr_q7 = if vad.nrg_ratio_smth_q8[b] >= 256 {
-            3 * silk_lin2log(vad.nrg_ratio_smth_q8[b]) - 3 * 8 * 128
-        } else {
-            0
-        };
-        ps_enc.input_quality_bands_q15[b] = silk_sigm_q15((snr_q7 - 128) >> 4);
+        // Accumulate signal-without-noise energies, higher frequency bands have more weight
+        speech_nrg_total += ((b as i32) + 1) * ((xnrg[b] - vad.nl[b]) >> 4);
+    }
+
+    if ps_enc.frame_length == 20 * ps_enc.fs_khz {
+        speech_nrg_total >>= 1;
+    }
+
+    // Power scaling
+    if speech_nrg_total <= 0 {
+        sa_q15 >>= 1;
+    } else if speech_nrg_total < 16384 {
+        let snrg = silk_sqrt_approx(speech_nrg_total << 16);
+        sa_q15 = silk_smulwb_i32(32768 + snrg, sa_q15);
+    }
+
+    // Copy the resulting speech activity in Q8
+    eprintln!("[VAD TRACE] sum_sq={} p_snr_db_q7={} sa_q15_before_power={} speech_nrg_total={} sa_q15_after_power={} → Q8={}",
+        sum_squared, p_snr_db_q7,
+        silk_sigm_q15(silk_smulwb_i32(VAD_SNR_FACTOR_Q16, p_snr_db_q7) - VAD_NEGATIVE_OFFSET_Q5),
+        speech_nrg_total, sa_q15, imin(sa_q15 >> 7, 255));
+    ps_enc.speech_activity_q8 = imin(sa_q15 >> 7, 255);
+
+    // Energy Level and SNR estimation
+    // Smoothing coefficient
+    let mut smooth_coef_q16 = silk_smulwb_i32(
+        VAD_SNR_SMOOTH_COEF_Q18,
+        silk_smulwb_i32(sa_q15, sa_q15),
+    );
+
+    if ps_enc.frame_length == 10 * ps_enc.fs_khz {
+        smooth_coef_q16 >>= 1;
+    }
+
+    for b in 0..VAD_N_BANDS {
+        // Compute smoothed energy-to-noise ratio per band
+        vad.nrg_ratio_smth_q8[b] = silk_smlawb_i32(
+            vad.nrg_ratio_smth_q8[b],
+            nrg_to_noise_ratio_q8[b] - vad.nrg_ratio_smth_q8[b],
+            smooth_coef_q16,
+        );
+
+        // Signal to noise ratio in dB per band
+        let snr_q7 = 3 * (silk_lin2log(vad.nrg_ratio_smth_q8[b]) - 8 * 128);
+        // quality = sigmoid( 0.25 * ( SNR_dB - 16 ) )
+        ps_enc.input_quality_bands_q15[b] = silk_sigm_q15((snr_q7 - 16 * 128) >> 4);
     }
 
     0
@@ -4253,6 +4308,9 @@ pub fn silk_process_gains_fix(
     ps_enc_ctrl.gains_unq_q16[..nb_subfr].copy_from_slice(&ps_enc_ctrl.gains_q16[..nb_subfr]);
     ps_enc_ctrl.last_gain_index_prev = ps_enc.s_shape.last_gain_index;
 
+    eprintln!("[GAINS TRACE] gains_q16_before_quant={:?} last_gain_index={}",
+        &ps_enc_ctrl.gains_q16[..nb_subfr], ps_enc.s_shape.last_gain_index);
+
     // Quantize gains
     silk_gains_quant(
         &mut ps_enc.s_cmn.indices.gains_indices,
@@ -4557,11 +4615,94 @@ pub fn silk_find_pred_coefs_fix(
 }
 
 // ===========================================================================
-// Noise shape analysis (simplified)
+// Noise shape analysis helpers
+// ===========================================================================
+
+/// Compute warped gain from AR coefficients. Matches C: `warped_gain`.
+/// Returns gain in Q16.
+fn warped_gain(coefs_q24: &[i32], lambda_q16: i32, order: usize) -> i32 {
+    let lambda_q16 = -lambda_q16;
+    let mut gain_q24 = coefs_q24[order - 1];
+    for i in (0..order - 1).rev() {
+        gain_q24 = silk_smlawb_i32(coefs_q24[i], gain_q24, lambda_q16);
+    }
+    gain_q24 = silk_smlawb_i32(1 << 24, gain_q24, -lambda_q16);
+    silk_inverse32_var_q(gain_q24, 40)
+}
+
+/// Limit warped coefficients. Matches C: `limit_warped_coefs`.
+fn limit_warped_coefs(coefs_q24: &mut [i32], lambda_q16: i32, limit_q24: i32, order: usize) {
+    let mut lambda = -lambda_q16;
+
+    // Convert to monic coefficients
+    for i in (1..order).rev() {
+        coefs_q24[i - 1] = silk_smlawb_i32(coefs_q24[i - 1], coefs_q24[i], lambda);
+    }
+    lambda = -lambda;
+    let nom_q16 = silk_smlawb_i32(1 << 16, -lambda, lambda);
+    let den_q24 = silk_smlawb_i32(1 << 24, coefs_q24[0], lambda);
+    let mut gain_q16 = silk_div32_var_q(nom_q16, den_q24, 24);
+    for i in 0..order {
+        coefs_q24[i] = silk_smulww(gain_q16, coefs_q24[i]);
+    }
+
+    let limit_q20 = limit_q24 >> 4;
+    for iter in 0..10 {
+        // Find maximum absolute value
+        let mut maxabs_q24 = -1i32;
+        let mut ind = 0usize;
+        for i in 0..order {
+            let tmp = coefs_q24[i].abs();
+            if tmp > maxabs_q24 {
+                maxabs_q24 = tmp;
+                ind = i;
+            }
+        }
+        let maxabs_q20 = maxabs_q24 >> 4;
+        if maxabs_q20 <= limit_q20 {
+            return;
+        }
+
+        // Convert back to true warped coefficients
+        for i in 1..order {
+            coefs_q24[i - 1] = silk_smlawb_i32(coefs_q24[i - 1], coefs_q24[i], lambda);
+        }
+        gain_q16 = silk_inverse32_var_q(gain_q16, 32);
+        for i in 0..order {
+            coefs_q24[i] = silk_smulww(gain_q16, coefs_q24[i]);
+        }
+
+        // Apply bandwidth expansion
+        let chirp_q16 = ((0.99 * 65536.0) as i32) - silk_div32_var_q(
+            silk_smulwb_i32(
+                maxabs_q20 - limit_q20,
+                silk_smlabb(((0.8 * 1024.0) as i32), ((0.1 * 1024.0) as i32), iter),
+            ),
+            (maxabs_q20) * (ind as i32 + 1),
+            22,
+        );
+        silk_bwexpander_32(&mut coefs_q24[..order], order, chirp_q16);
+
+        // Convert to monic warped coefficients
+        lambda = -lambda;
+        for i in (1..order).rev() {
+            coefs_q24[i - 1] = silk_smlawb_i32(coefs_q24[i - 1], coefs_q24[i], lambda);
+        }
+        lambda = -lambda;
+        let nom_q16 = silk_smlawb_i32(1 << 16, -lambda, lambda);
+        let den_q24 = silk_smlawb_i32(1 << 24, coefs_q24[0], lambda);
+        gain_q16 = silk_div32_var_q(nom_q16, den_q24, 24);
+        for i in 0..order {
+            coefs_q24[i] = silk_smulww(gain_q16, coefs_q24[i]);
+        }
+    }
+}
+
+// ===========================================================================
+// Noise shape analysis
 // ===========================================================================
 
 /// Noise shape analysis. Matches C: `silk_noise_shape_analysis_FIX`.
-/// This is a simplified implementation that computes basic gains and AR coefficients.
 pub fn silk_noise_shape_analysis_fix(
     ps_enc: &mut SilkEncoderStateFix,
     ps_enc_ctrl: &mut SilkEncoderControl,
@@ -4583,6 +4724,66 @@ pub fn silk_noise_shape_analysis_fix(
 
     ps_enc_ctrl.input_quality_q14 = input_quality_q14;
     ps_enc_ctrl.coding_quality_q14 = coding_quality_q14;
+
+    // Reduce coding SNR during low speech activity (CBR skip)
+    let mut snr_adj_db_q7 = snr_adj_db_q7;
+    if ps_enc.s_cmn.use_cbr == 0 {
+        let b_q8 = 256 - ps_enc.s_cmn.speech_activity_q8;
+        let b_q8 = silk_smulwb_i32(b_q8 << 8, b_q8);
+        snr_adj_db_q7 = silk_smlawb_i32(
+            snr_adj_db_q7,
+            silk_smulbb(((-3.0 * 128.0) as i32) >> 5, b_q8), // BG_SNR_DECR_dB=3.0
+            silk_smulwb_i32((1 << 14) + input_quality_q14, coding_quality_q14),
+        );
+    }
+
+    if ps_enc.s_cmn.indices.signal_type as i32 == TYPE_VOICED {
+        snr_adj_db_q7 = silk_smlawb_i32(
+            snr_adj_db_q7,
+            ((3.0 * 256.0) as i32), // HARM_SNR_INCR_dB=3.0 in Q8
+            ps_enc.ltp_corr_q15,
+        );
+    } else {
+        snr_adj_db_q7 = silk_smlawb_i32(
+            snr_adj_db_q7,
+            silk_smlawb_i32(
+                ((6.0 * 512.0) as i32), // 6.0 in Q9
+                ((-0.4 * (1 << 18) as f64) as i32), // -0.4 in Q18
+                ps_enc.s_cmn.snr_db_q7,
+            ),
+            (1 << 14) - input_quality_q14,
+        );
+    }
+
+    // Sparseness processing: set quantizer offset
+    if ps_enc.s_cmn.indices.signal_type as i32 == TYPE_VOICED {
+        // Initially 0; may be overruled in process_gains
+        ps_enc.s_cmn.indices.quant_offset_type = 0;
+    } else {
+        // Sparseness measure based on energy variation per 2ms segments
+        let n_samples = (fs_khz << 1) as usize;
+        let mut energy_variation_q7 = 0i32;
+        let mut log_energy_prev_q7 = 0i32;
+        let n_segs = (SUB_FRAME_LENGTH_MS * nb_subfr) / 2;
+        let mut ptr_offset = 0usize;
+        for k in 0..n_segs {
+            let (nrg, scale) = silk_sum_sqr_shift(&pitch_res[ptr_offset..ptr_offset + n_samples]);
+            let nrg = nrg + (n_samples as i32 >> scale);
+            let log_energy_q7 = silk_lin2log(nrg);
+            if k > 0 {
+                energy_variation_q7 += (log_energy_q7 - log_energy_prev_q7).abs();
+            }
+            log_energy_prev_q7 = log_energy_q7;
+            ptr_offset += n_samples;
+        }
+        // Set quantization offset depending on sparseness
+        let threshold = ((0.6 * 128.0) as i32) * ((n_segs as i32) - 1);
+        if energy_variation_q7 > threshold {
+            ps_enc.s_cmn.indices.quant_offset_type = 0;
+        } else {
+            ps_enc.s_cmn.indices.quant_offset_type = 1;
+        }
+    }
 
     // Bandwidth expansion
     let pred_gain_q16 = ps_enc_ctrl.pred_gain_q16;
@@ -4634,8 +4835,8 @@ pub fn silk_noise_shape_analysis_fix(
         }
 
         // Autocorrelation
+        let mut scale = 0i32;
         if warping_q16 > 0 {
-            let mut scale = 0i32;
             silk_warped_autocorrelation(
                 &mut auto_corr,
                 &mut scale,
@@ -4645,7 +4846,6 @@ pub fn silk_noise_shape_analysis_fix(
                 shaping_lpc_order,
             );
         } else {
-            let mut scale = 0i32;
             silk_autocorr(
                 &mut auto_corr,
                 &mut scale,
@@ -4659,24 +4859,51 @@ pub fn silk_noise_shape_analysis_fix(
         auto_corr[0] += imax(silk_smulwb(auto_corr[0] >> 4, ((SHAPE_WHITE_NOISE_FRACTION * (1 << 20) as f64) as i16)), 1);
 
         // Schur recursion
-        let nrg = silk_schur64(&mut refl_coef_q16, &auto_corr, shaping_lpc_order);
+        let mut nrg = silk_schur64(&mut refl_coef_q16, &auto_corr, shaping_lpc_order);
 
         // Convert to AR coefficients
         ar_q24.fill(0);
         silk_k2a_q16(&mut ar_q24, &refl_coef_q16, shaping_lpc_order);
 
+        // Compute gain using proper Q-format from autocorrelation scale
+        // C: Qnrg = -scale; make even; sqrt; shift to Q16
+        let mut q_nrg = -scale; // range: -12...30
+        if q_nrg & 1 != 0 {
+            q_nrg -= 1;
+            nrg >>= 1;
+        }
+        let tmp32 = silk_sqrt_approx(nrg);
+        q_nrg >>= 1; // range: -6...15
+        ps_enc_ctrl.gains_q16[k] = silk_lshift_sat32(tmp32, 16 - q_nrg);
+
+        // Adjust gain for warping
+        if warping_q16 > 0 {
+            let warp_gain_q16 = warped_gain(&ar_q24, warping_q16, shaping_lpc_order);
+            if ps_enc_ctrl.gains_q16[k] < (0.25 * 65536.0) as i32 {
+                ps_enc_ctrl.gains_q16[k] = silk_smulww(ps_enc_ctrl.gains_q16[k], warp_gain_q16);
+            } else {
+                ps_enc_ctrl.gains_q16[k] = silk_smulww(
+                    silk_rshift_round(ps_enc_ctrl.gains_q16[k], 1), warp_gain_q16);
+                if ps_enc_ctrl.gains_q16[k] >= (i32::MAX >> 1) {
+                    ps_enc_ctrl.gains_q16[k] = i32::MAX;
+                } else {
+                    ps_enc_ctrl.gains_q16[k] <<= 1;
+                }
+            }
+        }
+
         // Bandwidth expansion
         silk_bwexpander_32(&mut ar_q24, shaping_lpc_order, bw_exp_q16);
 
         // Store AR coefficients (Q24→Q13)
-        for i in 0..shaping_lpc_order {
-            ps_enc_ctrl.ar_q13[k * shaping_lpc_order + i] = sat16(silk_rshift_round(ar_q24[i], 11));
+        if warping_q16 > 0 {
+            limit_warped_coefs(&mut ar_q24, warping_q16, (3.999 * (1 << 24) as f64) as i32, shaping_lpc_order);
+            for i in 0..shaping_lpc_order {
+                ps_enc_ctrl.ar_q13[k * shaping_lpc_order + i] = sat16(silk_rshift_round(ar_q24[i], 11));
+            }
+        } else {
+            silk_lpc_fit(&mut ps_enc_ctrl.ar_q13[k * shaping_lpc_order..], &ar_q24, 13, 24, shaping_lpc_order);
         }
-
-        // Compute gain
-        let qnrg = imin(nrg, i32::MAX >> 1);
-        let gain = silk_sqrt_approx(qnrg);
-        ps_enc_ctrl.gains_q16[k] = imax(silk_lshift_sat32(gain, 4), 1);
     }
 
     // Apply gain multiplier from SNR
@@ -4687,9 +4914,12 @@ pub fn silk_noise_shape_analysis_fix(
     ));
     let gain_add_q16 = silk_log2lin(silk_smlawb(
         ((16.0 * 128.0) + 0.5) as i32,
-        ((-30.0 * 128.0) as i32), // MIN_QGAIN_DB_Q7
+        ((MIN_QGAIN_DB as f64 * 128.0) + 0.5) as i32, // MIN_QGAIN_DB in Q7
         ((0.16 * 65536.0) + 0.5) as i16,
     ));
+
+    eprintln!("[SHAPE TRACE] snr_adj_db_q7={} gain_mult_q16={} gain_add_q16={} gains_before_tweaking={:?}",
+        snr_adj_db_q7, gain_mult_q16, gain_add_q16, &ps_enc_ctrl.gains_q16[..nb_subfr]);
 
     for k in 0..nb_subfr {
         ps_enc_ctrl.gains_q16[k] = silk_smulww(ps_enc_ctrl.gains_q16[k], gain_mult_q16);
@@ -5233,7 +5463,7 @@ pub fn silk_burg_modified(
                 for i in 0..(subfr_length - n) {
                     sum += x[x_ptr + i] as i64 * x[x_ptr + i + n] as i64;
                 }
-                c_first_row[n - 1] += (sum >> rshifts) as i32;
+                c_first_row[n - 1] = c_first_row[n - 1].wrapping_add((sum >> rshifts) as i32);
             }
         }
     } else {
@@ -5244,7 +5474,7 @@ pub fn silk_burg_modified(
                 for i in 0..(subfr_length - n) {
                     sum += x[x_ptr + i] as i64 * x[x_ptr + i + n] as i64;
                 }
-                c_first_row[n - 1] += shl32(sum as i32, -rshifts);
+                c_first_row[n - 1] = c_first_row[n - 1].wrapping_add(shl32(sum as i32, -rshifts));
             }
         }
     }

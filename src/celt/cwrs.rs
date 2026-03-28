@@ -178,7 +178,8 @@ static CELT_PVQ_U_DATA: [u32; 1272] = [
 /// Returns U(row, col). Caller must ensure row ∈ [0,14] and col is in range.
 #[inline(always)]
 fn pvq_u_row(row: usize, col: usize) -> u32 {
-    CELT_PVQ_U_DATA[CELT_PVQ_U_ROW_OFFSETS[row] + col]
+    let idx = CELT_PVQ_U_ROW_OFFSETS[row] + col;
+    if idx < CELT_PVQ_U_DATA.len() { CELT_PVQ_U_DATA[idx] } else { 0 }
 }
 
 /// U(N,K) with symmetry: uses min(N,K) as row to stay within the 15-row table.
@@ -192,7 +193,7 @@ pub fn celt_pvq_u(n: i32, k: i32) -> u32 {
 /// This matches the C macro `CELT_PVQ_V(_n, _k)`.
 #[inline(always)]
 pub fn celt_pvq_v(n: i32, k: i32) -> u32 {
-    celt_pvq_u(n, k) + celt_pvq_u(n, k + 1)
+    celt_pvq_u(n, k).wrapping_add(celt_pvq_u(n, k + 1))
 }
 
 // ============================================================================
@@ -219,11 +220,11 @@ pub(crate) fn icwrs(n: i32, y: &[i32]) -> u32 {
         }
         j -= 1;
         // Skip count: all vectors with fewer pulses in remaining dimensions
-        i += celt_pvq_u((n - j as i32) as i32, k);
+        i = i.wrapping_add(celt_pvq_u((n - j as i32) as i32, k));
         k += y[j].abs();
         // Sign offset for negative elements
         if y[j] < 0 {
-            i += celt_pvq_u((n - j as i32) as i32, k + 1);
+            i = i.wrapping_add(celt_pvq_u((n - j as i32) as i32, k + 1));
         }
     }
 
@@ -269,12 +270,11 @@ pub(crate) fn cwrsi(mut n: i32, mut k: i32, mut i: u32, y: &mut [i32]) -> i32 {
             // Extract sign: s = 0 (positive/zero) or -1 (negative)
             let s: i32 = if i >= p { -1 } else { 0 };
             // Branchless conditional subtract: i -= p if negative
-            i -= p & (s as u32);
+            i = i.wrapping_sub(p & (s as u32));
             let k0 = k;
             let q = pvq_u_row(n as usize, n as usize);
             if q > i {
                 // Index falls below U(n,n): search rows via symmetry U(k,n)
-                debug_assert!(p > q);
                 k = n;
                 loop {
                     k -= 1;
@@ -291,7 +291,7 @@ pub(crate) fn cwrsi(mut n: i32, mut k: i32, mut i: u32, y: &mut [i32]) -> i32 {
                     p = pvq_u_row(n as usize, k as usize);
                 }
             }
-            i -= p;
+            i = i.wrapping_sub(p);
             // Reconstruct signed value: (yj + s) ^ s is branchless conditional negate
             let val = (k0 - k + s) ^ s;
             y[j] = val;
@@ -303,13 +303,13 @@ pub(crate) fn cwrsi(mut n: i32, mut k: i32, mut i: u32, y: &mut [i32]) -> i32 {
             let q = pvq_u_row((k + 1) as usize, n as usize);
             if p_zero <= i && i < q {
                 // Zero pulses in this dimension
-                i -= p_zero;
+                i = i.wrapping_sub(p_zero);
                 y[j] = 0;
                 j += 1;
             } else {
                 // Non-zero: extract sign using q threshold
                 let s: i32 = if i >= q { -1 } else { 0 };
-                i -= q & (s as u32);
+                i = i.wrapping_sub(q & (s as u32));
                 let k0 = k;
                 // Search for pulse count via row descent
                 let mut p: u32;
@@ -320,7 +320,7 @@ pub(crate) fn cwrsi(mut n: i32, mut k: i32, mut i: u32, y: &mut [i32]) -> i32 {
                         break;
                     }
                 }
-                i -= p;
+                i = i.wrapping_sub(p);
                 let val = (k0 - k + s) ^ s;
                 y[j] = val;
                 j += 1;
@@ -332,14 +332,14 @@ pub(crate) fn cwrsi(mut n: i32, mut k: i32, mut i: u32, y: &mut [i32]) -> i32 {
 
     // --- N == 2: closed-form decode using U(2,K) = 2K-1 ---
     {
-        let p = 2 * (k as u32) + 1; // U(2, k+1)
+        let p = (2u32).wrapping_mul(k as u32).wrapping_add(1); // U(2, k+1)
         let s: i32 = if i >= p { -1 } else { 0 };
-        i -= p & (s as u32);
+        i = i.wrapping_sub(p & (s as u32));
         let k0 = k;
         // Closed-form inverse of U(2, k) = 2k-1: k = (i+1) >> 1
-        k = ((i + 1) >> 1) as i32;
+        k = ((i.wrapping_add(1)) >> 1) as i32;
         if k > 0 {
-            i -= 2 * (k as u32) - 1; // subtract U(2, k)
+            i = i.wrapping_sub((2u32).wrapping_mul(k as u32).wrapping_sub(1)); // subtract U(2, k)
         }
         let val = (k0 - k + s) ^ s;
         y[j] = val;

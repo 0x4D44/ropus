@@ -1603,6 +1603,22 @@ pub fn celt_encode_with_ec(
     nb_compressed_bytes: i32,
     enc: Option<&mut RangeEncoder>,
 ) -> i32 {
+    if let Some(e) = enc {
+        celt_encode_core(st, pcm, frame_size, nb_compressed_bytes, e, false)
+    } else {
+        let mut local_enc = RangeEncoder::new(compressed);
+        celt_encode_core(st, pcm, frame_size, nb_compressed_bytes, &mut local_enc, true)
+    }
+}
+
+fn celt_encode_core(
+    st: &mut CeltEncoder,
+    pcm: &[i16],
+    frame_size: i32,
+    nb_compressed_bytes: i32,
+    enc_ref: &mut RangeEncoder,
+    enc_inited: bool,
+) -> i32 {
     let mode = st.mode;
     let cc = st.channels;
     let c = st.stream_channels;
@@ -1636,16 +1652,6 @@ pub fn celt_encode_with_ec(
     let m = 1 << lm;
     let n = m * mode.short_mdct_size;
     let eff_end = end.min(mode.eff_ebands);
-
-    // Initialize entropy encoder
-    let mut local_enc = RangeEncoder::new(compressed);
-    let enc_ref = if enc.is_some() {
-        // For hybrid mode, the caller provides the encoder
-        // For now, we always use local encoder
-        &mut local_enc
-    } else {
-        &mut local_enc
-    };
 
     let _tell0_frac = enc_ref.tell_frac();
     let mut tell = enc_ref.tell() as i32;
@@ -1684,18 +1690,16 @@ pub fn celt_encode_with_ec(
 
     // Handle silence in VBR mode
     if silence && vbr_rate > 0 {
-        nb_compressed_bytes = 2.max(nb_filled_bytes);
-        // Fill remaining with zeros
-        for i in nb_filled_bytes as usize..nb_compressed_bytes as usize {
-            if i < compressed.len() {
-                compressed[i] = 0;
-            }
-        }
+        st.vbr_reservoir += nb_compressed_bytes * (8 << BITRES) - vbr_rate;
+        nb_compressed_bytes = nb_filled_bytes + 2;
+        enc_ref.shrink(nb_compressed_bytes as u32);
         // Update state for silence
         for i in 0..cc as usize * nb_ebands as usize {
             st.old_band_e[i] = GCONST_NEG28;
         }
-        st.vbr_reservoir += (2 * 8 << BITRES) - vbr_rate;
+        // Early out: finalize
+        st.rng = enc_ref.get_rng();
+        enc_ref.done();
         return nb_compressed_bytes;
     }
 
@@ -1779,8 +1783,8 @@ pub fn celt_encode_with_ec(
         // Encode pitch pre-filter on
         enc_ref.encode_bit_logp(true, 1);
         // Encode pitch octave + fine period
-        let octave = celt_ilog2(pitch_index) - 5;
-        enc_ref.encode_uint(octave.max(0) as u32, 6);
+        let octave = (celt_ilog2(pitch_index) - 5).max(0);
+        enc_ref.encode_uint(octave as u32, 6);
         let fine = pitch_index.wrapping_sub(16 << octave);
         enc_ref.encode_bits(fine as u32, (4 + octave) as u32);
         // Encode gain (3 bits)
@@ -2258,7 +2262,6 @@ pub fn celt_encode_with_ec(
 
     // Finalize bitstream
     enc_ref.done();
-
     if enc_ref.error() {
         return OPUS_INTERNAL_ERROR;
     }

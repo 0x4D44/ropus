@@ -197,6 +197,9 @@ fn main() {
         build.file(ref_dir.join(src));
     }
 
+    // Debug helper for extracting SILK encoder internals
+    build.file(harness_dir.join("debug_helper.c"));
+
     build.compile("opus_ref");
 
     // Tell cargo to link the static library

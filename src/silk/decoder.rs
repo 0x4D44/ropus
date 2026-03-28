@@ -1416,8 +1416,8 @@ pub fn silk_stereo_ms_to_lr(
             // Apply prediction: side'[n+1] = side[n+1] + pred0*lowpass(mid) + pred1*mid[n+1]
             let sum_mid = (mid[n] as i32 + 2 * mid[n + 1] as i32 + mid[n + 2] as i32) << 9;
             let pred_side = ((side[n + 1] as i32) << 8)
-                + ((sum_mid as i64 * pred0_q13 as i64 >> 7) as i32)
-                + (((mid[n + 1] as i32) << 11) as i64 * pred1_q13 as i64 >> 7) as i32;
+                .wrapping_add(((sum_mid as i64 * pred0_q13 as i64 >> 7) as i32))
+                .wrapping_add((((mid[n + 1] as i32) << 11) as i64 * pred1_q13 as i64 >> 7) as i32);
             side[n + 1] = sat16(pred_side >> 8);
         }
     }
@@ -1428,8 +1428,8 @@ pub fn silk_stereo_ms_to_lr(
     for n in interp_len..frame_length {
         let sum_mid = (mid[n] as i32 + 2 * mid[n + 1] as i32 + mid[n + 2] as i32) << 9;
         let pred_side = ((side[n + 1] as i32) << 8)
-            + ((sum_mid as i64 * pred0_q13 as i64 >> 7) as i32)
-            + (((mid[n + 1] as i32) << 11) as i64 * pred1_q13 as i64 >> 7) as i32;
+            .wrapping_add(((sum_mid as i64 * pred0_q13 as i64 >> 7) as i32))
+            .wrapping_add((((mid[n + 1] as i32) << 11) as i64 * pred1_q13 as i64 >> 7) as i32);
         side[n + 1] = sat16(pred_side >> 8);
     }
 
