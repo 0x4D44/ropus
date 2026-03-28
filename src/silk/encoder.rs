@@ -1700,161 +1700,178 @@ fn silk_resampler_run(state: &mut SilkResamplerState, output: &mut [i16], input:
 /// Convert LPC coefficients to NLSFs.
 /// Matches C: `silk_A2NLSF`.
 pub fn silk_a2nlsf(nlsf: &mut [i16], a_q16: &[i32], d: usize) {
-    let dd = d >> 1;
+    let dd = silk_rshift(d as i32, 1) as usize;
+    let mut a_q16_mut = [0i32; MAX_LPC_ORDER];
+    a_q16_mut[..d].copy_from_slice(&a_q16[..d]);
 
-    // Step 1: Split polynomial into P and Q parts, deconvolve, and convert
     let mut p = [0i32; MAX_LPC_ORDER / 2 + 1];
     let mut q = [0i32; MAX_LPC_ORDER / 2 + 1];
 
-    silk_a2nlsf_init(a_q16, &mut p, &mut q, d);
+    silk_a2nlsf_init(&a_q16_mut, &mut p, &mut q, dd);
 
-    // Step 2: Find roots by scanning the cosine table
-    let mut root = 0usize;
-    let xlo = silk_lsf_cos_tab_fix_q12_eval(&p, &q, 0, dd, root & 1);
-    let mut prev_val = xlo;
+    // Find roots, alternating between P and Q
+    let pq: [*const i32; 2] = [p.as_ptr(), q.as_ptr()];
+    let mut poly_p = &p as &[i32];
 
-    for k in 1..=LSF_COS_TAB_SZ_FIX {
-        let x_val = silk_lsf_cos_tab_fix_q12_eval(&p, &q, k, dd, root & 1);
-        // Detect sign change
-        if (prev_val ^ x_val) < 0 {
-            // Bisection refinement
-            let mut x_lo = ((k - 1) as i32) << 8;
-            let mut x_hi = (k as i32) << 8;
-            let mut y_lo = prev_val;
+    let mut xlo = SILK_LSF_COS_TAB_FIX_Q12[0] as i32;
+    let mut ylo = silk_a2nlsf_eval_poly(poly_p, xlo, dd);
 
-            for _iter in 0..BIN_DIV_STEPS_A2NLSF {
-                let x_mid = (x_lo + x_hi) >> 1;
-                let y_mid = silk_lsf_cos_tab_fix_q12_eval_interp(&p, &q, x_mid, dd, root & 1);
-                if (y_lo ^ y_mid) < 0 {
-                    x_hi = x_mid;
-                } else {
-                    x_lo = x_mid;
-                    y_lo = y_mid;
-                }
-            }
+    let mut root_ix: usize;
+    if ylo < 0 {
+        // Set the first NLSF to zero and move on to the next
+        nlsf[0] = 0;
+        poly_p = &q;
+        ylo = silk_a2nlsf_eval_poly(poly_p, xlo, dd);
+        root_ix = 1;
+    } else {
+        root_ix = 0;
+    }
 
-            // Linear interpolation for fractional precision
-            let y_hi =
-                silk_lsf_cos_tab_fix_q12_eval_interp(&p, &q, x_hi, dd, root & 1);
-            let denom = y_lo - y_hi;
-            let nlsf_val = if denom != 0 {
-                x_lo + (((-y_lo as i64) * ((x_hi - x_lo) as i64) / (denom as i64)) as i32)
+    let mut k: usize = 1;
+    let mut i: usize = 0;
+    let mut thr: i32 = 0;
+
+    loop {
+        // Evaluate polynomial
+        let xhi = SILK_LSF_COS_TAB_FIX_Q12[k] as i32;
+        let yhi = silk_a2nlsf_eval_poly(poly_p, xhi, dd);
+
+        // Detect zero crossing
+        if (ylo <= 0 && yhi >= thr) || (ylo >= 0 && yhi <= -thr) {
+            if yhi == 0 {
+                thr = 1;
             } else {
-                (x_lo + x_hi) >> 1
-            };
-
-            // Map from table index (0..128 << 8) to Q15 (0..32767)
-            nlsf[root] = imin(imax(nlsf_val, 0), 32767) as i16;
-            root += 1;
-            if root >= d {
-                break;
+                thr = 0;
             }
-            // Re-evaluate at current position for the next polynomial
-            prev_val = silk_lsf_cos_tab_fix_q12_eval(&p, &q, k, dd, root & 1);
-        } else {
-            prev_val = x_val;
-        }
-    }
 
-    // If not all roots found, apply bandwidth expansion and retry
-    if root < d {
-        // Fallback: use existing NLSF2A inverse with bandwidth expansion
-        // This matches the C reference retry loop
-        let mut a_q16_tmp = [0i32; MAX_LPC_ORDER];
-        a_q16_tmp[..d].copy_from_slice(&a_q16[..d]);
-        for _i in 0..MAX_ITERATIONS_A2NLSF {
-            silk_bwexpander_32(&mut a_q16_tmp[..d], d, 65536 - 1);
-            let mut root2 = 0usize;
-            silk_a2nlsf_init(&a_q16_tmp, &mut p, &mut q, d);
-            prev_val = silk_lsf_cos_tab_fix_q12_eval(&p, &q, 0, dd, root2 & 1);
-            for k2 in 1..=LSF_COS_TAB_SZ_FIX {
-                let x_val2 = silk_lsf_cos_tab_fix_q12_eval(&p, &q, k2, dd, root2 & 1);
-                if (prev_val ^ x_val2) < 0 {
-                    let nlsf_val = ((k2 as i32 - 1) << 8) + 128; // midpoint approximation
-                    nlsf[root2] = imin(imax(nlsf_val, 0), 32767) as i16;
-                    root2 += 1;
-                    if root2 >= d {
-                        break;
-                    }
-                    prev_val = silk_lsf_cos_tab_fix_q12_eval(&p, &q, k2, dd, root2 & 1);
+            // Binary division
+            let mut ffrac: i32 = -256;
+            let mut xlo_b = xlo;
+            let mut ylo_b = ylo;
+            let mut xhi_b = xhi;
+            let mut yhi_b = yhi;
+            for m in 0..BIN_DIV_STEPS_A2NLSF {
+                let xmid = silk_rshift_round(xlo_b + xhi_b, 1);
+                let ymid = silk_a2nlsf_eval_poly(poly_p, xmid, dd);
+
+                if (ylo_b <= 0 && ymid >= 0) || (ylo_b >= 0 && ymid <= 0) {
+                    xhi_b = xmid;
+                    yhi_b = ymid;
                 } else {
-                    prev_val = x_val2;
+                    xlo_b = xmid;
+                    ylo_b = ymid;
+                    ffrac += 128 >> m;
                 }
             }
-            if root2 >= d {
+
+            // Interpolate
+            if ylo_b.abs() < 65536 {
+                let den = ylo_b - yhi_b;
+                let nom = silk_lshift(ylo_b, 8 - BIN_DIV_STEPS_A2NLSF as i32)
+                    + silk_rshift(den, 1);
+                if den != 0 {
+                    ffrac += nom / den;
+                }
+            } else {
+                ffrac += ylo_b
+                    / silk_rshift(ylo_b - yhi_b, 8 - BIN_DIV_STEPS_A2NLSF as i32);
+            }
+            nlsf[root_ix] =
+                imin(silk_lshift(k as i32, 8) + ffrac, i16::MAX as i32) as i16;
+
+            root_ix += 1;
+            if root_ix >= d {
                 break;
+            }
+            // Alternate pointer to polynomial
+            poly_p = if (root_ix & 1) == 0 { &p } else { &q };
+
+            // Evaluate polynomial
+            xlo = SILK_LSF_COS_TAB_FIX_Q12[k - 1] as i32;
+            ylo = silk_lshift(1 - (root_ix as i32 & 2), 12);
+        } else {
+            k += 1;
+            xlo = xhi;
+            ylo = yhi;
+            thr = 0;
+
+            if k > LSF_COS_TAB_SZ_FIX {
+                i += 1;
+                if i > MAX_ITERATIONS_A2NLSF {
+                    // Set NLSFs to white spectrum and exit
+                    nlsf[0] = ((1i32 << 15) / (d as i32 + 1)) as i16;
+                    for kk in 1..d {
+                        nlsf[kk] = nlsf[kk - 1] + nlsf[0];
+                    }
+                    return;
+                }
+
+                // Apply progressively more bandwidth expansion and retry
+                silk_bwexpander_32(&mut a_q16_mut[..d], d, 65536 - silk_lshift(1, i as i32));
+
+                silk_a2nlsf_init(&a_q16_mut, &mut p, &mut q, dd);
+                poly_p = &p;
+                xlo = SILK_LSF_COS_TAB_FIX_Q12[0] as i32;
+                ylo = silk_a2nlsf_eval_poly(poly_p, xlo, dd);
+                if ylo < 0 {
+                    nlsf[0] = 0;
+                    poly_p = &q;
+                    ylo = silk_a2nlsf_eval_poly(poly_p, xlo, dd);
+                    root_ix = 1;
+                } else {
+                    root_ix = 0;
+                }
+                k = 1;
             }
         }
     }
+}
+
+/// Transforms polynomials from cos(n*f) to cos(f)^n.
+/// Matches C: `silk_A2NLSF_trans_poly`.
+fn silk_a2nlsf_trans_poly(p: &mut [i32], dd: usize) {
+    for k in 2..=dd {
+        for n in (k + 1..=dd).rev() {
+            p[n - 2] -= p[n];
+        }
+        p[k - 2] -= silk_lshift(p[k], 1);
+    }
+}
+
+/// Polynomial evaluation using Horner's method.
+/// Matches C: `silk_A2NLSF_eval_poly`.
+fn silk_a2nlsf_eval_poly(p: &[i32], x: i32, dd: usize) -> i32 {
+    let mut y32 = p[dd];
+    let x_q16 = silk_lshift(x, 4);
+
+    for n in (0..dd).rev() {
+        y32 = silk_smlaww(p[n], y32, x_q16);
+    }
+    y32
 }
 
 /// Initialize P and Q polynomials from LPC coefficients.
-fn silk_a2nlsf_init(a_q16: &[i32], p: &mut [i32], q: &mut [i32], d: usize) {
-    let dd = d >> 1;
+/// Matches C: `silk_A2NLSF_init`.
+fn silk_a2nlsf_init(a_q16: &[i32], p: &mut [i32], q: &mut [i32], dd: usize) {
+    let d = dd * 2;
 
-    // Form P(z) + Q(z) and P(z) - Q(z), then deconvolve
-    // P: (1 + z^-d) sum, Q: (1 - z^-d) sum, each divided out root at ±1
-    let mut a_tmp = [0i64; MAX_LPC_ORDER];
-    for k in 0..d {
-        a_tmp[k] = a_q16[k] as i64;
-    }
-
-    p[0] = 1 << 16;
-    q[0] = 1 << 16;
+    // Convert filter coefs to even and odd polynomials
+    p[dd] = silk_lshift(1, 16);
+    q[dd] = silk_lshift(1, 16);
     for k in 0..dd {
-        p[k + 1] = -(a_tmp[k] as i32 + a_tmp[d - k - 1] as i32 + p[k]);
-        q[k + 1] = -(a_tmp[k] as i32 - a_tmp[d - k - 1] as i32 - q[k]);
+        p[k] = -a_q16[dd - k - 1] - a_q16[dd + k];
+        q[k] = -a_q16[dd - k - 1] + a_q16[dd + k];
     }
 
-    // Divide P by (1+z^-1) and Q by (1-z^-1) (cumulative sum / alternating sum)
+    // Divide out zeros: z=1 is always a root in Q, z=-1 always in P
     for k in (1..=dd).rev() {
-        p[k] -= p[k - 1];
-        q[k] += q[k - 1];
+        p[k - 1] -= p[k];
+        q[k - 1] += q[k];
     }
-}
 
-/// Evaluate polynomial at a cosine table position.
-fn silk_lsf_cos_tab_fix_q12_eval(
-    p: &[i32],
-    q: &[i32],
-    k: usize,
-    dd: usize,
-    use_q: usize,
-) -> i32 {
-    let cos_val = SILK_LSF_COS_TAB_FIX_Q12[k] as i32;
-    let poly = if use_q == 0 { p } else { q };
-
-    // Evaluate using Horner's method
-    let mut val: i64 = poly[dd] as i64;
-    for i in (0..dd).rev() {
-        val = ((val * cos_val as i64) >> 12) + poly[i] as i64;
-    }
-    val as i32
-}
-
-/// Evaluate polynomial with fractional cosine table interpolation.
-fn silk_lsf_cos_tab_fix_q12_eval_interp(
-    p: &[i32],
-    q: &[i32],
-    x: i32,
-    dd: usize,
-    use_q: usize,
-) -> i32 {
-    let k = (x >> 8) as usize;
-    let frac = x & 0xFF;
-    let k = k.min(LSF_COS_TAB_SZ_FIX - 1);
-
-    // Interpolate cosine value
-    let cos0 = SILK_LSF_COS_TAB_FIX_Q12[k] as i32;
-    let cos1 = SILK_LSF_COS_TAB_FIX_Q12[k + 1] as i32;
-    let cos_val = cos0 + ((cos1 - cos0) * frac >> 8);
-
-    let poly = if use_q == 0 { p } else { q };
-    let mut val: i64 = poly[dd] as i64;
-    for i in (0..dd).rev() {
-        val = ((val * cos_val as i64) >> 12) + poly[i] as i64;
-    }
-    val as i32
+    // Transform polynomials from cos(n*f) to cos(f)^n
+    silk_a2nlsf_trans_poly(p, dd);
+    silk_a2nlsf_trans_poly(q, dd);
 }
 
 // ===========================================================================
@@ -1911,20 +1928,38 @@ pub fn silk_nlsf_vq_weights_laroia(
 pub fn silk_nlsf_vq(
     err_q24: &mut [i32],
     input_q15: &[i16],
-    nlsf_w_q2: &[i16],
+    _nlsf_w_q2: &[i16],
     cb_q8: &[u8],
     cb_wght_q9: &[i16],
     n_vectors: usize,
     order: usize,
 ) {
+    // Loop over codebook vectors
     for i in 0..n_vectors {
-        let mut sum_q24: i64 = 0;
-        for j in 0..order {
-            let diff_q15 = input_q15[j] as i32 - ((cb_q8[i * order + j] as i32) << 7);
-            let weighted = (diff_q15 as i64 * nlsf_w_q2[j] as i64) >> 2;
-            sum_q24 += weighted * weighted >> 15;
+        let mut sum_error_q24: i32 = 0;
+        let mut pred_q24: i32 = 0;
+        let cb_offset = i * order;
+        let w_offset = i * order;
+
+        // Loop in reverse order, processing pairs
+        let mut m = order as i32 - 2;
+        while m >= 0 {
+            let mu = m as usize;
+            // Index m + 1
+            let diff_q15 = input_q15[mu + 1] as i32 - ((cb_q8[cb_offset + mu + 1] as i32) << 7);
+            let diffw_q24 = silk_smulbb(diff_q15, cb_wght_q9[w_offset + mu + 1] as i32);
+            sum_error_q24 = sum_error_q24.wrapping_add((diffw_q24 - silk_rshift(pred_q24, 1)).abs());
+            pred_q24 = diffw_q24;
+
+            // Index m
+            let diff_q15 = input_q15[mu] as i32 - ((cb_q8[cb_offset + mu] as i32) << 7);
+            let diffw_q24 = silk_smulbb(diff_q15, cb_wght_q9[w_offset + mu] as i32);
+            sum_error_q24 = sum_error_q24.wrapping_add((diffw_q24 - silk_rshift(pred_q24, 1)).abs());
+            pred_q24 = diffw_q24;
+
+            m -= 2;
         }
-        err_q24[i] = imin(sum_q24 as i32, i32::MAX);
+        err_q24[i] = sum_error_q24;
     }
 }
 
@@ -1943,107 +1978,190 @@ pub fn silk_nlsf_del_dec_quant(
     order: i16,
 ) -> i32 {
     let order_u = order as usize;
+    const LEVEL_ADJ_Q10: i32 = 102; // SILK_FIX_CONST(NLSF_QUANT_LEVEL_ADJ, 10)
 
-    // State arrays for delayed decision
-    let mut ind: [[i8; MAX_LPC_ORDER]; NLSF_QUANT_DEL_DEC_STATES] =
-        [[0; MAX_LPC_ORDER]; NLSF_QUANT_DEL_DEC_STATES];
-    let mut rd_q25 = [i32::MAX; 2 * NLSF_QUANT_DEL_DEC_STATES];
-    let mut prev_out_q10 = [0i32; 2 * NLSF_QUANT_DEL_DEC_STATES];
-
-    let mut n_states = 1usize;
-    rd_q25[0] = 0;
-
-    // Process coefficients in reverse order
-    for i in (0..order_u).rev() {
-        let pred_q10 = if i + 1 < order_u {
-            // Predicted value from already-quantized coefficients
-            0 // Prediction from prev_out
+    // Precompute output tables (C lines 60-80)
+    let mut out0_q10_table = [0i32; 2 * NLSF_QUANT_MAX_AMPLITUDE_EXT as usize];
+    let mut out1_q10_table = [0i32; 2 * NLSF_QUANT_MAX_AMPLITUDE_EXT as usize];
+    for ii in -NLSF_QUANT_MAX_AMPLITUDE_EXT..NLSF_QUANT_MAX_AMPLITUDE_EXT {
+        let mut out0: i32 = ii << 10;
+        let mut out1: i32 = out0 + 1024;
+        if ii > 0 {
+            out0 -= LEVEL_ADJ_Q10;
+            out1 -= LEVEL_ADJ_Q10;
+        } else if ii == 0 {
+            out1 -= LEVEL_ADJ_Q10;
+        } else if ii == -1 {
+            out0 += LEVEL_ADJ_Q10;
         } else {
-            0
-        };
+            out0 += LEVEL_ADJ_Q10;
+            out1 += LEVEL_ADJ_Q10;
+        }
+        let idx = (ii + NLSF_QUANT_MAX_AMPLITUDE_EXT) as usize;
+        out0_q10_table[idx] = silk_smulbb(out0, quant_step_size_q16) >> 16;
+        out1_q10_table[idx] = silk_smulbb(out1, quant_step_size_q16) >> 16;
+    }
 
+    // State arrays (C lines 52-57)
+    let mut ind = [[0i8; MAX_LPC_ORDER]; NLSF_QUANT_DEL_DEC_STATES];
+    let mut prev_out_q10 = [0i16; 2 * NLSF_QUANT_DEL_DEC_STATES];
+    let mut rd_q25 = [0i32; 2 * NLSF_QUANT_DEL_DEC_STATES];
+    let mut rd_min_q25 = [0i32; NLSF_QUANT_DEL_DEC_STATES];
+    let mut rd_max_q25 = [0i32; NLSF_QUANT_DEL_DEC_STATES];
+    let mut ind_sort = [0usize; NLSF_QUANT_DEL_DEC_STATES];
+
+    let mut n_states: usize = 1;
+    rd_q25[0] = 0;
+    prev_out_q10[0] = 0;
+
+    for i in (0..order_u).rev() {
+        let rates_q5 = &ec_rates_q5[ec_ix[i] as usize..];
         let in_q10 = x_q10[i] as i32;
 
-        // For each state, try two candidates (floor and ceil)
-        let n_states_old = n_states;
-        for j in 0..n_states_old {
-            let out_q10 = prev_out_q10[j];
-            let pred = (out_q10 * pred_coef_q8[i] as i32) >> 8;
-            let res_q10 = in_q10 - pred;
+        for j in 0..n_states {
+            // Prediction (C line 91)
+            let pred_q10 = silk_smulbb(
+                pred_coef_q8[i] as i16 as i32,
+                prev_out_q10[j] as i32,
+            ) >> 8;
+            let res_q10 = in_q10 - pred_q10;
+            // Quantize (C lines 93-94)
+            let mut ind_tmp = silk_smulbb(inv_quant_step_size_q6 as i32, res_q10) >> 16;
+            ind_tmp = ind_tmp.clamp(
+                -NLSF_QUANT_MAX_AMPLITUDE_EXT,
+                NLSF_QUANT_MAX_AMPLITUDE_EXT - 1,
+            );
+            ind[j][i] = ind_tmp as i8;
 
-            // Quantize
-            let q_raw = (res_q10 as i64 * inv_quant_step_size_q6 as i64 >> 16) as i32;
-            let ind0 = imax(imin(q_raw, NLSF_QUANT_MAX_AMPLITUDE_EXT), -NLSF_QUANT_MAX_AMPLITUDE_EXT);
-            let ind1 = ind0 + (if ind0 < 0 { -1 } else { 1 });
+            // Look up outputs from precomputed tables (C lines 98-104)
+            let tbl_idx = (ind_tmp + NLSF_QUANT_MAX_AMPLITUDE_EXT) as usize;
+            let out0_q10 = (out0_q10_table[tbl_idx] + pred_q10) as i16;
+            let out1_q10 = (out1_q10_table[tbl_idx] + pred_q10) as i16;
+            prev_out_q10[j] = out0_q10;
+            prev_out_q10[j + n_states] = out1_q10;
 
-            // Rate-distortion for candidate 0
-            let mut out0_q10 = ind0 << 10;
-            if out0_q10 > 0 { out0_q10 -= 102; } else if out0_q10 < 0 { out0_q10 += 102; }
-            out0_q10 = pred + ((out0_q10 as i64 * quant_step_size_q16 as i64 >> 16) as i32);
-            let err0 = in_q10 - out0_q10;
-            let dist0 = ((err0 as i64 * err0 as i64 * w_q5[i] as i64) >> 5) as i32;
-            let ix0 = imin(imax(ind0 + NLSF_QUANT_MAX_AMPLITUDE_EXT, 0),
-                           2 * NLSF_QUANT_MAX_AMPLITUDE_EXT) as usize;
-            let rate0 = ec_rates_q5[(ec_ix[i] as usize) + ix0] as i32;
-            let rd0 = rd_q25[j].saturating_add(dist0).saturating_add(mu_q20 * rate0 >> 5);
-
-            // Rate-distortion for candidate 1
-            let ind1_clamped = imax(imin(ind1, NLSF_QUANT_MAX_AMPLITUDE_EXT), -NLSF_QUANT_MAX_AMPLITUDE_EXT);
-            let mut out1_q10 = ind1_clamped << 10;
-            if out1_q10 > 0 { out1_q10 -= 102; } else if out1_q10 < 0 { out1_q10 += 102; }
-            out1_q10 = pred + ((out1_q10 as i64 * quant_step_size_q16 as i64 >> 16) as i32);
-            let err1 = in_q10 - out1_q10;
-            let dist1 = ((err1 as i64 * err1 as i64 * w_q5[i] as i64) >> 5) as i32;
-            let ix1 = imin(imax(ind1_clamped + NLSF_QUANT_MAX_AMPLITUDE_EXT, 0),
-                           2 * NLSF_QUANT_MAX_AMPLITUDE_EXT) as usize;
-            let rate1 = ec_rates_q5[(ec_ix[i] as usize) + ix1] as i32;
-            let rd1 = rd_q25[j].saturating_add(dist1).saturating_add(mu_q20 * rate1 >> 5);
-
-            // Store best candidate
-            if n_states <= NLSF_QUANT_DEL_DEC_STATES / 2 {
-                // Can expand states
-                let new_j = n_states;
-                // State j gets candidate 0, new state gets candidate 1
-                rd_q25[j] = rd0;
-                prev_out_q10[j] = out0_q10;
-                ind[j][i] = ind0 as i8;
-
-                rd_q25[new_j] = rd1;
-                prev_out_q10[new_j] = out1_q10;
-                ind[new_j] = ind[j];
-                ind[new_j][i] = ind1_clamped as i8;
-                n_states += 1;
-            } else {
-                // Prune: keep the better candidate
-                if rd0 <= rd1 {
-                    rd_q25[j] = rd0;
-                    prev_out_q10[j] = out0_q10;
-                    ind[j][i] = ind0 as i8;
+            // Compute rates with three-way branch (C lines 107-126)
+            let rate0_q5: i32;
+            let rate1_q5: i32;
+            if ind_tmp + 1 >= NLSF_QUANT_MAX_AMPLITUDE {
+                if ind_tmp + 1 == NLSF_QUANT_MAX_AMPLITUDE {
+                    rate0_q5 = rates_q5[(ind_tmp + NLSF_QUANT_MAX_AMPLITUDE) as usize] as i32;
+                    rate1_q5 = 280;
                 } else {
-                    rd_q25[j] = rd1;
-                    prev_out_q10[j] = out1_q10;
-                    ind[j][i] = ind1_clamped as i8;
+                    rate0_q5 =
+                        silk_smlabb(280 - 43 * NLSF_QUANT_MAX_AMPLITUDE, 43, ind_tmp);
+                    rate1_q5 = rate0_q5 + 43;
                 }
+            } else if ind_tmp <= -NLSF_QUANT_MAX_AMPLITUDE {
+                if ind_tmp == -NLSF_QUANT_MAX_AMPLITUDE {
+                    rate0_q5 = 280;
+                    rate1_q5 =
+                        rates_q5[(ind_tmp + 1 + NLSF_QUANT_MAX_AMPLITUDE) as usize] as i32;
+                } else {
+                    rate0_q5 =
+                        silk_smlabb(280 - 43 * NLSF_QUANT_MAX_AMPLITUDE, -43, ind_tmp);
+                    rate1_q5 = rate0_q5 - 43;
+                }
+            } else {
+                rate0_q5 = rates_q5[(ind_tmp + NLSF_QUANT_MAX_AMPLITUDE) as usize] as i32;
+                rate1_q5 =
+                    rates_q5[(ind_tmp + 1 + NLSF_QUANT_MAX_AMPLITUDE) as usize] as i32;
+            }
+
+            // Compute RD for both candidates (C lines 127-131)
+            let rd_tmp_q25 = rd_q25[j];
+            let diff0 = in_q10 - out0_q10 as i32;
+            rd_q25[j] = silk_smlabb(
+                silk_mla(rd_tmp_q25, silk_smulbb(diff0, diff0), w_q5[i] as i32),
+                mu_q20,
+                rate0_q5,
+            );
+            let diff1 = in_q10 - out1_q10 as i32;
+            rd_q25[j + n_states] = silk_smlabb(
+                silk_mla(rd_tmp_q25, silk_smulbb(diff1, diff1), w_q5[i] as i32),
+                mu_q20,
+                rate1_q5,
+            );
+        }
+
+        if n_states <= NLSF_QUANT_DEL_DEC_STATES / 2 {
+            // Double number of states and copy (C lines 136-143)
+            for j in 0..n_states {
+                ind[j + n_states][i] = ind[j][i] + 1;
+            }
+            n_states <<= 1;
+            for j in n_states..NLSF_QUANT_DEL_DEC_STATES {
+                ind[j][i] = ind[j - n_states][i];
+            }
+        } else {
+            // Pairwise sort lower and upper half (C lines 145-161)
+            for j in 0..NLSF_QUANT_DEL_DEC_STATES {
+                if rd_q25[j] > rd_q25[j + NLSF_QUANT_DEL_DEC_STATES] {
+                    rd_max_q25[j] = rd_q25[j];
+                    rd_min_q25[j] = rd_q25[j + NLSF_QUANT_DEL_DEC_STATES];
+                    rd_q25[j] = rd_min_q25[j];
+                    rd_q25[j + NLSF_QUANT_DEL_DEC_STATES] = rd_max_q25[j];
+                    let tmp = prev_out_q10[j];
+                    prev_out_q10[j] = prev_out_q10[j + NLSF_QUANT_DEL_DEC_STATES];
+                    prev_out_q10[j + NLSF_QUANT_DEL_DEC_STATES] = tmp;
+                    ind_sort[j] = j + NLSF_QUANT_DEL_DEC_STATES;
+                } else {
+                    rd_min_q25[j] = rd_q25[j];
+                    rd_max_q25[j] = rd_q25[j + NLSF_QUANT_DEL_DEC_STATES];
+                    ind_sort[j] = j;
+                }
+            }
+            // Compare highest RD of winning half with lowest of losing half (C lines 164-189)
+            loop {
+                let mut min_max_q25 = i32::MAX;
+                let mut max_min_q25: i32 = 0;
+                let mut ind_min_max: usize = 0;
+                let mut ind_max_min: usize = 0;
+                for j in 0..NLSF_QUANT_DEL_DEC_STATES {
+                    if min_max_q25 > rd_max_q25[j] {
+                        min_max_q25 = rd_max_q25[j];
+                        ind_min_max = j;
+                    }
+                    if max_min_q25 < rd_min_q25[j] {
+                        max_min_q25 = rd_min_q25[j];
+                        ind_max_min = j;
+                    }
+                }
+                if min_max_q25 >= max_min_q25 {
+                    break;
+                }
+                ind_sort[ind_max_min] =
+                    ind_sort[ind_min_max] ^ NLSF_QUANT_DEL_DEC_STATES;
+                rd_q25[ind_max_min] =
+                    rd_q25[ind_min_max + NLSF_QUANT_DEL_DEC_STATES];
+                prev_out_q10[ind_max_min] =
+                    prev_out_q10[ind_min_max + NLSF_QUANT_DEL_DEC_STATES];
+                rd_min_q25[ind_max_min] = 0;
+                rd_max_q25[ind_min_max] = i32::MAX;
+                ind[ind_max_min] = ind[ind_min_max];
+            }
+            // Increment index if from upper half (C lines 191-193)
+            for j in 0..NLSF_QUANT_DEL_DEC_STATES {
+                ind[j][i] += (ind_sort[j] >> NLSF_QUANT_DEL_DEC_STATES_LOG2) as i8;
             }
         }
     }
 
-    // Select winner (minimum RD)
-    let mut best_j = 0usize;
-    let mut best_rd = rd_q25[0];
-    for j in 1..n_states {
-        if rd_q25[j] < best_rd {
-            best_rd = rd_q25[j];
-            best_j = j;
+    // Find winner across all 2*NLSF_QUANT_DEL_DEC_STATES (C lines 198-211)
+    let mut ind_tmp: usize = 0;
+    let mut min_q25 = i32::MAX;
+    for j in 0..(2 * NLSF_QUANT_DEL_DEC_STATES) {
+        if min_q25 > rd_q25[j] {
+            min_q25 = rd_q25[j];
+            ind_tmp = j;
         }
     }
-
-    // Copy winner indices
-    for i in 0..order_u {
-        indices[i] = ind[best_j][i];
+    for j in 0..order_u {
+        indices[j] = ind[ind_tmp & (NLSF_QUANT_DEL_DEC_STATES - 1)][j];
     }
+    indices[0] += (ind_tmp >> NLSF_QUANT_DEL_DEC_STATES_LOG2) as i8;
 
-    best_rd
+    min_q25
 }
 
 /// Full NLSF encoding pipeline.
@@ -2052,131 +2170,222 @@ pub fn silk_nlsf_encode(
     nlsf_indices: &mut [i8],
     nlsf_q15: &mut [i16],
     cb: &SilkNlsfCbStruct,
-    prev_nlsf_q15: &[i16],
     w_q2: &[i16],
+    nlsf_mu_q20: i32,
     n_survivors: i32,
     signal_type: i32,
-    mu_q20_in: i32,
 ) -> i32 {
     let order = cb.order as usize;
     let n_vectors = cb.n_vectors as usize;
 
-    // Step 1: Compute NLSF VQ errors for all codebook vectors
+    eprintln!("[NLSF INPUT] nlsf_q15={:?} w_q2={:?}", &nlsf_q15[..order], &w_q2[..order]);
+
+    // NLSF stabilization
+    silk_nlsf_stabilize(nlsf_q15, cb.delta_min_q15, order);
+
+    // First stage: VQ
     let mut err_q24 = vec![0i32; n_vectors];
     silk_nlsf_vq(&mut err_q24, nlsf_q15, w_q2, cb.cb1_nlsf_q8, cb.cb1_wght_q9, n_vectors, order);
 
-    // Step 2: Find best first-stage indices (survivors)
+    // Sort the quantization errors (insertion sort to find n_surv best)
     let n_surv = imin(n_survivors, n_vectors as i32) as usize;
-    let mut temp_indices = vec![0usize; n_surv];
-
-    // Simple selection: find n_surv smallest errors
-    for s in 0..n_surv {
-        let mut min_err = i32::MAX;
-        let mut min_idx = 0;
-        for k in 0..n_vectors {
-            if err_q24[k] < min_err {
-                min_err = err_q24[k];
-                min_idx = k;
-            }
-        }
-        temp_indices[s] = min_idx;
-        err_q24[min_idx] = i32::MAX; // exclude from future selection
+    let mut temp_indices1 = vec![0i32; n_vectors];
+    for i in 0..n_vectors {
+        temp_indices1[i] = i as i32;
     }
+    // Insertion sort: find n_surv smallest errors
+    silk_insertion_sort_increasing(&mut err_q24, &mut temp_indices1, n_vectors, n_surv);
 
-    // Step 3: For each survivor, quantize residuals
-    let mut best_rd = i32::MAX;
-    let mut best_survivor = 0usize;
-    let mut best_nlsf_indices = [0i8; MAX_LPC_ORDER + 1];
+    eprintln!("[NLSF VQ] survivors: {:?} vq_errs: {:?} mu_q20={}", &temp_indices1[..n_surv], &err_q24[..n_surv], nlsf_mu_q20);
 
+    let mut rd_q25 = vec![0i32; n_surv];
+    let mut temp_indices2 = vec![0i8; n_surv * MAX_LPC_ORDER];
+
+    // Loop over survivors
     for s in 0..n_surv {
-        let cb1_idx = temp_indices[s];
+        let ind1 = temp_indices1[s] as usize;
 
-        // Compute residual
+        // Residual after first stage
+        let cb_offset = ind1 * order;
         let mut res_q10 = [0i16; MAX_LPC_ORDER];
-        let cb_offset = cb1_idx * order;
+        let mut w_adj_q5 = [0i16; MAX_LPC_ORDER];
         for i in 0..order {
-            let nlsf_tmp = nlsf_q15[i] as i32 - ((cb.cb1_nlsf_q8[cb_offset + i] as i32) << 7);
-            res_q10[i] = ((nlsf_tmp as i64 * cb.cb1_wght_q9[cb_offset + i] as i64) >> 14) as i16;
+            let nlsf_tmp_q15 = (cb.cb1_nlsf_q8[cb_offset + i] as i16) << 7;
+            let w_tmp_q9 = cb.cb1_wght_q9[cb_offset + i] as i32;
+            res_q10[i] = silk_rshift(
+                silk_smulbb(nlsf_q15[i] as i32 - nlsf_tmp_q15 as i32, w_tmp_q9),
+                14,
+            ) as i16;
+            w_adj_q5[i] =
+                silk_div32_varq(w_q2[i] as i32, silk_smulbb(w_tmp_q9, w_tmp_q9), 21) as i16;
         }
 
-        // Unpack entropy table info for this codebook entry
+        // Unpack entropy table indices and predictor
         let mut ec_ix = [0i16; MAX_LPC_ORDER];
         let mut pred_q8 = [0u8; MAX_LPC_ORDER];
-        silk_nlsf_unpack(&mut ec_ix, &mut pred_q8, cb, cb1_idx);
+        silk_nlsf_unpack(&mut ec_ix, &mut pred_q8, cb, ind1);
 
-        // Convert weights to Q5
-        let mut w_q5 = [0i16; MAX_LPC_ORDER];
-        for i in 0..order {
-            w_q5[i] = (w_q2[i] as i32 >> 0) as i16; // Already Q2, need Q5 = Q2 << 3
-        }
-
-        // Delayed-decision quantization of residuals
-        let mut temp_nlsf_ind = [0i8; MAX_LPC_ORDER];
-        let rd = silk_nlsf_del_dec_quant(
-            &mut temp_nlsf_ind,
+        // Trellis quantizer
+        rd_q25[s] = silk_nlsf_del_dec_quant(
+            &mut temp_indices2[s * MAX_LPC_ORDER..],
             &res_q10,
-            &w_q5,
+            &w_adj_q5,
             &pred_q8,
             &ec_ix,
             cb.ec_rates_q5,
             cb.quant_step_size_q16 as i32,
             cb.inv_quant_step_size_q6,
-            mu_q20_in,
+            nlsf_mu_q20,
             order as i16,
         );
-
-        if rd < best_rd {
-            best_rd = rd;
-            best_survivor = s;
-            best_nlsf_indices[0] = cb1_idx as i8;
-            best_nlsf_indices[1..=order].copy_from_slice(&temp_nlsf_ind[..order]);
+        if ind1 == 0 && s < 5 {
+            for i in 0..order {
+                let w_tmp_q9 = cb.cb1_wght_q9[cb_offset + i] as i32;
+                let sq = silk_smulbb(w_tmp_q9, w_tmp_q9);
+                let div_result = silk_div32_varq(w_q2[i] as i32, sq, 21);
+                eprintln!("[W_ADJ i={}] w_q2={} w_tmp_q9={} sq={} div_result={} as_i16={}",
+                    i, w_q2[i], w_tmp_q9, sq, div_result, div_result as i16);
+            }
+            eprintln!("[DELDEC s={}] res_q10={:?} w_adj_q5={:?} pred_q8={:?} ec_ix={:?}",
+                      s, &res_q10[..order], &w_adj_q5[..order], &pred_q8[..order], &ec_ix[..order]);
+            eprintln!("[DELDEC s={}] out_indices={:?} rd={}",
+                      s, &temp_indices2[s*MAX_LPC_ORDER..s*MAX_LPC_ORDER+order], rd_q25[s]);
         }
+
+        // Add rate for first stage
+        let icdf_ptr =
+            &cb.cb1_icdf[((signal_type >> 1) as usize) * n_vectors..];
+        let prob_q8 = if ind1 == 0 {
+            256 - icdf_ptr[ind1] as i32
+        } else {
+            icdf_ptr[ind1 - 1] as i32 - icdf_ptr[ind1] as i32
+        };
+        let bits_q7 = (8 << 7) - silk_lin2log(prob_q8);
+        rd_q25[s] = silk_smlabb(rd_q25[s], bits_q7, silk_rshift(nlsf_mu_q20, 2));
+        eprintln!("[NLSF RD] s={} ind1={} rd_after_deldec={} prob_q8={} bits_q7={} rd_final={}", s, ind1, rd_q25[s] - silk_smlabb(0, bits_q7, silk_rshift(nlsf_mu_q20, 2)), prob_q8, bits_q7, rd_q25[s]);
     }
 
-    // Store result
-    nlsf_indices[..=order].copy_from_slice(&best_nlsf_indices[..=order]);
+    // Find the lowest rate-distortion error
+    let mut best_index = 0i32;
+    {
+        let mut rd_copy = rd_q25.clone();
+        let mut idx_arr = vec![0i32; n_surv];
+        for i in 0..n_surv {
+            idx_arr[i] = i as i32;
+        }
+        silk_insertion_sort_increasing(&mut rd_copy, &mut idx_arr, n_surv, 1);
+        best_index = idx_arr[0];
+    }
+
+    nlsf_indices[0] = temp_indices1[best_index as usize] as i8;
+    let src_offset = best_index as usize * MAX_LPC_ORDER;
+    for i in 0..order {
+        nlsf_indices[1 + i] = temp_indices2[src_offset + i];
+    }
 
     // Decode the quantized NLSFs for use by the encoder
     silk_nlsf_decode(nlsf_q15, nlsf_indices, cb);
 
-    best_rd
+    rd_q25[0]
 }
 
-/// Process NLSFs: interpolate, encode, convert to LPC.
+/// Process NLSFs: compute weights, encode, convert to LPC.
 /// Matches C: `silk_process_NLSFs`.
 pub fn silk_process_nlsfs(
     ps_enc: &mut SilkEncoderState,
     _enc_control: &SilkEncoderControl,
     pred_coef_q12: &mut [[i16; MAX_LPC_ORDER]; 2],
-    nlsf_q15: &[i16],
+    nlsf_q15: &mut [i16],
     prev_nlsf_q15: &[i16],
 ) {
     let order = ps_enc.predict_lpc_order as usize;
-    let nb_subfr = ps_enc.nb_subfr as usize;
 
-    // Compute interpolation coefficient
-    let interp_coef_q2 = ps_enc.indices.nlsf_interp_coef_q2;
+    // Calculate mu values
+    // NLSF_mu = 0.003 - 0.001 * speech_activity
+    let mut nlsf_mu_q20 = silk_smlawb_i32(
+        (0.003 * (1 << 20) as f64 + 0.5) as i32,     // SILK_FIX_CONST(0.003, 20) = 3146
+        (-0.001 * (1i64 << 28) as f64 - 0.5) as i32,  // SILK_FIX_CONST(-0.001, 28) = -268435
+        ps_enc.speech_activity_q8,
+    );
+    if ps_enc.nb_subfr == 2 {
+        // Multiply by 1.5 for 10 ms packets
+        nlsf_mu_q20 = nlsf_mu_q20 + silk_rshift(nlsf_mu_q20, 1);
+    }
 
-    if nb_subfr == 4 && interp_coef_q2 < 4 {
-        // Interpolate NLSFs for the first half
-        let mut nlsf_interp_q15 = [0i16; MAX_LPC_ORDER];
+    // Calculate NLSF weights
+    let mut nlsf_w_qw = [0i16; MAX_LPC_ORDER];
+    silk_nlsf_vq_weights_laroia(&mut nlsf_w_qw, nlsf_q15, order);
+
+    // Update NLSF weights for interpolated NLSFs
+    let do_interpolate = ps_enc.use_interpolated_nlsfs == 1
+        && ps_enc.indices.nlsf_interp_coef_q2 < 4;
+
+    if do_interpolate {
+        // Calculate the interpolated NLSF vector for the first half
+        let mut nlsf0_temp_q15 = [0i16; MAX_LPC_ORDER];
         silk_interpolate(
-            &mut nlsf_interp_q15,
+            &mut nlsf0_temp_q15,
             prev_nlsf_q15,
             nlsf_q15,
-            interp_coef_q2 as i32,
+            ps_enc.indices.nlsf_interp_coef_q2 as i32,
             order,
         );
 
-        // Convert interpolated NLSFs to LPC (first half)
-        silk_nlsf2a(&mut pred_coef_q12[0], &nlsf_interp_q15, order);
-    } else {
-        // No interpolation: first half uses same as second
-        silk_nlsf2a(&mut pred_coef_q12[0], nlsf_q15, order);
+        // Calculate first half NLSF weights for the interpolated NLSFs
+        let mut nlsf_w0_temp_qw = [0i16; MAX_LPC_ORDER];
+        silk_nlsf_vq_weights_laroia(&mut nlsf_w0_temp_qw, &nlsf0_temp_q15, order);
+
+        // Update NLSF weights with contribution from first half
+        let i_sqr_q15 = silk_lshift(
+            silk_smulbb(
+                ps_enc.indices.nlsf_interp_coef_q2 as i32,
+                ps_enc.indices.nlsf_interp_coef_q2 as i32,
+            ),
+            11,
+        );
+        for i in 0..order {
+            nlsf_w_qw[i] = (silk_rshift(nlsf_w_qw[i] as i32, 1)
+                + silk_rshift(
+                    silk_smulbb(nlsf_w0_temp_qw[i] as i32, i_sqr_q15),
+                    16,
+                )) as i16;
+        }
     }
 
-    // Convert current NLSFs to LPC (second half, or all if no interpolation)
+    // NLSF encoding
+    silk_nlsf_encode(
+        &mut ps_enc.indices.nlsf_indices,
+        nlsf_q15,
+        ps_enc.nlsf_cb,
+        &nlsf_w_qw,
+        nlsf_mu_q20,
+        ps_enc.nlsf_msvq_survivors,
+        ps_enc.indices.signal_type as i32,
+    );
+
+    eprintln!("[NLSF QUANTIZED] nlsf_q15={:?} indices={:?}", &nlsf_q15[..order], &ps_enc.indices.nlsf_indices[..order+1]);
+
+    // Convert quantized NLSFs back to LPC coefficients
     silk_nlsf2a(&mut pred_coef_q12[1], nlsf_q15, order);
+
+    if do_interpolate {
+        // Calculate the interpolated, quantized LSF vector for the first half
+        let mut nlsf0_temp_q15 = [0i16; MAX_LPC_ORDER];
+        silk_interpolate(
+            &mut nlsf0_temp_q15,
+            prev_nlsf_q15,
+            nlsf_q15,
+            ps_enc.indices.nlsf_interp_coef_q2 as i32,
+            order,
+        );
+
+        // Convert back to LPC coefficients
+        silk_nlsf2a(&mut pred_coef_q12[0], &nlsf0_temp_q15, order);
+    } else {
+        // Copy LPC coefficients for first half from second half
+        let (first, second) = pred_coef_q12.split_at_mut(1);
+        first[0][..order].copy_from_slice(&second[0][..order]);
+    }
 }
 
 // ===========================================================================
@@ -2193,30 +2402,58 @@ pub fn silk_gains_quant(
     nb_subfr: usize,
 ) {
     for k in 0..nb_subfr {
-        // Convert to log domain
-        let gain_q16 = imax(gains_q16[k], 1);
-        let mut gain_q7 = silk_lin2log(gain_q16) - OFFSET_GAIN;
+        // Convert to log scale, scale, floor()
+        let log_val = silk_lin2log(gains_q16[k]);
+        let smulwb_result = silk_smulwb_i32(SCALE_Q16_GAIN, log_val - OFFSET_GAIN);
+        ind[k] = smulwb_result as i8;
+        eprintln!("[GQUANT k={}] gain_q16={} lin2log={} offset={} diff={} smulwb={} ind_raw={} prev_ind={}",
+            k, gains_q16[k], log_val, OFFSET_GAIN, log_val - OFFSET_GAIN, smulwb_result, ind[k], *prev_ind);
 
-        // Scale by quantization step
-        gain_q7 = (gain_q7 as i64 * 65536 / INV_SCALE_Q16_GAIN as i64) as i32;
+        // Round towards previous quantized gain (hysteresis)
+        if ind[k] < *prev_ind {
+            ind[k] += 1;
+        }
+        ind[k] = imin(imax(ind[k] as i32, 0), N_LEVELS_QGAIN_I - 1) as i8;
 
+        // Compute delta indices and limit
         if k == 0 && !conditional {
-            // Absolute coding
-            let index = imin(imax(gain_q7, 0), N_LEVELS_QGAIN_I - 1);
-            ind[k] = index as i8;
-            *prev_ind = index as i8;
-        } else {
-            // Delta coding
-            let delta = gain_q7 - *prev_ind as i32;
-            let delta = imin(imax(delta, MIN_DELTA_GAIN_QUANT), MAX_DELTA_GAIN_QUANT);
-            ind[k] = (delta - MIN_DELTA_GAIN_QUANT) as i8;
-            *prev_ind = imin(
-                imax(*prev_ind as i32 + delta, 0),
+            // Full index
+            ind[k] = imin(
+                imax(ind[k] as i32, *prev_ind as i32 + MIN_DELTA_GAIN_QUANT),
                 N_LEVELS_QGAIN_I - 1,
             ) as i8;
+            *prev_ind = ind[k];
+        } else {
+            // Delta index
+            ind[k] = (ind[k] as i32 - *prev_ind as i32) as i8;
+
+            // Double the quantization step size for large gain increases,
+            // so that the max gain level can be reached
+            let double_step_size_threshold =
+                2 * MAX_DELTA_GAIN_QUANT - N_LEVELS_QGAIN_I + *prev_ind as i32;
+            if (ind[k] as i32) > double_step_size_threshold {
+                ind[k] = (double_step_size_threshold
+                    + silk_rshift(ind[k] as i32 - double_step_size_threshold + 1, 1))
+                    as i8;
+            }
+
+            ind[k] = imin(imax(ind[k] as i32, MIN_DELTA_GAIN_QUANT), MAX_DELTA_GAIN_QUANT) as i8;
+
+            // Accumulate deltas
+            if (ind[k] as i32) > double_step_size_threshold {
+                *prev_ind = imin(
+                    *prev_ind as i32 + silk_lshift(ind[k] as i32, 1) - double_step_size_threshold,
+                    N_LEVELS_QGAIN_I - 1,
+                ) as i8;
+            } else {
+                *prev_ind = (*prev_ind as i32 + ind[k] as i32) as i8;
+            }
+
+            // Shift to make non-negative
+            ind[k] = (ind[k] as i32 - MIN_DELTA_GAIN_QUANT) as i8;
         }
 
-        // Dequantize to get reconstructed gain
+        // Scale and convert to linear scale
         let log_val = imin(
             silk_smulwb(INV_SCALE_Q16_GAIN, *prev_ind as i16) + OFFSET_GAIN,
             3967,
@@ -2654,6 +2891,10 @@ pub fn silk_encode_pulses(
     let nb_shell_blocks = frame_length / SHELL_CODEC_FRAME_LENGTH;
     // Extra block for 12 kHz / 10ms case (frame_length = 120, not multiple of 16)
     let iter = if frame_length == 120 { nb_shell_blocks + 1 } else { nb_shell_blocks };
+
+    eprintln!("[PULSES] frame_length={} pulses_nonzero={} pulses_sum={}", frame_length,
+              pulses.iter().filter(|&&p| p != 0).count(),
+              pulses.iter().map(|&p| (p as i32).unsigned_abs()).sum::<u32>());
 
     // Convert pulses to i32 and compute absolute values per shell block
     let mut abs_pulses = vec![0i32; iter * SHELL_CODEC_FRAME_LENGTH];
@@ -3375,6 +3616,11 @@ fn silk_noise_shape_quantizer(
 
         let r_q10 = x_sc_q10[i] - tmp1_final; // residual error Q10
 
+        if i < 3 && nsq.s_ltp_shp_buf_idx < 650 {
+            eprintln!("[NSQ i={}] x_sc={} lpc_pred={} tmp1_final={} r_q10={} offset_q10={}",
+                      i, x_sc_q10[i], lpc_pred_q10, tmp1_final, r_q10, offset_q10);
+        }
+
         // Flip sign depending on dither
         let r_q10 = if nsq.rand_seed < 0 { -r_q10 } else { r_q10 };
         let r_q10 = imax(imin(r_q10, 30 << 10), -(31 << 10));
@@ -3514,6 +3760,9 @@ pub fn silk_nsq(
     for k in 0..nb_subfr {
         let coef_idx = (k >> 1) | (1 - lsf_interpolation_flag);
         let a_q12 = &pred_coef_q12[coef_idx as usize];
+        if k == 0 && nsq.s_ltp_shp_buf_idx < 650 {
+            eprintln!("[NSQ LPC] coef_idx={} a_q12={:?}", coef_idx, &a_q12[..predict_lpc_order]);
+        }
         let b_q14 = &ltp_coef_q14[k * LTP_ORDER..];
         let ar_shp_q13 = &ar_q13[k * shaping_lpc_order..];
 
@@ -4294,13 +4543,18 @@ pub fn silk_process_gains_fix(
         }
         let gain = ps_enc_ctrl.gains_q16[k];
         let gain_squared = silk_add_sat32(res_nrg_part, silk_smmul(gain, gain));
+        eprintln!("[PROCGAIN k={}] gain_in={} res_nrg={} res_nrg_q={} res_nrg_part={} inv_max_sqr={} smmul={} gain_sq={} branch={}",
+            k, gain, res_nrg, ps_enc_ctrl.res_nrg_q[k], res_nrg_part, inv_max_sqr_val_q16,
+            silk_smmul(gain, gain), gain_squared, if gain_squared < i16::MAX as i32 { "lo" } else { "hi" });
         if gain_squared < i16::MAX as i32 {
             let gain_squared = silk_smlaww(shl32(res_nrg_part, 16), gain, gain);
             let gain = imin(silk_sqrt_approx(gain_squared), i32::MAX >> 8);
             ps_enc_ctrl.gains_q16[k] = silk_lshift_sat32(gain, 8);
+            eprintln!("[PROCGAIN k={}] lo: gain_sq_hi={} sqrt={} final_q16={}", k, gain_squared, gain, ps_enc_ctrl.gains_q16[k]);
         } else {
             let gain = imin(silk_sqrt_approx(gain_squared), i32::MAX >> 16);
             ps_enc_ctrl.gains_q16[k] = silk_lshift_sat32(gain, 16);
+            eprintln!("[PROCGAIN k={}] hi: sqrt={} final_q16={}", k, gain, ps_enc_ctrl.gains_q16[k]);
         }
     }
 
@@ -4407,7 +4661,9 @@ pub fn silk_find_lpc_fix(
         }
 
         // Convert to NLSFs
+        eprintln!("[A2NLSF] a_q16={:?}", &a_tmp_q16[..d]);
         silk_a2nlsf(nlsf_q15, &a_tmp_q16, d);
+        eprintln!("[A2NLSF] nlsf_q15={:?}", &nlsf_q15[..d]);
 
         // Search over interpolation indices
         let mut nlsf0_q15 = [0i16; MAX_LPC_ORDER];
@@ -4593,7 +4849,7 @@ pub fn silk_find_pred_coefs_fix(
         &mut ps_enc.s_cmn,
         ps_enc_ctrl,
         &mut pred_coef_q12,
-        &nlsf_q15,
+        &mut nlsf_q15,
         &prev_nlsf,
     );
     ps_enc_ctrl.pred_coef_q12 = pred_coef_q12;
@@ -5067,6 +5323,9 @@ pub fn silk_encode_frame_fix(
     let la_shape = (LA_SHAPE_MS * ps_enc.s_cmn.fs_khz) as usize;
     let nb_subfr = ps_enc.s_cmn.nb_subfr as usize;
 
+    eprintln!("[RUST ENC] silk_encode_frame_fix called: prefill={} frame_len={} nb_subfr={}",
+        ps_enc.s_cmn.prefill_flag, frame_length, nb_subfr);
+
     let bits_margin = if use_cbr != 0 { 5 } else { max_bits / 4 };
 
     ps_enc.s_cmn.indices.seed = ((ps_enc.s_cmn.frame_counter as u8) & 3) as i8;
@@ -5181,6 +5440,7 @@ pub fn silk_encode_frame_fix(
         let mut best_gain_mult = [0i16; MAX_NB_SUBFR];
         let mut best_sum = [0i32; MAX_NB_SUBFR];
 
+        eprintln!("[RS LOOP] max_bits={} use_cbr={} bits_margin={}", max_bits, use_cbr, bits_margin);
         for iter in 0..=max_iter {
             let n_bits: i32;
             if gains_id == gains_id_lower && found_lower {
@@ -5282,6 +5542,8 @@ pub fn silk_encode_frame_fix(
                     );
                 }
 
+                let pulse_sum: i32 = ps_enc.s_cmn.pulses[..frame_length].iter().map(|p| (*p as i32).abs()).sum();
+                eprintln!("[RS LOOP iter={}] n_bits={} max_bits={} use_cbr={} pulse_sum={}", iter, n_bits, max_bits, use_cbr, pulse_sum);
                 // VBR early exit: first iter and within budget
                 if use_cbr == 0 && iter == 0 && n_bits <= max_bits {
                     break;
@@ -5383,6 +5645,9 @@ pub fn silk_encode_frame_fix(
                 );
             }
             ps_enc.s_shape.last_gain_index = s_enc_ctrl.last_gain_index_prev;
+            eprintln!("[RS GAINS_QUANT iter] gains_q16={:?} prev_ind={} cond={}",
+                &s_enc_ctrl.gains_q16[..nb_subfr], ps_enc.s_shape.last_gain_index,
+                cond_coding == CODE_CONDITIONALLY);
             silk_gains_quant(
                 &mut ps_enc.s_cmn.indices.gains_indices,
                 &mut s_enc_ctrl.gains_q16,
@@ -5726,10 +5991,12 @@ pub fn silk_encode(
     activity: i32,
 ) -> i32 {
     let mut ret = SILK_NO_ERROR;
+    eprintln!("[RUST silk_encode] ENTERED: n_samples_in={} prefill_flag={}", n_samples_in, prefill_flag);
 
     // Validate control input
     ret = check_control_input(enc_control);
     if ret != SILK_NO_ERROR {
+        eprintln!("[RUST silk_encode] check_control_input failed: {}", ret);
         return ret;
     }
 

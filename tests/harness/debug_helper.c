@@ -12,6 +12,26 @@ typedef struct {
 
 #include <stdio.h>
 
+/* Forward declarations for SILK functions we want to test */
+extern opus_int32 silk_lin2log(const opus_int32 inLin);
+extern void silk_gains_quant(
+    opus_int8 ind[], opus_int32 gain_Q16[], opus_int8 *prev_ind,
+    const opus_int conditional, const opus_int nb_subfr);
+
+void debug_test_gains_quant(void) {
+    opus_int32 gains[4] = {115456, 115456, 115456, 115456};
+    opus_int8 ind[4] = {0};
+    opus_int8 prev_ind = 10;
+
+    fprintf(stderr, "[C TEST] silk_lin2log(115456)=%d\n", silk_lin2log(115456));
+
+    silk_gains_quant(ind, gains, &prev_ind, 0, 4);
+    fprintf(stderr, "[C TEST] gains_quant result: ind=[%d, %d, %d, %d] final_prev=%d\n",
+        (int)ind[0], (int)ind[1], (int)ind[2], (int)ind[3], (int)prev_ind);
+    fprintf(stderr, "[C TEST] gains_q16_after=[%d, %d, %d, %d]\n",
+        gains[0], gains[1], gains[2], gains[3]);
+}
+
 void debug_dump_silk_indices(OpusEncoder *enc) {
     OpusEncoderOffsets *offsets = (OpusEncoderOffsets *)enc;
     silk_encoder *silk = (silk_encoder *)((char *)enc + offsets->silk_enc_offset);

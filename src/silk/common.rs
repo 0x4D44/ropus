@@ -51,6 +51,8 @@ pub const MAX_QGAIN_DB: i32 = 88;
 pub const OFFSET_GAIN: i32 = (MIN_QGAIN_DB * 128) / 6 + 16 * 128;
 pub const INV_SCALE_Q16_GAIN: i32 =
     (65536 * (((MAX_QGAIN_DB - MIN_QGAIN_DB) * 128) / 6)) / (N_LEVELS_QGAIN_I - 1);
+pub const SCALE_Q16_GAIN: i32 =
+    (65536 * (N_LEVELS_QGAIN_I - 1)) / (((MAX_QGAIN_DB - MIN_QGAIN_DB) * 128) / 6);
 
 /// Decode_core constants
 pub const QUANT_LEVEL_ADJUST_Q10: i32 = 80; // SILK_FIX_CONST(NLSF_QUANT_LEVEL_ADJ, 10) ≈ 102, but C uses 80
@@ -110,6 +112,13 @@ pub fn silk_clz32(x: i32) -> i32 {
     32 - ec_ilog(x as u32)
 }
 
+/// Rotate right 32-bit value.
+/// Matches C: `silk_ROR32`.
+#[inline(always)]
+pub fn silk_ror32(a32: i32, rot: i32) -> i32 {
+    (a32 as u32).rotate_right(rot as u32) as i32
+}
+
 /// Count leading zeros of a 64-bit value.
 #[inline(always)]
 pub fn silk_clz64(x: i64) -> i32 {
@@ -163,11 +172,14 @@ const SIGM_LUT_NEG_Q15: [i32; 6] = [16384, 8812, 3906, 1554, 589, 219];
 /// Matches C: `silk_lin2log`.
 /// `inLin` is a positive i32 value.
 pub fn silk_lin2log(in_lin: i32) -> i32 {
-    // silk_lin2log(x) = silk_CLZ32(x) inverted + frac approx
-    // = (EC_ILOG(x) - 1) << 7 + frac_Q7
     let lz = silk_clz32(in_lin);
-    let frac_q7 = ((in_lin << lz) >> 24) & 0x7F; // extract 7-bit fraction
-    (31 - lz) * 128 + frac_q7
+    let frac_q7 = silk_ror32(in_lin, 24 - lz) & 0x7F;
+    // Piece-wise parabolic approximation of log2
+    silk_add_lshift32(
+        silk_smlawb_i32(frac_q7, frac_q7 * (128 - frac_q7), 179),
+        31 - lz,
+        7,
+    )
 }
 
 /// Convert log-domain (Q7 input) to linear-domain.
@@ -177,18 +189,22 @@ pub fn silk_log2lin(in_log_q7: i32) -> i32 {
         return 0;
     }
     if in_log_q7 >= 3967 {
-        // Clip to prevent overflow (3967 = 31.0 in Q7)
-        return i32::MAX >> 1;
+        return i32::MAX;
     }
-    let integer_part = in_log_q7 >> 7;       // Integer part
-    let frac_q7 = in_log_q7 & 0x7F;          // Fractional part (Q7)
-    // out = (1 << integer_part) + frac correction
-    if integer_part < 7 {
-        (1 << integer_part) + ((1 << integer_part) * frac_q7 >> 7)
+    let mut out = 1i32 << (in_log_q7 >> 7);
+    let frac_q7 = in_log_q7 & 0x7F;
+    // Piece-wise parabolic approximation
+    let correction = silk_smlawb_i32(
+        frac_q7,
+        silk_smulbb(frac_q7, 128 - frac_q7),
+        -174,
+    );
+    if in_log_q7 < 2048 {
+        out = silk_add_rshift32(out, out * correction, 7);
     } else {
-        let out = (1i32 << integer_part) + shr32(shl32(frac_q7, integer_part), 7);
-        out
+        out = silk_mla(out, out >> 7, correction);
     }
+    out
 }
 
 // ===========================================================================
@@ -208,10 +224,11 @@ pub fn silk_bwexpander(ar: &mut [i16], d: usize, mut chirp_q16: i32) {
 /// Bandwidth expansion for i32 LPC coefficients.
 pub fn silk_bwexpander_32(ar: &mut [i32], d: usize, mut chirp_q16: i32) {
     let chirp_minus_one_q16 = chirp_q16 - 65536;
-    for i in 0..d {
+    for i in 0..d - 1 {
         ar[i] = mult32_32_q16(chirp_q16, ar[i]);
-        chirp_q16 = chirp_q16.wrapping_add((chirp_q16 as i64 * chirp_minus_one_q16 as i64 >> 16) as i32);
+        chirp_q16 += silk_rshift_round(chirp_q16.wrapping_mul(chirp_minus_one_q16), 16);
     }
+    ar[d - 1] = mult32_32_q16(chirp_q16, ar[d - 1]);
 }
 
 // ===========================================================================
@@ -300,16 +317,17 @@ pub fn silk_sqrt_approx(x: i32) -> i32 {
         return 0;
     }
     let lz = silk_clz32(x);
-    if lz & 1 != 0 {
-        // Odd leading zeros
-        let y = 1 << ((32 - lz) >> 1);
-        // One Newton iteration
-        y + (x / y >> 1)
-    } else {
-        // Even leading zeros
-        let y = (3 << ((32 - lz) >> 1)) >> 2;
-        y + (x / y >> 1)
-    }
+    let frac_q7 = silk_ror32(x, 24 - lz) & 0x7F;
+
+    let mut y: i32 = if lz & 1 != 0 { 32768 } else { 46214 }; // 46214 = sqrt(2) * 32768
+
+    // Get scaling right
+    y >>= silk_rshift(lz, 1);
+
+    // Increment using fractional part of input
+    y = silk_smlawb_i32(y, y, silk_smulbb(213, frac_q7));
+
+    y
 }
 
 // ===========================================================================
@@ -421,16 +439,20 @@ pub fn silk_lpc_analysis_filter(
     len: usize,
     d: usize,
 ) {
-    for n in (0..len).rev() {
-        // For analysis filter: out[n] = s[n] - Σ(a[k] * s[n-k-1]) for k=0..d-1
-        let mut sum_q12: i32 = 0;
-        for k in 0..d {
-            if n >= k + 1 {
-                sum_q12 += a_q12[k] as i32 * s[n - k - 1] as i32;
-            }
+    for ix in d..len {
+        let mut out32_q12: u32 = (s[ix - 1] as i32 * a_q12[0] as i32) as u32;
+        for j in 1..d {
+            out32_q12 = out32_q12.wrapping_add((s[ix - 1 - j] as i32 * a_q12[j] as i32) as u32);
         }
-        let out_val = s[n] as i32 - (sum_q12 >> 12);
-        out[n] = sat16(out_val);
+        // Subtract prediction: s[ix]<<12 - accumulated, with wrapping
+        let out32_q12 = ((s[ix] as i32 as u32) << 12).wrapping_sub(out32_q12) as i32;
+        // Scale to Q0 with rounding
+        let out32 = silk_rshift_round(out32_q12, 12);
+        out[ix] = sat16(out32);
+    }
+    // Set first d output samples to zero
+    for j in 0..d {
+        out[j] = 0;
     }
 }
 
@@ -594,6 +616,51 @@ pub fn silk_lpc_fit(
 
 /// Insertion sort of i16 values in ascending order.
 /// Matches C: `silk_insertion_sort_increasing_all_values_int16`.
+/// Insertion sort, increasing order. Sorts the first K positions of `a`
+/// (and corresponding `idx`), with the K smallest values from a[0..L].
+/// Matches C: `silk_insertion_sort_increasing`.
+pub fn silk_insertion_sort_increasing(
+    a: &mut [i32],
+    idx: &mut [i32],
+    l: usize,
+    k: usize,
+) {
+    // Initialize idx for the first K positions
+    for i in 0..k {
+        idx[i] = i as i32;
+    }
+
+    // Sort the first K elements
+    for i in 1..k {
+        let value = a[i];
+        let index = idx[i];
+        let mut j = i as i32 - 1;
+        while j >= 0 && value < a[j as usize] {
+            a[(j + 1) as usize] = a[j as usize];
+            idx[(j + 1) as usize] = idx[j as usize];
+            j -= 1;
+        }
+        a[(j + 1) as usize] = value;
+        idx[(j + 1) as usize] = index;
+    }
+
+    // Check remaining elements and insert if smaller than K-th smallest
+    for i in k..l {
+        let value = a[i];
+        if value < a[k - 1] {
+            let index = i as i32;
+            let mut j = k as i32 - 2;
+            while j >= 0 && value < a[j as usize] {
+                a[(j + 1) as usize] = a[j as usize];
+                idx[(j + 1) as usize] = idx[j as usize];
+                j -= 1;
+            }
+            a[(j + 1) as usize] = value;
+            idx[(j + 1) as usize] = index;
+        }
+    }
+}
+
 pub fn silk_insertion_sort_increasing_all_values_int16(a: &mut [i16], len: usize) {
     for i in 1..len {
         let val = a[i];
@@ -756,20 +823,36 @@ pub fn silk_smlabb_ovflw(a: i32, b: i32, c: i32) -> i32 {
 }
 
 /// `silk_DIV32_varQ(a32, b32, q_res)`: divide with variable Q result.
-/// Returns `(a32 << q_res) / b32` with overflow protection.
+/// Returns a good approximation of `(a32 << q_res) / b32`.
+/// Matches C: `silk_DIV32_varQ` in `silk/Inlines.h`.
 #[inline(always)]
 pub fn silk_div32_varq(a32: i32, b32: i32, q_res: i32) -> i32 {
-    let a_headrm = (if a32 >= 0 { a32 } else { !a32 }).leading_zeros() as i32 - 1;
-    let a32_nrm = a32 << a_headrm;
-    let b_headrm = (if b32 >= 0 { b32 } else { !b32 }).leading_zeros() as i32 - 1;
-    let b32_nrm = b32 << b_headrm;
-    let b32_inv = ((i32::MAX >> 2) / (b32_nrm >> 16)) << 16;
-    let result = silk_smmul(a32_nrm, b32_inv);
-    let lshift = q_res - a_headrm + b_headrm + 1;
+    // Compute headroom and normalize inputs
+    let a_headrm = a32.unsigned_abs().leading_zeros() as i32 - 1;
+    let a32_nrm = shl32(a32, a_headrm); // Q: a_headrm
+    let b_headrm = b32.unsigned_abs().leading_zeros() as i32 - 1;
+    let b32_nrm = shl32(b32, b_headrm); // Q: b_headrm
+
+    // Inverse of b32, with 14 bits of precision
+    let b32_inv = silk_div32_16(i32::MAX >> 2, b32_nrm >> 16); // Q: 29 + 16 - b_headrm
+
+    // First approximation
+    let mut result = silk_smulwb_i32(a32_nrm, b32_inv); // Q: 29 + a_headrm - b_headrm
+
+    // Compute residual (OK to overflow — final a32_nrm value is small)
+    let a32_nrm = (a32_nrm as u32).wrapping_sub(
+        (silk_smmul(b32_nrm, result) as u32).wrapping_shl(3)
+    ) as i32; // Q: a_headrm
+
+    // Refinement
+    result = silk_smlawb_i32(result, a32_nrm, b32_inv); // Q: 29 + a_headrm - b_headrm
+
+    // Convert to Qres domain
+    let lshift = 29 + a_headrm - b_headrm - q_res;
     if lshift < 0 {
-        silk_rshift(result, -lshift)
+        silk_lshift_sat32(result, -lshift)
     } else if lshift < 32 {
-        silk_lshift_sat32(result, lshift)
+        silk_rshift(result, lshift)
     } else {
         0
     }
@@ -1059,7 +1142,7 @@ pub fn silk_nlsf_stabilize(
 
             let center = imin(
                 imax(
-                    (nlsf_q15[min_idx - 1] as i32 + nlsf_q15[min_idx] as i32) >> 1,
+                    silk_rshift_round(nlsf_q15[min_idx - 1] as i32 + nlsf_q15[min_idx] as i32, 1),
                     min_center,
                 ),
                 max_center,

@@ -130,6 +130,7 @@ unsafe extern "C" {
 
     // Debug helper
     pub fn debug_dump_silk_indices(enc: *mut OpusEncoder);
+    pub fn debug_test_gains_quant();
 }
 
 // ---------------------------------------------------------------------------

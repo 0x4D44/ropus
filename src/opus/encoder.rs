@@ -1804,8 +1804,10 @@ impl OpusEncoder {
 
                 // Encode SILK
                 let mut n_bytes = 0i32;
+                eprintln!("[OPUS] about to call silk_encode, silk_enc.is_some()={}", self.silk_enc.is_some());
                 if let Some(ref mut silk) = self.silk_enc {
                     let silk_pcm = &pcm_buf[..(frame_size * self.channels) as usize];
+                    eprintln!("[OPUS] calling silk_encode: pcm_len={} frame_size={} ch={}", silk_pcm.len(), frame_size, self.channels);
                     let silk_ret = silk_encode(
                         silk,
                         &mut self.silk_mode,

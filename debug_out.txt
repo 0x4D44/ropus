@@ -1,0 +1,12 @@
+C reference opus: libopus 1.5.2-harness-fixed
+
+Input: C:/language/mdopus/tests/vectors/8000hz_mono_silence.wav (8000 Hz, 1 ch, 8000 samples)
+Encoding with C reference (bitrate=16000, complexity=10)...
+  C encoded: 2100 bytes
+Encoding with Rust implementation...
+  Rust encoded: 2100 bytes
+
+encode: FAIL at offset 4 (total: 2100, matching: 1351, max_diff: 244)
+  C ref:  28 00 0b 41 1f 0b e4 53 15 4b f2 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 28 00 0b 41 20 06 e0 b3 0e c6
+  Rust:   28 00 0b 41 16 2f 91 4c 4f 06 77 0f 35 da 00 aa 75 1c a3 f0 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 28 00 0b 41 18 1b 82 c9 6d 5f
+                        ^ offset 4

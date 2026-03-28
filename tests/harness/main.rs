@@ -249,6 +249,8 @@ fn c_encode(pcm: &[i16], sample_rate: i32, channels: i32, bitrate: i32, complexi
         let mut output = Vec::new();
         let mut packet = vec![0u8; max_packet];
 
+        bindings::debug_test_gains_quant();
+
         let mut pos = 0;
         let mut frame_num = 0usize;
         while pos + samples_per_frame <= pcm.len() {
@@ -357,6 +359,7 @@ fn rust_encode(
     enc.set_bitrate(bitrate);
     enc.set_complexity(complexity);
     enc.set_vbr(0); // CBR for deterministic output
+    eprintln!("[RUST] encoder created: sr={} ch={} br={} cx={}", sample_rate, channels, bitrate, complexity);
 
     let frame_size = (sample_rate / 50) as usize; // 20ms frames
     let samples_per_frame = frame_size * channels as usize;
@@ -370,6 +373,10 @@ fn rust_encode(
                          &mut packet, max_packet as i32) {
             Ok(ret) => {
                 let ret = ret as usize;
+                if pos == 0 {
+                    eprintln!("[RUST] first frame encoded: {} bytes, data[0..min(ret,16)]={:02x?}",
+                        ret, &packet[..ret.min(16)]);
+                }
                 output.extend_from_slice(&(ret as u16).to_le_bytes());
                 output.extend_from_slice(&packet[..ret]);
             }
