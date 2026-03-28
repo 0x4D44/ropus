@@ -336,7 +336,7 @@ fn comb_filter(
 /// 4. Post-rotate to produce the final MDCT output
 ///
 /// The twiddle factors are computed on the fly using `celt_cos_norm`.
-fn clt_mdct_forward(
+pub(crate) fn clt_mdct_forward(
     input: &[i32],
     output: &mut [i32],
     window: &[i16],
@@ -483,7 +483,7 @@ fn clt_mdct_forward(
 }
 
 /// Select the correct FFT state for a given shift level.
-fn get_fft_state(shift: i32) -> &'static KissFftState {
+pub(crate) fn get_fft_state(shift: i32) -> &'static KissFftState {
     match shift {
         0 => &fft::FFT_STATE_48000_960_0,
         1 => &fft::FFT_STATE_48000_960_1,

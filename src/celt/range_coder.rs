@@ -830,6 +830,14 @@ impl<'a> RangeDecoder<'a> {
     pub fn storage(&self) -> u32 {
         self.storage
     }
+
+    /// Reduce the buffer capacity by `amount` bytes.
+    /// Used to exclude redundancy bytes from the main decode range.
+    /// Matches C: `dec.storage -= redundancy_bytes`.
+    #[inline(always)]
+    pub fn reduce_storage(&mut self, amount: u32) {
+        self.storage -= amount;
+    }
 }
 
 // ============================================================================
