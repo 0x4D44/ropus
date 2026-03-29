@@ -47,10 +47,11 @@ pub fn bits2pulses(m: &CELTMode, band: i32, lm: i32, bits: i32) -> i32 {
             lo = mid;
         }
     }
-    if cache[lo as usize] as i32 >= bits {
+    let lo_bits = if lo == 0 { -1 } else { cache[lo as usize] as i32 };
+    if bits - lo_bits <= cache[hi as usize] as i32 - bits {
         lo
     } else {
-        lo + 1
+        hi
     }
 }
 
@@ -63,7 +64,7 @@ pub fn pulses2bits(m: &CELTMode, band: i32, lm: i32, q: i32) -> i32 {
     if q == 0 {
         0
     } else {
-        cache[q as usize] as i32
+        cache[q as usize] as i32 + 1
     }
 }
 

@@ -62,15 +62,16 @@ static COMB_GAINS: [[i32; 3]; 3] = [
 
 /// Precomputed `6*64/x` table for transient analysis (128 entries).
 /// Trained on real data to minimize average error.
-static INV_TABLE: [i16; 128] = [
-    255, 255, 156,  110,  86,  70,  59,  51,  45,  40,  37,  33,  31,  28,  26,  25,
-     23,  22,  21,  20,  19,  18,  17,  16,  16,  15,  15,  14,  13,  13,  12,  12,
-     12,  12,  11,  11,  11,  10,  10,  10,  10,   9,   9,   9,   9,   9,   8,   8,
-      8,   8,   8,   7,   7,   7,   7,   7,   7,   6,   6,   6,   6,   6,   6,   6,
-      6,   6,   6,   6,   5,   5,   5,   5,   5,   5,   5,   5,   5,   5,   5,   5,
-      4,   4,   4,   4,   4,   4,   4,   4,   4,   4,   4,   4,   4,   4,   4,   4,
-      3,   3,   3,   3,   3,   3,   3,   3,   3,   3,   3,   3,   3,   3,   3,   3,
-      3,   3,   3,   3,   3,   3,   3,   3,   3,   3,   3,   2,   2,   2,   2,   2,
+/// Must match C reference exactly (celt_encoder.c:287-296).
+static INV_TABLE: [u8; 128] = [
+    255,255,156,110, 86, 70, 59, 51, 45, 40, 37, 33, 31, 28, 26, 25,
+     23, 22, 21, 20, 19, 18, 17, 16, 16, 15, 15, 14, 13, 13, 12, 12,
+     12, 12, 11, 11, 11, 10, 10, 10,  9,  9,  9,  9,  9,  9,  8,  8,
+      8,  8,  8,  7,  7,  7,  7,  7,  7,  6,  6,  6,  6,  6,  6,  6,
+      6,  6,  6,  6,  6,  6,  6,  6,  6,  5,  5,  5,  5,  5,  5,  5,
+      5,  5,  5,  5,  5,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,
+      4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  3,  3,
+      3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,  2,
 ];
 
 /// Intensity stereo thresholds (in kbps), 21 entries.
@@ -628,7 +629,7 @@ pub fn celt_preemphasis(
 
 /// Detect transients in the input signal.
 ///
-/// Matches C `transient_analysis()` from `celt_encoder.c`.
+/// Matches C `transient_analysis()` from `celt_encoder.c` (FIXED_POINT path).
 /// Returns true if a transient is detected (`mask_metric > 200`).
 fn transient_analysis(
     input: &[i32],
@@ -641,107 +642,124 @@ fn transient_analysis(
     tone_freq: i32,
     toneishness: i32,
 ) -> bool {
-    let len2 = (len / 2) as usize;
+    let len = len as usize;
+    let len2 = len / 2;
     #[allow(unused_assignments)]
     let mut is_transient = false;
     let mut mask_metric: i32 = 0;
     let tf_max: i32;
 
-    // Forward masking decay: 4 for normal, 5 for weak transient mode
+    // Forward masking decay: 6.7 dB/ms normal, 3.3 dB/ms for weak transients
     let forward_shift: i32 = if allow_weak_transients { 5 } else { 4 };
 
     *weak_transient = false;
     *tf_chan = 0;
 
+    // Normalize input to avoid overflow in filter (C: celt_encoder.c:299)
+    let in_shift = 0i32.max(celt_ilog2(1 + celt_maxabs32(&input[..cc as usize * len])) - 14);
+
+    let mut tmp = vec![0i32; len];
+
     for c in 0..cc as usize {
         let mut mem0: i32 = 0;
         let mut mem1: i32 = 0;
+        let mut unmask: i32 = 0;
 
-        // High-pass filter and downsample by 2
-        let mut tmp = vec![0i32; len2];
-        let n_plus_overlap = len as usize;
-        for i in 0..n_plus_overlap {
-            let x = shr32(input[c * n_plus_overlap + i], SIG_SHIFT);
-            let y = x - mem1 + half32(mem0);
-            mem0 = mem1;
-            mem1 = x;
-            if i >= 12 && (i & 1) == 0 && (i / 2) < len2 {
-                tmp[i / 2] = y;
-            }
+        // High-pass filter: (1 - 2*z^-1 + z^-2) / (1 - z^-1 + .5*z^-2)
+        // (C: celt_encoder.c:326-348, FIXED_POINT path)
+        for i in 0..len {
+            let x = shr32(input[i + c * len], in_shift);
+            let y = mem0 + x;
+            mem0 = mem1 + y - shl32(x, 1);
+            mem1 = x - shr32(y, 1);
+            tmp[i] = sround16(y, 2);
         }
-        // Clear first 6 samples (from the 12 skipped above, downsampled)
-        for i in 0..6.min(len2) {
+
+        // First few samples are bad because we don't propagate the memory
+        for i in 0..12.min(len) {
             tmp[i] = 0;
         }
 
-        // Normalize
-        let maxabs = celt_maxabs16(&tmp[..len2]);
-        let shift = 14i32.saturating_sub(celt_ilog2(1.max(maxabs)));
-        let shift = shift.max(0);
-        for i in 0..len2 {
-            tmp[i] = shl32(tmp[i], shift);
+        // Normalize tmp to max range (C: celt_encoder.c:353-364)
+        {
+            let shift = 14 - celt_ilog2(max16(1, celt_maxabs16(&tmp[..len])));
+            if shift != 0 {
+                for i in 0..len {
+                    tmp[i] = shl16(tmp[i], shift);
+                }
+            }
         }
 
-        // Forward masking
-        let mut forward = vec![0i32; len2];
-        let mut accum: i32 = 0;
+        // Forward pass: grouping by two (C: celt_encoder.c:370-382)
+        let mut mean: i32 = 0;
+        mem0 = 0;
         for i in 0..len2 {
-            let val = sround16(tmp[i], 2);
-            let e = mult16_16(val, val);
-            accum = accum.wrapping_sub(shr32(accum, forward_shift)).wrapping_add(e);
-            forward[i] = accum;
+            let x2 = pshr32(
+                mult16_16(tmp[2 * i], tmp[2 * i]) + mult16_16(tmp[2 * i + 1], tmp[2 * i + 1]),
+                4,
+            );
+            mean += pshr32(x2, 12);
+            mem0 = mem0 + pshr32(x2 - mem0, forward_shift);
+            tmp[i] = pshr32(mem0, 12);
         }
 
-        // Backward masking (steeper decay)
-        let mut backward = vec![0i32; len2];
-        accum = 0;
+        // Backward pass (C: celt_encoder.c:387-400)
+        mem0 = 0;
+        let mut max_e: i32 = 0;
         for i in (0..len2).rev() {
-            let val = sround16(tmp[i], 2);
-            let e = mult16_16(val, val);
-            accum = accum.wrapping_sub(shr32(accum, 3)).wrapping_add(e);
-            backward[i] = accum;
+            mem0 = mem0 + pshr32(shl32(tmp[i], 4) - mem0, 3);
+            tmp[i] = pshr32(mem0, 4);
+            max_e = max16(max_e, tmp[i]);
         }
 
-        // Compute transient metric
-        let mut unmask: i32 = 0;
-        for i in 0..len2 {
-            let f = forward[i].max(1);
-            let b = backward[i].max(1);
-            let id = (128i64 * f as i64 / (f as i64 + b as i64)).max(0).min(127) as usize;
+        // Frame energy: geometric mean of energy and half the max
+        // (C: celt_encoder.c:410-411)
+        mean = mult16_16(
+            celt_sqrt(mean),
+            celt_sqrt(mult16_16(max_e, (len2 >> 1) as i32)),
+        );
+
+        // Inverse of the mean energy in Q15+6 (C: celt_encoder.c:416)
+        let norm = shl32(extend32(len2 as i32), 6 + 14) / (EPSILON + shr32(mean, 1));
+
+        // Harmonic mean, 1/4th of samples (C: celt_encoder.c:426-435)
+        let mut i = 12;
+        while i < len2.saturating_sub(5) {
+            let id = max32(0, min32(127, mult16_32_q15(tmp[i] + EPSILON, norm))) as usize;
             unmask += INV_TABLE[id] as i32;
+            i += 4;
         }
 
-        // Normalize by frame length
-        let c_metric = if len2 > 17 {
-            64 * unmask * 4 / (6 * (len2 as i32 - 17))
-        } else {
-            0
-        };
+        // Normalize (C: celt_encoder.c:438)
+        unmask = 64 * unmask * 4 / (6 * (len2 as i32 - 17));
 
-        if c_metric > mask_metric {
-            mask_metric = c_metric;
+        if unmask > mask_metric {
             *tf_chan = c as i32;
+            mask_metric = unmask;
         }
-    }
-
-    // Tone protection: suppress transient detection for pure tones
-    if toneishness > qconst32(0.98, 29) && tone_freq < qconst16(0.026, 13) {
-        mask_metric = 0;
     }
 
     is_transient = mask_metric > 200;
 
-    // Weak transient handling
+    // Tone protection (C: celt_encoder.c:448-452)
+    if toneishness > qconst32(0.98, 29) && tone_freq < qconst16(0.026, 13) {
+        is_transient = false;
+        mask_metric = 0;
+    }
+
+    // Weak transient handling (C: celt_encoder.c:455-458)
     if allow_weak_transients && is_transient && mask_metric < 600 {
         *weak_transient = true;
         is_transient = false;
     }
 
-    // Compute tf_estimate for VBR
-    tf_max = (celt_sqrt(27 * mask_metric.max(0)) - 42).max(0);
-    let tf_tmp = mult16_16(qconst16(0.0069, 14), tf_max.min(163));
-    let tf_tmp2 = shl32(tf_tmp, 14).wrapping_sub(qconst32(0.139, 28));
-    *tf_estimate = celt_sqrt(tf_tmp2.max(0));
+    // VBR boost metric (C: celt_encoder.c:460-462)
+    tf_max = max16(0, celt_sqrt(27 * mask_metric.max(0)) - 42);
+    *tf_estimate = celt_sqrt(max32(
+        0,
+        shl32(mult16_16(qconst16(0.0069, 14), min16(163, tf_max)), 14)
+            - qconst32(0.139, 28),
+    ));
 
     is_transient
 }
@@ -966,38 +984,45 @@ fn tf_encode(
     is_transient: bool,
     tf_res: &mut [i32],
     lm: i32,
-    tf_select: i32,
+    mut tf_select: i32,
     ec: &mut RangeEncoder,
 ) {
-    let budget = (ec.tell_frac() + (end - start) as u32 * 8).min(ec.buffer().len() as u32 * 8);
-    let mut tell = ec.tell_frac();
-
-    // Reserve bit for tf_select if LM > 0
-    let tf_select_rsv = lm > 0 && tell + 8 + 1 <= budget as u32;
-
-    let mut logp = if is_transient { 2u32 } else { 4 };
+    let mut budget = ec.buffer().len() as u32 * 8;
+    let mut tell = ec.tell() as u32;
+    let mut logp: u32 = if is_transient { 2 } else { 4 };
+    // Reserve space to code the tf_select decision.
+    let tf_select_rsv = lm > 0 && tell + logp + 1 <= budget;
+    budget -= tf_select_rsv as u32;
     let mut curr = 0i32;
+    let mut tf_changed = 0i32;
 
     for i in start..end {
-        if tell + logp <= budget as u32 {
+        if tell + logp <= budget {
             ec.encode_bit_logp(tf_res[i as usize] ^ curr != 0, logp);
-            tell = ec.tell_frac();
+            tell = ec.tell() as u32;
             curr = tf_res[i as usize];
-            logp = if is_transient { 4 } else { 5 };
+            tf_changed |= curr;
         } else {
             tf_res[i as usize] = curr;
         }
+        logp = if is_transient { 4 } else { 5 };
     }
 
-    // Encode tf_select
-    if tf_select_rsv && tell + 1 <= budget as u32 {
+    // Only code tf_select if it would actually make a difference.
+    let is_trans_i = is_transient as usize;
+    if tf_select_rsv
+        && TF_SELECT_TABLE[lm as usize][4 * is_trans_i + 0 + tf_changed as usize]
+            != TF_SELECT_TABLE[lm as usize][4 * is_trans_i + 2 + tf_changed as usize]
+    {
         ec.encode_bit_logp(tf_select != 0, 1);
+    } else {
+        tf_select = 0;
     }
 
-    // Apply tf_select_table to convert raw flags to actual TF values
     for i in start..end {
-        let idx = 4 * (is_transient as usize) + 2 * (tf_select as usize) + tf_res[i as usize] as usize;
-        tf_res[i as usize] = TF_SELECT_TABLE[lm as usize][idx] as i32;
+        tf_res[i as usize] = TF_SELECT_TABLE[lm as usize]
+            [4 * is_trans_i + 2 * tf_select as usize + tf_res[i as usize] as usize]
+            as i32;
     }
 }
 
@@ -1667,7 +1692,7 @@ fn celt_encode_core(
         effective_bytes = nb_compressed_bytes - nb_filled_bytes;
     }
     let nb_available_bytes = nb_compressed_bytes - nb_filled_bytes;
-    let total_bits = nb_compressed_bytes * 8 * (1 << BITRES);
+    let total_bits = nb_compressed_bytes * 8;
 
     // Equivalent rate for analysis decisions
     let equiv_rate = (nb_compressed_bytes as i64 * 8 * 50 << (3 - lm)) as i32
@@ -1682,10 +1707,12 @@ fn celt_encode_core(
         silence = true;
     }
 
-    // Encode silence flag
+    // Encode silence flag (C: celt_encoder.c:1981-1984)
     if tell == 1 {
         enc_ref.encode_bit_logp(silence, 15);
         tell = enc_ref.tell() as i32;
+    } else {
+        silence = false;
     }
 
     // Handle silence in VBR mode
@@ -1739,7 +1766,7 @@ fn celt_encode_core(
     let mut tf_estimate: i32 = 0;
     let mut tf_chan: i32 = 0;
     let mut weak_transient = false;
-    let allow_weak_transients = hybrid;
+    let allow_weak_transients = hybrid && effective_bytes < 15 && st.silk_info.signal_type != 2;
 
     if st.complexity >= 1 && st.lfe == 0 {
         is_transient = transient_analysis(
@@ -1935,6 +1962,12 @@ fn celt_encode_core(
             tf_res[i] = 1;
         }
         tf_select = 0;
+    } else if hybrid && effective_bytes < 15 && st.silk_info.signal_type != 2 {
+        // For low bitrate hybrid, force temporal resolution to 5 ms rather than 2.5 ms.
+        for i in start as usize..end as usize {
+            tf_res[i] = 0;
+        }
+        tf_select = is_transient as i32;
     } else {
         for i in start as usize..end as usize {
             tf_res[i] = is_transient as i32;
@@ -1942,33 +1975,52 @@ fn celt_encode_core(
         tf_select = 0;
     }
 
-    // Energy quantization: error biasing
+    // Energy quantization: error biasing (C: celt_encoder.c:2289-2292)
     let mut error = vec![0i32; c as usize * nb_ebands as usize];
     for ch in 0..c as usize {
         for i in start as usize..end as usize {
             let idx = i + ch * nb_ebands as usize;
             if abs32(band_log_e[idx] - st.old_band_e[idx]) < (2 << DB_SHIFT) {
-                let _biased = band_log_e[idx] - mult16_32_q15(
+                band_log_e[idx] -= mult16_32_q15(
                     qconst16(0.25, 15),
                     st.energy_error[idx],
                 );
-                // Need to modify band_log_e for coarse quant - use a local copy
-                // Note: in the C code, bandLogE is modified in place
             }
         }
     }
 
     // Coarse energy quantization
+    if hybrid {
+        eprintln!("[RS CELT_PRE_COARSE] tell={} rng={} start={} end={} lm={} silence={} eff_bytes={} vbr_rate={}",
+            enc_ref.tell(), enc_ref.get_rng(), start, end, lm, silence as i32, effective_bytes, vbr_rate);
+        eprintln!("[RS CELT_BAND_LOG_E] {:?}", &band_log_e[start as usize..end as usize]);
+        eprintln!("[RS CELT_OLD_BAND_E] {:?}", &st.old_band_e[start as usize..end as usize]);
+    }
     quant_coarse_energy(
         mode, start, end, eff_end, &band_log_e, &mut st.old_band_e,
         total_bits as u32, &mut error, enc_ref, c, lm,
         nb_available_bytes, st.force_intra, &mut st.delayed_intra,
         (st.complexity >= 4) as i32, st.loss_rate, st.lfe,
     );
+    if hybrid {
+        eprintln!("[RS CELT_POST_COARSE] tell={} rng={}", enc_ref.tell(), enc_ref.get_rng());
+    }
 
     // TF encoding
+    if hybrid {
+        eprintln!("[RS CELT_PRE_TF] tf_res=[{},{},{},{}] tf_select={} is_transient={} lm={}",
+            tf_res[start as usize], tf_res.get(start as usize + 1).copied().unwrap_or(0),
+            tf_res.get(start as usize + 2).copied().unwrap_or(0), tf_res.get(start as usize + 3).copied().unwrap_or(0),
+            tf_select, is_transient, lm);
+    }
     tf_encode(start, end, is_transient, &mut tf_res, lm, tf_select, enc_ref);
     tell = enc_ref.tell() as i32;
+    if hybrid {
+        eprintln!("[RS CELT_POST_TF] tell={} rng={} is_transient={} tf_res=[{},{},{},{}]",
+            tell, enc_ref.get_rng(), is_transient,
+            tf_res[start as usize], tf_res.get(start as usize + 1).copied().unwrap_or(0),
+            tf_res.get(start as usize + 2).copied().unwrap_or(0), tf_res.get(start as usize + 3).copied().unwrap_or(0));
+    }
 
     // Spread decision
     if tell + 4 <= total_bits {
@@ -1997,6 +2049,9 @@ fn celt_encode_core(
             );
         }
         enc_ref.encode_icdf(st.spread_decision as u32, &SPREAD_ICDF, 5);
+        if hybrid {
+            eprintln!("[RS CELT_POST_SPREAD] tell={} rng={} spread={}", enc_ref.tell(), enc_ref.get_rng(), st.spread_decision);
+        }
     } else {
         st.spread_decision = SPREAD_NORMAL;
     }
@@ -2065,6 +2120,9 @@ fn celt_encode_core(
             );
         }
         enc_ref.encode_icdf(alloc_trim as u32, &TRIM_ICDF, 7);
+        if hybrid {
+            eprintln!("[RS CELT_POST_TRIM] tell={} rng={} trim={}", enc_ref.tell(), enc_ref.get_rng(), alloc_trim);
+        }
     }
 
     // Minimum allowed bytes
@@ -2146,12 +2204,21 @@ fn celt_encode_core(
 
     let signal_bandwidth = end - 1;
 
+    if hybrid {
+        eprintln!("[RS CELT_PRE_ALLOC] bits={} anti_collapse_rsv={} nb_compr={} offsets={:?}",
+            bits, anti_collapse_rsv, nb_compressed_bytes, &offsets[start as usize..end as usize]);
+    }
     let coded_bands = clt_compute_allocation(
         mode, start, end, &offsets, &cap, alloc_trim,
         &mut st.intensity, &mut dual_stereo,
         bits, &mut balance, &mut pulses, &mut fine_quant, &mut fine_priority,
         c, lm, enc_ref, true, st.last_coded_bands, signal_bandwidth,
     );
+    if hybrid {
+        eprintln!("[RS CELT_POST_ALLOC] tell={} rng={} coded_bands={} pulses={:?} fine_quant={:?}",
+            enc_ref.tell(), enc_ref.get_rng(), coded_bands,
+            &pulses[start as usize..end as usize], &fine_quant[start as usize..end as usize]);
+    }
 
     // Update lastCodedBands with hysteresis
     if coded_bands <= st.last_coded_bands.min(end) && coded_bands > st.last_coded_bands.min(end) - 2 {
@@ -2162,6 +2229,12 @@ fn celt_encode_core(
 
     // Fine energy quantization
     quant_fine_energy(mode, start, end, &mut st.old_band_e, &mut error, None, &fine_quant, enc_ref, c);
+    if hybrid {
+        eprintln!("[RS CELT_POST_FINE] tell={} rng={} olde=[{},{},{},{}]",
+            enc_ref.tell(), enc_ref.get_rng(),
+            st.old_band_e[start as usize], st.old_band_e[start as usize + 1],
+            st.old_band_e[start as usize + 2], st.old_band_e[start as usize + 3]);
+    }
 
     // Clear energy error
     for i in 0..nb_ebands as usize * cc as usize {
@@ -2184,6 +2257,9 @@ fn celt_encode_core(
         balance, enc_ref, lm, coded_bands,
         &mut st.rng, st.complexity, st.disable_inv != 0,
     );
+    if hybrid {
+        eprintln!("[RS CELT_POST_PVQ] tell={} rng={}", enc_ref.tell(), enc_ref.get_rng());
+    }
 
     // Anti-collapse
     let anti_collapse_on;
@@ -2200,6 +2276,9 @@ fn celt_encode_core(
         nb_compressed_bytes * 8 - enc_ref.tell() as i32,
         enc_ref, c,
     );
+    if hybrid {
+        eprintln!("[RS CELT_POST_FINAL] tell={} rng={}", enc_ref.tell(), enc_ref.get_rng());
+    }
 
     // Store energy error for next frame
     for i in 0..nb_ebands as usize * cc as usize {

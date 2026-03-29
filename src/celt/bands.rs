@@ -993,6 +993,9 @@ fn quant_partition<EC: EcCoder>(
         // We'll work with indices into x directly
         let (x_lo, x_hi) = x.split_at_mut(nu);
 
+        if i >= 17 {
+            eprintln!("[RS QP_PRE] i={} n={} b={} B={} lm={} tell_frac={}", i, n, b, big_b, lm, ctx.ec.ec_tell_frac());
+        }
         let sctx = compute_theta(
             ctx, x_lo, &mut x_hi[..nu], n_half, &mut b, new_b, big_b,
             new_lm, false, &mut fill,
@@ -1002,6 +1005,9 @@ fn quant_partition<EC: EcCoder>(
         let delta = sctx.delta;
         let itheta = sctx.itheta;
         let qalloc = sctx.qalloc;
+        if i >= 17 {
+            eprintln!("[RS QP_POST] i={} n={} b={} itheta={} qalloc={} tell_frac={}", i, n, b, itheta, qalloc, ctx.ec.ec_tell_frac());
+        }
 
         // Fixed-point, no ENABLE_QEXT: mid/side from imid/iside
         let mid = shl32(extend32(imid), 16);
@@ -1094,6 +1100,9 @@ fn quant_partition<EC: EcCoder>(
         // Base case: no-split
         let mut q = bits2pulses(m, i, lm, b);
         let mut curr_bits = pulses2bits(m, i, lm, q);
+        if i >= 17 {
+            eprintln!("[RS QP_BASE] i={} n={} b={} q={} k={} tell_frac={}", i, n, b, q, get_pulses(q), ctx.ec.ec_tell_frac());
+        }
         ctx.remaining_bits -= curr_bits;
 
         // Ensure we never bust the budget
@@ -1897,6 +1906,7 @@ pub fn quant_all_bands<EC: EcCoder>(
 
         collapse_masks[iu * c_channels as usize] = x_cm as u8;
         collapse_masks[iu * c_channels as usize + (c_channels as usize - 1)] = y_cm as u8;
+        eprintln!("[RS BAND_END] i={} tell={} tell_frac={} b={} N={} xcm={} ycm={} bal={}", i_band, ec.ec_tell(), ec.ec_tell_frac(), b, n, x_cm, y_cm, balance);
         balance += pulses[iu] + tell as i32;
 
         // Update folding position only as long as we have 1 bit/sample depth

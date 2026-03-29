@@ -2040,9 +2040,9 @@ impl OpusEncoder {
             // --- Main CELT encode ---
             if self.mode != MODE_SILK_ONLY {
                 if let Some(ref mut celt) = self.celt_enc {
-                    // Configure VBR/bitrate for CELT
+                    // Configure VBR/bitrate for CELT (matches C: opus_encoder.c:2455)
+                    celt.ctl(CeltEncoderCtl::SetVbr(self.use_vbr));
                     if self.mode == MODE_HYBRID {
-                        celt.ctl(CeltEncoderCtl::SetVbr(1));
                         if self.use_vbr != 0 {
                             celt.ctl(CeltEncoderCtl::SetBitrate(
                                 self.bitrate_bps - self.silk_mode.bit_rate,
@@ -2050,9 +2050,11 @@ impl OpusEncoder {
                             celt.ctl(CeltEncoderCtl::SetVbrConstraint(0));
                         }
                     } else {
-                        celt.ctl(CeltEncoderCtl::SetVbr(self.use_vbr));
-                        celt.ctl(CeltEncoderCtl::SetBitrate(self.bitrate_bps));
-                        celt.ctl(CeltEncoderCtl::SetVbrConstraint(self.vbr_constraint));
+                        if self.use_vbr != 0 {
+                            celt.ctl(CeltEncoderCtl::SetVbr(1));
+                            celt.ctl(CeltEncoderCtl::SetVbrConstraint(self.vbr_constraint));
+                            celt.ctl(CeltEncoderCtl::SetBitrate(self.bitrate_bps));
+                        }
                     }
 
                     // Prefill on mode transition
@@ -2209,7 +2211,7 @@ impl OpusEncoder {
             }
         }
         {
-            let dbg_max = ret.min(16) as usize;
+            let dbg_max = ret.min(40) as usize;
             let hex: Vec<String> = data[..dbg_max].iter().map(|b| format!("{:02x}", b)).collect();
             eprintln!("[RS OPUS_FINAL] ret={} data=[{}]", ret, hex.join(","));
         }

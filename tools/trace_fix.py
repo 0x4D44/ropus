@@ -110,6 +110,19 @@ def parse_debug_lines(output: str) -> tuple[list[dict], list[dict]]:
     return c_lines, rs_lines
 
 
+def _normalize(val: str) -> str:
+    """Normalize debug values for comparison (true/false -> 1/0, strip whitespace)."""
+    v = val.strip()
+    if v == "true":
+        return "1"
+    if v == "false":
+        return "0"
+    # Normalize array formatting: remove spaces after commas in arrays
+    # so [737, 972, 0, 0] matches [737,972,0,0]
+    v = re.sub(r',\s+', ',', v)
+    return v
+
+
 def find_first_divergence(c_lines: list[dict], rs_lines: list[dict]) -> dict | None:
     """Find the first debug checkpoint where C and Rust values differ."""
     # Match by tag in order
@@ -137,7 +150,7 @@ def find_first_divergence(c_lines: list[dict], rs_lines: list[dict]) -> dict | N
             c_vals = c_entries[i]["values"]
             rs_vals = rs_entries[i]["values"]
             for key in c_vals:
-                if key in rs_vals and c_vals[key] != rs_vals[key]:
+                if key in rs_vals and _normalize(c_vals[key]) != _normalize(rs_vals[key]):
                     return {
                         "tag": tag,
                         "occurrence": i,
@@ -152,7 +165,9 @@ def find_first_divergence(c_lines: list[dict], rs_lines: list[dict]) -> dict | N
     return None
 
 
-def invoke_claude(prompt: str, timeout: int = 3600) -> tuple[bool, str]:
+def invoke_agent(prompt: str, timeout: int = 3600) -> tuple[bool, str]:
+    """Try Claude first, fall back to Codex if Claude fails fast (likely down)."""
+    # Try Claude
     cmd = [
         "claude", "-p",
         "--model", "claude-opus-4-6",
@@ -161,12 +176,46 @@ def invoke_claude(prompt: str, timeout: int = 3600) -> tuple[bool, str]:
         "--output-format", "text",
     ]
     try:
+        t0 = time.time()
         result = subprocess.run(
             cmd, cwd=str(ROOT), capture_output=True,
             input=prompt, text=True,
             timeout=timeout, encoding="utf-8", errors="replace",
         )
+        elapsed = time.time() - t0
+        if result.returncode == 0 and elapsed > 5:
+            return True, (result.stdout + result.stderr)
+        # If Claude returned too fast or failed, try Codex
+        if elapsed < 5:
+            logging.getLogger("tracefix").info("  Claude returned too fast, falling back to Codex...")
+            return invoke_codex(prompt, timeout)
         return result.returncode == 0, (result.stdout + result.stderr)
+    except subprocess.TimeoutExpired:
+        return False, "TIMEOUT"
+    except Exception as e:
+        return False, str(e)
+
+
+def invoke_codex(prompt: str, timeout: int = 3600) -> tuple[bool, str]:
+    """Invoke Codex CLI as fallback agent."""
+    output_file = LOGS / f"codex_fix_{int(time.time())}.txt"
+    cmd = [
+        "codex", "exec",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-o", str(output_file),
+        prompt,
+    ]
+    try:
+        result = subprocess.run(
+            cmd, cwd=str(ROOT), capture_output=True, text=True,
+            timeout=timeout, encoding="utf-8", errors="replace",
+        )
+        output = ""
+        if output_file.exists():
+            output = output_file.read_text(encoding="utf-8", errors="replace")
+        if not output:
+            output = result.stdout + result.stderr
+        return result.returncode == 0, output
     except subprocess.TimeoutExpired:
         return False, "TIMEOUT"
     except Exception as e:
@@ -295,7 +344,7 @@ def trace_fix_loop(log: logging.Logger) -> bool:
             prompt = FIX_PROMPT.format(**div)
             log.info("  Sending targeted fix to Claude...")
             t0 = time.time()
-            ok, claude_out = invoke_claude(prompt)
+            ok, claude_out = invoke_agent(prompt)
             elapsed = time.time() - t0
             log.info(f"  Claude returned in {elapsed:.0f}s, ok={ok}")
 
@@ -325,7 +374,7 @@ def trace_fix_loop(log: logging.Logger) -> bool:
             )
             log.info("  Sending instrumentation request to Claude...")
             t0 = time.time()
-            ok, claude_out = invoke_claude(prompt, timeout=1800)
+            ok, claude_out = invoke_agent(prompt, timeout=1800)
             elapsed = time.time() - t0
             log.info(f"  Claude returned in {elapsed:.0f}s, ok={ok}")
 
