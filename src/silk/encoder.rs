@@ -2546,7 +2546,7 @@ pub fn silk_quant_ltp_gains(
             let gain = imax(cb_gain[best_idx] as i32, 1);
             temp_sum_log_gain += silk_lin2log(gain) << 1;
 
-            total_rd += min_rd;
+            total_rd = total_rd.wrapping_add(min_rd);
         }
 
         if total_rd < best_total_rd {
