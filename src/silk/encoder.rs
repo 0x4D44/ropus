@@ -5113,7 +5113,7 @@ const MAX_CONSECUTIVE_DTX: i32 = 20;
 const FIND_PITCH_WHITE_NOISE_FRACTION: f64 = 1e-3;
 const FIND_PITCH_BANDWIDTH_EXPANSION: f64 = 0.99;
 const LBRR_SPEECH_ACTIVITY_THRES: f64 = 0.3;
-const LOW_FREQ_SHAPING_Q0: f64 = 2.0;
+const LOW_FREQ_SHAPING_Q0: f64 = 4.0;
 const LOW_QUALITY_LOW_FREQ_SHAPING_DECR: f64 = 0.5;
 const SUBFR_SMTH_COEF: f64 = 0.4;
 const HARM_SNR_INCR_DB: f64 = 2.0;
@@ -5858,16 +5858,27 @@ pub fn silk_noise_shape_analysis_fix(
     let signal_type = ps_enc.s_cmn.indices.signal_type as i32;
     let tilt_q16: i32;
     let harm_shape_gain_q16: i32;
+
+    // strength_Q16: matches C silk_MUL(LOW_FREQ_SHAPING_Q4, silk_SMLAWB(1.0_Q12, 0.5_Q13, quality - 1.0_Q15))
+    let low_freq_shp_q4 = (LOW_FREQ_SHAPING_Q0 * 16.0) as i32; // 64
+    let low_quality_decr_q13 = (LOW_QUALITY_LOW_FREQ_SHAPING_DECR * 8192.0) as i32; // 4096
+    let quality_adj_q12 = silk_smlawb_i32(
+        1 << 12, // 1.0 in Q12
+        low_quality_decr_q13,
+        ps_enc.s_cmn.input_quality_bands_q15[0] - (1 << 15),
+    );
+    let mut strength_q16 = low_freq_shp_q4 * quality_adj_q12; // Q4 * Q12 = Q16
+    strength_q16 = (strength_q16 * ps_enc.s_cmn.speech_activity_q8) >> 8; // Q16
+
     if signal_type == TYPE_VOICED {
         for k in 0..nb_subfr {
             let b_q14 = silk_div32_16(((0.2 * 16384.0) as i32), fs_khz)
                 + silk_div32_16(((3.0 * 16384.0) as i32), ps_enc_ctrl.pitch_l[k]);
             let b_q14 = imin(b_q14, (1 << 14) - 1);
-            let strength = silk_smulwb(((LOW_FREQ_SHAPING_Q0 * 16.0) as i32), (1 << 12) as i16);
             ps_enc_ctrl.lf_shp_q14[k] = shl32(
-                (1 << 14) - b_q14 - silk_smulwb(strength, b_q14 as i16),
+                (1 << 14) - b_q14 - silk_smulwb_i32(strength_q16, b_q14),
                 16,
-            ) | (b_q14 - (1 << 14));
+            ) | ((b_q14 - (1 << 14)) as u16 as i32);
         }
         // Tilt_Q16 for voiced: -HP_NOISE_COEF - (1-HP_NOISE_COEF) * HARM_HP * speech_activity
         let hp_q16 = ((HP_NOISE_COEF * 65536.0) + 0.5) as i32;
@@ -5878,7 +5889,10 @@ pub fn silk_noise_shape_analysis_fix(
         harm_shape_gain_q16 = ((HARMONIC_SHAPING * 65536.0 + 0.5) as i32);
     } else {
         let b_q14 = silk_div32_16(21299, fs_khz); // 1.3 * 16384
-        let lf_val = shl32((1 << 14) - b_q14, 16) | (b_q14 - (1 << 14));
+        // C: silk_SMULWB(strength_Q16, silk_SMULWB(0.6_Q16, b_Q14))
+        let strength_term = silk_smulwb_i32(strength_q16, silk_smulwb_i32(39322, b_q14)); // 0.6_Q16 = 39322
+        let lf_val = shl32((1 << 14) - b_q14 - strength_term, 16)
+            | ((b_q14 - (1 << 14)) as u16 as i32);
         for k in 0..nb_subfr {
             ps_enc_ctrl.lf_shp_q14[k] = lf_val;
         }
@@ -6935,6 +6949,15 @@ pub fn silk_encode(
         eprintln!("[RS VAD_PLACEHOLDER] nFramesPkt={} nChInt={} lbrr_enabled={} tell_before={}",
             n_frames_per_packet, n_channels_internal,
             enc.state_fxx[0].s_cmn.lbrr_enabled, range_enc.tell());
+
+        // Create space at start of payload for VAD and FEC flags
+        // Matches C: ec_enc_icdf(psRangeEnc, 0, iCDF, 8) in enc_API.c
+        let shift = ((n_frames_per_packet + 1) * n_channels_internal as i32) as u32;
+        let icdf = [(256u32 - (256u32 >> shift)) as u8, 0u8];
+        range_enc.encode_icdf(0, &icdf, 8);
+        let curr_n_bits_used_lbrr_start = range_enc.tell();
+        eprintln!("[RS VAD_PLACEHOLDER] tell_after={} rng={}", range_enc.tell(), range_enc.get_rng());
+
         // LBRR flags
         if enc.state_fxx[0].s_cmn.lbrr_enabled != 0 {
             let _lbrr_flag0 = enc.state_fxx[0].s_cmn.lbrr_flag;
@@ -6970,6 +6993,23 @@ pub fn silk_encode(
                     );
                 }
             }
+        }
+
+        // Reset LBRR flags (matches C: silk_memset LBRR_flags)
+        for n in 0..n_channels_internal {
+            for flag in enc.state_fxx[n].s_cmn.lbrr_flags.iter_mut() {
+                *flag = 0;
+            }
+        }
+
+        // Track bits used for LBRR (matches C: curr_nBitsUsedLBRR update)
+        let curr_n_bits_used_lbrr = range_enc.tell() - curr_n_bits_used_lbrr_start;
+        if curr_n_bits_used_lbrr < 10 {
+            enc.n_bits_used_lbrr = 0;
+        } else if enc.n_bits_used_lbrr < 10 {
+            enc.n_bits_used_lbrr = curr_n_bits_used_lbrr;
+        } else {
+            enc.n_bits_used_lbrr = (enc.n_bits_used_lbrr + curr_n_bits_used_lbrr) / 2;
         }
     }
 
