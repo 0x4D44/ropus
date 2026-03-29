@@ -135,6 +135,12 @@ fn silk_mul(a: i32, b: i32) -> i32 {
     a * b
 }
 
+/// silk_SMULWW: 32×32-bit multiply, return upper 32 bits (result >> 16).
+#[inline(always)]
+fn silk_smulww(a32: i32, b32: i32) -> i32 {
+    ((a32 as i64 * b32 as i64) >> 16) as i32
+}
+
 /// SILK_FIX_CONST: compile-time Q-format conversion.
 const fn silk_fix_const(x: f64, bits: u32) -> i32 {
     (x * ((1i64 << bits) as f64) + 0.5) as i32
@@ -584,13 +590,13 @@ fn silk_biquad_res(
 
         // Update S[0]
         state[0] = state[1]
-            .wrapping_add(silk_lshift(silk_smulwb(out32_q14, a0_l), 14))
-            .wrapping_add(silk_lshift(silk_smulwb(out32_q14, a0_u), 12))
+            .wrapping_add(silk_rshift_round(silk_smulwb(out32_q14, a0_l), 14))
+            .wrapping_add(silk_smulwb(out32_q14, a0_u))
             .wrapping_add(silk_smulwb(b_q28[1], inval));
 
         // Update S[1]
-        state[1] = silk_lshift(silk_smulwb(out32_q14, a1_l), 14)
-            .wrapping_add(silk_lshift(silk_smulwb(out32_q14, a1_u), 12))
+        state[1] = silk_rshift_round(silk_smulwb(out32_q14, a1_l), 14)
+            .wrapping_add(silk_smulwb(out32_q14, a1_u))
             .wrapping_add(silk_smulwb(b_q28[2], inval));
 
         // Output: round-shift Q14→Q0, saturate to i16
@@ -614,18 +620,18 @@ fn hp_cutoff(
     let fc_q19 = pi_q19 * cutoff_hz / (fs / 1000);
 
     // r_Q28 = 1.0_Q28 - 0.92_Q9 * Fc_Q19
-    let r_q28: i32 = (1i32 << 28) - silk_smulwb(qconst32(0.92, 9), fc_q19);
+    let r_q28: i32 = (1i32 << 28) - silk_mul(qconst32(0.92, 9), fc_q19);
 
     // Biquad coefficients
     let b_q28 = [r_q28, -(r_q28 << 1), r_q28];
 
     // r_Q22 = r_Q28 >> 6
     let r_q22 = r_q28 >> 6;
-    let fc_q19_sq = silk_smulwb(fc_q19, fc_q19); // Fc²
+    let fc_q19_sq = silk_smulww(fc_q19, fc_q19); // Fc²
 
     let a_q28 = [
-        silk_smulwb(r_q22, fc_q19_sq - qconst32(2.0, 22)),
-        silk_smulwb(r_q22, r_q22),
+        silk_smulww(r_q22, fc_q19_sq - qconst32(2.0, 22)),
+        silk_smulww(r_q22, r_q22),
     ];
 
     // Apply per channel

@@ -7506,7 +7506,7 @@ pub fn silk_encode(
             // Buffer the resampled input
             let buf_ix = enc.state_fxx[n].s_cmn.input_buf_ix as usize;
             let copy_len = n_samples_to_buffer.min(MAX_FRAME_LENGTH + 2 - buf_ix);
-            enc.state_fxx[n].s_cmn.input_buf[buf_ix..buf_ix + copy_len]
+            enc.state_fxx[n].s_cmn.input_buf[buf_ix + 2..buf_ix + 2 + copy_len]
                 .copy_from_slice(&buf[..copy_len]);
             enc.state_fxx[n].s_cmn.input_buf_ix += n_samples_to_buffer as i32;
         }
@@ -7584,7 +7584,7 @@ pub fn silk_encode(
                 );
                 let buf_ix = enc.state_fxx[n].s_cmn.input_buf_ix as usize;
                 let copy_len = n_stb.min(MAX_FRAME_LENGTH + 2 - buf_ix);
-                enc.state_fxx[n].s_cmn.input_buf[buf_ix..buf_ix + copy_len]
+                enc.state_fxx[n].s_cmn.input_buf[buf_ix + 2..buf_ix + 2 + copy_len]
                     .copy_from_slice(&buf[..copy_len]);
                 enc.state_fxx[n].s_cmn.input_buf_ix += n_stb as i32;
             }
@@ -7682,7 +7682,7 @@ pub fn silk_encode(
 
     // VAD per channel
     for n in 0..n_channels_internal {
-        let input_copy = enc.state_fxx[n].s_cmn.input_buf[..frame_length as usize].to_vec();
+        let input_copy = enc.state_fxx[n].s_cmn.input_buf[1..1 + frame_length as usize].to_vec();
         silk_vad_get_sa_q8(
             &mut enc.state_fxx[n].s_cmn,
             &input_copy,
