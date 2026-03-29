@@ -1107,6 +1107,7 @@ pub fn silk_vad_get_sa_q8(ps_enc: &mut SilkEncoderState, p_in: &[i16]) -> i32 {
 
 /// Biquad filter (second-order IIR), stride 1.
 /// Matches C: `silk_biquad_alt_stride1`.
+/// Direct form II transposed with split-precision feedback (state in Q12).
 pub fn silk_biquad_alt_stride1(
     input: &[i16],
     b_q28: &[i32; 3],
@@ -1115,22 +1116,33 @@ pub fn silk_biquad_alt_stride1(
     output: &mut [i16],
     len: usize,
 ) {
+    // Negate A coefficients and split into upper/lower 14-bit parts
+    let a0_neg = a_q28[0].wrapping_neg();
+    let a0_l = a0_neg & 0x00003FFF;
+    let a0_u = a0_neg >> 14;
+    let a1_neg = a_q28[1].wrapping_neg();
+    let a1_l = a1_neg & 0x00003FFF;
+    let a1_u = a1_neg >> 14;
+
     for k in 0..len {
-        // Second-order section (transposed direct form II)
-        let in_val = input[k] as i64;
+        let inval = input[k] as i32;
 
-        // out = state[0] + B[0] * input
-        let out64 = state[0] as i64 + ((b_q28[0] as i64 * in_val) >> 28);
-        let out32 = sat16(out64 as i32);
-        output[k] = out32;
+        // Output: state is Q12, smlawb adds B[0]*inval>>16 (Q12), lshift 2 → Q14
+        let out32_q14 = ((silk_smlawb_i32(state[0], b_q28[0], inval) as u32) << 2) as i32;
 
-        // Update state
-        let out_i64 = out32 as i64;
-        state[0] = (state[1] as i64
-            + ((b_q28[1] as i64 * in_val) >> 28)
-            - ((a_q28[0] as i64 * out_i64) >> 28)) as i32;
-        state[1] = (((b_q28[2] as i64 * in_val) >> 28)
-            - ((a_q28[1] as i64 * out_i64) >> 28)) as i32;
+        // State update for S[0] using split-precision feedback
+        state[0] = state[1]
+            .wrapping_add(silk_rshift_round(silk_smulwb_i32(out32_q14, a0_l), 14));
+        state[0] = silk_smlawb_i32(state[0], out32_q14, a0_u);
+        state[0] = silk_smlawb_i32(state[0], b_q28[1], inval);
+
+        // State update for S[1]
+        state[1] = silk_rshift_round(silk_smulwb_i32(out32_q14, a1_l), 14);
+        state[1] = silk_smlawb_i32(state[1], out32_q14, a1_u);
+        state[1] = silk_smlawb_i32(state[1], b_q28[2], inval);
+
+        // Scale back to Q0 and saturate
+        output[k] = sat16((out32_q14.wrapping_add((1 << 14) - 1)) >> 14);
     }
 }
 
@@ -1213,7 +1225,7 @@ pub fn silk_lp_variable_cutoff(
     silk_lp_interpolate_filter_taps(&mut b_q28, &mut a_q28, ind, fac_q16);
 
     // Advance transition counter, clamped to [0, TRANSITION_FRAMES]
-    s_lp.transition_frame_no = imax(imin(
+    s_lp.transition_frame_no = imin(imax(
         s_lp.transition_frame_no + s_lp.mode, 0), TRANSITION_FRAMES);
 
     // Apply ARMA low-pass biquad filter (in-place)
