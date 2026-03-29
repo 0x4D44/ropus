@@ -5601,7 +5601,7 @@ fn limit_warped_coefs(coefs_q24: &mut [i32], lambda_q16: i32, limit_q24: i32, or
                 maxabs_q20 - limit_q20,
                 silk_smlabb(((0.8 * 1024.0) as i32), ((0.1 * 1024.0) as i32), iter),
             ),
-            (maxabs_q20) * (ind as i32 + 1),
+            (maxabs_q20).wrapping_mul(ind as i32 + 1),
             22,
         );
         silk_bwexpander_32(&mut coefs_q24[..order], order, chirp_q16);
@@ -6085,7 +6085,9 @@ pub fn silk_encode_frame_fix(
         );
 
         // Noise shape analysis
-        let x_frame_copy = ps_enc.x_buf[x_frame_offset..].to_vec();
+        // C does x_ptr = x - la_shape inside noise_shape_analysis, so pass
+        // x_buf starting la_shape samples before x_frame to match.
+        let x_frame_copy = ps_enc.x_buf[x_frame_offset - la_shape..].to_vec();
         silk_noise_shape_analysis_fix(
             ps_enc,
             &mut s_enc_ctrl,
