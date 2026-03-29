@@ -673,6 +673,179 @@ pub fn silk_insertion_sort_increasing_all_values_int16(a: &mut [i16], len: usize
     }
 }
 
+/// Insertion sort, decreasing order. Sorts the first K positions of `a`
+/// (and corresponding `idx`), with the K largest values from a[0..L].
+/// Matches C: `silk_insertion_sort_decreasing_int16`.
+pub fn silk_insertion_sort_decreasing_int16(
+    a: &mut [i16],
+    idx: &mut [i32],
+    l: usize,
+    k: usize,
+) {
+    for i in 0..k {
+        idx[i] = i as i32;
+    }
+    // Sort the first K elements in decreasing order
+    for i in 1..k {
+        let value = a[i] as i32;
+        let index = idx[i];
+        let mut j = i as i32 - 1;
+        while j >= 0 && value > a[j as usize] as i32 {
+            a[(j + 1) as usize] = a[j as usize];
+            idx[(j + 1) as usize] = idx[j as usize];
+            j -= 1;
+        }
+        a[(j + 1) as usize] = value as i16;
+        idx[(j + 1) as usize] = index;
+    }
+    // Check remaining elements
+    for i in k..l {
+        let value = a[i] as i32;
+        if value > a[k - 1] as i32 {
+            let index = i as i32;
+            let mut j = k as i32 - 2;
+            while j >= 0 && value > a[j as usize] as i32 {
+                a[(j + 1) as usize] = a[j as usize];
+                idx[(j + 1) as usize] = idx[j as usize];
+                j -= 1;
+            }
+            a[(j + 1) as usize] = value as i16;
+            idx[(j + 1) as usize] = index;
+        }
+    }
+}
+
+// ===========================================================================
+// Resamplers for pitch analysis
+// ===========================================================================
+
+/// Downsample by factor 2. Matches C: `silk_resampler_down2`.
+/// State `s` has 2 elements, output length is `input.len() / 2`.
+pub fn silk_resampler_down2(s: &mut [i32], out: &mut [i16], input: &[i16]) {
+    const DOWN2_0: i16 = 9872;
+    const DOWN2_1: i16 = (39809i32 - 65536) as i16; // -25727
+    let len2 = input.len() / 2;
+    for k in 0..len2 {
+        // Even sample: all-pass section
+        let in32 = (input[2 * k] as i32) << 10;
+        let y = in32 - s[0];
+        let x = silk_smlawb(y, y, DOWN2_1);
+        let out32 = s[0] + x;
+        s[0] = in32 + x;
+
+        // Odd sample: all-pass section, add to output
+        let in32 = (input[2 * k + 1] as i32) << 10;
+        let y = in32 - s[1];
+        let x = silk_smulwb(y, DOWN2_0);
+        let out32 = out32 + s[1] + x;
+        s[1] = in32 + x;
+
+        out[k] = silk_sat16(silk_rshift_round(out32, 11)) as i16;
+    }
+}
+
+/// Second-order AR filter. Matches C: `silk_resampler_private_AR2`.
+fn silk_resampler_private_ar2(
+    s: &mut [i32],
+    out_q8: &mut [i32],
+    input: &[i16],
+    a_q14: &[i16],
+    len: usize,
+) {
+    for k in 0..len {
+        let out32 = silk_add_lshift32(s[0], input[k] as i32, 8);
+        out_q8[k] = out32;
+        let out32_shifted = out32 << 2;
+        s[0] = silk_smlawb(s[1], out32_shifted, a_q14[0]);
+        s[1] = silk_smulwb(out32_shifted, a_q14[1]);
+    }
+}
+
+/// Downsample by factor 2/3 (low quality). Matches C: `silk_resampler_down2_3`.
+/// State `s` has 6 elements.
+pub fn silk_resampler_down2_3(s: &mut [i32], out: &mut [i16], input: &[i16], in_len: usize) {
+    const ORDER_FIR: usize = 4;
+    const MAX_BATCH: usize = 480; // RESAMPLER_MAX_BATCH_SIZE_MS * RESAMPLER_MAX_FS_KHZ
+    const COEFS_LQ: [i16; 6] = [-2797, -6507, 4697, 10739, 1567, 8276];
+
+    let mut buf = vec![0i32; MAX_BATCH + ORDER_FIR];
+    buf[..ORDER_FIR].copy_from_slice(&s[..ORDER_FIR]);
+
+    let mut in_pos = 0usize;
+    let mut out_pos = 0usize;
+    let mut remaining = in_len as i32;
+    let mut last_n_samples = 0usize;
+
+    loop {
+        let n_samples = (remaining as usize).min(MAX_BATCH);
+        last_n_samples = n_samples;
+
+        // AR2 filter
+        silk_resampler_private_ar2(
+            &mut s[ORDER_FIR..],
+            &mut buf[ORDER_FIR..],
+            &input[in_pos..],
+            &COEFS_LQ[..2],
+            n_samples,
+        );
+
+        // Interpolate
+        let mut bp = 0;
+        let mut counter = n_samples as i32;
+        while counter > 2 {
+            let mut res_q6 = silk_smulwb_i32(buf[bp], COEFS_LQ[2] as i32);
+            res_q6 = silk_smlawb_i32(res_q6, buf[bp + 1], COEFS_LQ[3] as i32);
+            res_q6 = silk_smlawb_i32(res_q6, buf[bp + 2], COEFS_LQ[5] as i32);
+            res_q6 = silk_smlawb_i32(res_q6, buf[bp + 3], COEFS_LQ[4] as i32);
+            out[out_pos] = silk_sat16(silk_rshift_round(res_q6, 6)) as i16;
+            out_pos += 1;
+
+            let mut res_q6 = silk_smulwb_i32(buf[bp + 1], COEFS_LQ[4] as i32);
+            res_q6 = silk_smlawb_i32(res_q6, buf[bp + 2], COEFS_LQ[5] as i32);
+            res_q6 = silk_smlawb_i32(res_q6, buf[bp + 3], COEFS_LQ[3] as i32);
+            res_q6 = silk_smlawb_i32(res_q6, buf[bp + 4], COEFS_LQ[2] as i32);
+            out[out_pos] = silk_sat16(silk_rshift_round(res_q6, 6)) as i16;
+            out_pos += 1;
+
+            bp += 3;
+            counter -= 3;
+        }
+
+        in_pos += n_samples;
+        remaining -= n_samples as i32;
+
+        if remaining > 0 {
+            // Copy tail for next iteration
+            for i in 0..ORDER_FIR {
+                buf[i] = buf[n_samples + i];
+            }
+        } else {
+            break;
+        }
+    }
+
+    // Save state: copy last ORDER_FIR values from buf at offset last_n_samples
+    s[..ORDER_FIR].copy_from_slice(&buf[last_n_samples..last_n_samples + ORDER_FIR]);
+}
+
+/// Pitch cross-correlation for i16 data. Equivalent to `celt_pitch_xcorr` but
+/// operating on i16 vectors (as used by SILK fixed-point pitch analysis).
+pub fn celt_pitch_xcorr_i16(
+    x: &[i16],
+    y: &[i16],
+    xcorr: &mut [i32],
+    len: usize,
+    max_pitch: usize,
+) {
+    for i in 0..max_pitch {
+        let mut sum: i64 = 0;
+        for j in 0..len {
+            sum += x[j] as i64 * y[i + j] as i64;
+        }
+        xcorr[i] = sum as i32;
+    }
+}
+
 // ===========================================================================
 // ADD_SAT32 (saturating arithmetic)
 // ===========================================================================

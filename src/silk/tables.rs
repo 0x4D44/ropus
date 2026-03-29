@@ -28,13 +28,23 @@ pub const PITCH_EST_MAX_LAG_MS: usize = 18;
 
 // Pitch estimation constants
 pub const PE_MAX_NB_SUBFR: usize = 4;
+pub const PE_SUBFR_LENGTH_MS: usize = 5;
+pub const PE_LTP_MEM_LENGTH_MS: usize = 4 * PE_SUBFR_LENGTH_MS;
+pub const PE_MIN_LAG_MS: usize = 2;
+pub const PE_MAX_LAG_MS: usize = 18;
+pub const PE_D_SRCH_LENGTH: usize = 24;
+pub const PE_NB_STAGE3_LAGS: usize = 5;
+pub const PE_NB_CBKS_STAGE2: usize = 3;
 pub const PE_NB_CBKS_STAGE2_10MS: usize = 3;
 pub const PE_NB_CBKS_STAGE3_10MS: usize = 12;
 pub const PE_NB_CBKS_STAGE2_EXT: usize = 11;
 pub const PE_NB_CBKS_STAGE3_MAX: usize = 34;
 pub const PE_NB_CBKS_STAGE3_MID: usize = 24;
 pub const PE_NB_CBKS_STAGE3_MIN: usize = 16;
+pub const SILK_PE_MIN_COMPLEX: usize = 0;
 pub const SILK_PE_MAX_COMPLEX: usize = 2;
+pub const PE_MAX_FS_KHZ: usize = 16;
+pub const PE_MAX_LAG: usize = PE_MAX_LAG_MS * PE_MAX_FS_KHZ;
 
 // Resampler constants
 pub const RESAMPLER_DOWN_ORDER_FIR0: usize = 18;
