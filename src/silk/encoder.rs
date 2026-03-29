@@ -6721,6 +6721,12 @@ pub fn silk_encode_frame_fix(
             ps_enc.x_buf[copy_start + i] = ps_enc.s_cmn.input_buf[i + 1];
         }
     }
+    if ps_enc.s_cmn.n_frames_encoded == 0 {
+        eprintln!("[RS XBUF_COPY] la_shape={} copy_start={} frame_len={} input_buf[1..9]={:?} x_buf[copy_start..+8]={:?}",
+            la_shape, copy_start, frame_length,
+            &ps_enc.s_cmn.input_buf[1..9.min(ps_enc.s_cmn.input_buf.len())],
+            &ps_enc.x_buf[copy_start..copy_start+8]);
+    }
 
     let mut s_enc_ctrl = SilkEncoderControl::default();
 
@@ -7691,6 +7697,18 @@ pub fn silk_encode(
     // Compute target bitrate
     let target_rate = enc_control.bit_rate;
     silk_control_snr(&mut enc.state_fxx[0].s_cmn, target_rate);
+
+    // Copy sMid lookback into inputBuf[0:2] and save tail for next frame
+    // Matches C: silk_memcpy(inputBuf, sStereo.sMid, 2) + save back
+    {
+        let fl = enc.state_fxx[0].s_cmn.frame_length as usize;
+        enc.state_fxx[0].s_cmn.input_buf[0] = enc.s_stereo.s_mid[0];
+        enc.state_fxx[0].s_cmn.input_buf[1] = enc.s_stereo.s_mid[1];
+        if fl + 2 <= enc.state_fxx[0].s_cmn.input_buf.len() {
+            enc.s_stereo.s_mid[0] = enc.state_fxx[0].s_cmn.input_buf[fl];
+            enc.s_stereo.s_mid[1] = enc.state_fxx[0].s_cmn.input_buf[fl + 1];
+        }
+    }
 
     // VAD per channel
     for n in 0..n_channels_internal {
