@@ -4105,9 +4105,9 @@ fn silk_noise_shape_quantizer_del_dec(
         // Write samples from winner to output
         let dd = &ps_del_dec[winner_ind];
         if subfr > 0 || i >= decision_delay as usize {
-            let out_idx = i as isize - decision_delay as isize;
-            pulses[out_idx as usize] = silk_rshift_round(dd.q_q10[last_smple_idx], 10) as i8;
-            nsq.xq[pxq_offset.wrapping_add(out_idx as usize)] = sat16(silk_rshift_round(
+            let out_idx = (subfr * length + i).wrapping_sub(decision_delay as usize);
+            pulses[out_idx] = silk_rshift_round(dd.q_q10[last_smple_idx], 10) as i8;
+            nsq.xq[pxq_offset + i - decision_delay as usize] = sat16(silk_rshift_round(
                 silk_smulww(dd.xq_q14[last_smple_idx], delayed_gain_q10[last_smple_idx]),
                 8,
             ));
@@ -4255,9 +4255,9 @@ pub fn silk_nsq_del_dec(
                     for j in 0..decision_delay as usize {
                         last_smple_idx = (last_smple_idx - 1).rem_euclid(DECISION_DELAY as i32);
                         let ls = last_smple_idx as usize;
-                        let out_idx = j as isize - decision_delay as isize;
-                        pulses[out_idx as usize] = silk_rshift_round(dd.q_q10[ls], 10) as i8;
-                        nsq.xq[(ltp_mem_length as isize + out_idx) as usize] = sat16(silk_rshift_round(
+                        let out_idx = 2 * subfr_length + j - decision_delay as usize;
+                        pulses[out_idx] = silk_rshift_round(dd.q_q10[ls], 10) as i8;
+                        nsq.xq[ltp_mem_length + 2 * subfr_length + j - decision_delay as usize] = sat16(silk_rshift_round(
                             silk_smulww(dd.xq_q14[ls], gain_q10_k1),
                             8,
                         ));
@@ -4309,7 +4309,7 @@ pub fn silk_nsq_del_dec(
             &mut ps_del_dec,
             signal_type,
             &x_sc_q10,
-            &mut pulses[k * subfr_length..],
+            pulses,
             ltp_mem_length + k * subfr_length,
             &mut s_ltp_q15,
             &mut delayed_gain_q10,
@@ -4354,10 +4354,10 @@ pub fn silk_nsq_del_dec(
     for i in 0..decision_delay as usize {
         last_smple_idx = (last_smple_idx - 1).rem_euclid(DECISION_DELAY as i32);
         let ls = last_smple_idx as usize;
-        let out_idx = i as isize - decision_delay as isize;
-        pulses[(out_idx + (nb_subfr * subfr_length) as isize) as usize] =
+        let out_idx = nb_subfr * subfr_length + i - decision_delay as usize;
+        pulses[out_idx] =
             silk_rshift_round(dd.q_q10[ls], 10) as i8;
-        nsq.xq[(ltp_mem_length + nb_subfr * subfr_length).wrapping_add(out_idx as usize)] =
+        nsq.xq[ltp_mem_length + nb_subfr * subfr_length + i - decision_delay as usize] =
             sat16(silk_rshift_round(silk_smulww(dd.xq_q14[ls], gain_q10), 8));
         nsq.s_ltp_shp_q14[(nsq.s_ltp_shp_buf_idx - decision_delay + i as i32) as usize] =
             dd.shape_q14[ls];
