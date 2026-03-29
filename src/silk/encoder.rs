@@ -5781,6 +5781,30 @@ pub fn silk_noise_shape_analysis_fix(
 
         // Autocorrelation
         if k == 0 {
+            // Diagnostic: raw x_frame data at key positions
+            let raw_tail_start = x_offset + win_len.saturating_sub(8);
+            let raw_tail_end = x_offset + win_len;
+            if raw_tail_end <= x_frame.len() {
+                eprintln!("[RS NSHAPE_RAW] raw_tail8={:?} raw_at160={:?} raw_at150={:?} slope={} flat={} flat_end={}",
+                    &x_frame[raw_tail_start..raw_tail_end],
+                    if x_offset + 160 + 8 <= x_frame.len() { &x_frame[x_offset+160..x_offset+168] } else { &x_frame[..0] },
+                    if x_offset + 150 + 12 <= x_frame.len() { &x_frame[x_offset+150..x_offset+162] } else { &x_frame[..0] },
+                    slope_part, flat_part, flat_end);
+                // Also print raw energy sections
+                let mut e_slope1: i64 = 0;
+                let mut e_flat: i64 = 0;
+                let mut e_slope2: i64 = 0;
+                for i in 0..slope_part {
+                    e_slope1 += (x_frame[x_offset + i] as i64) * (x_frame[x_offset + i] as i64);
+                }
+                for i in slope_part..slope_part+flat_part {
+                    e_flat += (x_frame[x_offset + i] as i64) * (x_frame[x_offset + i] as i64);
+                }
+                for i in slope_part+flat_part..win_len {
+                    e_slope2 += (x_frame[x_offset + i] as i64) * (x_frame[x_offset + i] as i64);
+                }
+                eprintln!("[RS NSHAPE_RAWENERGY] e_rise={} e_flat={} e_fall={}", e_slope1, e_flat, e_slope2);
+            }
             let energy: i64 = x_windowed.iter().map(|&s| (s as i64) * (s as i64)).sum();
             eprintln!("[RS NSHAPE_DBG] k=0 win_len={} shape_win_len={} x_offset={} energy={} first8={:?} mid8={:?} tail8={:?}",
                 win_len, shape_win_length, x_offset, energy,
