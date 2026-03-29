@@ -3616,11 +3616,6 @@ fn silk_noise_shape_quantizer(
 
         let r_q10 = x_sc_q10[i] - tmp1_final; // residual error Q10
 
-        if i < 3 && nsq.s_ltp_shp_buf_idx < 650 {
-            eprintln!("[NSQ i={}] x_sc={} lpc_pred={} tmp1_final={} r_q10={} offset_q10={}",
-                      i, x_sc_q10[i], lpc_pred_q10, tmp1_final, r_q10, offset_q10);
-        }
-
         // Flip sign depending on dither
         let r_q10 = if nsq.rand_seed < 0 { -r_q10 } else { r_q10 };
         let r_q10 = imax(imin(r_q10, 30 << 10), -(31 << 10));
@@ -3707,6 +3702,651 @@ fn silk_noise_shape_quantizer(
 
     // Update LPC synth buffer
     nsq.s_lpc_q14.copy_within(length..length + NSQ_LPC_BUF_LENGTH, 0);
+}
+
+// ===========================================================================
+// NSQ_del_dec sample struct (matches C: NSQ_sample_struct)
+// ===========================================================================
+#[derive(Clone, Copy, Default)]
+struct NsqSampleStruct {
+    q_q10: i32,
+    rd_q10: i32,
+    xq_q14: i32,
+    lf_ar_q14: i32,
+    diff_q14: i32,
+    s_ltp_shp_q14: i32,
+    lpc_exc_q14: i32,
+}
+
+// ===========================================================================
+// Delayed-decision scale states
+// Matches C: silk_nsq_del_dec_scale_states
+// ===========================================================================
+fn silk_nsq_del_dec_scale_states(
+    ps_enc: &SilkEncoderState,
+    nsq: &mut NsqState,
+    ps_del_dec: &mut [NsqDelDecStruct],
+    x16: &[i16],
+    x_sc_q10: &mut [i32],
+    s_ltp: &[i16],
+    s_ltp_q15: &mut [i32],
+    subfr: usize,
+    n_states: usize,
+    ltp_scale_q14: i32,
+    gains_q16: &[i32],
+    pitch_l: &[i32],
+    signal_type: i32,
+    decision_delay: i32,
+) {
+    let subfr_length = ps_enc.subfr_length as usize;
+    let ltp_mem_length = ps_enc.ltp_mem_length as usize;
+    let lag = pitch_l[subfr];
+
+    let inv_gain_q31 = silk_inverse32_var_q(imax(gains_q16[subfr], 1), 47);
+
+    // Scale input
+    let inv_gain_q26 = silk_rshift_round(inv_gain_q31, 5);
+    for i in 0..subfr_length {
+        x_sc_q10[i] = silk_smulww(x16[i] as i32, inv_gain_q26);
+    }
+
+    // After rewhitening the LTP state is un-scaled
+    if nsq.rewhite_flag != 0 {
+        let mut inv_gain = inv_gain_q31;
+        if subfr == 0 {
+            inv_gain = shl32(silk_smulwb(inv_gain, ltp_scale_q14 as i16), 2);
+        }
+        let start = (nsq.s_ltp_buf_idx - lag - (LTP_ORDER as i32 / 2)) as usize;
+        let end = nsq.s_ltp_buf_idx as usize;
+        for i in start..end {
+            s_ltp_q15[i] = silk_smulwb(inv_gain, s_ltp[i] as i16);
+        }
+    }
+
+    // Adjust for changing gain
+    if gains_q16[subfr] != nsq.prev_gain_q16 {
+        let gain_adj_q16 = silk_div32_var_q(nsq.prev_gain_q16, gains_q16[subfr], 16);
+
+        // Scale long-term shaping state
+        let shp_start = (nsq.s_ltp_shp_buf_idx - ltp_mem_length as i32) as usize;
+        let shp_end = nsq.s_ltp_shp_buf_idx as usize;
+        for i in shp_start..shp_end {
+            nsq.s_ltp_shp_q14[i] = silk_smulww(gain_adj_q16, nsq.s_ltp_shp_q14[i]);
+        }
+
+        // Scale long-term prediction state
+        if signal_type == TYPE_VOICED && nsq.rewhite_flag == 0 {
+            let start = (nsq.s_ltp_buf_idx - lag - (LTP_ORDER as i32 / 2)) as usize;
+            let end = (nsq.s_ltp_buf_idx - decision_delay) as usize;
+            for i in start..end {
+                s_ltp_q15[i] = silk_smulww(gain_adj_q16, s_ltp_q15[i]);
+            }
+        }
+
+        for k in 0..n_states {
+            let dd = &mut ps_del_dec[k];
+            dd.lf_ar_q14 = silk_smulww(gain_adj_q16, dd.lf_ar_q14);
+            dd.diff_q14 = silk_smulww(gain_adj_q16, dd.diff_q14);
+            for i in 0..NSQ_LPC_BUF_LENGTH {
+                dd.s_lpc_q14[i] = silk_smulww(gain_adj_q16, dd.s_lpc_q14[i]);
+            }
+            for i in 0..MAX_SHAPE_LPC_ORDER {
+                dd.s_ar2_q14[i] = silk_smulww(gain_adj_q16, dd.s_ar2_q14[i]);
+            }
+            for i in 0..DECISION_DELAY {
+                dd.pred_q15[i] = silk_smulww(gain_adj_q16, dd.pred_q15[i]);
+                dd.shape_q14[i] = silk_smulww(gain_adj_q16, dd.shape_q14[i]);
+            }
+        }
+
+        nsq.prev_gain_q16 = gains_q16[subfr];
+    }
+}
+
+// ===========================================================================
+// Delayed-decision inner quantizer loop
+// Matches C: silk_noise_shape_quantizer_del_dec
+// ===========================================================================
+#[allow(clippy::too_many_arguments)]
+fn silk_noise_shape_quantizer_del_dec(
+    nsq: &mut NsqState,
+    ps_del_dec: &mut [NsqDelDecStruct],
+    signal_type: i32,
+    x_q10: &[i32],
+    pulses: &mut [i8],
+    pxq_offset: usize,
+    s_ltp_q15: &mut [i32],
+    delayed_gain_q10: &mut [i32],
+    a_q12: &[i16],
+    b_q14: &[i16],
+    ar_shp_q13: &[i16],
+    lag: i32,
+    harm_shape_fir_packed_q14: i32,
+    tilt_q14: i32,
+    lf_shp_q14: i32,
+    gain_q16: i32,
+    lambda_q10: i32,
+    offset_q10: i32,
+    length: usize,
+    subfr: usize,
+    shaping_lpc_order: usize,
+    predict_lpc_order: usize,
+    warping_q16: i32,
+    n_states: usize,
+    smpl_buf_idx: &mut i32,
+    decision_delay: i32,
+) {
+    let shp_lag_ptr_base = (nsq.s_ltp_shp_buf_idx - lag + (HARM_SHAPE_FIR_TAPS / 2) as i32) as usize;
+    let pred_lag_ptr_base = (nsq.s_ltp_buf_idx - lag + (LTP_ORDER / 2) as i32) as usize;
+    let gain_q10 = gain_q16 >> 6;
+
+    let mut sample_state = [[NsqSampleStruct::default(); 2]; MAX_DEL_DEC_STATES];
+
+    for i in 0..length {
+        // Long-term prediction (common to all states)
+        let ltp_pred_q14 = if signal_type == TYPE_VOICED {
+            let pred_ptr = pred_lag_ptr_base + i;
+            let mut pred = 2i32;
+            pred = silk_smlawb(pred, s_ltp_q15[pred_ptr], b_q14[0]);
+            pred = silk_smlawb(pred, s_ltp_q15[pred_ptr.wrapping_sub(1)], b_q14[1]);
+            pred = silk_smlawb(pred, s_ltp_q15[pred_ptr.wrapping_sub(2)], b_q14[2]);
+            pred = silk_smlawb(pred, s_ltp_q15[pred_ptr.wrapping_sub(3)], b_q14[3]);
+            pred = silk_smlawb(pred, s_ltp_q15[pred_ptr.wrapping_sub(4)], b_q14[4]);
+            shl32(pred, 1) // Q13 -> Q14
+        } else {
+            0
+        };
+
+        // Long-term shaping
+        let n_ltp_q14 = if lag > 0 {
+            let shp_idx = shp_lag_ptr_base + i;
+            let mut n = silk_smulwb_i32(
+                silk_add_sat32(nsq.s_ltp_shp_q14[shp_idx], nsq.s_ltp_shp_q14[shp_idx.wrapping_sub(2)]),
+                harm_shape_fir_packed_q14,
+            );
+            n = silk_smlawt(n, nsq.s_ltp_shp_q14[shp_idx.wrapping_sub(1)], harm_shape_fir_packed_q14);
+            ltp_pred_q14.wrapping_sub(shl32(n, 2)) // silk_SUB_LSHIFT32
+        } else {
+            0
+        };
+
+        for k in 0..n_states {
+            let dd = &mut ps_del_dec[k];
+
+            // Generate dither
+            dd.seed = silk_rand(dd.seed);
+
+            // Short-term prediction
+            let ps_lpc_idx = NSQ_LPC_BUF_LENGTH - 1 + i;
+            let mut lpc_pred_q14 = (predict_lpc_order >> 1) as i32;
+            for j in 0..predict_lpc_order {
+                lpc_pred_q14 = silk_smlawb(lpc_pred_q14, dd.s_lpc_q14[ps_lpc_idx - j], a_q12[j]);
+            }
+            lpc_pred_q14 = shl32(lpc_pred_q14, 4); // Q10 -> Q14
+
+            // Noise shape feedback with warping
+            let tmp2_init = silk_smlawb_i32(dd.diff_q14, dd.s_ar2_q14[0], warping_q16);
+            let mut tmp1 = silk_smlawb_i32(dd.s_ar2_q14[0], dd.s_ar2_q14[1].wrapping_sub(tmp2_init), warping_q16);
+            dd.s_ar2_q14[0] = tmp2_init;
+            let mut n_ar_q14 = (shaping_lpc_order >> 1) as i32;
+            n_ar_q14 = silk_smlawb(n_ar_q14, tmp2_init, ar_shp_q13[0]);
+
+            let mut j = 2;
+            while j < shaping_lpc_order {
+                let tmp2 = silk_smlawb_i32(dd.s_ar2_q14[j - 1], dd.s_ar2_q14[j].wrapping_sub(tmp1), warping_q16);
+                dd.s_ar2_q14[j - 1] = tmp1;
+                n_ar_q14 = silk_smlawb(n_ar_q14, tmp1, ar_shp_q13[j - 1]);
+                tmp1 = silk_smlawb_i32(dd.s_ar2_q14[j], dd.s_ar2_q14[j + 1].wrapping_sub(tmp2), warping_q16);
+                dd.s_ar2_q14[j] = tmp2;
+                n_ar_q14 = silk_smlawb(n_ar_q14, tmp2, ar_shp_q13[j]);
+                j += 2;
+            }
+            dd.s_ar2_q14[shaping_lpc_order - 1] = tmp1;
+            n_ar_q14 = silk_smlawb(n_ar_q14, tmp1, ar_shp_q13[shaping_lpc_order - 1]);
+
+            n_ar_q14 = shl32(n_ar_q14, 1); // Q11 -> Q12
+            n_ar_q14 = silk_smlawb_i32(n_ar_q14, dd.lf_ar_q14, tilt_q14); // Q12
+            n_ar_q14 = shl32(n_ar_q14, 2); // Q12 -> Q14
+
+            let n_lf_q14 = {
+                let mut v = silk_smulwb_i32(dd.shape_q14[*smpl_buf_idx as usize], lf_shp_q14);
+                v = silk_smlawt(v, dd.lf_ar_q14, lf_shp_q14);
+                shl32(v, 2) // Q12 -> Q14
+            };
+
+            // r = x - LTP_pred - LPC_pred + n_AR + n_Tilt + n_LF + n_LTP
+            let tmp1_combined = silk_add_sat32(n_ar_q14, n_lf_q14);
+            let tmp2_combined = n_ltp_q14.wrapping_add(lpc_pred_q14);
+            let tmp_sub = silk_sub_sat32(tmp2_combined, tmp1_combined);
+            let tmp_r = silk_rshift_round(tmp_sub, 4); // Q10
+
+            let r_q10 = x_q10[i] - tmp_r;
+            if subfr == 0 && i < 3 {
+                eprintln!("[RS NSQ_INNER] i={} k={} r_Q10={} x_Q10={} LPC_pred_Q14={} n_AR_Q14={} n_LF_Q14={} n_LTP_Q14={} tmp1={}",
+                    i, k, r_q10, x_q10[i], lpc_pred_q14, n_ar_q14, n_lf_q14, n_ltp_q14, tmp_r);
+            }
+
+            // Flip sign depending on dither
+            let r_q10 = if dd.seed < 0 { -r_q10 } else { r_q10 };
+            let r_q10 = imax(imin(r_q10, 30 << 10), -(31 << 10));
+
+            // Two-candidate quantization
+            let mut q1_q10 = r_q10 - offset_q10;
+            let mut q1_q0 = q1_q10 >> 10;
+            if lambda_q10 > 2048 {
+                let rdo_offset = lambda_q10 / 2 - 512;
+                if q1_q10 > rdo_offset {
+                    q1_q0 = (q1_q10 - rdo_offset) >> 10;
+                } else if q1_q10 < -rdo_offset {
+                    q1_q0 = (q1_q10 + rdo_offset) >> 10;
+                } else if q1_q10 < 0 {
+                    q1_q0 = -1;
+                } else {
+                    q1_q0 = 0;
+                }
+            }
+
+            let (q1_q10_val, q2_q10, rd1_q10, rd2_q10);
+            if q1_q0 > 0 {
+                q1_q10_val = (q1_q0 << 10) - QUANT_LEVEL_ADJUST_Q10 + offset_q10;
+                q2_q10 = q1_q10_val + 1024;
+                rd1_q10 = silk_smulbb(q1_q10_val, lambda_q10);
+                rd2_q10 = silk_smulbb(q2_q10, lambda_q10);
+            } else if q1_q0 == 0 {
+                q1_q10_val = offset_q10;
+                q2_q10 = q1_q10_val + 1024 - QUANT_LEVEL_ADJUST_Q10;
+                rd1_q10 = silk_smulbb(q1_q10_val, lambda_q10);
+                rd2_q10 = silk_smulbb(q2_q10, lambda_q10);
+            } else if q1_q0 == -1 {
+                q2_q10 = offset_q10;
+                q1_q10_val = q2_q10 - 1024 + QUANT_LEVEL_ADJUST_Q10;
+                rd1_q10 = silk_smulbb(-q1_q10_val, lambda_q10);
+                rd2_q10 = silk_smulbb(q2_q10, lambda_q10);
+            } else {
+                q1_q10_val = (q1_q0 << 10) + QUANT_LEVEL_ADJUST_Q10 + offset_q10;
+                q2_q10 = q1_q10_val + 1024;
+                rd1_q10 = silk_smulbb(-q1_q10_val, lambda_q10);
+                rd2_q10 = silk_smulbb(-q2_q10, lambda_q10);
+            }
+
+            let rr1 = r_q10 - q1_q10_val;
+            let rd1_q10 = silk_smlabb(rd1_q10, rr1, rr1) >> 10;
+            let rr2 = r_q10 - q2_q10;
+            let rd2_q10 = silk_smlabb(rd2_q10, rr2, rr2) >> 10;
+
+            if rd1_q10 < rd2_q10 {
+                sample_state[k][0].rd_q10 = dd.rd_q10 + rd1_q10;
+                sample_state[k][1].rd_q10 = dd.rd_q10 + rd2_q10;
+                sample_state[k][0].q_q10 = q1_q10_val;
+                sample_state[k][1].q_q10 = q2_q10;
+            } else {
+                sample_state[k][0].rd_q10 = dd.rd_q10 + rd2_q10;
+                sample_state[k][1].rd_q10 = dd.rd_q10 + rd1_q10;
+                sample_state[k][0].q_q10 = q2_q10;
+                sample_state[k][1].q_q10 = q1_q10_val;
+            }
+            if subfr == 0 {
+                eprintln!(
+                    "[RS NSQ_RD] i={} k={} rd0={} rd1={} q0={} q1={} seed={}",
+                    i,
+                    k,
+                    sample_state[k][0].rd_q10,
+                    sample_state[k][1].rd_q10,
+                    sample_state[k][0].q_q10,
+                    sample_state[k][1].q_q10,
+                    dd.seed
+                );
+            }
+
+            // Update states for best quantization
+            let mut exc_q14 = shl32(sample_state[k][0].q_q10, 4);
+            if dd.seed < 0 { exc_q14 = -exc_q14; }
+            let lpc_exc_q14 = exc_q14.wrapping_add(ltp_pred_q14);
+            let xq_q14 = lpc_exc_q14.wrapping_add(lpc_pred_q14);
+            sample_state[k][0].diff_q14 = xq_q14.wrapping_sub(shl32(x_q10[i], 4));
+            let s_lf_ar_shp_q14 = sample_state[k][0].diff_q14.wrapping_sub(n_ar_q14);
+            sample_state[k][0].s_ltp_shp_q14 = silk_sub_sat32(s_lf_ar_shp_q14, n_lf_q14);
+            sample_state[k][0].lf_ar_q14 = s_lf_ar_shp_q14;
+            sample_state[k][0].lpc_exc_q14 = lpc_exc_q14;
+            sample_state[k][0].xq_q14 = xq_q14;
+
+            // Update states for second best quantization
+            let mut exc_q14 = shl32(sample_state[k][1].q_q10, 4);
+            if dd.seed < 0 { exc_q14 = -exc_q14; }
+            let lpc_exc_q14 = exc_q14.wrapping_add(ltp_pred_q14);
+            let xq_q14 = lpc_exc_q14.wrapping_add(lpc_pred_q14);
+            sample_state[k][1].diff_q14 = xq_q14.wrapping_sub(shl32(x_q10[i], 4));
+            let s_lf_ar_shp_q14 = sample_state[k][1].diff_q14.wrapping_sub(n_ar_q14);
+            sample_state[k][1].s_ltp_shp_q14 = silk_sub_sat32(s_lf_ar_shp_q14, n_lf_q14);
+            sample_state[k][1].lf_ar_q14 = s_lf_ar_shp_q14;
+            sample_state[k][1].lpc_exc_q14 = lpc_exc_q14;
+            sample_state[k][1].xq_q14 = xq_q14;
+        }
+
+        *smpl_buf_idx = (*smpl_buf_idx - 1).rem_euclid(DECISION_DELAY as i32);
+        let last_smple_idx = ((*smpl_buf_idx + decision_delay) % DECISION_DELAY as i32) as usize;
+
+        // Find winner
+        let mut rd_min_q10 = sample_state[0][0].rd_q10;
+        let mut winner_ind = 0usize;
+        for k in 1..n_states {
+            if sample_state[k][0].rd_q10 < rd_min_q10 {
+                rd_min_q10 = sample_state[k][0].rd_q10;
+                winner_ind = k;
+            }
+        }
+
+        // Increase RD values of expired states
+        let winner_rand_state = ps_del_dec[winner_ind].rand_state[last_smple_idx];
+        for k in 0..n_states {
+            if ps_del_dec[k].rand_state[last_smple_idx] != winner_rand_state {
+                sample_state[k][0].rd_q10 = sample_state[k][0].rd_q10.wrapping_add(i32::MAX >> 4);
+                sample_state[k][1].rd_q10 = sample_state[k][1].rd_q10.wrapping_add(i32::MAX >> 4);
+            }
+        }
+
+        // Find worst in first set and best in second set
+        let mut rd_max_q10 = sample_state[0][0].rd_q10;
+        let mut rd_min_q10 = sample_state[0][1].rd_q10;
+        let mut rd_max_ind = 0usize;
+        let mut rd_min_ind = 0usize;
+        for k in 1..n_states {
+            if sample_state[k][0].rd_q10 > rd_max_q10 {
+                rd_max_q10 = sample_state[k][0].rd_q10;
+                rd_max_ind = k;
+            }
+            if sample_state[k][1].rd_q10 < rd_min_q10 {
+                rd_min_q10 = sample_state[k][1].rd_q10;
+                rd_min_ind = k;
+            }
+        }
+
+        // Replace a state if best from second set outperforms worst in first set
+        if rd_min_q10 < rd_max_q10 {
+            // Copy del_dec struct from rd_min_ind to rd_max_ind (partial, starting at offset i)
+            // C does: memcpy(((int32*)&psDelDec[RDmax_ind]) + i, ((int32*)&psDelDec[RDmin_ind]) + i, sizeof - i*4)
+            // In Rust we copy the whole struct and restore the first i values of s_lpc_q14
+            let src = ps_del_dec[rd_min_ind].clone();
+            let dst = &mut ps_del_dec[rd_max_ind];
+            // Preserve first `i` values of s_lpc_q14 (the partial copy offset)
+            let saved: Vec<i32> = dst.s_lpc_q14[..i].to_vec();
+            *dst = src;
+            dst.s_lpc_q14[..i].copy_from_slice(&saved);
+            sample_state[rd_max_ind][0] = sample_state[rd_min_ind][1];
+        }
+
+        // Write samples from winner to output
+        let dd = &ps_del_dec[winner_ind];
+        if subfr > 0 || i >= decision_delay as usize {
+            let out_idx = i as isize - decision_delay as isize;
+            pulses[out_idx as usize] = silk_rshift_round(dd.q_q10[last_smple_idx], 10) as i8;
+            nsq.xq[pxq_offset.wrapping_add(out_idx as usize)] = sat16(silk_rshift_round(
+                silk_smulww(dd.xq_q14[last_smple_idx], delayed_gain_q10[last_smple_idx]),
+                8,
+            ));
+            nsq.s_ltp_shp_q14[(nsq.s_ltp_shp_buf_idx - decision_delay) as usize] =
+                dd.shape_q14[last_smple_idx];
+            s_ltp_q15[(nsq.s_ltp_buf_idx - decision_delay) as usize] =
+                dd.pred_q15[last_smple_idx];
+        }
+        nsq.s_ltp_shp_buf_idx += 1;
+        nsq.s_ltp_buf_idx += 1;
+
+        // Update states
+        for k in 0..n_states {
+            let dd = &mut ps_del_dec[k];
+            let ss = &sample_state[k][0];
+            dd.lf_ar_q14 = ss.lf_ar_q14;
+            dd.diff_q14 = ss.diff_q14;
+            dd.s_lpc_q14[NSQ_LPC_BUF_LENGTH + i] = ss.xq_q14;
+            dd.xq_q14[*smpl_buf_idx as usize] = ss.xq_q14;
+            dd.q_q10[*smpl_buf_idx as usize] = ss.q_q10;
+            dd.pred_q15[*smpl_buf_idx as usize] = shl32(ss.lpc_exc_q14, 1);
+            dd.shape_q14[*smpl_buf_idx as usize] = ss.s_ltp_shp_q14;
+            dd.seed = dd.seed.wrapping_add(silk_rshift_round(ss.q_q10, 10));
+            dd.rand_state[*smpl_buf_idx as usize] = dd.seed;
+            dd.rd_q10 = ss.rd_q10;
+        }
+        delayed_gain_q10[*smpl_buf_idx as usize] = gain_q10;
+    }
+
+    // Update LPC states
+    for k in 0..n_states {
+        ps_del_dec[k].s_lpc_q14.copy_within(length..length + NSQ_LPC_BUF_LENGTH, 0);
+    }
+}
+
+// ===========================================================================
+// Delayed-decision noise shaping quantizer.
+// Matches C: silk_NSQ_del_dec_c
+// ===========================================================================
+#[allow(clippy::too_many_arguments)]
+pub fn silk_nsq_del_dec(
+    ps_enc: &SilkEncoderState,
+    nsq: &mut NsqState,
+    ps_indices: &mut SideInfoIndices,
+    x16: &[i16],
+    pulses: &mut [i8],
+    pred_coef_q12: &[[i16; MAX_LPC_ORDER]; 2],
+    ltp_coef_q14: &[i16],
+    ar_q13: &[i16],
+    harm_shape_gain_q14: &[i32],
+    tilt_q14: &[i32],
+    lf_shp_q14: &[i32],
+    gains_q16: &[i32],
+    pitch_l: &[i32],
+    lambda_q10: i32,
+    ltp_scale_q14: i32,
+) {
+    let nb_subfr = ps_enc.nb_subfr as usize;
+    let subfr_length = ps_enc.subfr_length as usize;
+    let frame_length = ps_enc.frame_length as usize;
+    let ltp_mem_length = ps_enc.ltp_mem_length as usize;
+    let predict_lpc_order = ps_enc.predict_lpc_order as usize;
+    let shaping_lpc_order = ps_enc.shaping_lpc_order as usize;
+    let warping_q16 = ps_enc.warping_q16;
+    let n_states = ps_enc.n_states_delayed_decision as usize;
+
+    let signal_type = ps_indices.signal_type as i32;
+
+    let mut s_ltp_q15 = vec![0i32; ltp_mem_length + frame_length];
+    let mut s_ltp = vec![0i16; ltp_mem_length + frame_length];
+    let mut x_sc_q10 = vec![0i32; subfr_length];
+    let mut delayed_gain_q10 = [0i32; DECISION_DELAY];
+
+    let mut lag = nsq.lag_prev;
+
+    // Initialize delayed decision states
+    let mut ps_del_dec = vec![NsqDelDecStruct::default(); n_states];
+    for k in 0..n_states {
+        ps_del_dec[k].seed = ((k as i32 + ps_indices.seed as i32) & 3) as i32;
+        ps_del_dec[k].seed_init = ps_del_dec[k].seed;
+        ps_del_dec[k].rd_q10 = 0;
+        ps_del_dec[k].lf_ar_q14 = nsq.s_lf_ar_shp_q14;
+        ps_del_dec[k].diff_q14 = nsq.s_diff_shp_q14;
+        ps_del_dec[k].shape_q14[0] = nsq.s_ltp_shp_q14[ltp_mem_length - 1];
+        ps_del_dec[k].s_lpc_q14[..NSQ_LPC_BUF_LENGTH]
+            .copy_from_slice(&nsq.s_lpc_q14[..NSQ_LPC_BUF_LENGTH]);
+        ps_del_dec[k].s_ar2_q14.copy_from_slice(&nsq.s_ar2_q14);
+    }
+
+    let offset_q10 = SILK_QUANTIZATION_OFFSETS_Q10
+        [(signal_type >> 1) as usize]
+        [ps_indices.quant_offset_type as usize] as i32;
+
+    let mut smpl_buf_idx: i32 = 0;
+
+    let mut decision_delay = imin(DECISION_DELAY as i32, subfr_length as i32);
+    if signal_type == TYPE_VOICED {
+        for k in 0..nb_subfr {
+            decision_delay = imin(decision_delay, pitch_l[k] - LTP_ORDER as i32 / 2 - 1);
+        }
+    } else if lag > 0 {
+        decision_delay = imin(decision_delay, lag - LTP_ORDER as i32 / 2 - 1);
+    }
+
+    let lsf_interpolation_flag = if ps_indices.nlsf_interp_coef_q2 == 4 { 0 } else { 1 };
+
+    nsq.s_ltp_shp_buf_idx = ltp_mem_length as i32;
+    nsq.s_ltp_buf_idx = ltp_mem_length as i32;
+
+    let mut subfr_counter = 0usize;
+    for k in 0..nb_subfr {
+        let coef_idx = (k >> 1) | (1 - lsf_interpolation_flag);
+        let a_q12 = &pred_coef_q12[coef_idx as usize];
+        let b_q14 = &ltp_coef_q14[k * LTP_ORDER..];
+        let ar_shp_q13 = &ar_q13[k * shaping_lpc_order..];
+
+        let harm_shape_fir_packed_q14 = (harm_shape_gain_q14[k] >> 2)
+            | (((harm_shape_gain_q14[k] >> 1) as i32) << 16);
+
+        nsq.rewhite_flag = 0;
+        if signal_type == TYPE_VOICED {
+            lag = pitch_l[k];
+
+            if (k as i32 & (3 - shl32(lsf_interpolation_flag as i32, 1))) == 0 {
+                if k == 2 {
+                    // RESET DELAYED DECISIONS - find winner
+                    let mut rd_min_q10 = ps_del_dec[0].rd_q10;
+                    let mut winner_ind = 0usize;
+                    for j in 1..n_states {
+                        if ps_del_dec[j].rd_q10 < rd_min_q10 {
+                            rd_min_q10 = ps_del_dec[j].rd_q10;
+                            winner_ind = j;
+                        }
+                    }
+                    for j in 0..n_states {
+                        if j != winner_ind {
+                            ps_del_dec[j].rd_q10 = ps_del_dec[j].rd_q10.wrapping_add(i32::MAX >> 4);
+                        }
+                    }
+
+                    // Copy final part of signals from winner state
+                    let dd = &ps_del_dec[winner_ind];
+                    let gain_q10_k1 = gains_q16[1] >> 6;
+                    let mut last_smple_idx = smpl_buf_idx + decision_delay;
+                    for j in 0..decision_delay as usize {
+                        last_smple_idx = (last_smple_idx - 1).rem_euclid(DECISION_DELAY as i32);
+                        let ls = last_smple_idx as usize;
+                        let out_idx = j as isize - decision_delay as isize;
+                        pulses[out_idx as usize] = silk_rshift_round(dd.q_q10[ls], 10) as i8;
+                        nsq.xq[(ltp_mem_length as isize + out_idx) as usize] = sat16(silk_rshift_round(
+                            silk_smulww(dd.xq_q14[ls], gain_q10_k1),
+                            8,
+                        ));
+                        nsq.s_ltp_shp_q14[(nsq.s_ltp_shp_buf_idx - decision_delay + j as i32) as usize] =
+                            dd.shape_q14[ls];
+                    }
+
+                    subfr_counter = 0;
+                }
+
+                // Rewhiten with new A coefs
+                let start_idx = (ltp_mem_length as i32 - lag - ps_enc.predict_lpc_order as i32
+                    - LTP_ORDER as i32 / 2) as usize;
+                let xq_offset = start_idx + k * subfr_length;
+                let filter_len = ltp_mem_length - start_idx;
+                let xq_src: Vec<i16> = nsq.xq[xq_offset..xq_offset + filter_len].to_vec();
+                silk_lpc_analysis_filter(
+                    &mut s_ltp[start_idx..start_idx + filter_len],
+                    &xq_src,
+                    a_q12,
+                    filter_len,
+                    predict_lpc_order,
+                );
+
+                nsq.s_ltp_buf_idx = ltp_mem_length as i32;
+                nsq.rewhite_flag = 1;
+            }
+        }
+
+        silk_nsq_del_dec_scale_states(
+            ps_enc,
+            nsq,
+            &mut ps_del_dec,
+            &x16[k * subfr_length..],
+            &mut x_sc_q10,
+            &s_ltp,
+            &mut s_ltp_q15,
+            k,
+            n_states,
+            ltp_scale_q14,
+            gains_q16,
+            pitch_l,
+            signal_type,
+            decision_delay,
+        );
+
+        silk_noise_shape_quantizer_del_dec(
+            nsq,
+            &mut ps_del_dec,
+            signal_type,
+            &x_sc_q10,
+            &mut pulses[k * subfr_length..],
+            ltp_mem_length + k * subfr_length,
+            &mut s_ltp_q15,
+            &mut delayed_gain_q10,
+            a_q12,
+            b_q14,
+            ar_shp_q13,
+            lag,
+            harm_shape_fir_packed_q14,
+            tilt_q14[k] as i32,
+            lf_shp_q14[k],
+            gains_q16[k],
+            lambda_q10,
+            offset_q10,
+            subfr_length,
+            subfr_counter,
+            shaping_lpc_order,
+            predict_lpc_order,
+            warping_q16,
+            n_states,
+            &mut smpl_buf_idx,
+            decision_delay,
+        );
+
+        subfr_counter += 1;
+    }
+
+    // Find winner
+    let mut rd_min_q10 = ps_del_dec[0].rd_q10;
+    let mut winner_ind = 0usize;
+    for k in 1..n_states {
+        if ps_del_dec[k].rd_q10 < rd_min_q10 {
+            rd_min_q10 = ps_del_dec[k].rd_q10;
+            winner_ind = k;
+        }
+    }
+
+    // Copy final part of signals from winner state to output
+    let dd = &ps_del_dec[winner_ind];
+    ps_indices.seed = dd.seed_init as i8;
+    let mut last_smple_idx = smpl_buf_idx + decision_delay;
+    let gain_q10 = gains_q16[nb_subfr - 1] >> 6;
+    for i in 0..decision_delay as usize {
+        last_smple_idx = (last_smple_idx - 1).rem_euclid(DECISION_DELAY as i32);
+        let ls = last_smple_idx as usize;
+        let out_idx = i as isize - decision_delay as isize;
+        pulses[(out_idx + (nb_subfr * subfr_length) as isize) as usize] =
+            silk_rshift_round(dd.q_q10[ls], 10) as i8;
+        nsq.xq[(ltp_mem_length + nb_subfr * subfr_length).wrapping_add(out_idx as usize)] =
+            sat16(silk_rshift_round(silk_smulww(dd.xq_q14[ls], gain_q10), 8));
+        nsq.s_ltp_shp_q14[(nsq.s_ltp_shp_buf_idx - decision_delay + i as i32) as usize] =
+            dd.shape_q14[ls];
+    }
+    nsq.s_lpc_q14[..NSQ_LPC_BUF_LENGTH]
+        .copy_from_slice(&dd.s_lpc_q14[subfr_length..subfr_length + NSQ_LPC_BUF_LENGTH]);
+    nsq.s_ar2_q14.copy_from_slice(&dd.s_ar2_q14);
+
+    // Update states
+    nsq.s_lf_ar_shp_q14 = dd.lf_ar_q14;
+    nsq.s_diff_shp_q14 = dd.diff_q14;
+    nsq.lag_prev = pitch_l[nb_subfr - 1];
+
+    // Shift buffers
+    nsq.xq.copy_within(frame_length..frame_length + ltp_mem_length, 0);
+    nsq.s_ltp_shp_q14.copy_within(frame_length..frame_length + ltp_mem_length, 0);
 }
 
 /// Noise shaping quantizer (standard, non-delayed-decision).
@@ -5464,27 +6104,47 @@ pub fn silk_encode_frame_fix(
                     ps_enc.s_cmn.ec_prev_signal_type = ec_prev_sig_copy;
                 }
 
-                // NSQ
+                // NSQ: dispatch del_dec vs standard (matches C encode_frame_FIX.c:210)
                 let mut nsq = std::mem::replace(&mut ps_enc.s_cmn.s_nsq, NsqState::default());
                 let mut indices = std::mem::replace(&mut ps_enc.s_cmn.indices, SideInfoIndices::default());
                 let mut pulses = std::mem::replace(&mut ps_enc.s_cmn.pulses, [0i8; MAX_FRAME_LENGTH]);
-                silk_nsq(
-                    &ps_enc.s_cmn,
-                    &mut nsq,
-                    &mut indices,
-                    &x_frame_slice,
-                    &mut pulses,
-                    &s_enc_ctrl.pred_coef_q12,
-                    &s_enc_ctrl.ltp_coef_q14,
-                    &s_enc_ctrl.ar_q13,
-                    &s_enc_ctrl.harm_shape_gain_q14,
-                    &s_enc_ctrl.tilt_q14,
-                    &s_enc_ctrl.lf_shp_q14,
-                    &s_enc_ctrl.gains_q16,
-                    &s_enc_ctrl.pitch_l,
-                    s_enc_ctrl.lambda_q10,
-                    s_enc_ctrl.ltp_scale_q14,
-                );
+                if ps_enc.s_cmn.n_states_delayed_decision > 1 || ps_enc.s_cmn.warping_q16 > 0 {
+                    silk_nsq_del_dec(
+                        &ps_enc.s_cmn,
+                        &mut nsq,
+                        &mut indices,
+                        &x_frame_slice,
+                        &mut pulses,
+                        &s_enc_ctrl.pred_coef_q12,
+                        &s_enc_ctrl.ltp_coef_q14,
+                        &s_enc_ctrl.ar_q13,
+                        &s_enc_ctrl.harm_shape_gain_q14,
+                        &s_enc_ctrl.tilt_q14,
+                        &s_enc_ctrl.lf_shp_q14,
+                        &s_enc_ctrl.gains_q16,
+                        &s_enc_ctrl.pitch_l,
+                        s_enc_ctrl.lambda_q10,
+                        s_enc_ctrl.ltp_scale_q14,
+                    );
+                } else {
+                    silk_nsq(
+                        &ps_enc.s_cmn,
+                        &mut nsq,
+                        &mut indices,
+                        &x_frame_slice,
+                        &mut pulses,
+                        &s_enc_ctrl.pred_coef_q12,
+                        &s_enc_ctrl.ltp_coef_q14,
+                        &s_enc_ctrl.ar_q13,
+                        &s_enc_ctrl.harm_shape_gain_q14,
+                        &s_enc_ctrl.tilt_q14,
+                        &s_enc_ctrl.lf_shp_q14,
+                        &s_enc_ctrl.gains_q16,
+                        &s_enc_ctrl.pitch_l,
+                        s_enc_ctrl.lambda_q10,
+                        s_enc_ctrl.ltp_scale_q14,
+                    );
+                }
                 ps_enc.s_cmn.s_nsq = nsq;
                 ps_enc.s_cmn.indices = indices;
                 ps_enc.s_cmn.pulses = pulses;

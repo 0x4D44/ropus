@@ -683,6 +683,12 @@ pub fn silk_add_sat32(a: i32, b: i32) -> i32 {
     a.saturating_add(b)
 }
 
+/// Saturating i32 subtraction.
+#[inline(always)]
+pub fn silk_sub_sat32(a: i32, b: i32) -> i32 {
+    a.saturating_sub(b)
+}
+
 /// Saturating i32 left shift.
 #[inline(always)]
 pub fn silk_lshift_sat32(a: i32, shift: i32) -> i32 {

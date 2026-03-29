@@ -1,0 +1,490 @@
+warning: unnecessary parentheses around function argument
+   --> src\celt\bands.rs:309:32
+    |
+309 |         let depth = (celt_udiv((1 + pulses[iu] as u32), n0 as u32) >> lm as u32) as i32;
+    |                                ^                     ^
+    |
+    = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+    |
+309 -         let depth = (celt_udiv((1 + pulses[iu] as u32), n0 as u32) >> lm as u32) as i32;
+309 +         let depth = (celt_udiv(1 + pulses[iu] as u32, n0 as u32) >> lm as u32) as i32;
+    |
+
+warning: unused imports: `celt_ilog2` and `celt_zlog2`
+ --> src\celt\fft.rs:7:29
+  |
+7 | use crate::celt::math_ops::{celt_ilog2, celt_zlog2};
+  |                             ^^^^^^^^^^  ^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary parentheses around method argument
+    --> src\silk\decoder.rs:1419:31
+     |
+1419 |                 .wrapping_add(((sum_mid as i64 * pred0_q13 as i64 >> 7) as i32))
+     |                               ^                                               ^
+     |
+help: remove these parentheses
+     |
+1419 -                 .wrapping_add(((sum_mid as i64 * pred0_q13 as i64 >> 7) as i32))
+1419 +                 .wrapping_add((sum_mid as i64 * pred0_q13 as i64 >> 7) as i32)
+     |
+
+warning: unnecessary parentheses around method argument
+    --> src\silk\decoder.rs:1431:27
+     |
+1431 |             .wrapping_add(((sum_mid as i64 * pred0_q13 as i64 >> 7) as i32))
+     |                           ^                                               ^
+     |
+help: remove these parentheses
+     |
+1431 -             .wrapping_add(((sum_mid as i64 * pred0_q13 as i64 >> 7) as i32))
+1431 +             .wrapping_add((sum_mid as i64 * pred0_q13 as i64 >> 7) as i32)
+     |
+
+warning: unnecessary parentheses around function argument
+    --> src\silk\encoder.rs:5564:29
+     |
+5564 |                 silk_smlabb(((0.8 * 1024.0) as i32), ((0.1 * 1024.0) as i32), iter),
+     |                             ^                     ^
+     |
+help: remove these parentheses
+     |
+5564 -                 silk_smlabb(((0.8 * 1024.0) as i32), ((0.1 * 1024.0) as i32), iter),
+5564 +                 silk_smlabb((0.8 * 1024.0) as i32, ((0.1 * 1024.0) as i32), iter),
+     |
+
+warning: unnecessary parentheses around function argument
+    --> src\silk\encoder.rs:5564:54
+     |
+5564 |                 silk_smlabb(((0.8 * 1024.0) as i32), ((0.1 * 1024.0) as i32), iter),
+     |                                                      ^                     ^
+     |
+help: remove these parentheses
+     |
+5564 -                 silk_smlabb(((0.8 * 1024.0) as i32), ((0.1 * 1024.0) as i32), iter),
+5564 +                 silk_smlabb(((0.8 * 1024.0) as i32), (0.1 * 1024.0) as i32, iter),
+     |
+
+warning: unnecessary parentheses around function argument
+    --> src\silk\encoder.rs:5631:13
+     |
+5631 |             ((2.0 * 256.0) as i32), // HARM_SNR_INCR_dB=2.0 in Q8
+     |             ^                    ^
+     |
+help: remove these parentheses
+     |
+5631 -             ((2.0 * 256.0) as i32), // HARM_SNR_INCR_dB=2.0 in Q8
+5631 +             (2.0 * 256.0) as i32, // HARM_SNR_INCR_dB=2.0 in Q8
+     |
+
+warning: unnecessary parentheses around function argument
+    --> src\silk\encoder.rs:5638:17
+     |
+5638 |                 ((6.0 * 512.0) as i32), // 6.0 in Q9
+     |                 ^                    ^
+     |
+help: remove these parentheses
+     |
+5638 -                 ((6.0 * 512.0) as i32), // 6.0 in Q9
+5638 +                 (6.0 * 512.0) as i32, // 6.0 in Q9
+     |
+
+warning: unnecessary parentheses around function argument
+    --> src\silk\encoder.rs:5639:17
+     |
+5639 |                 ((-0.4 * (1 << 18) as f64) as i32), // -0.4 in Q18
+     |                 ^                                ^
+     |
+help: remove these parentheses
+     |
+5639 -                 ((-0.4 * (1 << 18) as f64) as i32), // -0.4 in Q18
+5639 +                 (-0.4 * (1 << 18) as f64) as i32, // -0.4 in Q18
+     |
+
+warning: unnecessary parentheses around function argument
+    --> src\silk\encoder.rs:5678:60
+     |
+5678 |     let strength_q16 = silk_smulwb(imax(pred_gain_q16, 1), ((FIND_PITCH_WHITE_NOISE_FRACTION * 65536.0 + 0.5) as i16));
+     |                                                            ^                                                        ^
+     |
+help: remove these parentheses
+     |
+5678 -     let strength_q16 = silk_smulwb(imax(pred_gain_q16, 1), ((FIND_PITCH_WHITE_NOISE_FRACTION * 65536.0 + 0.5) as i16));
+5678 +     let strength_q16 = silk_smulwb(imax(pred_gain_q16, 1), (FIND_PITCH_WHITE_NOISE_FRACTION * 65536.0 + 0.5) as i16);
+     |
+
+warning: unnecessary parentheses around function argument
+    --> src\silk\encoder.rs:5680:9
+     |
+5680 |         ((BANDWIDTH_EXPANSION * 65536.0 + 0.5) as i32),
+     |         ^                                            ^
+     |
+help: remove these parentheses
+     |
+5680 -         ((BANDWIDTH_EXPANSION * 65536.0 + 0.5) as i32),
+5680 +         (BANDWIDTH_EXPANSION * 65536.0 + 0.5) as i32,
+     |
+
+warning: unnecessary parentheses around function argument
+    --> src\silk\encoder.rs:5681:21
+     |
+5681 |         silk_smlaww((1 << 16), strength_q16, strength_q16),
+     |                     ^       ^
+     |
+help: remove these parentheses
+     |
+5681 -         silk_smlaww((1 << 16), strength_q16, strength_q16),
+5681 +         silk_smlaww(1 << 16, strength_q16, strength_q16),
+     |
+
+warning: unnecessary parentheses around function argument
+    --> src\silk\encoder.rs:5747:61
+     |
+5747 |         auto_corr[0] += imax(silk_smulwb(auto_corr[0] >> 4, ((SHAPE_WHITE_NOISE_FRACTION * (1 << 20) as f64) as i16)), 1);
+     |                                                             ^                                                      ^
+     |
+help: remove these parentheses
+     |
+5747 -         auto_corr[0] += imax(silk_smulwb(auto_corr[0] >> 4, ((SHAPE_WHITE_NOISE_FRACTION * (1 << 20) as f64) as i16)), 1);
+5747 +         auto_corr[0] += imax(silk_smulwb(auto_corr[0] >> 4, (SHAPE_WHITE_NOISE_FRACTION * (1 << 20) as f64) as i16), 1);
+     |
+
+warning: unnecessary parentheses around function argument
+    --> src\silk\encoder.rs:5823:39
+     |
+5823 |             let b_q14 = silk_div32_16(((0.2 * 16384.0) as i32), fs_khz)
+     |                                       ^                      ^
+     |
+help: remove these parentheses
+     |
+5823 -             let b_q14 = silk_div32_16(((0.2 * 16384.0) as i32), fs_khz)
+5823 +             let b_q14 = silk_div32_16((0.2 * 16384.0) as i32, fs_khz)
+     |
+
+warning: unnecessary parentheses around function argument
+    --> src\silk\encoder.rs:5824:33
+     |
+5824 |                 + silk_div32_16(((3.0 * 16384.0) as i32), ps_enc_ctrl.pitch_l[k]);
+     |                                 ^                      ^
+     |
+help: remove these parentheses
+     |
+5824 -                 + silk_div32_16(((3.0 * 16384.0) as i32), ps_enc_ctrl.pitch_l[k]);
+5824 +                 + silk_div32_16((3.0 * 16384.0) as i32, ps_enc_ctrl.pitch_l[k]);
+     |
+
+warning: unnecessary parentheses around function argument
+    --> src\silk\encoder.rs:5826:40
+     |
+5826 |             let strength = silk_smulwb(((LOW_FREQ_SHAPING_Q0 * 16.0) as i32), (1 << 12) as i16);
+     |                                        ^                                   ^
+     |
+help: remove these parentheses
+     |
+5826 -             let strength = silk_smulwb(((LOW_FREQ_SHAPING_Q0 * 16.0) as i32), (1 << 12) as i16);
+5826 +             let strength = silk_smulwb((LOW_FREQ_SHAPING_Q0 * 16.0) as i32, (1 << 12) as i16);
+     |
+
+warning: unnecessary parentheses around assigned value
+    --> src\silk\encoder.rs:5832:50
+     |
+5832 |             ps_enc_ctrl.harm_shape_gain_q14[k] = ((HARMONIC_SHAPING * 16384.0 + 0.5) as i32);
+     |                                                  ^                                         ^
+     |
+help: remove these parentheses
+     |
+5832 -             ps_enc_ctrl.harm_shape_gain_q14[k] = ((HARMONIC_SHAPING * 16384.0 + 0.5) as i32);
+5832 +             ps_enc_ctrl.harm_shape_gain_q14[k] = (HARMONIC_SHAPING * 16384.0 + 0.5) as i32;
+     |
+
+warning: unnecessary parentheses around function argument
+    --> src\silk\encoder.rs:5891:60
+     |
+5891 |     auto_corr[0] = silk_smlawb(auto_corr[0], auto_corr[0], ((FIND_PITCH_WHITE_NOISE_FRACTION * 65536.0) as i16)) + 1;
+     |                                                            ^                                                  ^
+     |
+help: remove these parentheses
+     |
+5891 -     auto_corr[0] = silk_smlawb(auto_corr[0], auto_corr[0], ((FIND_PITCH_WHITE_NOISE_FRACTION * 65536.0) as i16)) + 1;
+5891 +     auto_corr[0] = silk_smlawb(auto_corr[0], auto_corr[0], (FIND_PITCH_WHITE_NOISE_FRACTION * 65536.0) as i16) + 1;
+     |
+
+warning: unnecessary parentheses around function argument
+    --> src\silk\encoder.rs:5911:50
+     |
+5911 |     silk_bwexpander(&mut a_q12, pitch_lpc_order, ((FIND_PITCH_BANDWIDTH_EXPANSION * 65536.0 + 0.5) as i32));
+     |                                                  ^                                                       ^
+     |
+help: remove these parentheses
+     |
+5911 -     silk_bwexpander(&mut a_q12, pitch_lpc_order, ((FIND_PITCH_BANDWIDTH_EXPANSION * 65536.0 + 0.5) as i32));
+5911 +     silk_bwexpander(&mut a_q12, pitch_lpc_order, (FIND_PITCH_BANDWIDTH_EXPANSION * 65536.0 + 0.5) as i32);
+     |
+
+warning: unused variable: `inner`
+  --> src\celt\bands.rs:99:9
+   |
+99 |     let inner = frac_mul16(x2i, -626 + frac_mul16(x2i, 8277 + frac_mul16(-626, x2i)));
+   |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_inner`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `band_len`
+   --> src\celt\bands.rs:137:17
+    |
+137 |             let band_len = end_bin - start_bin;
+    |                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_band_len`
+
+warning: value assigned to `f_idx` is never read
+   --> src\celt\bands.rs:225:28
+    |
+225 |     let mut f_idx: usize = 0;
+    |                            ^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `stereo`
+   --> src\celt\bands.rs:911:9
+    |
+911 |     let stereo = y.is_some();
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_stereo`
+
+warning: variable does not need to be mutable
+   --> src\celt\bands.rs:984:13
+    |
+984 |         let mut new_lm = lm - 1;
+    |             ----^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+    --> src\celt\bands.rs:1532:5
+     |
+1532 |     mut intensity: i32,
+     |     ----^^^^^^^^^
+     |     |
+     |     help: remove this `mut`
+
+warning: unused variable: `lowband_scratch_ref`
+    --> src\celt\bands.rs:1623:13
+     |
+1623 |         let lowband_scratch_ref: Option<&mut [i32]> = if beyond_eff || (last && !theta_rdo) {
+     |             ^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_lowband_scratch_ref`
+
+warning: unused variable: `shift`
+   --> src\celt\encoder.rs:344:5
+    |
+344 |     shift: i32,
+    |     ^^^^^ help: if this is intentional, prefix it with an underscore: `_shift`
+
+warning: unused variable: `enc_inited`
+    --> src\celt\encoder.rs:1620:5
+     |
+1620 |     enc_inited: bool,
+     |     ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_enc_inited`
+
+warning: unused variable: `ret_before_strip`
+    --> src\opus\encoder.rs:2203:13
+     |
+2203 |         let ret_before_strip = ret;
+     |             ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ret_before_strip`
+
+warning: function `compute_channel_weights` is never used
+   --> src\celt\bands.rs:380:4
+    |
+380 | fn compute_channel_weights(ex: i32, ey: i32) -> [i32; 2] {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `median_of_3` is never used
+    --> src\celt\encoder.rs:1151:4
+     |
+1151 | fn median_of_3(a: i32, b: i32, c: i32) -> i32 {
+     |    ^^^^^^^^^^^
+
+warning: constant `LBRR_SPEECH_ACTIVITY_THRES` is never used
+    --> src\silk\encoder.rs:5077:7
+     |
+5077 | const LBRR_SPEECH_ACTIVITY_THRES: f64 = 0.3;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `LOW_QUALITY_LOW_FREQ_SHAPING_DECR` is never used
+    --> src\silk\encoder.rs:5079:7
+     |
+5079 | const LOW_QUALITY_LOW_FREQ_SHAPING_DECR: f64 = 0.5;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `SUBFR_SMTH_COEF` is never used
+    --> src\silk\encoder.rs:5080:7
+     |
+5080 | const SUBFR_SMTH_COEF: f64 = 0.4;
+     |       ^^^^^^^^^^^^^^^
+
+warning: constant `HARM_SNR_INCR_DB` is never used
+    --> src\silk\encoder.rs:5081:7
+     |
+5081 | const HARM_SNR_INCR_DB: f64 = 2.0;
+     |       ^^^^^^^^^^^^^^^^
+
+warning: constant `HIGH_RATE_OR_LOW_QUALITY_HARMONIC_SHAPING` is never used
+    --> src\silk\encoder.rs:5083:7
+     |
+5083 | const HIGH_RATE_OR_LOW_QUALITY_HARMONIC_SHAPING: f64 = 0.2;
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `HARM_HP_NOISE_COEF` is never used
+    --> src\silk\encoder.rs:5085:7
+     |
+5085 | const HARM_HP_NOISE_COEF: f64 = 0.35;
+     |       ^^^^^^^^^^^^^^^^^^
+
+warning: constant `WHITE_NOISE_FRACTION` is never used
+    --> src\silk\encoder.rs:5088:7
+     |
+5088 | const WHITE_NOISE_FRACTION: f64 = 2e-5;
+     |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: multiple methods are never used
+    --> src\opus\decoder.rs:1337:19
+     |
+ 456 | impl OpusDecoder {
+     | ---------------- methods in this implementation
+...
+1337 |     pub(crate) fn ms_get_sample_rate(&self) -> i32 { self.fs }
+     |                   ^^^^^^^^^^^^^^^^^^
+1338 |     pub(crate) fn ms_get_bandwidth(&self) -> i32 { self.bandwidth }
+     |                   ^^^^^^^^^^^^^^^^
+1339 |     pub(crate) fn ms_get_range_final(&self) -> u32 { self.range_final }
+     |                   ^^^^^^^^^^^^^^^^^^
+1340 |     pub(crate) fn ms_get_last_packet_duration(&self) -> i32 { self.last_packet_duration }
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+1341 |     pub(crate) fn ms_get_gain(&self) -> i32 { self.decode_gain }
+     |                   ^^^^^^^^^^^
+1342 |     pub(crate) fn ms_set_gain(&mut self, gain: i32) { self.decode_gain = gain; }
+     |                   ^^^^^^^^^^^
+1343 |     pub(crate) fn ms_get_complexity(&self) -> i32 { self.complexity }
+     |                   ^^^^^^^^^^^^^^^^^
+1344 |     pub(crate) fn ms_set_complexity(&mut self, v: i32) { self.complexity = v; }
+     |                   ^^^^^^^^^^^^^^^^^
+1345 |     pub(crate) fn ms_get_phase_inversion_disabled(&self) -> i32 {
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1348 |     pub(crate) fn ms_set_phase_inversion_disabled(&mut self, v: i32) {
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1351 |     pub(crate) fn ms_reset(&mut self) {
+     |                   ^^^^^^^^
+
+warning: constant `OPUS_APPLICATION_RESTRICTED_SILK` is never used
+  --> src\opus\encoder.rs:37:7
+   |
+37 | const OPUS_APPLICATION_RESTRICTED_SILK: i32 = 2052;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `OPUS_APPLICATION_RESTRICTED_CELT` is never used
+  --> src\opus\encoder.rs:38:7
+   |
+38 | const OPUS_APPLICATION_RESTRICTED_CELT: i32 = 2053;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `MAX_ENCODER_BUFFER` is never used
+  --> src\opus\encoder.rs:61:7
+   |
+61 | const MAX_ENCODER_BUFFER: i32 = 480;
+   |       ^^^^^^^^^^^^^^^^^^
+
+warning: function `silk_smlawb` is never used
+   --> src\opus\encoder.rs:128:4
+    |
+128 | fn silk_smlawb(a: i32, b: i32, c: i32) -> i32 {
+    |    ^^^^^^^^^^^
+
+warning: multiple methods are never used
+    --> src\opus\encoder.rs:964:19
+     |
+ 852 | impl OpusEncoder {
+     | ---------------- methods in this implementation
+...
+ 964 |     pub(crate) fn ms_get_vbr(&self) -> i32 { self.use_vbr }
+     |                   ^^^^^^^^^^
+ 965 |     pub(crate) fn ms_get_bitrate(&self) -> i32 { self.bitrate_bps }
+     |                   ^^^^^^^^^^^^^^
+ 966 |     pub(crate) fn ms_set_user_bitrate(&mut self, rate: i32) { self.user_bitrate_bps = rate; }
+     |                   ^^^^^^^^^^^^^^^^^^^
+ 967 |     pub(crate) fn ms_set_bandwidth(&mut self, bw: i32) { self.user_bandwidth = bw; }
+     |                   ^^^^^^^^^^^^^^^^
+ 968 |     pub(crate) fn ms_set_max_bandwidth(&mut self, bw: i32) { self.max_bandwidth = bw; }
+     |                   ^^^^^^^^^^^^^^^^^^^^
+ 969 |     pub(crate) fn ms_set_force_mode(&mut self, mode: i32) { self.user_forced_mode = mode; }
+     |                   ^^^^^^^^^^^^^^^^^
+ 970 |     pub(crate) fn ms_set_force_channels(&mut self, ch: i32) { self.force_channels = ch; }
+     |                   ^^^^^^^^^^^^^^^^^^^^^
+ 971 |     pub(crate) fn ms_set_lfe(&mut self, lfe: i32) { self.lfe = lfe; }
+     |                   ^^^^^^^^^^
+ 972 |     pub(crate) fn ms_get_variable_duration(&self) -> i32 { self.variable_duration }
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^
+ 973 |     pub(crate) fn ms_set_variable_duration(&mut self, v: i32) { self.variable_duration = v; }
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^
+ 974 |     pub(crate) fn ms_get_lsb_depth(&self) -> i32 { self.lsb_depth }
+     |                   ^^^^^^^^^^^^^^^^
+ 975 |     pub(crate) fn ms_set_lsb_depth(&mut self, v: i32) { self.lsb_depth = v; }
+     |                   ^^^^^^^^^^^^^^^^
+ 976 |     pub(crate) fn ms_get_complexity(&self) -> i32 {
+     |                   ^^^^^^^^^^^^^^^^^
+...
+ 979 |     pub(crate) fn ms_set_complexity(&mut self, v: i32) {
+     |                   ^^^^^^^^^^^^^^^^^
+...
+ 983 |     pub(crate) fn ms_set_vbr(&mut self, v: i32) { self.use_vbr = v; }
+     |                   ^^^^^^^^^^
+ 984 |     pub(crate) fn ms_set_vbr_constraint(&mut self, v: i32) { self.vbr_constraint = v; }
+     |                   ^^^^^^^^^^^^^^^^^^^^^
+ 985 |     pub(crate) fn ms_set_signal(&mut self, v: i32) { self.signal_type = v; }
+     |                   ^^^^^^^^^^^^^
+ 986 |     pub(crate) fn ms_set_inband_fec(&mut self, v: i32) { self.fec_config = v; }
+     |                   ^^^^^^^^^^^^^^^^^
+ 987 |     pub(crate) fn ms_set_packet_loss_perc(&mut self, v: i32) {
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 991 |     pub(crate) fn ms_set_dtx(&mut self, v: i32) { self.use_dtx = v; }
+     |                   ^^^^^^^^^^
+ 992 |     pub(crate) fn ms_set_prediction_disabled(&mut self, v: i32) {
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 995 |     pub(crate) fn ms_set_phase_inversion_disabled(&mut self, v: i32) {
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+ 998 |     pub(crate) fn ms_set_application(&mut self, v: i32) {
+     |                   ^^^^^^^^^^^^^^^^^^
+...
+1004 |     pub(crate) fn ms_get_lookahead(&self) -> i32 { self.delay_compensation }
+     |                   ^^^^^^^^^^^^^^^^
+1005 |     pub(crate) fn ms_get_celt_mode(&self) -> Option<&'static crate::celt::modes::CELTMode> {
+     |                   ^^^^^^^^^^^^^^^^
+
+warning: `mdopus` (lib) generated 44 warnings (run `cargo fix --lib -p mdopus` to apply 28 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running `target\debug\mdopus-compare.exe tests/vectors/16000hz_mono_sine440.wav`
+ERROR: unknown command 'tests/vectors/16000hz_mono_sine440.wav'
+mdopus-compare: compare C reference opus vs Rust implementation
+
+USAGE:
+  mdopus-compare encode <input.wav> [--bitrate N] [--complexity N]
+  mdopus-compare decode <input.opus>
+  mdopus-compare roundtrip <input.wav> [--bitrate N]
+  mdopus-compare unit <module_name>
+
+MODULES for 'unit':
+  range_coder   Range coder (entenc/entdec)
+  all           Run all module tests
+
+OPTIONS:
+  --bitrate N      Target bitrate in bps (default: 64000)
+  --complexity N   Encoder complexity 0-10 (default: 10)
+error: process didn't exit successfully: `target\debug\mdopus-compare.exe tests/vectors/16000hz_mono_sine440.wav` (exit code: 1)
