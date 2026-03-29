@@ -33,6 +33,40 @@ if sys.platform == "win32":
     COMPARE_BIN = COMPARE_BIN.with_suffix(".exe")
 
 MAX_ITERATIONS = 50
+
+# Ordered test cases to fix — simplest first
+ALL_TESTS = [
+    ("48000hz_mono_silence", 16000),
+    ("48000hz_mono_silence", 64000),
+    ("48000hz_stereo_silence", 64000),
+    ("48000hz_stereo_silence", 16000),
+    ("48000hz_mono_sine440", 16000),
+    ("48000hz_mono_sine440", 64000),
+    ("48000hz_mono_noise", 16000),
+    ("48000hz_mono_noise", 64000),
+    ("24000hz_mono_silence", 16000),
+    ("24000hz_mono_silence", 64000),
+    ("16000hz_mono_silence", 16000),
+    ("16000hz_mono_silence", 64000),
+    ("8000hz_mono_silence", 16000),
+    ("8000hz_mono_silence", 64000),
+    ("48k_impulse", 64000),
+    ("48k_square1k", 64000),
+    ("48k_sweep", 64000),
+]
+
+def find_next_failing_test(log) -> tuple[str, int] | None:
+    """Find the first failing test case from the priority list."""
+    for wav, br in ALL_TESTS:
+        passed, _ = run_comparison(log, wav, br)
+        if passed:
+            log.info(f"  PASS: {wav} @{br}")
+        else:
+            log.info(f"  FAIL: {wav} @{br} <- targeting this")
+            return wav, br
+    return None
+
+# Default for trace command
 TEST_WAV = "48000hz_mono_silence"
 TEST_BITRATE = 16000
 
@@ -303,28 +337,17 @@ def trace_fix_loop(log: logging.Logger) -> bool:
         log.info(f"Iteration {iteration + 1}/{MAX_ITERATIONS}")
         log.info(f"{'='*60}")
 
-        # Run comparison
-        passed, output = run_comparison(log)
+        # Find next failing test
+        next_fail = find_next_failing_test(log)
+        if next_fail is None:
+            log.info("\nALL TESTS PASSING!")
+            return True
+        current_wav, current_br = next_fail
+
+        # Run comparison on the target
+        passed, output = run_comparison(log, current_wav, current_br)
         if passed:
-            log.info("TEST PASSES! Checking other test cases...")
-            # Try a few more
-            all_pass = True
-            for wav, br in [
-                ("48000hz_mono_silence", 64000),
-                ("48000hz_mono_sine440", 16000),
-                ("48000hz_mono_noise", 16000),
-                ("48000hz_stereo_silence", 16000),
-            ]:
-                p, _ = run_comparison(log, wav, br)
-                status = "PASS" if p else "FAIL"
-                log.info(f"  {wav} @{br}: {status}")
-                if not p:
-                    all_pass = False
-            if all_pass:
-                log.info("\nALL TESTS PASSING!")
-                return True
-            log.info("Primary test passes, switching to next failing case...")
-            # TODO: switch TEST_WAV/BITRATE to a failing case
+            log.info(f"  {current_wav} @{current_br} just started passing, continuing...")
             continue
 
         # Parse debug output
@@ -412,7 +435,7 @@ def trace_fix_loop(log: logging.Logger) -> bool:
                 continue
 
         # Re-test to see progress
-        new_passed, new_output = run_comparison(log)
+        new_passed, new_output = run_comparison(log, current_wav, current_br)
         if new_passed:
             log.info(f"  TARGET TEST NOW PASSES!")
         else:

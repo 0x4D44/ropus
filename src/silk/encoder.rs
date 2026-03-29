@@ -4764,7 +4764,7 @@ pub fn silk_ltp_scale_ctrl(
 }
 
 /// Warped autocorrelation constants.
-const QS: i32 = 14;
+const QS: i32 = 13;
 const QC: i32 = 10;
 
 /// Warped autocorrelation. Matches C: `silk_warped_autocorrelation_FIX_c`.
@@ -5719,6 +5719,13 @@ pub fn silk_noise_shape_analysis_fix(
         silk_smlaww((1 << 16), strength_q16, strength_q16),
         16,
     );
+
+    // Adjust warping for coding quality (C: lines 235-240 of noise_shape_analysis_FIX.c)
+    let warping_q16 = if ps_enc.s_cmn.warping_q16 > 0 {
+        silk_smlawb_i32(ps_enc.s_cmn.warping_q16, coding_quality_q14, (0.01 * (1 << 18) as f64) as i32)
+    } else {
+        0
+    };
 
     // Per-subframe analysis
     let la_shape = ps_enc.s_cmn.la_shape as usize;

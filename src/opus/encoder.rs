@@ -932,7 +932,7 @@ impl OpusEncoder {
             hp_mem: [0; 4],
             mode: MODE_HYBRID,
             prev_mode: 0,
-            prev_channels: channels,
+            prev_channels: 0,
             prev_framesize: fs / 50, // 20ms
             bandwidth: OPUS_BANDWIDTH_FULLBAND,
             auto_bandwidth: OPUS_BANDWIDTH_FULLBAND,
@@ -1316,6 +1316,8 @@ impl OpusEncoder {
         {
             self.silk_mode.to_mono = 1;
             self.stream_channels = 2;
+        } else {
+            self.silk_mode.to_mono = 0;
         }
 
         // Recompute equiv_rate with final mode
