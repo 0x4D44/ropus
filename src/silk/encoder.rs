@@ -7100,6 +7100,12 @@ pub fn silk_encode(
     // Query encoder status
     silk_query_encoder(enc, enc_control);
 
+    // Set signal type and quantization offset for CELT (matches C enc_API.c:603-606)
+    enc_control.signal_type = enc.state_fxx[0].s_cmn.indices.signal_type as i32;
+    enc_control.offset = SILK_QUANTIZATION_OFFSETS_Q10
+        [(enc.state_fxx[0].s_cmn.indices.signal_type as usize) >> 1]
+        [enc.state_fxx[0].s_cmn.indices.quant_offset_type as usize] as i32;
+
     ret
 }
 

@@ -415,45 +415,42 @@ fn compute_silk_rate_for_hybrid(
     channels: i32,
 ) -> i32 {
     let entry = 1 + (if frame20ms { 1 } else { 0 }) + 2 * (if fec != 0 { 1 } else { 0 });
-    let n = rate / channels;
+    // C does rate /= channels early; all remaining logic is per-channel
+    let rate = rate / channels;
+    let n = RATE_TABLE.len();
 
-    // Find interpolation segment
-    let mut lo = 0usize;
-    for i in 1..RATE_TABLE.len() {
-        if n <= RATE_TABLE[i][0] {
-            lo = i - 1;
+    // Find first table entry with rate_table[i][0] > rate (matches C loop)
+    let mut i = n;
+    for idx in 1..n {
+        if RATE_TABLE[idx][0] > rate {
+            i = idx;
             break;
         }
-        if i == RATE_TABLE.len() - 1 {
-            lo = i - 1;
-        }
-    }
-    let hi = lo + 1;
-    if hi >= RATE_TABLE.len() {
-        return RATE_TABLE[RATE_TABLE.len() - 1][entry] * channels;
     }
 
-    let frac = if RATE_TABLE[hi][0] != RATE_TABLE[lo][0] {
-        (n - RATE_TABLE[lo][0]) as i64 * 256 / (RATE_TABLE[hi][0] - RATE_TABLE[lo][0]) as i64
+    let mut silk_rate;
+    if i == n {
+        // Rate exceeds all table entries: last entry + 50% of excess
+        silk_rate = RATE_TABLE[n - 1][entry];
+        silk_rate += (rate - RATE_TABLE[n - 1][0]) / 2;
     } else {
-        0
-    };
+        // Direct integer interpolation matching C exactly (single division)
+        let lo = RATE_TABLE[i - 1][entry];
+        let hi = RATE_TABLE[i][entry];
+        let x0 = RATE_TABLE[i - 1][0];
+        let x1 = RATE_TABLE[i][0];
+        silk_rate = (lo * (x1 - rate) + hi * (rate - x0)) / (x1 - x0);
+    }
 
-    let silk_rate = ((RATE_TABLE[lo][entry] as i64 * (256 - frac)
-        + RATE_TABLE[hi][entry] as i64 * frac)
-        / 256) as i32;
-
-    let mut silk_rate = silk_rate * channels;
-
-    // CBR boost
+    // CBR/SWB boosts applied per-channel BEFORE multiplication (matches C)
     if vbr == 0 {
         silk_rate += 100;
     }
-    // SWB boost
     if bandwidth == OPUS_BANDWIDTH_SUPERWIDEBAND {
         silk_rate += 300;
     }
-    // Stereo reduction
+    silk_rate *= channels;
+    // Stereo reduction (C uses per-channel rate after rate /= channels)
     if channels == 2 && rate >= 12000 {
         silk_rate -= 1000;
     }
@@ -1966,6 +1963,8 @@ impl OpusEncoder {
             }
 
             // --- Redundancy signaling ---
+            eprintln!("[RS OPUS_PRE_REDUND] mode={} tell={} max_data_bytes={} redundancy={}",
+                self.mode, enc.tell(), max_data_bytes, redundancy);
             if self.mode != MODE_CELT_ONLY
                 && enc.tell() + 17 + 20 * (if self.mode == MODE_HYBRID { 1 } else { 0 })
                     <= 8 * (max_data_bytes - 1)
@@ -2084,6 +2083,9 @@ impl OpusEncoder {
                     }));
 
                     // Encode if there's room
+                    eprintln!("[RS OPUS_PRE_CELT] tell={} rng={} nb_compr_bytes={} start_band={} bitrate={} silk_bitrate={} frame_size={}",
+                        enc.tell(), enc.get_rng(), nb_compr_bytes, start_band,
+                        self.bitrate_bps, self.silk_mode.bit_rate, frame_size);
                     if enc.tell() <= 8 * nb_compr_bytes {
                         let mut dummy_buf = vec![0u8; nb_compr_bytes as usize + 1];
                         ret = celt_encode_with_ec(
