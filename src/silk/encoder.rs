@@ -3885,11 +3885,29 @@ fn silk_noise_shape_quantizer_del_dec(
             lpc_pred_q14 = shl32(lpc_pred_q14, 4); // Q10 -> Q14
 
             // Noise shape feedback with warping
+            if subfr == 0 && i == 1 && k == 0 {
+                eprintln!(
+                    "[RS NSQ_AR2] diff_q14={} s_ar2_q14=[{},{},{},{},{}] lf_ar_q14={} shape_q14={} warping_q16={}",
+                    dd.diff_q14,
+                    dd.s_ar2_q14[0],
+                    dd.s_ar2_q14[1],
+                    dd.s_ar2_q14[2],
+                    dd.s_ar2_q14[3],
+                    dd.s_ar2_q14[4],
+                    dd.lf_ar_q14,
+                    dd.shape_q14[*smpl_buf_idx as usize],
+                    warping_q16
+                );
+            }
             let tmp2_init = silk_smlawb_i32(dd.diff_q14, dd.s_ar2_q14[0], warping_q16);
             let mut tmp1 = silk_smlawb_i32(dd.s_ar2_q14[0], dd.s_ar2_q14[1].wrapping_sub(tmp2_init), warping_q16);
             dd.s_ar2_q14[0] = tmp2_init;
             let mut n_ar_q14 = (shaping_lpc_order >> 1) as i32;
             n_ar_q14 = silk_smlawb(n_ar_q14, tmp2_init, ar_shp_q13[0]);
+            if subfr == 0 && i == 1 && k == 0 {
+                eprintln!("[RS NSQ_AR2_STEP] tmp2={} tmp1={} n_ar_q14_init={} ar_shp0={} order={}",
+                    tmp2_init, tmp1, n_ar_q14, ar_shp_q13[0], shaping_lpc_order);
+            }
 
             let mut j = 2;
             while j < shaping_lpc_order {
@@ -3904,6 +3922,10 @@ fn silk_noise_shape_quantizer_del_dec(
             dd.s_ar2_q14[shaping_lpc_order - 1] = tmp1;
             n_ar_q14 = silk_smlawb(n_ar_q14, tmp1, ar_shp_q13[shaping_lpc_order - 1]);
 
+            if subfr == 0 && i == 1 && k == 0 {
+                eprintln!("[RS NSQ_AR2_POST] n_ar_q14_pre_shift={} lf_ar={} tilt={} s_ar2={:?}",
+                    n_ar_q14, dd.lf_ar_q14, tilt_q14, &dd.s_ar2_q14[..6]);
+            }
             n_ar_q14 = shl32(n_ar_q14, 1); // Q11 -> Q12
             n_ar_q14 = silk_smlawb_i32(n_ar_q14, dd.lf_ar_q14, tilt_q14); // Q12
             n_ar_q14 = shl32(n_ar_q14, 2); // Q12 -> Q14
@@ -4009,6 +4031,11 @@ fn silk_noise_shape_quantizer_del_dec(
             sample_state[k][0].lf_ar_q14 = s_lf_ar_shp_q14;
             sample_state[k][0].lpc_exc_q14 = lpc_exc_q14;
             sample_state[k][0].xq_q14 = xq_q14;
+            if subfr == 0 && i < 2 && k == 0 {
+                eprintln!("[RS NSQ_STATE] i={} k={} diff_q14={} lf_ar_q14={} s_ltp_shp_q14={} xq_q14={} exc_q14={} n_ar_q14={} n_lf_q14={}",
+                    i, k, sample_state[k][0].diff_q14, sample_state[k][0].lf_ar_q14,
+                    sample_state[k][0].s_ltp_shp_q14, xq_q14, exc_q14, n_ar_q14, n_lf_q14);
+            }
 
             // Update states for second best quantization
             let mut exc_q14 = shl32(sample_state[k][1].q_q10, 4);
@@ -5827,10 +5854,12 @@ pub fn silk_noise_shape_analysis_fix(
         ps_enc_ctrl.gains_q16[k] = silk_add_pos_sat32(ps_enc_ctrl.gains_q16[k], gain_add_q16);
     }
 
-    // LF shaping, tilt, harmonic shaping
+    // LF shaping, tilt, harmonic shaping - compute Q16 targets first
     let signal_type = ps_enc.s_cmn.indices.signal_type as i32;
-    for k in 0..nb_subfr {
-        if signal_type == TYPE_VOICED {
+    let tilt_q16: i32;
+    let harm_shape_gain_q16: i32;
+    if signal_type == TYPE_VOICED {
+        for k in 0..nb_subfr {
             let b_q14 = silk_div32_16(((0.2 * 16384.0) as i32), fs_khz)
                 + silk_div32_16(((3.0 * 16384.0) as i32), ps_enc_ctrl.pitch_l[k]);
             let b_q14 = imin(b_q14, (1 << 14) - 1);
@@ -5839,19 +5868,40 @@ pub fn silk_noise_shape_analysis_fix(
                 (1 << 14) - b_q14 - silk_smulwb(strength, b_q14 as i16),
                 16,
             ) | (b_q14 - (1 << 14));
-            ps_enc_ctrl.tilt_q14[k] = -(((HP_NOISE_COEF * 16384.0) + 0.5) as i32);
-            ps_enc_ctrl.harm_shape_gain_q14[k] = ((HARMONIC_SHAPING * 16384.0 + 0.5) as i32);
-        } else {
-            let b_q14 = silk_div32_16(21299, fs_khz); // 1.3 * 16384
-            ps_enc_ctrl.lf_shp_q14[k] = shl32((1 << 14) - b_q14, 16) | (b_q14 - (1 << 14));
-            ps_enc_ctrl.tilt_q14[k] = -(((HP_NOISE_COEF * 16384.0) + 0.5) as i32);
-            ps_enc_ctrl.harm_shape_gain_q14[k] = 0;
         }
+        // Tilt_Q16 for voiced: -HP_NOISE_COEF - (1-HP_NOISE_COEF) * HARM_HP * speech_activity
+        let hp_q16 = ((HP_NOISE_COEF * 65536.0) + 0.5) as i32;
+        tilt_q16 = -hp_q16 - silk_smulwb(
+            (1 << 16) - hp_q16,
+            silk_smulwb(((HARM_HP_NOISE_COEF * (1 << 24) as f64) + 0.5) as i32, ps_enc.s_cmn.speech_activity_q8 as i16) as i16,
+        );
+        harm_shape_gain_q16 = ((HARMONIC_SHAPING * 65536.0 + 0.5) as i32);
+    } else {
+        let b_q14 = silk_div32_16(21299, fs_khz); // 1.3 * 16384
+        let lf_val = shl32((1 << 14) - b_q14, 16) | (b_q14 - (1 << 14));
+        for k in 0..nb_subfr {
+            ps_enc_ctrl.lf_shp_q14[k] = lf_val;
+        }
+        tilt_q16 = -(((HP_NOISE_COEF * 65536.0) + 0.5) as i32);
+        harm_shape_gain_q16 = 0;
     }
 
-    // Smoothing (update shape state)
-    ps_enc.s_shape.tilt_smth = ps_enc_ctrl.tilt_q14[nb_subfr - 1] << 2;
-    ps_enc.s_shape.harm_shape_gain_smth = ps_enc_ctrl.harm_shape_gain_q14[nb_subfr - 1] << 2;
+    // Smooth over subframes (C: lines 400-408)
+    let subfr_smth_coef_q16 = ((SUBFR_SMTH_COEF * 65536.0) + 0.5) as i16;
+    for k in 0..MAX_NB_SUBFR {
+        ps_enc.s_shape.harm_shape_gain_smth = silk_smlawb(
+            ps_enc.s_shape.harm_shape_gain_smth,
+            (harm_shape_gain_q16 - ps_enc.s_shape.harm_shape_gain_smth) as i32,
+            subfr_smth_coef_q16,
+        );
+        ps_enc.s_shape.tilt_smth = silk_smlawb(
+            ps_enc.s_shape.tilt_smth,
+            (tilt_q16 - ps_enc.s_shape.tilt_smth) as i32,
+            subfr_smth_coef_q16,
+        );
+        ps_enc_ctrl.harm_shape_gain_q14[k] = silk_rshift_round(ps_enc.s_shape.harm_shape_gain_smth, 2);
+        ps_enc_ctrl.tilt_q14[k] = silk_rshift_round(ps_enc.s_shape.tilt_smth, 2);
+    }
 }
 
 // ===========================================================================
