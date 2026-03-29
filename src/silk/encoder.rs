@@ -6417,6 +6417,14 @@ pub fn silk_encode_frame_fix(
     ps_enc.s_cmn.prev_lag = s_enc_ctrl.pitch_l[nb_subfr - 1];
     ps_enc.s_cmn.prev_signal_type = ps_enc.s_cmn.indices.signal_type as i32;
 
+    // Update range-coder inter-frame state (C does this inside silk_encode_indices,
+    // but our Rust version takes &SilkEncoderState so cannot mutate. Matches C
+    // encode_indices.c:141,174.)
+    if ps_enc.s_cmn.indices.signal_type == TYPE_VOICED as i8 {
+        ps_enc.s_cmn.ec_prev_lag_index = ps_enc.s_cmn.indices.lag_index;
+    }
+    ps_enc.s_cmn.ec_prev_signal_type = ps_enc.s_cmn.indices.signal_type as i32;
+
     // Payload size
     ps_enc.s_cmn.first_frame_after_reset = 0;
     *pn_bytes_out = (range_enc.tell() + 7) >> 3;

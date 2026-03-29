@@ -959,11 +959,11 @@ fn quant_band_n1<EC: EcCoder>(
 fn quant_partition<EC: EcCoder>(
     ctx: &mut BandCtx<EC>,
     x: &mut [i32],
-    n: i32,
+    mut n: i32,
     mut b: i32,
-    big_b: i32,
+    mut big_b: i32,
     lowband: Option<&[i32]>,
-    lm: i32,
+    mut lm: i32,
     gain: i32,
     mut fill: i32,
 ) -> u32 {
@@ -979,14 +979,14 @@ fn quant_partition<EC: EcCoder>(
 
     if lm != -1 && b > cache[cache[0] as usize] as i32 + 12 && n > 2 {
         // Split the band in two
-        let n_half = n >> 1;
-        let nu = n_half as usize;
-        let mut new_lm = lm - 1;
-        let mut new_b = big_b;
-        if new_b == 1 {
+        let b0 = big_b;
+        n >>= 1;
+        let nu = n as usize;
+        lm -= 1;
+        if big_b == 1 {
             fill = (fill & 1) | (fill << 1);
         }
-        new_b = (new_b + 1) >> 1;
+        big_b = (big_b + 1) >> 1;
 
         // We need to split x into two halves: x[..nu] and x[nu..n]
         // compute_theta needs both halves as separate mutable slices
@@ -997,8 +997,8 @@ fn quant_partition<EC: EcCoder>(
             eprintln!("[RS QP_PRE] i={} n={} b={} B={} lm={} tell_frac={}", i, n, b, big_b, lm, ctx.ec.ec_tell_frac());
         }
         let sctx = compute_theta(
-            ctx, x_lo, &mut x_hi[..nu], n_half, &mut b, new_b, big_b,
-            new_lm, false, &mut fill,
+            ctx, x_lo, &mut x_hi[..nu], n, &mut b, big_b, b0,
+            lm, false, &mut fill,
         );
         let imid = sctx.imid;
         let iside = sctx.iside;
@@ -1015,11 +1015,11 @@ fn quant_partition<EC: EcCoder>(
 
         // Give more bits to low-energy MDCTs
         let mut delta = delta;
-        if big_b > 1 && (itheta & 0x3fff) != 0 {
+        if b0 > 1 && (itheta & 0x3fff) != 0 {
             if itheta > 8192 {
-                delta -= delta >> (4 - new_lm);
+                delta -= delta >> (4 - lm);
             } else {
-                delta = imin(0, delta + (n_half << BITRES >> (5 - new_lm)));
+                delta = imin(0, delta + (n << BITRES >> (5 - lm)));
             }
         }
         let mbits = imax(0, imin(b, (b - delta) / 2));
@@ -1041,11 +1041,11 @@ fn quant_partition<EC: EcCoder>(
             let cm_lo = quant_partition(
                 ctx,
                 x_lo,
-                n_half,
+                n,
                 mbits,
-                new_b,
+                big_b,
                 lowband,
-                new_lm,
+                lm,
                 mult32_32_q31(gain, mid),
                 fill,
             );
@@ -1056,26 +1056,26 @@ fn quant_partition<EC: EcCoder>(
             let cm_hi = quant_partition(
                 ctx,
                 x_hi,
-                n_half,
+                n,
                 sbits,
-                new_b,
+                big_b,
                 next_lowband2.as_deref(),
-                new_lm,
+                lm,
                 mult32_32_q31(gain, side),
-                fill >> new_b,
+                fill >> big_b,
             );
-            cm = cm_lo | (cm_hi << (big_b >> 1));
+            cm = cm_lo | (cm_hi << (b0 >> 1));
         } else {
             let cm_hi = quant_partition(
                 ctx,
                 x_hi,
-                n_half,
+                n,
                 sbits,
-                new_b,
+                big_b,
                 next_lowband2.as_deref(),
-                new_lm,
+                lm,
                 mult32_32_q31(gain, side),
-                fill >> new_b,
+                fill >> big_b,
             );
             let rebalance = sbits - (rebalance - ctx.remaining_bits);
             let mut mbits = mbits;
@@ -1085,15 +1085,15 @@ fn quant_partition<EC: EcCoder>(
             let cm_lo = quant_partition(
                 ctx,
                 x_lo,
-                n_half,
+                n,
                 mbits,
-                new_b,
+                big_b,
                 lowband,
-                new_lm,
+                lm,
                 mult32_32_q31(gain, mid),
                 fill,
             );
-            cm = cm_lo | (cm_hi << (big_b >> 1));
+            cm = cm_lo | (cm_hi << (b0 >> 1));
         }
         cm
     } else {

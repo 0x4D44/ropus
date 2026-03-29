@@ -1,0 +1,12 @@
+C reference opus: libopus 1.5.2-harness-fixed
+
+Input: tests/vectors/48000hz_mono_silence.wav (48000 Hz, 1 ch, 48000 samples)
+Encoding with C reference (bitrate=64000, complexity=10)...
+  C encoded: 8100 bytes
+Encoding with Rust implementation...
+  Rust encoded: 8100 bytes
+
+encode: FAIL at offset 5 (total: 8100, matching: 6906, max_diff: 254)
+  C ref:  a0 00 f8 ff fe 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  Rust:   a0 00 f8 ff fe c3 d9 ac d8 76 21 9b 2d 9c 60 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+                           ^ offset 5

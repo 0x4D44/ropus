@@ -1692,7 +1692,7 @@ fn celt_encode_core(
         effective_bytes = nb_compressed_bytes - nb_filled_bytes;
     }
     let nb_available_bytes = nb_compressed_bytes - nb_filled_bytes;
-    let total_bits = nb_compressed_bytes * 8;
+    let mut total_bits = nb_compressed_bytes * 8;
 
     // Equivalent rate for analysis decisions
     let equiv_rate = (nb_compressed_bytes as i64 * 8 * 50 << (3 - lm)) as i32
@@ -1715,19 +1715,20 @@ fn celt_encode_core(
         silence = false;
     }
 
-    // Handle silence in VBR mode
-    if silence && vbr_rate > 0 {
-        st.vbr_reservoir += nb_compressed_bytes * (8 << BITRES) - vbr_rate;
-        nb_compressed_bytes = nb_filled_bytes + 2;
-        enc_ref.shrink(nb_compressed_bytes as u32);
-        // Update state for silence
-        for i in 0..cc as usize * nb_ebands as usize {
-            st.old_band_e[i] = GCONST_NEG28;
+    // Handle silence (matches C: celt_encoder.c:1986-2008)
+    if silence {
+        if vbr_rate > 0 {
+            // VBR: shrink to minimum packet
+            nb_compressed_bytes = (nb_filled_bytes + 2).min(nb_compressed_bytes);
+            total_bits = nb_compressed_bytes * 8;
+            enc_ref.shrink(nb_compressed_bytes as u32);
+            st.vbr_reservoir += nb_compressed_bytes * (8 << BITRES) - vbr_rate;
         }
-        // Early out: finalize
-        st.rng = enc_ref.get_rng();
-        enc_ref.done();
-        return nb_compressed_bytes;
+        // Pretend we've filled all remaining bits with zeros
+        // (that's what the initializer did anyway).
+        // This prevents encoding actual data in the silence frame.
+        tell = nb_compressed_bytes * 8;
+        enc_ref.add_nbits_total(tell - enc_ref.tell());
     }
 
     // Pre-emphasis
@@ -2276,8 +2277,8 @@ fn celt_encode_core(
         nb_compressed_bytes * 8 - enc_ref.tell() as i32,
         enc_ref, c,
     );
-    if hybrid {
-        eprintln!("[RS CELT_POST_FINAL] tell={} rng={}", enc_ref.tell(), enc_ref.get_rng());
+    {
+        eprintln!("[RS CELT_POST_FINAL] tell={} rng={} tell_frac={}", enc_ref.tell(), enc_ref.get_rng(), enc_ref.tell_frac());
     }
 
     // Store energy error for next frame

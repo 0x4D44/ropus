@@ -2085,9 +2085,14 @@ impl OpusEncoder {
                     }));
 
                     // Encode if there's room
-                    eprintln!("[RS OPUS_PRE_CELT] tell={} rng={} nb_compr_bytes={} start_band={} bitrate={} silk_bitrate={} frame_size={}",
-                        enc.tell(), enc.get_rng(), nb_compr_bytes, start_band,
-                        self.bitrate_bps, self.silk_mode.bit_rate, frame_size);
+                    {
+                        let (val, offs, end_offs, storage, nend_bits, rem, ext) = enc.debug_state();
+                        eprintln!("[RS OPUS_PRE_CELT] tell={} rng={} nb_compr_bytes={} start_band={} bitrate={} silk_bitrate={} frame_size={}",
+                            enc.tell(), enc.get_rng(), nb_compr_bytes, start_band,
+                            self.bitrate_bps, self.silk_mode.bit_rate, frame_size);
+                        eprintln!("[RS EC_STATE_PRE_CELT] val={} offs={} end_offs={} storage={} nend_bits={} rem={} ext={}",
+                            val, offs, end_offs, storage, nend_bits, rem, ext);
+                    }
                     if enc.tell() <= 8 * nb_compr_bytes {
                         let mut dummy_buf = vec![0u8; nb_compr_bytes as usize + 1];
                         ret = celt_encode_with_ec(
@@ -2106,7 +2111,9 @@ impl OpusEncoder {
                 }
             }
 
-            enc.done();
+            // NOTE: enc.done() is NOT called here — the CELT encoder already
+            // calls done() internally (matching C's celt_encoder.c:2861).
+            // Calling it twice corrupts the buffer layout.
         }
         // enc is now dropped, enc_data is available
 

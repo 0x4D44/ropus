@@ -219,10 +219,23 @@ impl<'a> RangeEncoder<'a> {
         self.error != 0
     }
 
+    /// Debug: returns (val, offs, end_offs, storage, nend_bits, rem, ext).
+    pub fn debug_state(&self) -> (u32, u32, u32, u32, i32, i32, u32) {
+        (self.val, self.offs, self.end_offs, self.storage, self.nend_bits, self.rem, self.ext)
+    }
+
     /// Bits "used" so far (conservative, rounds up).
     #[inline(always)]
     pub fn tell(&self) -> i32 {
         self.nbits_total - ec_ilog(self.rng)
+    }
+
+    /// Adjust nbits_total by a delta. Used by the CELT encoder to mark
+    /// the remaining budget as consumed (e.g. for silence frames).
+    /// Matches C: `enc->nbits_total += delta`.
+    #[inline(always)]
+    pub fn add_nbits_total(&mut self, delta: i32) {
+        self.nbits_total += delta;
     }
 
     /// Bits used, scaled by `2^BITRES` (in 1/8-bit units).
