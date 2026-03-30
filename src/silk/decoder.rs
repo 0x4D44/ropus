@@ -1616,8 +1616,290 @@ fn silk_resampler_private_up2_hq(
     }
 }
 
+/// Resolve coefficient table from enum.
+fn get_down_fir_coefs(c: ResamplerCoefs) -> &'static [i16] {
+    use crate::silk::tables::*;
+    match c {
+        ResamplerCoefs::Ratio3_4 => &SILK_RESAMPLER_3_4_COEFS,
+        ResamplerCoefs::Ratio2_3 => &SILK_RESAMPLER_2_3_COEFS,
+        ResamplerCoefs::Ratio1_2 => &SILK_RESAMPLER_1_2_COEFS,
+        ResamplerCoefs::Ratio1_3 => &SILK_RESAMPLER_1_3_COEFS,
+        ResamplerCoefs::Ratio1_4 => &SILK_RESAMPLER_1_4_COEFS,
+        ResamplerCoefs::Ratio1_6 => &SILK_RESAMPLER_1_6_COEFS,
+        ResamplerCoefs::LowQuality2_3 => &SILK_RESAMPLER_2_3_COEFS_LQ,
+        ResamplerCoefs::None => &SILK_RESAMPLER_1_3_COEFS, // fallback
+    }
+}
+
+/// silk_SMULWB: (a32 * (i16)b) >> 16, using 64-bit intermediate.
+#[inline(always)]
+fn smulwb(a: i32, b: i16) -> i32 {
+    ((a as i64 * b as i64) >> 16) as i32
+}
+
+/// silk_SMLAWB: a + silk_SMULWB(b, c)
+#[inline(always)]
+fn smlawb(a: i32, b: i32, c: i16) -> i32 {
+    a.wrapping_add(smulwb(b, c))
+}
+
+/// FIR interpolation for down_FIR resampler. Returns number of output samples written.
+fn silk_resampler_private_down_fir_interpol(
+    out: &mut [i16],
+    out_offset: usize,
+    buf: &[i32],
+    fir_coefs: &[i16],
+    fir_order: usize,
+    fir_fracs: i32,
+    max_index_q16: i32,
+    index_increment_q16: i32,
+) -> usize {
+    let mut out_idx = out_offset;
+    let half_order = fir_order / 2;
+
+    match fir_order {
+        RESAMPLER_DOWN_ORDER_FIR0 => {
+            // Order 18: polyphase with FIR_Fracs phases
+            let mut index_q16 = 0i32;
+            while index_q16 < max_index_q16 {
+                let buf_idx = (index_q16 >> 16) as usize;
+                let interpol_ind = smulwb(index_q16 & 0xFFFF, fir_fracs as i16) as usize;
+
+                // First half: use interpol_ind phase
+                let interpol_off = half_order * interpol_ind;
+                let mut res_q6 = smulwb(buf[buf_idx], fir_coefs[interpol_off]);
+                for j in 1..half_order {
+                    res_q6 = smlawb(res_q6, buf[buf_idx + j], fir_coefs[interpol_off + j]);
+                }
+
+                // Second half: use (FIR_Fracs-1-interpol_ind) phase, reversed
+                let interpol_off2 = half_order * (fir_fracs as usize - 1 - interpol_ind);
+                for j in 0..half_order {
+                    res_q6 = smlawb(
+                        res_q6,
+                        buf[buf_idx + fir_order - 1 - j],
+                        fir_coefs[interpol_off2 + j],
+                    );
+                }
+
+                if out_idx < out.len() {
+                    out[out_idx] = sat16(silk_rshift_round(res_q6, 6));
+                }
+                out_idx += 1;
+                index_q16 += index_increment_q16;
+            }
+        }
+        RESAMPLER_DOWN_ORDER_FIR1 => {
+            // Order 24: symmetric filter, FIR_Fracs=1
+            let mut index_q16 = 0i32;
+            while index_q16 < max_index_q16 {
+                let buf_idx = (index_q16 >> 16) as usize;
+                let n = fir_order; // 24
+
+                let mut res_q6 = smulwb(
+                    buf[buf_idx].wrapping_add(buf[buf_idx + n - 1]),
+                    fir_coefs[0],
+                );
+                for j in 1..half_order {
+                    res_q6 = smlawb(
+                        res_q6,
+                        buf[buf_idx + j].wrapping_add(buf[buf_idx + n - 1 - j]),
+                        fir_coefs[j],
+                    );
+                }
+
+                if out_idx < out.len() {
+                    out[out_idx] = sat16(silk_rshift_round(res_q6, 6));
+                }
+                out_idx += 1;
+                index_q16 += index_increment_q16;
+            }
+        }
+        RESAMPLER_DOWN_ORDER_FIR2 => {
+            // Order 36: symmetric filter, FIR_Fracs=1
+            let mut index_q16 = 0i32;
+            while index_q16 < max_index_q16 {
+                let buf_idx = (index_q16 >> 16) as usize;
+                let n = fir_order; // 36
+
+                let mut res_q6 = smulwb(
+                    buf[buf_idx].wrapping_add(buf[buf_idx + n - 1]),
+                    fir_coefs[0],
+                );
+                for j in 1..half_order {
+                    res_q6 = smlawb(
+                        res_q6,
+                        buf[buf_idx + j].wrapping_add(buf[buf_idx + n - 1 - j]),
+                        fir_coefs[j],
+                    );
+                }
+
+                if out_idx < out.len() {
+                    out[out_idx] = sat16(silk_rshift_round(res_q6, 6));
+                }
+                out_idx += 1;
+                index_q16 += index_increment_q16;
+            }
+        }
+        _ => {}
+    }
+
+    out_idx - out_offset
+}
+
+/// Polyphase FIR downsampler. Matches C: `silk_resampler_private_down_FIR`.
+fn silk_resampler_private_down_fir(
+    s: &mut SilkResamplerState,
+    out: &mut [i16],
+    input: &[i16],
+    in_len: i32,
+) {
+    let fir_order = s.fir_order as usize;
+    let batch_size = s.batch_size as i32;
+    let index_increment_q16 = s.inv_ratio_q16;
+
+    let all_coefs = get_down_fir_coefs(s.coefs);
+    let ar2_coefs = &all_coefs[..2];
+    let fir_coefs = &all_coefs[2..];
+
+    let mut buf = vec![0i32; batch_size as usize + fir_order];
+
+    // Copy FIR state to start of buffer
+    buf[..fir_order].copy_from_slice(&s.s_fir_i32[..fir_order]);
+
+    let mut in_ptr = 0usize;
+    let mut out_ptr = 0usize;
+    let mut remaining = in_len;
+    let mut last_n_samples_in: usize;
+
+    loop {
+        let n_samples_in = remaining.min(batch_size) as usize;
+        last_n_samples_in = n_samples_in;
+
+        // AR2 filter: input → Q8 output into buf[fir_order..]
+        silk_resampler_private_ar2(
+            &mut s.s_iir[..2],
+            &mut buf[fir_order..fir_order + n_samples_in],
+            &input[in_ptr..in_ptr + n_samples_in],
+            ar2_coefs,
+            n_samples_in,
+        );
+
+        let max_index_q16 = (n_samples_in as i32) << 16;
+
+        // FIR interpolation
+        let n_out = silk_resampler_private_down_fir_interpol(
+            out,
+            out_ptr,
+            &buf,
+            fir_coefs,
+            fir_order,
+            s.fir_fracs,
+            max_index_q16,
+            index_increment_q16,
+        );
+        out_ptr += n_out;
+
+        in_ptr += n_samples_in;
+        remaining -= n_samples_in as i32;
+
+        if remaining > 1 {
+            // Copy last FIR_Order elements to start of buffer for next batch
+            for i in 0..fir_order {
+                buf[i] = buf[n_samples_in + i];
+            }
+        } else {
+            break;
+        }
+    }
+
+    // Save FIR state for next call (from last batch's offset)
+    if last_n_samples_in + fir_order <= buf.len() {
+        s.s_fir_i32[..fir_order]
+            .copy_from_slice(&buf[last_n_samples_in..last_n_samples_in + fir_order]);
+    }
+}
+
+/// IIR/FIR upsampling resampler. Matches C: `silk_resampler_private_IIR_FIR`.
+fn silk_resampler_private_iir_fir(
+    s: &mut SilkResamplerState,
+    out: &mut [i16],
+    input: &[i16],
+    in_len: i32,
+) {
+    use crate::silk::tables::*;
+    let batch_size = s.batch_size as i32;
+    let index_increment_q16 = s.inv_ratio_q16;
+
+    let mut buf = vec![0i16; 2 * batch_size as usize + RESAMPLER_ORDER_FIR_12];
+
+    // Copy FIR state (i16) to start of buffer
+    buf[..RESAMPLER_ORDER_FIR_12].copy_from_slice(&s.s_fir_i16[..RESAMPLER_ORDER_FIR_12]);
+
+    let mut in_ptr = 0usize;
+    let mut out_ptr = 0usize;
+    let mut remaining = in_len;
+    let mut last_n_samples_in: usize;
+
+    loop {
+        let n_samples_in = remaining.min(batch_size) as usize;
+        last_n_samples_in = n_samples_in;
+
+        // Upsample 2x using allpass
+        silk_resampler_private_up2_hq(
+            &mut s.s_iir,
+            &mut buf[RESAMPLER_ORDER_FIR_12..],
+            &input[in_ptr..in_ptr + n_samples_in],
+            n_samples_in,
+        );
+
+        let max_index_q16 = (n_samples_in as i32) << (16 + 1); // +1 for 2x upsampling
+
+        // FIR interpolation on i16 buffer
+        let mut index_q16 = 0i32;
+        while index_q16 < max_index_q16 {
+            let table_index = smulwb(index_q16 & 0xFFFF, 12) as usize;
+            let buf_idx = (index_q16 >> 16) as usize;
+
+            let mut res_q15 = (buf[buf_idx] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[table_index][0] as i32);
+            res_q15 += (buf[buf_idx + 1] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[table_index][1] as i32);
+            res_q15 += (buf[buf_idx + 2] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[table_index][2] as i32);
+            res_q15 += (buf[buf_idx + 3] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[table_index][3] as i32);
+            res_q15 += (buf[buf_idx + 4] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[11 - table_index][3] as i32);
+            res_q15 += (buf[buf_idx + 5] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[11 - table_index][2] as i32);
+            res_q15 += (buf[buf_idx + 6] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[11 - table_index][1] as i32);
+            res_q15 += (buf[buf_idx + 7] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[11 - table_index][0] as i32);
+
+            if out_ptr < out.len() {
+                out[out_ptr] = sat16(silk_rshift_round(res_q15, 15));
+            }
+            out_ptr += 1;
+            index_q16 += index_increment_q16;
+        }
+
+        in_ptr += n_samples_in;
+        remaining -= n_samples_in as i32;
+
+        if remaining > 0 {
+            // Copy last part of buffer to start for next batch
+            let shift = n_samples_in << 1;
+            for i in 0..RESAMPLER_ORDER_FIR_12 {
+                buf[i] = buf[shift + i];
+            }
+        } else {
+            break;
+        }
+    }
+
+    // Save FIR state (from last batch's offset)
+    let last_shift = last_n_samples_in << 1;
+    if last_shift + RESAMPLER_ORDER_FIR_12 <= buf.len() {
+        s.s_fir_i16[..RESAMPLER_ORDER_FIR_12]
+            .copy_from_slice(&buf[last_shift..last_shift + RESAMPLER_ORDER_FIR_12]);
+    }
+}
+
 /// AR2 filter for resampler.
-#[allow(dead_code)]
 fn silk_resampler_private_ar2(
     s: &mut [i32],
     out_q8: &mut [i32],
@@ -1674,21 +1956,29 @@ pub fn silk_resampler(
                 in_len - fs_in,
             );
         }
-    } else if s.resampler_function == USE_SILK_RESAMPLER_IIR_FIR
-        || s.resampler_function == USE_SILK_RESAMPLER_DOWN_FIR
-    {
-        // Simplified resampling: nearest-neighbor for now, actual implementation
-        // uses polyphase FIR interpolation matching the C reference
-        let ratio_q16 = s.inv_ratio_q16 as i64;
-        let total_out = ((in_len as i64 * fs_out as i64) / fs_in as i64) as usize;
-
-        let mut index_q16: i64 = 0;
-        for i in 0..total_out.min(out.len()) {
-            let in_idx = (index_q16 >> 16) as usize;
-            if in_idx < in_len {
-                out[i] = input[in_idx];
-            }
-            index_q16 += ratio_q16;
+    } else if s.resampler_function == USE_SILK_RESAMPLER_DOWN_FIR {
+        // AR2 + polyphase FIR downsampling
+        let delay_buf_copy: Vec<i16> = s.delay_buf[..fs_in].to_vec();
+        silk_resampler_private_down_fir(s, out, &delay_buf_copy, fs_in as i32);
+        if in_len > fs_in {
+            silk_resampler_private_down_fir(
+                s,
+                &mut out[fs_out..],
+                &input[n_samples..],
+                (in_len - fs_in) as i32,
+            );
+        }
+    } else if s.resampler_function == USE_SILK_RESAMPLER_IIR_FIR {
+        // Allpass 2x upsample + FIR interpolation
+        let delay_buf_copy: Vec<i16> = s.delay_buf[..fs_in].to_vec();
+        silk_resampler_private_iir_fir(s, out, &delay_buf_copy, fs_in as i32);
+        if in_len > fs_in {
+            silk_resampler_private_iir_fir(
+                s,
+                &mut out[fs_out..],
+                &input[n_samples..],
+                (in_len - fs_in) as i32,
+            );
         }
     } else {
         // COPY case (default): output delay buffer, then remaining input

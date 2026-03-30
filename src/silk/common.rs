@@ -278,33 +278,36 @@ pub fn silk_inverse32_var_q(b32: i32, q_res: i32) -> i32 {
     }
 }
 
-/// Variable-Q division: computes `a/b` in Q`q_res` format.
-/// Matches C: `silk_DIV32_varQ(a, b, Qres)`.
+/// Variable-Q division: approximate `(a << q_res) / b`.
+/// Matches C: `silk_DIV32_varQ` — uses inverse + Newton refinement, NOT exact division.
 pub fn silk_div32_var_q(a: i32, b: i32, q_res: i32) -> i32 {
-    if b == 0 || a == 0 {
-        return 0;
-    }
-    let a_sign = if a < 0 { -1 } else { 1 };
-    let b_sign = if b < 0 { -1 } else { 1 };
-    let a_abs = a.abs();
-    let b_abs = b.abs();
-    let a_headrm = silk_clz32(a_abs) - 1;
-    let b_headrm = silk_clz32(b_abs) - 1;
+    // Normalize inputs
+    let a_headrm = silk_clz32(a.wrapping_abs()) - 1;
+    let a32_nrm = shl32(a, a_headrm);
+    let b_headrm = silk_clz32(b.wrapping_abs()) - 1;
+    let b32_nrm = shl32(b, b_headrm);
 
-    let lshift = q_res + a_headrm - b_headrm;
-    let result = if lshift <= 0 {
-        let a_norm = a_abs << a_headrm;
-        let b_norm = b_abs << b_headrm;
-        a_norm / (b_norm >> (-lshift).min(31))
+    // Inverse of b32
+    let b32_inv = (i32::MAX >> 2) / (b32_nrm >> 16);
+
+    // First approximation
+    let result = silk_smulwb_i32(a32_nrm, b32_inv);
+
+    // Residual
+    let a32_nrm = a32_nrm.wrapping_sub(shl32(silk_smmul(b32_nrm, result), 3));
+
+    // Refinement
+    let result = silk_smlawb_i32(result, a32_nrm, b32_inv);
+
+    // Convert to Qres domain
+    let lshift = 29 + a_headrm - b_headrm - q_res;
+    if lshift < 0 {
+        silk_lshift_sat32(result, -lshift)
     } else if lshift < 32 {
-        let a_norm = a_abs << a_headrm;
-        let b_norm = b_abs << b_headrm;
-        ((a_norm as i64) << lshift) as i32 / b_norm
+        result >> lshift
     } else {
-        // Very large shift, use 64-bit
-        (((a_abs as i64) << (a_headrm as i64 + q_res as i64)) / (b_abs as i64 >> b_headrm as i64)) as i32
-    };
-    result * a_sign * b_sign
+        0
+    }
 }
 
 // ===========================================================================

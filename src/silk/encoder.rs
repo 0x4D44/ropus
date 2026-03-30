@@ -4234,7 +4234,7 @@ pub fn silk_nsq_del_dec(
         let coef_idx = (k >> 1) | (1 - lsf_interpolation_flag);
         let a_q12 = &pred_coef_q12[coef_idx as usize];
         let b_q14 = &ltp_coef_q14[k * LTP_ORDER..];
-        let ar_shp_q13 = &ar_q13[k * shaping_lpc_order..];
+        let ar_shp_q13 = &ar_q13[k * MAX_SHAPE_LPC_ORDER..];
 
         let harm_shape_fir_packed_q14 = (harm_shape_gain_q14[k] >> 2)
             | (((harm_shape_gain_q14[k] >> 1) as i32) << 16);
@@ -4443,7 +4443,7 @@ pub fn silk_nsq(
             eprintln!("[NSQ LPC] coef_idx={} a_q12={:?}", coef_idx, &a_q12[..predict_lpc_order]);
         }
         let b_q14 = &ltp_coef_q14[k * LTP_ORDER..];
-        let ar_shp_q13 = &ar_q13[k * shaping_lpc_order..];
+        let ar_shp_q13 = &ar_q13[k * MAX_SHAPE_LPC_ORDER..];
 
         // Noise shape parameters: pack HarmShapeGain into FIR packed format
         let harm_shape_fir_packed_q14 = (harm_shape_gain_q14[k] >> 2)
