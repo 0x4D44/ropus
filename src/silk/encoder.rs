@@ -4628,9 +4628,9 @@ pub fn silk_schur64(
     while k < order {
         if silk_abs_int32(cc[k + 1][0]) >= cc[0][1] {
             if cc[k + 1][0] > 0 {
-                rc_q16[k] = -((0.99f64 * 65536.0) as i32);
+                rc_q16[k] = -((0.99f64 * 65536.0 + 0.5) as i32);
             } else {
-                rc_q16[k] = (0.99f64 * 65536.0) as i32;
+                rc_q16[k] = (0.99f64 * 65536.0 + 0.5) as i32;
             }
             k += 1;
             break;
@@ -5095,12 +5095,12 @@ pub fn silk_find_ltp(
         );
 
         // Normalize to Q17
-        let temp = imax(silk_smlawb(1, nrg, ((1.0f64 / 0.5) * 65536.0) as i16), xx_val);
+        let temp = imax(silk_smlawb(1, nrg, ((LTP_CORR_INV_MAX * 65536.0 + 0.5) as i16)), xx_val);
         for i in 0..LTP_ORDER * LTP_ORDER {
-            xxltp_q17[xx_base + i] = ((xxltp_q17[xx_base + i] as i64) << 17 / temp as i64) as i32;
+            xxltp_q17[xx_base + i] = (((xxltp_q17[xx_base + i] as i64) << 17) / temp as i64) as i32;
         }
         for i in 0..LTP_ORDER {
-            xxltp_q17_vec[xv_base + i] = ((xxltp_q17_vec[xv_base + i] as i64) << 17 / temp as i64) as i32;
+            xxltp_q17_vec[xv_base + i] = (((xxltp_q17_vec[xv_base + i] as i64) << 17) / temp as i64) as i32;
         }
 
         r_offset += subfr_length;
@@ -5134,7 +5134,8 @@ const HIGH_RATE_OR_LOW_QUALITY_HARMONIC_SHAPING: f64 = 0.2;
 const HP_NOISE_COEF: f64 = 0.25;
 const HARM_HP_NOISE_COEF: f64 = 0.35;
 const SHAPE_WHITE_NOISE_FRACTION: f64 = 3e-5;
-const BANDWIDTH_EXPANSION: f64 = 0.95;
+const BANDWIDTH_EXPANSION: f64 = 0.94;
+const LTP_CORR_INV_MAX: f64 = 0.03;
 const WHITE_NOISE_FRACTION: f64 = 2e-5;
 
 // ===========================================================================
@@ -5616,7 +5617,7 @@ fn limit_warped_coefs(coefs_q24: &mut [i32], lambda_q16: i32, limit_q24: i32, or
         if trace { eprintln!("[RS LWC] iter={} after_unwarp coefs[0..4]=[{},{},{},{}]", iter, coefs_q24[0], coefs_q24[1], coefs_q24[2], coefs_q24[3]); }
 
         // Apply bandwidth expansion
-        let chirp_q16 = ((0.99 * 65536.0) as i32) - silk_div32_var_q(
+        let chirp_q16 = ((0.99 * 65536.0 + 0.5) as i32) - silk_div32_var_q(
             silk_smulwb_i32(
                 maxabs_q20 - limit_q20,
                 silk_smlabb(((0.8 * 1024.0) as i32), ((0.1 * 1024.0) as i32), iter),
@@ -5724,7 +5725,7 @@ pub fn silk_noise_shape_analysis_fix(
             ptr_offset += n_samples;
         }
         // Set quantization offset depending on sparseness
-        let threshold = ((0.6 * 128.0) as i32) * ((n_segs as i32) - 1);
+        let threshold = ((0.6 * 128.0 + 0.5) as i32) * ((n_segs as i32) - 1);
         if energy_variation_q7 > threshold {
             ps_enc.s_cmn.indices.quant_offset_type = 0;
         } else {
@@ -5856,9 +5857,9 @@ pub fn silk_noise_shape_analysis_fix(
         ar_q24.fill(0);
         silk_k2a_q16(&mut ar_q24, &refl_coef_q16, shaping_lpc_order);
         if k == 0 {
-            eprintln!("[RS K2A] refl[0..4]=[{},{},{},{}] ar_q24[0..4]=[{},{},{},{}]",
-                refl_coef_q16[0], refl_coef_q16[1], refl_coef_q16[2], refl_coef_q16[3],
-                ar_q24[0], ar_q24[1], ar_q24[2], ar_q24[3]);
+            eprintln!("[RS K2A] refl[0..6]=[{},{},{},{},{},{}] refl[20..24]=[{},{},{},{}]",
+                refl_coef_q16[0], refl_coef_q16[1], refl_coef_q16[2], refl_coef_q16[3], refl_coef_q16[4], refl_coef_q16[5],
+                refl_coef_q16[20], refl_coef_q16[21], refl_coef_q16[22], refl_coef_q16[23]);
         }
 
         // Compute gain using proper Q-format from autocorrelation scale
@@ -5901,7 +5902,7 @@ pub fn silk_noise_shape_analysis_fix(
             if k == 0 {
                 eprintln!("[RS AR_TRACE] pre_limit ar_q24[0..4]=[{},{},{},{}]", ar_q24[0], ar_q24[1], ar_q24[2], ar_q24[3]);
             }
-            limit_warped_coefs(&mut ar_q24, warping_q16, (3.999 * (1 << 24) as f64) as i32, shaping_lpc_order);
+            limit_warped_coefs(&mut ar_q24, warping_q16, (3.999 * (1 << 24) as f64 + 0.5) as i32, shaping_lpc_order);
             if k == 0 {
                 eprintln!("[RS AR_TRACE] post_limit ar_q24[0..4]=[{},{},{},{}]", ar_q24[0], ar_q24[1], ar_q24[2], ar_q24[3]);
             }
@@ -5955,8 +5956,8 @@ pub fn silk_noise_shape_analysis_fix(
 
     if signal_type == TYPE_VOICED {
         for k in 0..nb_subfr {
-            let b_q14 = silk_div32_16(((0.2 * 16384.0) as i32), fs_khz)
-                + silk_div32_16(((3.0 * 16384.0) as i32), ps_enc_ctrl.pitch_l[k]);
+            let b_q14 = silk_div32_16(((0.2 * 16384.0 + 0.5) as i32), fs_khz)
+                + silk_div32_16(((3.0 * 16384.0 + 0.5) as i32), ps_enc_ctrl.pitch_l[k]);
             let b_q14 = imin(b_q14, (1 << 14) - 1);
             ps_enc_ctrl.lf_shp_q14[k] = shl32(
                 (1 << 14) - b_q14 - silk_smulwb_i32(strength_q16, b_q14),
@@ -6161,7 +6162,7 @@ pub fn silk_pitch_analysis_core(
 
     // Escape if correlation is very low
     let cmax = c_buf[0] as i32;
-    if cmax < ((0.2 * 16384.0) as i32) {
+    if cmax < ((0.2 * 16384.0 + 0.5) as i32) {
         for k in 0..nb_subfr { pitch_out[k] = 0; }
         *ltp_corr_q15 = 0;
         *lag_index = 0;
@@ -6655,14 +6656,20 @@ pub fn silk_find_pitch_lags_fix(
     silk_autocorr(&mut auto_corr, &mut scale, &w_sig, pitch_lpc_win_length, pitch_lpc_order + 1);
 
     // Add white noise
-    auto_corr[0] = silk_smlawb(auto_corr[0], auto_corr[0], ((FIND_PITCH_WHITE_NOISE_FRACTION * 65536.0) as i16)) + 1;
+    eprintln!("[RS PITCH_AUTOCORR] pre_wn auto_corr[0..4]=[{},{},{},{}] scale={}",
+        auto_corr[0], auto_corr[1], auto_corr[2], auto_corr[3], scale);
+    auto_corr[0] = silk_smlawb(auto_corr[0], auto_corr[0], ((FIND_PITCH_WHITE_NOISE_FRACTION * 65536.0 + 0.5) as i16)) + 1;
+    eprintln!("[RS PITCH_AUTOCORR] post_wn auto_corr[0]={}", auto_corr[0]);
 
     // Schur recursion
     let mut rc_q15 = vec![0i16; pitch_lpc_order];
     let res_nrg = silk_schur(&mut rc_q15, &auto_corr, pitch_lpc_order);
+    eprintln!("[RS PITCH_SCHUR] res_nrg={} rc_q15[0..4]=[{},{},{},{}]",
+        res_nrg, rc_q15[0], rc_q15[1], rc_q15[2], rc_q15[3]);
 
     // Prediction gain
     ps_enc_ctrl.pred_gain_q16 = silk_div32_varq(auto_corr[0], imax(res_nrg, 1), 16);
+    eprintln!("[RS PITCH_GAIN] pred_gain_q16={}", ps_enc_ctrl.pred_gain_q16);
 
     // Convert reflection to prediction coefficients
     let mut a_q24 = vec![0i32; pitch_lpc_order];
@@ -6688,11 +6695,11 @@ pub fn silk_find_pitch_lags_fix(
         let mut thrhld_q13: i32 = (0.6 * 8192.0) as i32; // SILK_FIX_CONST(0.6, 13)
         thrhld_q13 = silk_smlabb(thrhld_q13, (-0.004 * 8192.0) as i32,
             ps_enc.s_cmn.pitch_estimation_lpc_order);
-        thrhld_q13 = silk_smlawb_i32(thrhld_q13, (-0.1 * 2097152.0) as i32, // Q21
+        thrhld_q13 = silk_smlawb_i32(thrhld_q13, (-0.1 * 2097152.0 + 0.5) as i32, // Q21
             ps_enc.s_cmn.speech_activity_q8);
         thrhld_q13 = silk_smlabb(thrhld_q13, (-0.15 * 8192.0) as i32,
             ps_enc.s_cmn.prev_signal_type >> 1);
-        thrhld_q13 = silk_smlawb_i32(thrhld_q13, (-0.1 * 16384.0) as i32, // Q14
+        thrhld_q13 = silk_smlawb_i32(thrhld_q13, (-0.1 * 16384.0 + 0.5) as i32, // Q14
             ps_enc.s_cmn.input_tilt_q15);
         thrhld_q13 = silk_sat16(thrhld_q13);
 
