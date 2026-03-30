@@ -1708,6 +1708,8 @@ impl OpusEncoder {
                 self.fs,
             );
         } else {
+            eprintln!("[RS DC_REJECT] offset={} pcm[0..8]={:?} frame_size={} ch={} fs={}",
+                new_pcm_offset, &pcm[..8.min(pcm.len())], frame_size, self.channels, self.fs);
             dc_reject(
                 pcm,
                 3,
@@ -1717,6 +1719,8 @@ impl OpusEncoder {
                 self.channels,
                 self.fs,
             );
+            eprintln!("[RS DC_OUT] pcm_buf[offset..+8]={:?}",
+                &pcm_buf[new_pcm_offset..new_pcm_offset+8]);
         }
 
         // --- Initialize range encoder ---
