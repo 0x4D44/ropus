@@ -1451,7 +1451,17 @@ pub fn silk_stereo_ms_to_lr(
 // Resampler
 // ===========================================================================
 
-/// Delay compensation tables (decoder).
+/// Delay compensation tables (encoder): in=[8,12,16,24,48,96] out=[8,12,16].
+const DELAY_MATRIX_ENC: [[i32; 3]; 6] = [
+    [6,  0,  3],  //  8 kHz in
+    [0,  7,  3],  // 12 kHz in
+    [0,  1, 10],  // 16 kHz in
+    [0,  2,  6],  // 24 kHz in
+    [18, 10, 12], // 48 kHz in
+    [0,  0, 44],  // 96 kHz in
+];
+
+/// Delay compensation tables (decoder): in=[8,12,16] out=[8,12,16,24,48,96].
 const DELAY_MATRIX_DEC: [[i32; 6]; 3] = [
     [4, 0, 2, 0, 0, 0],  // 8 kHz input
     [0, 9, 4, 7, 4, 4],  // 12 kHz input
@@ -1474,16 +1484,20 @@ fn silk_resampler_init(
     s: &mut SilkResamplerState,
     fs_hz_in: i32,
     fs_hz_out: i32,
-    _for_enc: bool,
+    for_enc: bool,
 ) {
     *s = SilkResamplerState::default();
     s.fs_in_khz = fs_hz_in / 1000;
     s.fs_out_khz = fs_hz_out / 1000;
 
-    // Delay compensation
-    let in_id = rate_id(fs_hz_in).min(2);
-    let out_id = rate_id(fs_hz_out).min(5);
-    s.input_delay = DELAY_MATRIX_DEC[in_id][out_id];
+    // Delay compensation — encoder and decoder use different matrices
+    let in_id = rate_id(fs_hz_in);
+    let out_id = rate_id(fs_hz_out);
+    s.input_delay = if for_enc {
+        DELAY_MATRIX_ENC[in_id.min(5)][out_id.min(2)]
+    } else {
+        DELAY_MATRIX_DEC[in_id.min(2)][out_id.min(5)]
+    };
 
     s.batch_size = s.fs_in_khz * RESAMPLER_MAX_BATCH_SIZE_MS;
 
@@ -1627,62 +1641,71 @@ pub fn silk_resampler(
     input: &[i16],
     in_len: usize,
 ) {
-    if s.resampler_function == USE_SILK_RESAMPLER_COPY {
-        // Direct copy
-        let copy_len = in_len.min(out.len());
-        out[..copy_len].copy_from_slice(&input[..copy_len]);
-    } else if s.resampler_function == USE_SILK_RESAMPLER_UP2_HQ {
-        // 2x upsampling
-        let process_len = in_len.min(out.len() / 2);
+    // C reference: all modes share delay buffer setup/teardown
+    // (resampler.c lines 197-200, 220-221)
+    let n_samples = (s.fs_in_khz - s.input_delay).max(0) as usize;
+    let delay_samples = s.input_delay as usize;
+    let fs_in = s.fs_in_khz as usize;
+    let fs_out = s.fs_out_khz as usize;
+
+    // Copy first nSamples from input into delay buffer tail
+    let copy_from_input = n_samples.min(in_len);
+    for i in 0..copy_from_input {
+        if delay_samples + i < s.delay_buf.len() {
+            s.delay_buf[delay_samples + i] = input[i];
+        }
+    }
+
+    // Per-mode processing: delay buffer as first batch, remaining input as second
+    if s.resampler_function == USE_SILK_RESAMPLER_UP2_HQ {
+        let delay_len = fs_in.min(s.delay_buf.len());
+        let delay_copy: Vec<i16> = s.delay_buf[..delay_len].to_vec();
         silk_resampler_private_up2_hq(
             &mut s.s_iir,
             out,
-            input,
-            process_len,
+            &delay_copy,
+            delay_len,
         );
+        if in_len > fs_in {
+            silk_resampler_private_up2_hq(
+                &mut s.s_iir,
+                &mut out[fs_out..],
+                &input[n_samples..],
+                in_len - fs_in,
+            );
+        }
+    } else if s.resampler_function == USE_SILK_RESAMPLER_IIR_FIR
+        || s.resampler_function == USE_SILK_RESAMPLER_DOWN_FIR
+    {
+        // Simplified resampling: nearest-neighbor for now, actual implementation
+        // uses polyphase FIR interpolation matching the C reference
+        let ratio_q16 = s.inv_ratio_q16 as i64;
+        let total_out = ((in_len as i64 * fs_out as i64) / fs_in as i64) as usize;
+
+        let mut index_q16: i64 = 0;
+        for i in 0..total_out.min(out.len()) {
+            let in_idx = (index_q16 >> 16) as usize;
+            if in_idx < in_len {
+                out[i] = input[in_idx];
+            }
+            index_q16 += ratio_q16;
+        }
     } else {
-        // General case: process through delay buffer + main buffer
-        let n_samples = (s.fs_in_khz - s.input_delay).max(0) as usize;
-        let delay_samples = s.input_delay as usize;
-
-        // Copy first samples to delay buffer tail
-        let copy_from_input = n_samples.min(in_len);
-        for i in 0..copy_from_input {
-            if delay_samples + i < s.delay_buf.len() {
-                s.delay_buf[delay_samples + i] = input[i];
-            }
+        // COPY case (default): output delay buffer, then remaining input
+        let copy_delay = fs_in.min(s.delay_buf.len()).min(out.len());
+        out[..copy_delay].copy_from_slice(&s.delay_buf[..copy_delay]);
+        if in_len > fs_in {
+            let remaining = (in_len - fs_in).min(out.len().saturating_sub(fs_out));
+            out[fs_out..fs_out + remaining]
+                .copy_from_slice(&input[n_samples..n_samples + remaining]);
         }
+    }
 
-        // Process delay buffer as first batch
-        let _out_first = s.fs_out_khz as usize;
-        let _delay_buf_copy: Vec<i16> = s.delay_buf[..s.fs_in_khz as usize].to_vec();
-
-        // Simple resampling via sample-rate conversion
-        if s.resampler_function == USE_SILK_RESAMPLER_IIR_FIR
-            || s.resampler_function == USE_SILK_RESAMPLER_DOWN_FIR
-        {
-            // Simplified resampling: nearest-neighbor for now, actual implementation
-            // uses polyphase FIR interpolation matching the C reference
-            let ratio_q16 = s.inv_ratio_q16 as i64;
-            let total_in = in_len;
-            let total_out = ((total_in as i64 * s.fs_out_khz as i64) / s.fs_in_khz as i64) as usize;
-
-            let mut index_q16: i64 = 0;
-            for i in 0..total_out.min(out.len()) {
-                let in_idx = (index_q16 >> 16) as usize;
-                if in_idx < in_len {
-                    out[i] = input[in_idx];
-                }
-                index_q16 += ratio_q16;
-            }
-        }
-
-        // Save last input_delay samples to delay buffer
-        if in_len >= delay_samples {
-            let start = in_len - delay_samples;
-            for i in 0..delay_samples.min(s.delay_buf.len()) {
-                s.delay_buf[i] = input[start + i];
-            }
+    // Save last inputDelay samples to delay buffer (common to all modes)
+    if in_len >= delay_samples && delay_samples > 0 {
+        let start = in_len - delay_samples;
+        for i in 0..delay_samples.min(s.delay_buf.len()) {
+            s.delay_buf[i] = input[start + i];
         }
     }
 }

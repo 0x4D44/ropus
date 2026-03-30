@@ -7544,6 +7544,11 @@ pub fn silk_encode(
                 &mut buf,
                 &input,
             );
+            if enc.state_fxx[0].s_cmn.n_frames_encoded < 2 {
+                eprintln!("[RS RESAMP] n={} in_len={} out_len={} in[0..8]={:?} out[0..8]={:?}",
+                    n, input.len(), buf.len(),
+                    &input[..8.min(input.len())], &buf[..8.min(buf.len())]);
+            }
 
             // Buffer the resampled input
             let buf_ix = enc.state_fxx[n].s_cmn.input_buf_ix as usize;
