@@ -336,7 +336,7 @@ fn comb_filter(
 /// 3. N/4-point complex FFT
 /// 4. Post-rotate to produce the final MDCT output
 ///
-/// The twiddle factors are computed on the fly using `celt_cos_norm`.
+/// The twiddle factors come from a pre-computed lookup table (`trig`).
 pub(crate) fn clt_mdct_forward(
     input: &[i32],
     output: &mut [i32],
@@ -345,6 +345,7 @@ pub(crate) fn clt_mdct_forward(
     shift: i32,
     stride: i32,
     fft_state: &KissFftState,
+    trig: &[i16],
 ) {
     let n = fft_state.nfft as usize * 4;
     let n2 = n >> 1;
@@ -410,32 +411,20 @@ pub(crate) fn clt_mdct_forward(
         }
     }
 
-    // Step 2: Pre-rotation - compute twiddle factors on the fly and apply
+    // Step 2: Pre-rotation using pre-computed trig table
+    // C: t0 = t[i], t1 = t[N4+i] (from mdct_lookup.trig)
     let mut f2 = vec![KissFftCpx::default(); n4];
     let mut maxval = 1i32;
     for i in 0..n4 {
-        // Compute twiddle: cos(pi*(2*i+1)/(4*n4)) and sin(pi*(2*i+1)/(4*n4))
-        // Using celt_cos_norm which takes x in Q16 where 1.0 = full period
-        let _phase_num = (2 * i + 1) as i32;
-        let _phase_den = (4 * n4) as i32;
-        // t0 = cos(pi*phase_num/(2*phase_den)) = celt_cos_norm(phase_num*65536/(2*phase_den))
-        // But we use the same computation as the C init: (i*131072+16386)/(N/2)
-        let t0 = extract16(celt_cos_norm(div32(
-            (i as i32) * 131072 + 16386,
-            n2 as i32,
-        )));
-        let t1 = extract16(celt_cos_norm(div32(
-            (n4 as i32 + i as i32) * 131072 + 16386,
-            n2 as i32,
-        )));
+        let t0 = trig[i] as i32;
+        let t1 = trig[n4 + i] as i32;
 
         let re = f[2 * i];
         let im = f[2 * i + 1];
-        // yr = re*t0 - im*t1, yi = im*t0 + re*t1 (using S_MUL = MULT16_32_Q15)
         let yr = mult16_32_q15(t0, re) - mult16_32_q15(t1, im);
         let yi = mult16_32_q15(t0, im) + mult16_32_q15(t1, re);
 
-        // Scale by S_MUL2 = MULT16_32_Q16 for non-QEXT
+        // S_MUL2 = MULT16_32_Q16 (non-QEXT)
         let yc_r = mult16_32_q16(scale, yr);
         let yc_i = mult16_32_q16(scale, yi);
 
@@ -451,19 +440,14 @@ pub(crate) fn clt_mdct_forward(
     // Step 3: N/4-point complex FFT
     opus_fft_impl(fft_state, &mut f2, scale_shift - headroom);
 
-    // Step 4: Post-rotation
+    // Step 4: Post-rotation using same trig table
+    // C: t0 = t[i], t1 = t[N4+i] (non-QEXT path)
     let st = stride as usize;
     let mut yp1 = 0usize;
     let mut yp2 = st * (n2 - 1);
     for i in 0..n4 {
-        let t0 = extract16(celt_cos_norm(div32(
-            (i as i32) * 131072 + 16386,
-            n2 as i32,
-        )));
-        let t1 = extract16(celt_cos_norm(div32(
-            (n4 as i32 + i as i32) * 131072 + 16386,
-            n2 as i32,
-        )));
+        let t0 = trig[i] as i32;
+        let t1 = trig[n4 + i] as i32;
 
         let yr = pshr32(
             mult16_32_q15(t1, f2[i].i) - mult16_32_q15(t0, f2[i].r),
@@ -520,6 +504,16 @@ fn compute_mdcts(
 
     let fft_st = get_fft_state(shift);
 
+    // Compute trig table offset, matching C: trig += N for each shift level
+    let mdct = &super::mdct::MDCT_48000_960;
+    let mut trig_offset = 0usize;
+    let mut trig_n = mdct.n;
+    for _ in 0..shift {
+        trig_n >>= 1;
+        trig_offset += trig_n as usize;
+    }
+    let trig = &mdct.trig[trig_offset..];
+
     for ch in 0..cc as usize {
         let in_base = ch * (b as usize * n as usize + overlap as usize);
         for blk in 0..b as usize {
@@ -535,6 +529,7 @@ fn compute_mdcts(
                 shift,
                 1, // stride=1 into temp buffer; real stride applied in copy below
                 fft_st,
+                trig,
             );
             // Copy with stride
             let stride = if short_blocks != 0 { b as usize } else { 1 };
@@ -858,118 +853,107 @@ fn tf_analysis(
     tf_chan: i32,
     importance: &[i32],
 ) -> i32 {
-    let nb_ebands = m.nb_ebands as usize;
-    let n0u = n0 as usize;
+    let is_trans_i = is_transient as usize;
 
-    // Bias towards longer windows when tf_estimate is low
     let bias = mult16_16_q14(
         qconst16(0.04, 15),
-        qconst16(0.5, 14).max(-qconst16(0.25, 14).max(qconst16(0.5, 14) - tf_estimate)),
+        max16(-qconst16(0.25, 14), qconst16(0.5, 14) - tf_estimate),
     );
 
-    let mut metric = vec![0i32; nb_ebands];
-    let mut path0 = vec![0i32; nb_ebands];
-    let mut path1 = vec![0i32; nb_ebands];
-    let mut sel_cost = [0i32; 2];
+    let mut metric = vec![0i32; len as usize];
+    let mut path0 = vec![0i32; len as usize];
+    let mut path1 = vec![0i32; len as usize];
 
-    // Compute metric per band by comparing L1 norms at different TF resolutions
-    for i in (m.ebands[0] as usize / n0u)..len as usize {
-        let band_start = m.ebands[i] as usize;
-        let band_end = m.ebands[i + 1] as usize;
-        let n = (band_end - band_start) << lm as usize;
-        let narrow = (band_end - band_start) == 1;
+    // Allocate tmp buffers sized for the largest band
+    let max_band_size = ((m.ebands[len as usize] - m.ebands[len as usize - 1]) << lm) as usize;
+    let mut tmp = vec![0i32; max_band_size];
+    let mut tmp_1 = vec![0i32; max_band_size];
 
-        if n <= 0 {
-            continue;
-        }
+    // Compute metric per band
+    for i in 0..len as usize {
+        let n = ((m.ebands[i + 1] - m.ebands[i]) << lm) as usize;
+        let narrow = (m.ebands[i + 1] - m.ebands[i]) == 1;
 
-        // Use channel indicated by tf_chan
-        let x_off = tf_chan as usize * n0u * (1 << lm as usize) + band_start * (1 << lm as usize);
+        // Copy band data
+        let x_off = tf_chan as usize * n0 as usize + (m.ebands[i] << lm) as usize;
+        tmp[..n].copy_from_slice(&x[x_off..x_off + n]);
 
-        // Compute L1 at current resolution
-        let mut tmp = vec![0i32; n];
-        if x_off + n <= x.len() {
-            tmp[..n].copy_from_slice(&x[x_off..x_off + n]);
-        }
-        let l1_base = l1_metric(&tmp, n as i32, lm, bias);
+        let mut best_l1 = l1_metric(&tmp[..n], n as i32, if is_transient { lm } else { 0 }, bias);
+        let mut best_level = 0i32;
 
-        // Apply Haar transform to test alternative TF resolution
-        if is_transient && n >= 2 {
-            haar1(&mut tmp, (n >> lm as usize) as i32, 1 << lm);
-        } else if !is_transient && lm > 0 {
-            // For non-transient, test with shorter blocks
-            for _ in 0..lm {
-                haar1(&mut tmp, n as i32, 1);
+        // Check the -1 case for transients
+        if is_transient && !narrow {
+            tmp_1[..n].copy_from_slice(&tmp[..n]);
+            haar1(&mut tmp_1[..n], (n >> lm as usize) as i32, 1 << lm);
+            let l1 = l1_metric(&tmp_1[..n], n as i32, lm + 1, bias);
+            if l1 < best_l1 {
+                best_l1 = l1;
+                best_level = -1;
             }
         }
-        let l1_alt = l1_metric(&tmp, n as i32, lm, bias);
 
-        // Metric: positive = prefer alternative TF, negative = prefer current
-        if l1_base > 0 {
-            metric[i] = if is_transient {
-                // For transient: positive metric means short blocks are better
-                ((l1_base - l1_alt) as i64 * 256 / l1_base as i64) as i32
-            } else {
-                ((l1_alt - l1_base) as i64 * 256 / l1_base as i64) as i32
-            };
+        let k_limit = if is_transient || narrow { lm } else { lm + 1 };
+        for k in 0..k_limit as usize {
+            let b = if is_transient { lm - k as i32 - 1 } else { k as i32 + 1 };
+            haar1(&mut tmp[..n], (n >> k) as i32, 1 << k);
+            let l1 = l1_metric(&tmp[..n], n as i32, b, bias);
+            if l1 < best_l1 {
+                best_l1 = l1;
+                best_level = k as i32 + 1;
+            }
         }
 
-        // Narrow band adjustment
+        metric[i] = if is_transient { 2 * best_level } else { -2 * best_level };
         if narrow && (metric[i] == 0 || metric[i] == -2 * lm) {
             metric[i] -= 1;
         }
     }
 
-    // Viterbi forward pass
-    let mut cost0 = 0i32;
-    let mut cost1 = 0i32;
-    for i in (m.ebands[0] as usize / n0u)..len as usize {
-        let imp = importance[i].max(1);
-        let curr0 = cost0;
-        let curr1 = cost1;
-        let mc = metric[i] * imp;
+    {
+        let m_str: Vec<String> = metric.iter().map(|v| v.to_string()).collect();
+        let i_str: Vec<String> = importance[..len as usize].iter().map(|v| v.to_string()).collect();
+        eprintln!("[RS TF_METRIC] metric=[{}] imp=[{}] len={} lambda={} bias={}",
+            m_str.join(","), i_str.join(","), len, lambda, bias);
+    }
 
-        // State 0: tf_res=0
-        let from0_to0 = curr0;
-        let from1_to0 = curr1 + lambda * imp;
-        if from0_to0 < from1_to0 {
-            cost0 = from0_to0;
-            path0[i] = 0;
-        } else {
-            cost0 = from1_to0;
-            path0[i] = 1;
+    // Search for optimal tf_select
+    let mut tf_select = 0i32;
+    let mut selcost = [0i32; 2];
+    for sel in 0..2 {
+        let mut cost0 = importance[0] * (metric[0] - 2 * TF_SELECT_TABLE[lm as usize][4 * is_trans_i + 2 * sel + 0] as i32).abs();
+        let mut cost1 = importance[0] * (metric[0] - 2 * TF_SELECT_TABLE[lm as usize][4 * is_trans_i + 2 * sel + 1] as i32).abs()
+            + if is_transient { 0 } else { lambda };
+        for i in 1..len as usize {
+            let curr0 = cost0.min(cost1 + lambda);
+            let curr1 = (cost0 + lambda).min(cost1);
+            cost0 = curr0 + importance[i] * (metric[i] - 2 * TF_SELECT_TABLE[lm as usize][4 * is_trans_i + 2 * sel + 0] as i32).abs();
+            cost1 = curr1 + importance[i] * (metric[i] - 2 * TF_SELECT_TABLE[lm as usize][4 * is_trans_i + 2 * sel + 1] as i32).abs();
         }
+        selcost[sel] = cost0.min(cost1);
+    }
+    if selcost[1] < selcost[0] && is_transient {
+        tf_select = 1;
+    }
 
-        // State 1: tf_res=1
-        let from0_to1 = curr0 + lambda * imp;
-        let from1_to1 = curr1;
-        if from0_to1 + mc < from1_to1 + mc {
-            cost1 = from0_to1 + mc;
-            path1[i] = 0;
-        } else {
-            cost1 = from1_to1 + mc;
-            path1[i] = 1;
-        }
+    // Final Viterbi forward pass with chosen tf_select
+    let mut cost0 = importance[0] * (metric[0] - 2 * TF_SELECT_TABLE[lm as usize][4 * is_trans_i + 2 * tf_select as usize + 0] as i32).abs();
+    let mut cost1 = importance[0] * (metric[0] - 2 * TF_SELECT_TABLE[lm as usize][4 * is_trans_i + 2 * tf_select as usize + 1] as i32).abs()
+        + if is_transient { 0 } else { lambda };
+    for i in 1..len as usize {
+        let from0 = cost0;
+        let from1 = cost1 + lambda;
+        let curr0 = if from0 < from1 { path0[i] = 0; from0 } else { path0[i] = 1; from1 };
+        let from0 = cost0 + lambda;
+        let from1 = cost1;
+        let curr1 = if from0 < from1 { path1[i] = 0; from0 } else { path1[i] = 1; from1 };
+        cost0 = curr0 + importance[i] * (metric[i] - 2 * TF_SELECT_TABLE[lm as usize][4 * is_trans_i + 2 * tf_select as usize + 0] as i32).abs();
+        cost1 = curr1 + importance[i] * (metric[i] - 2 * TF_SELECT_TABLE[lm as usize][4 * is_trans_i + 2 * tf_select as usize + 1] as i32).abs();
     }
 
     // Backward trace
-    let mut tf_select = 0;
-    let final_state = if cost0 < cost1 { 0 } else { 1 };
-    let mut state = final_state;
-    for i in (0..len as usize).rev() {
-        tf_res[i] = state;
-        state = if state == 0 { path0[i] } else { path1[i] };
-    }
-
-    // Check if tf_select=1 gives better results
-    if is_transient && lm > 0 {
-        sel_cost[0] = cost0.min(cost1);
-        // Recompute with tf_select=1 adjustment would go here
-        // For simplicity, use 0 unless the cost difference is significant
-        sel_cost[1] = sel_cost[0]; // simplified
-        if sel_cost[1] < sel_cost[0] - lambda {
-            tf_select = 1;
-        }
+    tf_res[len as usize - 1] = if cost0 < cost1 { 0 } else { 1 };
+    for i in (0..len as usize - 1).rev() {
+        tf_res[i] = if tf_res[i + 1] == 1 { path1[i + 1] } else { path0[i + 1] };
     }
 
     tf_select
@@ -1857,7 +1841,11 @@ fn celt_encode_core(
 
     // Main MDCT
     compute_mdcts(mode, short_blocks, &input, &mut freq, c, cc, lm, st.upsample);
+    eprintln!("[RS CELT_MDCT] short_blocks={} freq[0..8]=[{},{},{},{},{},{},{},{}] input[0..8]=[{},{},{},{},{},{},{},{}]",
+        short_blocks, freq[0], freq[1], freq[2], freq[3], freq[4], freq[5], freq[6], freq[7],
+        input[0], input[1], input[2], input[3], input[4], input[5], input[6], input[7]);
     compute_band_energies(mode, &freq, &mut band_e, eff_end, c, lm);
+    eprintln!("[RS CELT_BAND_E] band_e[0..4]=[{},{},{},{}]", band_e[0], band_e[1], band_e[2], band_e[3]);
 
     // LFE band limiting
     if st.lfe != 0 {
@@ -1991,7 +1979,7 @@ fn celt_encode_core(
     }
 
     // Coarse energy quantization
-    if hybrid {
+    {
         eprintln!("[RS CELT_PRE_COARSE] tell={} rng={} start={} end={} lm={} silence={} eff_bytes={} vbr_rate={}",
             enc_ref.tell(), enc_ref.get_rng(), start, end, lm, silence as i32, effective_bytes, vbr_rate);
         eprintln!("[RS CELT_BAND_LOG_E] {:?}", &band_log_e[start as usize..end as usize]);
@@ -2003,12 +1991,12 @@ fn celt_encode_core(
         nb_available_bytes, st.force_intra, &mut st.delayed_intra,
         (st.complexity >= 4) as i32, st.loss_rate, st.lfe,
     );
-    if hybrid {
+    {
         eprintln!("[RS CELT_POST_COARSE] tell={} rng={}", enc_ref.tell(), enc_ref.get_rng());
     }
 
     // TF encoding
-    if hybrid {
+    {
         eprintln!("[RS CELT_PRE_TF] tf_res=[{},{},{},{}] tf_select={} is_transient={} lm={}",
             tf_res[start as usize], tf_res.get(start as usize + 1).copied().unwrap_or(0),
             tf_res.get(start as usize + 2).copied().unwrap_or(0), tf_res.get(start as usize + 3).copied().unwrap_or(0),
@@ -2016,7 +2004,7 @@ fn celt_encode_core(
     }
     tf_encode(start, end, is_transient, &mut tf_res, lm, tf_select, enc_ref);
     tell = enc_ref.tell() as i32;
-    if hybrid {
+    {
         eprintln!("[RS CELT_POST_TF] tell={} rng={} is_transient={} tf_res=[{},{},{},{}]",
             tell, enc_ref.get_rng(), is_transient,
             tf_res[start as usize], tf_res.get(start as usize + 1).copied().unwrap_or(0),
@@ -2050,7 +2038,7 @@ fn celt_encode_core(
             );
         }
         enc_ref.encode_icdf(st.spread_decision as u32, &SPREAD_ICDF, 5);
-        if hybrid {
+        {
             eprintln!("[RS CELT_POST_SPREAD] tell={} rng={} spread={}", enc_ref.tell(), enc_ref.get_rng(), st.spread_decision);
         }
     } else {
@@ -2121,7 +2109,7 @@ fn celt_encode_core(
             );
         }
         enc_ref.encode_icdf(alloc_trim as u32, &TRIM_ICDF, 7);
-        if hybrid {
+        {
             eprintln!("[RS CELT_POST_TRIM] tell={} rng={} trim={}", enc_ref.tell(), enc_ref.get_rng(), alloc_trim);
         }
     }
@@ -2215,7 +2203,7 @@ fn celt_encode_core(
         bits, &mut balance, &mut pulses, &mut fine_quant, &mut fine_priority,
         c, lm, enc_ref, true, st.last_coded_bands, signal_bandwidth,
     );
-    if hybrid {
+    {
         eprintln!("[RS CELT_POST_ALLOC] tell={} rng={} coded_bands={} pulses={:?} fine_quant={:?}",
             enc_ref.tell(), enc_ref.get_rng(), coded_bands,
             &pulses[start as usize..end as usize], &fine_quant[start as usize..end as usize]);
@@ -2230,7 +2218,7 @@ fn celt_encode_core(
 
     // Fine energy quantization
     quant_fine_energy(mode, start, end, &mut st.old_band_e, &mut error, None, &fine_quant, enc_ref, c);
-    if hybrid {
+    {
         eprintln!("[RS CELT_POST_FINE] tell={} rng={} olde=[{},{},{},{}]",
             enc_ref.tell(), enc_ref.get_rng(),
             st.old_band_e[start as usize], st.old_band_e[start as usize + 1],
@@ -2258,7 +2246,7 @@ fn celt_encode_core(
         balance, enc_ref, lm, coded_bands,
         &mut st.rng, st.complexity, st.disable_inv != 0,
     );
-    if hybrid {
+    {
         eprintln!("[RS CELT_POST_PVQ] tell={} rng={}", enc_ref.tell(), enc_ref.get_rng());
     }
 

@@ -5568,18 +5568,24 @@ fn warped_gain(coefs_q24: &[i32], lambda_q16: i32, order: usize) -> i32 {
 /// Limit warped coefficients. Matches C: `limit_warped_coefs`.
 fn limit_warped_coefs(coefs_q24: &mut [i32], lambda_q16: i32, limit_q24: i32, order: usize) {
     let mut lambda = -lambda_q16;
+    static CALL_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let call_id = CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let trace = call_id == 0;
 
     // Convert to monic coefficients
     for i in (1..order).rev() {
         coefs_q24[i - 1] = silk_smlawb_i32(coefs_q24[i - 1], coefs_q24[i], lambda);
     }
     lambda = -lambda;
+    if trace { eprintln!("[RS LWC] after_monic coefs[0..4]=[{},{},{},{}] lambda={}", coefs_q24[0], coefs_q24[1], coefs_q24[2], coefs_q24[3], lambda); }
     let nom_q16 = silk_smlawb_i32(1 << 16, -lambda, lambda);
     let den_q24 = silk_smlawb_i32(1 << 24, coefs_q24[0], lambda);
     let mut gain_q16 = silk_div32_var_q(nom_q16, den_q24, 24);
+    if trace { eprintln!("[RS LWC] nom={} den={} gain={} lambda={}", nom_q16, den_q24, gain_q16, lambda); }
     for i in 0..order {
         coefs_q24[i] = silk_smulww(gain_q16, coefs_q24[i]);
     }
+    if trace { eprintln!("[RS LWC] after_gain coefs[0..4]=[{},{},{},{}]", coefs_q24[0], coefs_q24[1], coefs_q24[2], coefs_q24[3]); }
 
     let limit_q20 = limit_q24 >> 4;
     for iter in 0..10 {
@@ -5594,6 +5600,7 @@ fn limit_warped_coefs(coefs_q24: &mut [i32], lambda_q16: i32, limit_q24: i32, or
             }
         }
         let maxabs_q20 = maxabs_q24 >> 4;
+        if trace { eprintln!("[RS LWC] iter={} maxabs_q24={} maxabs_q20={} limit_q20={} ind={}", iter, maxabs_q24, maxabs_q20, limit_q20, ind); }
         if maxabs_q20 <= limit_q20 {
             return;
         }
@@ -5606,6 +5613,7 @@ fn limit_warped_coefs(coefs_q24: &mut [i32], lambda_q16: i32, limit_q24: i32, or
         for i in 0..order {
             coefs_q24[i] = silk_smulww(gain_q16, coefs_q24[i]);
         }
+        if trace { eprintln!("[RS LWC] iter={} after_unwarp coefs[0..4]=[{},{},{},{}]", iter, coefs_q24[0], coefs_q24[1], coefs_q24[2], coefs_q24[3]); }
 
         // Apply bandwidth expansion
         let chirp_q16 = ((0.99 * 65536.0) as i32) - silk_div32_var_q(
@@ -5616,6 +5624,7 @@ fn limit_warped_coefs(coefs_q24: &mut [i32], lambda_q16: i32, limit_q24: i32, or
             (maxabs_q20).wrapping_mul(ind as i32 + 1),
             22,
         );
+        if trace { eprintln!("[RS LWC] iter={} chirp_q16={}", iter, chirp_q16); }
         silk_bwexpander_32(&mut coefs_q24[..order], order, chirp_q16);
 
         // Convert to monic warped coefficients
@@ -5832,6 +5841,10 @@ pub fn silk_noise_shape_analysis_fix(
             );
         }
 
+        if k == 0 {
+            eprintln!("[RS AUTOCORR] k=0 scale={} ac[0..6]=[{},{},{},{},{},{}]",
+                scale, auto_corr[0], auto_corr[1], auto_corr[2], auto_corr[3], auto_corr[4], auto_corr[5]);
+        }
         // Add white noise
         auto_corr[0] += imax(silk_smulwb(auto_corr[0] >> 4, ((SHAPE_WHITE_NOISE_FRACTION * (1 << 20) as f64) as i16)), 1);
 
@@ -5842,6 +5855,11 @@ pub fn silk_noise_shape_analysis_fix(
         // Convert to AR coefficients
         ar_q24.fill(0);
         silk_k2a_q16(&mut ar_q24, &refl_coef_q16, shaping_lpc_order);
+        if k == 0 {
+            eprintln!("[RS K2A] refl[0..4]=[{},{},{},{}] ar_q24[0..4]=[{},{},{},{}]",
+                refl_coef_q16[0], refl_coef_q16[1], refl_coef_q16[2], refl_coef_q16[3],
+                ar_q24[0], ar_q24[1], ar_q24[2], ar_q24[3]);
+        }
 
         // Compute gain using proper Q-format from autocorrelation scale
         // C: Qnrg = -scale; make even; sqrt; shift to Q16
@@ -5872,13 +5890,27 @@ pub fn silk_noise_shape_analysis_fix(
         }
 
         // Bandwidth expansion
+        if k == 0 {
+            eprintln!("[RS BWEXP] bw_exp_q16={} pred_gain_q16={} ar_q24_pre_bw[0..4]=[{},{},{},{}]",
+                bw_exp_q16, pred_gain_q16, ar_q24[0], ar_q24[1], ar_q24[2], ar_q24[3]);
+        }
         silk_bwexpander_32(&mut ar_q24, shaping_lpc_order, bw_exp_q16);
 
         // Store AR coefficients (Q24→Q13)
         if warping_q16 > 0 {
+            if k == 0 {
+                eprintln!("[RS AR_TRACE] pre_limit ar_q24[0..4]=[{},{},{},{}]", ar_q24[0], ar_q24[1], ar_q24[2], ar_q24[3]);
+            }
             limit_warped_coefs(&mut ar_q24, warping_q16, (3.999 * (1 << 24) as f64) as i32, shaping_lpc_order);
+            if k == 0 {
+                eprintln!("[RS AR_TRACE] post_limit ar_q24[0..4]=[{},{},{},{}]", ar_q24[0], ar_q24[1], ar_q24[2], ar_q24[3]);
+            }
             for i in 0..shaping_lpc_order {
                 ps_enc_ctrl.ar_q13[k * shaping_lpc_order + i] = sat16(silk_rshift_round(ar_q24[i], 11));
+            }
+            if k == 0 {
+                eprintln!("[RS AR_TRACE] ar_q13[0..4]=[{},{},{},{}]",
+                    ps_enc_ctrl.ar_q13[0], ps_enc_ctrl.ar_q13[1], ps_enc_ctrl.ar_q13[2], ps_enc_ctrl.ar_q13[3]);
             }
         } else {
             silk_lpc_fit(&mut ps_enc_ctrl.ar_q13[k * shaping_lpc_order..], &ar_q24, 13, 24, shaping_lpc_order);
