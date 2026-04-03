@@ -15,8 +15,8 @@
 //! Matches C reference: `dnn/lossgen.c`
 
 use super::core::{
-    compute_generic_dense, compute_generic_gru, linear_init, parse_weights, LinearLayer,
-    WeightArray, ACTIVATION_SIGMOID, ACTIVATION_TANH,
+    ACTIVATION_SIGMOID, ACTIVATION_TANH, LinearLayer, WeightArray, compute_generic_dense,
+    compute_generic_gru, linear_init, parse_weights,
 };
 
 // ---------------------------------------------------------------------------
@@ -161,7 +161,7 @@ pub fn init_lossgen(arrays: &[WeightArray]) -> Result<LossGen, ()> {
         None,
         None, // input layer has no diag
         Some("lossgen_gru1_input_weights_scale"),
-        LOSSGEN_DENSE_IN_OUT_SIZE, // 8
+        LOSSGEN_DENSE_IN_OUT_SIZE,   // 8
         3 * LOSSGEN_GRU1_STATE_SIZE, // 48
     )?;
 
@@ -175,7 +175,7 @@ pub fn init_lossgen(arrays: &[WeightArray]) -> Result<LossGen, ()> {
         None,
         Some("lossgen_gru1_recurrent_diag"),
         Some("lossgen_gru1_recurrent_weights_scale"),
-        LOSSGEN_GRU1_STATE_SIZE, // 16
+        LOSSGEN_GRU1_STATE_SIZE,     // 16
         3 * LOSSGEN_GRU1_STATE_SIZE, // 48
     )?;
 
@@ -189,7 +189,7 @@ pub fn init_lossgen(arrays: &[WeightArray]) -> Result<LossGen, ()> {
         None,
         None,
         Some("lossgen_gru2_input_weights_scale"),
-        LOSSGEN_GRU1_STATE_SIZE, // 16 (GRU1 output feeds GRU2 input)
+        LOSSGEN_GRU1_STATE_SIZE,     // 16 (GRU1 output feeds GRU2 input)
         3 * LOSSGEN_GRU2_STATE_SIZE, // 96
     )?;
 
@@ -203,7 +203,7 @@ pub fn init_lossgen(arrays: &[WeightArray]) -> Result<LossGen, ()> {
         None,
         Some("lossgen_gru2_recurrent_diag"),
         Some("lossgen_gru2_recurrent_weights_scale"),
-        LOSSGEN_GRU2_STATE_SIZE, // 32
+        LOSSGEN_GRU2_STATE_SIZE,     // 32
         3 * LOSSGEN_GRU2_STATE_SIZE, // 96
     )?;
 
@@ -372,7 +372,7 @@ impl LossGenState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dnn::core::{sigmoid_approx, WEIGHT_TYPE_FLOAT, WEIGHT_TYPE_INT8};
+    use crate::dnn::core::{WEIGHT_TYPE_FLOAT, WEIGHT_TYPE_INT8, sigmoid_approx};
 
     const EPS: f32 = 1e-5;
 
@@ -479,10 +479,7 @@ mod tests {
             ),
             // Dense output: 32 → 1, float
             make_f32_weight("lossgen_dense_out_bias", &[out_bias]),
-            make_f32_weight(
-                "lossgen_dense_out_weights",
-                &[0.0; LOSSGEN_GRU2_STATE_SIZE],
-            ),
+            make_f32_weight("lossgen_dense_out_weights", &[0.0; LOSSGEN_GRU2_STATE_SIZE]),
         ]
     }
 
@@ -534,7 +531,10 @@ mod tests {
         let model = model.unwrap();
         assert_eq!(model.lossgen_dense_in.nb_inputs, 2);
         assert_eq!(model.lossgen_dense_in.nb_outputs, LOSSGEN_DENSE_IN_OUT_SIZE);
-        assert_eq!(model.lossgen_gru1_input.nb_inputs, LOSSGEN_DENSE_IN_OUT_SIZE);
+        assert_eq!(
+            model.lossgen_gru1_input.nb_inputs,
+            LOSSGEN_DENSE_IN_OUT_SIZE
+        );
         assert_eq!(
             model.lossgen_gru1_input.nb_outputs,
             3 * LOSSGEN_GRU1_STATE_SIZE
@@ -736,7 +736,10 @@ mod tests {
         let mut st2 = LossGenState::new_with_seed(&arrays, 2).unwrap();
         let seq1: Vec<i32> = (0..100).map(|_| st1.sample_loss(0.3)).collect();
         let seq2: Vec<i32> = (0..100).map(|_| st2.sample_loss(0.3)).collect();
-        assert_ne!(seq1, seq2, "different seeds should produce different sequences");
+        assert_ne!(
+            seq1, seq2,
+            "different seeds should produce different sequences"
+        );
     }
 
     #[test]

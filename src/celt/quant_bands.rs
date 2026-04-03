@@ -8,10 +8,10 @@
 //! 2. **Fine**: sub-integer refinement bits (raw bits)
 //! 3. **Finalise**: leftover bits for one more bit of precision per band
 
-use crate::types::*;
 use super::math_ops::celt_log2_db;
 use super::modes::CELTMode;
 use super::range_coder::{RangeDecoder, RangeEncoder};
+use crate::types::*;
 
 // ============================================================================
 // Constants
@@ -24,11 +24,8 @@ pub const MAX_FINE_BITS: i32 = 8;
 /// Subtracted before quantization to center residuals near zero for
 /// better Laplace coding efficiency. Matches C `eMeans[25]` in quant_bands.c.
 pub static EMEANS: [i8; 25] = [
-    103, 100, 92, 85, 81,
-     77,  72, 70, 78, 75,
-     73,  71, 78, 74, 69,
-     72,  70, 74, 76, 71,
-     60,  60, 60, 60, 60,
+    103, 100, 92, 85, 81, 77, 72, 70, 78, 75, 73, 71, 78, 74, 69, 72, 70, 74, 76, 71, 60, 60, 60,
+    60, 60,
 ];
 
 /// Prediction coefficients indexed by LM, Q15.
@@ -159,7 +156,8 @@ fn ec_laplace_encode(enc: &mut RangeEncoder, value: &mut i32, mut fs: u32, decay
 
         // Everything beyond the geometric part has probability LAPLACE_MINP
         if fs == 0 {
-            let ndi_max = (32768u32.wrapping_sub(fl)
+            let ndi_max = (32768u32
+                .wrapping_sub(fl)
                 .wrapping_add(LAPLACE_MINP)
                 .wrapping_sub(1)
                 >> LAPLACE_LOG_MINP) as i32;
@@ -418,8 +416,7 @@ pub fn quant_coarse_energy(
 
     let intra_bias =
         ((budget as i64 * *delayed_intra as i64 * loss_rate as i64) / (cc as i64 * 512)) as i32;
-    let new_distortion =
-        loss_distortion(e_bands, old_e_bands, start, eff_end, nb_ebands, cc);
+    let new_distortion = loss_distortion(e_bands, old_e_bands, start, eff_end, nb_ebands, cc);
 
     let tell = enc.tell();
     if tell + 3 > budget as i32 {
@@ -516,8 +513,7 @@ pub fn quant_coarse_energy(
                 enc.buffer_mut()[nstart_bytes..nintra_bytes]
                     .copy_from_slice(&intra_bits[..intra_byte_count]);
             }
-            old_e_bands[..total_bands]
-                .copy_from_slice(&old_e_bands_intra[..total_bands]);
+            old_e_bands[..total_bands].copy_from_slice(&old_e_bands_intra[..total_bands]);
             error[..total_bands].copy_from_slice(&error_intra[..total_bands]);
             intra = 1;
         }
@@ -591,8 +587,10 @@ pub fn quant_fine_energy(
             enc.encode_bits(q2 as u32, extra_quant[iu] as u32);
 
             // Compute offset: center of quantization bin in Q24
-            let mut offset =
-                sub32(vshr32(2 * q2 + 1, extra_quant[iu] - DB_SHIFT + 1), qconst32(0.5, DB_SHIFT as u32));
+            let mut offset = sub32(
+                vshr32(2 * q2 + 1, extra_quant[iu] - DB_SHIFT + 1),
+                qconst32(0.5, DB_SHIFT as u32),
+            );
             offset = shr32(offset, prev);
 
             old_e_bands[idx] += offset;
@@ -727,9 +725,7 @@ pub fn unquant_coarse_energy(
 
             old_e_bands[idx] = max32(-qconst32(9.0, DB_SHIFT as u32), old_e_bands[idx]);
             // Compute with i64 prev to avoid accumulation drift
-            let tmp_64 = (mult16_32_q15(coef, old_e_bands[idx]) as i64)
-                + prev[c_idx]
-                + (q as i64);
+            let tmp_64 = (mult16_32_q15(coef, old_e_bands[idx]) as i64) + prev[c_idx] + (q as i64);
             // Truncate to i32, then clamp to ±28.0 in Q24
             let tmp = min32(
                 qconst32(28.0, DB_SHIFT as u32),
@@ -779,8 +775,10 @@ pub fn unquant_fine_energy(
             let q2 = dec.decode_bits(extra as u32) as i32;
 
             // Compute offset: center of quantization bin in Q24
-            let mut offset =
-                sub32(vshr32(2 * q2 + 1, extra - DB_SHIFT + 1), qconst32(0.5, DB_SHIFT as u32));
+            let mut offset = sub32(
+                vshr32(2 * q2 + 1, extra - DB_SHIFT + 1),
+                qconst32(0.5, DB_SHIFT as u32),
+            );
             offset = shr32(offset, prev);
 
             old_e_bands[idx] += offset;
@@ -893,7 +891,9 @@ mod tests {
             nb_ebands: 21,
             eff_ebands: 21,
             preemph: [0; 4],
-            ebands: &[0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 34, 40, 48, 60, 78, 100],
+            ebands: &[
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 34, 40, 48, 60, 78, 100,
+            ],
             max_lm: 3,
             nb_short_mdcts: 1,
             short_mdct_size: 960,
@@ -967,7 +967,8 @@ mod tests {
         // Synthesize some band energies
         let mut e_bands = vec![0i32; total];
         for i in 0..end as usize {
-            e_bands[i] = qconst32(3.0, DB_SHIFT as u32) + (i as i32) * qconst32(0.5, DB_SHIFT as u32);
+            e_bands[i] =
+                qconst32(3.0, DB_SHIFT as u32) + (i as i32) * qconst32(0.5, DB_SHIFT as u32);
         }
 
         let mut old_e_bands_enc = vec![0i32; total];
@@ -980,9 +981,23 @@ mod tests {
         {
             let mut enc = RangeEncoder::new(&mut buf);
             quant_coarse_energy(
-                &m, start, end, end, &e_bands, &mut old_e_bands_enc,
-                (budget_bytes as u32) * 8, &mut error, &mut enc,
-                cc, lm, budget_bytes as i32, 0, &mut delayed_intra, 1, 0, 0,
+                &m,
+                start,
+                end,
+                end,
+                &e_bands,
+                &mut old_e_bands_enc,
+                (budget_bytes as u32) * 8,
+                &mut error,
+                &mut enc,
+                cc,
+                lm,
+                budget_bytes as i32,
+                0,
+                &mut delayed_intra,
+                1,
+                0,
+                0,
             );
             enc.done();
         }
@@ -993,7 +1008,16 @@ mod tests {
             let mut dec = RangeDecoder::new(&buf);
             // The first 3-bit symbol is the intra flag; we need to skip it.
             let intra = if dec.decode_bit_logp(3) { 1 } else { 0 };
-            unquant_coarse_energy(&m, start, end, &mut old_e_bands_dec, intra, &mut dec, cc, lm);
+            unquant_coarse_energy(
+                &m,
+                start,
+                end,
+                &mut old_e_bands_dec,
+                intra,
+                &mut dec,
+                cc,
+                lm,
+            );
         }
 
         // After encoding and decoding, old_e_bands should match
@@ -1014,17 +1038,38 @@ mod tests {
         let mut error = vec![qconst32(0.3, DB_SHIFT as u32); total];
 
         // 3 extra bits per band, no previous fine quant
-        let extra_quant: Vec<i32> = (0..nb_ebands).map(|i| if (i as i32) < end { 3 } else { 0 }).collect();
+        let extra_quant: Vec<i32> = (0..nb_ebands)
+            .map(|i| if (i as i32) < end { 3 } else { 0 })
+            .collect();
 
         let mut buf = vec![0u8; 256];
         {
             let mut enc = RangeEncoder::new(&mut buf);
-            quant_fine_energy(&m, start, end, &mut old_e_bands_enc, &mut error, None, &extra_quant, &mut enc, cc);
+            quant_fine_energy(
+                &m,
+                start,
+                end,
+                &mut old_e_bands_enc,
+                &mut error,
+                None,
+                &extra_quant,
+                &mut enc,
+                cc,
+            );
             enc.done();
         }
         {
             let mut dec = RangeDecoder::new(&buf);
-            unquant_fine_energy(&m, start, end, &mut old_e_bands_dec, None, &extra_quant, &mut dec, cc);
+            unquant_fine_energy(
+                &m,
+                start,
+                end,
+                &mut old_e_bands_dec,
+                None,
+                &extra_quant,
+                &mut dec,
+                cc,
+            );
         }
 
         assert_eq!(old_e_bands_enc, old_e_bands_dec);
@@ -1044,7 +1089,9 @@ mod tests {
         let mut error_enc = vec![qconst32(0.1, DB_SHIFT as u32); total];
         let _error_dec = error_enc.clone();
 
-        let fine_quant: Vec<i32> = (0..nb_ebands).map(|i| if (i as i32) < end { 3 } else { 0 }).collect();
+        let fine_quant: Vec<i32> = (0..nb_ebands)
+            .map(|i| if (i as i32) < end { 3 } else { 0 })
+            .collect();
         let fine_priority: Vec<i32> = (0..nb_ebands).map(|i| (i % 2) as i32).collect();
         let bits_left = end * cc; // enough for one bit per band per channel
 
@@ -1052,16 +1099,31 @@ mod tests {
         {
             let mut enc = RangeEncoder::new(&mut buf);
             quant_energy_finalise(
-                &m, start, end, Some(&mut old_e_bands_enc), &mut error_enc,
-                &fine_quant, &fine_priority, bits_left, &mut enc, cc,
+                &m,
+                start,
+                end,
+                Some(&mut old_e_bands_enc),
+                &mut error_enc,
+                &fine_quant,
+                &fine_priority,
+                bits_left,
+                &mut enc,
+                cc,
             );
             enc.done();
         }
         {
             let mut dec = RangeDecoder::new(&buf);
             unquant_energy_finalise(
-                &m, start, end, Some(&mut old_e_bands_dec), &fine_quant,
-                &fine_priority, bits_left, &mut dec, cc,
+                &m,
+                start,
+                end,
+                Some(&mut old_e_bands_dec),
+                &fine_quant,
+                &fine_priority,
+                bits_left,
+                &mut dec,
+                cc,
             );
         }
 
@@ -1072,11 +1134,10 @@ mod tests {
     fn emeans_matches_c_reference() {
         // Verify Q4 to float conversion matches C reference float table
         let expected_float: [f32; 25] = [
-            6.437500, 6.250000, 5.750000, 5.312500, 5.062500,
-            4.812500, 4.500000, 4.375000, 4.875000, 4.687500,
-            4.562500, 4.437500, 4.875000, 4.625000, 4.312500,
-            4.500000, 4.375000, 4.625000, 4.750000, 4.437500,
-            3.750000, 3.750000, 3.750000, 3.750000, 3.750000,
+            6.437500, 6.250000, 5.750000, 5.312500, 5.062500, 4.812500, 4.500000, 4.375000,
+            4.875000, 4.687500, 4.562500, 4.437500, 4.875000, 4.625000, 4.312500, 4.500000,
+            4.375000, 4.625000, 4.750000, 4.437500, 3.750000, 3.750000, 3.750000, 3.750000,
+            3.750000,
         ];
         for i in 0..25 {
             let float_val = EMEANS[i] as f32 / 16.0;

@@ -47,7 +47,11 @@ pub fn bits2pulses(m: &CELTMode, band: i32, lm: i32, bits: i32) -> i32 {
             lo = mid;
         }
     }
-    let lo_bits = if lo == 0 { -1 } else { cache[lo as usize] as i32 };
+    let lo_bits = if lo == 0 {
+        -1
+    } else {
+        cache[lo as usize] as i32
+    };
     if bits - lo_bits <= cache[hi as usize] as i32 - bits {
         lo
     } else {
@@ -85,11 +89,7 @@ const ALLOC_STEPS: i32 = 6;
 /// and skip signalling bit reservations.
 /// Matches the C static `LOG2_FRAC_TABLE[24]` in rate.c.
 static LOG2_FRAC_TABLE: [u8; 24] = [
-     0,
-     8, 13,
-    16, 19, 21, 23,
-    24, 26, 27, 28, 29, 30, 31, 32,
-    32, 33, 34, 34, 35, 36, 36, 37, 37,
+    0, 8, 13, 16, 19, 21, 23, 24, 26, 27, 28, 29, 30, 31, 32, 32, 33, 34, 34, 35, 36, 36, 37, 37,
 ];
 
 // ===========================================================================
@@ -162,7 +162,10 @@ fn interp_bits2pulses<EC: EcCoder>(
         psum = 0;
         let mut done = 0i32;
         let mut j = end;
-        while { j -= 1; j >= start } {
+        while {
+            j -= 1;
+            j >= start
+        } {
             let tmp = bits1[j as usize] + (mid * bits2[j as usize] >> ALLOC_STEPS);
             if tmp >= thresh[j as usize] || done != 0 {
                 done = 1;
@@ -184,7 +187,10 @@ fn interp_bits2pulses<EC: EcCoder>(
     let mut done = 0i32;
     {
         let mut j = end;
-        while { j -= 1; j >= start } {
+        while {
+            j -= 1;
+            j >= start
+        } {
             let mut tmp = bits1[j as usize] + (lo * bits2[j as usize] >> ALLOC_STEPS);
             if tmp < thresh[j as usize] && done == 0 {
                 if tmp >= alloc_floor {
@@ -272,7 +278,10 @@ fn interp_bits2pulses<EC: EcCoder>(
     if intensity_rsv > 0 {
         if encode {
             *intensity = (*intensity).min(coded_bands);
-            ec.ec_enc_uint((*intensity - start) as u32, (coded_bands + 1 - start) as u32);
+            ec.ec_enc_uint(
+                (*intensity - start) as u32,
+                (coded_bands + 1 - start) as u32,
+            );
         } else {
             *intensity = start + ec.ec_dec_uint((coded_bands + 1 - start) as u32) as i32;
         }
@@ -301,8 +310,7 @@ fn interp_bits2pulses<EC: EcCoder>(
     ) as i32;
     left -= (m.ebands[coded_bands as usize] - m.ebands[start as usize]) as i32 * percoeff;
     for j in start..coded_bands {
-        bits[j as usize] +=
-            percoeff * (m.ebands[(j + 1) as usize] - m.ebands[j as usize]) as i32;
+        bits[j as usize] += percoeff * (m.ebands[(j + 1) as usize] - m.ebands[j as usize]) as i32;
     }
     for j in start..coded_bands {
         let tmp = left.min((m.ebands[(j + 1) as usize] - m.ebands[j as usize]) as i32);
@@ -381,8 +389,7 @@ fn interp_bits2pulses<EC: EcCoder>(
         // Fine energy can't take advantage of the re-balancing in
         // quant_all_bands(). Instead, do the re-balancing here.
         if excess > 0 {
-            let extra_fine =
-                (excess >> (stereo + BITRES)).min(MAX_FINE_BITS - ebits[ju]);
+            let extra_fine = (excess >> (stereo + BITRES)).min(MAX_FINE_BITS - ebits[ju]);
             ebits[ju] += extra_fine;
             let extra_bits = extra_fine * c << BITRES;
             fine_priority[ju] = (extra_bits >= excess - bal) as i32;
@@ -434,10 +441,10 @@ pub static TAPSET_ICDF: [u8; 3] = [2, 1, 0];
 /// Maps the raw tf_res flags and tf_select bit to actual TF resolution values.
 pub static TF_SELECT_TABLE: [[i8; 8]; 4] = [
     // isTransient=0          isTransient=1
-    [ 0, -1,  0, -1,    0, -1,  0, -1], // LM=0 (2.5 ms)
-    [ 0, -1,  0, -2,    1,  0,  1, -1], // LM=1 (5 ms)
-    [ 0, -2,  0, -3,    2,  0,  1, -1], // LM=2 (10 ms)
-    [ 0, -2,  0, -3,    3,  0,  1, -1], // LM=3 (20 ms)
+    [0, -1, 0, -1, 0, -1, 0, -1], // LM=0 (2.5 ms)
+    [0, -1, 0, -2, 1, 0, 1, -1],  // LM=1 (5 ms)
+    [0, -2, 0, -3, 2, 0, 1, -1],  // LM=2 (10 ms)
+    [0, -2, 0, -3, 3, 0, 1, -1],  // LM=3 (20 ms)
 ];
 
 // ===========================================================================
@@ -506,9 +513,8 @@ pub fn clt_compute_allocation<EC: EcCoder>(
         // Below this threshold, we're sure not to allocate any PVQ bits
         thresh[ju] = (c << BITRES).max(3 * band_width << lm << BITRES >> 4);
         // Tilt of the allocation curve
-        trim_offset[ju] = c * band_width * (alloc_trim - 5 - lm) * (end - j - 1)
-            * (1 << (lm + BITRES))
-            >> 6;
+        trim_offset[ju] =
+            c * band_width * (alloc_trim - 5 - lm) * (end - j - 1) * (1 << (lm + BITRES)) >> 6;
         // Giving less resolution to single-coefficient bands
         if band_width << lm == 1 {
             trim_offset[ju] -= c << BITRES;
@@ -524,7 +530,10 @@ pub fn clt_compute_allocation<EC: EcCoder>(
         let mut psum = 0i32;
         let mid = (lo + hi) >> 1;
         let mut j = end;
-        while { j -= 1; j >= start } {
+        while {
+            j -= 1;
+            j >= start
+        } {
             let ju = j as usize;
             let n = (m.ebands[(j + 1) as usize] - m.ebands[j as usize]) as i32;
             let mut bitsj = c * n * (m.alloc_vectors[(mid * len + j) as usize] as i32) << lm >> 2;

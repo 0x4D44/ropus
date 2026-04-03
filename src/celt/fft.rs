@@ -4,7 +4,6 @@
 //! Uses an iterative mixed-radix decimation-in-time algorithm with
 //! radix-2, 3, 4, and 5 butterfly stages.
 
-use crate::celt::math_ops::{celt_ilog2, celt_zlog2};
 use crate::types::*;
 
 // =========================================================================
@@ -170,7 +169,10 @@ fn kf_bfly2(fout: &mut [KissFftCpx], _m: usize, n: usize) {
         // Element 3: twiddle = W8 conjugate
         let t = KissFftCpx {
             r: s_mul(sub32_ovflw(fout[idx + 7].i, fout[idx + 7].r), tw),
-            i: s_mul(neg32_ovflw(add32_ovflw(fout[idx + 7].i, fout[idx + 7].r)), tw),
+            i: s_mul(
+                neg32_ovflw(add32_ovflw(fout[idx + 7].i, fout[idx + 7].r)),
+                tw,
+            ),
         };
         fout[idx + 7] = c_sub(fout[idx + 3], t);
         c_addto(&mut fout[idx + 3], t);
@@ -323,20 +325,35 @@ fn kf_bfly5(
             fout[f0].i = add32_ovflw(fout[f0].i, add32_ovflw(scratch7.i, scratch8.i));
 
             let scratch5 = KissFftCpx {
-                r: add32_ovflw(scratch0.r, add32_ovflw(s_mul(scratch7.r, ya_r), s_mul(scratch8.r, yb_r))),
-                i: add32_ovflw(scratch0.i, add32_ovflw(s_mul(scratch7.i, ya_r), s_mul(scratch8.i, yb_r))),
+                r: add32_ovflw(
+                    scratch0.r,
+                    add32_ovflw(s_mul(scratch7.r, ya_r), s_mul(scratch8.r, yb_r)),
+                ),
+                i: add32_ovflw(
+                    scratch0.i,
+                    add32_ovflw(s_mul(scratch7.i, ya_r), s_mul(scratch8.i, yb_r)),
+                ),
             };
             let scratch6 = KissFftCpx {
                 r: add32_ovflw(s_mul(scratch10.i, ya_i), s_mul(scratch9.i, yb_i)),
-                i: neg32_ovflw(add32_ovflw(s_mul(scratch10.r, ya_i), s_mul(scratch9.r, yb_i))),
+                i: neg32_ovflw(add32_ovflw(
+                    s_mul(scratch10.r, ya_i),
+                    s_mul(scratch9.r, yb_i),
+                )),
             };
 
             fout[f1] = c_sub(scratch5, scratch6);
             fout[f4] = c_add(scratch5, scratch6);
 
             let scratch11 = KissFftCpx {
-                r: add32_ovflw(scratch0.r, add32_ovflw(s_mul(scratch7.r, yb_r), s_mul(scratch8.r, ya_r))),
-                i: add32_ovflw(scratch0.i, add32_ovflw(s_mul(scratch7.i, yb_r), s_mul(scratch8.i, ya_r))),
+                r: add32_ovflw(
+                    scratch0.r,
+                    add32_ovflw(s_mul(scratch7.r, yb_r), s_mul(scratch8.r, ya_r)),
+                ),
+                i: add32_ovflw(
+                    scratch0.i,
+                    add32_ovflw(s_mul(scratch7.i, yb_r), s_mul(scratch8.i, ya_r)),
+                ),
             };
             let scratch12 = KissFftCpx {
                 r: sub32_ovflw(s_mul(scratch9.i, ya_i), s_mul(scratch10.i, yb_i)),
@@ -757,9 +774,7 @@ mod tests {
         // Expected: bin[0] = N (scaled by 1/N → ~1), rest ≈ 0
         let st = &FFT_STATE_48000_960_3; // 60-point FFT
         let n = st.nfft as usize;
-        let fin: Vec<KissFftCpx> = (0..n)
-            .map(|_| KissFftCpx { r: 1 << 15, i: 0 })
-            .collect();
+        let fin: Vec<KissFftCpx> = (0..n).map(|_| KissFftCpx { r: 1 << 15, i: 0 }).collect();
         let mut fout = vec![KissFftCpx::default(); n];
         opus_fft(st, &fin, &mut fout);
 

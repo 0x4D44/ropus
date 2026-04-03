@@ -8,8 +8,8 @@
 //! - Extension parsing, iteration, and generation (Opus 1.4+)
 
 use crate::opus::decoder::{
-    opus_packet_get_nb_frames, opus_packet_get_samples_per_frame, OPUS_BAD_ARG,
-    OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR, OPUS_INVALID_PACKET, OPUS_OK,
+    OPUS_BAD_ARG, OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR, OPUS_INVALID_PACKET, OPUS_OK,
+    opus_packet_get_nb_frames, opus_packet_get_samples_per_frame,
 };
 
 /// Maximum frames per Opus packet (120ms / 2.5ms = 48).
@@ -340,12 +340,7 @@ fn skip_extension_payload(
 /// Advance past a complete extension (ID byte + payload).
 /// Returns remaining length (negative = error). Does not advance pos on error.
 /// Matches C `skip_extension` in extensions.c.
-fn skip_extension(
-    data: &[u8],
-    pos: &mut usize,
-    remaining: i32,
-    header_size: &mut i32,
-) -> i32 {
+fn skip_extension(data: &[u8], pos: &mut usize, remaining: i32, header_size: &mut i32) -> i32 {
     if remaining == 0 {
         *header_size = 0;
         return 0;
@@ -356,8 +351,7 @@ fn skip_extension(
     let saved_pos = *pos;
     let id_byte = data[*pos];
     *pos += 1;
-    let new_remaining =
-        skip_extension_payload(data, pos, remaining - 1, header_size, id_byte, 0);
+    let new_remaining = skip_extension_payload(data, pos, remaining - 1, header_size, id_byte, 0);
     if new_remaining >= 0 {
         *header_size += 1; // account for the ID byte
     } else {
@@ -844,11 +838,8 @@ pub(crate) fn opus_packet_extensions_generate(
                         if frame_repeat_idx[g] >= frame_max_idx[g] {
                             break;
                         }
-                        debug_assert!(
-                            extensions[frame_repeat_idx[g] as usize].frame == g as i32
-                        );
-                        if extensions[frame_repeat_idx[g] as usize].id
-                            != extensions[i as usize].id
+                        debug_assert!(extensions[frame_repeat_idx[g] as usize].frame == g as i32);
+                        if extensions[frame_repeat_idx[g] as usize].id != extensions[i as usize].id
                         {
                             break;
                         }
@@ -870,9 +861,7 @@ pub(crate) fn opus_packet_extensions_generate(
                     // Advance repeat pointers for subsequent frames
                     for g2 in (f + 1)..nb_frames as usize {
                         let mut j = frame_repeat_idx[g2] + 1;
-                        while j < frame_max_idx[g2]
-                            && extensions[j as usize].frame != g2 as i32
-                        {
+                        while j < frame_max_idx[g2] && extensions[j as usize].frame != g2 as i32 {
                             j += 1;
                         }
                         frame_repeat_idx[g2] = j;
@@ -1025,12 +1014,7 @@ impl<'a> OpusRepacketizer<'a> {
 
     /// Internal cat with self-delimited flag.
     /// Matches C `opus_repacketizer_cat_impl`.
-    pub(crate) fn cat_impl(
-        &mut self,
-        data: &'a [u8],
-        len: i32,
-        self_delimited: bool,
-    ) -> i32 {
+    pub(crate) fn cat_impl(&mut self, data: &'a [u8], len: i32, self_delimited: bool) -> i32 {
         if len < 1 {
             return OPUS_INVALID_PACKET;
         }
@@ -1142,8 +1126,7 @@ impl<'a> OpusRepacketizer<'a> {
             if remaining_capacity <= 0 {
                 continue;
             }
-            let mut frame_exts =
-                vec![OpusExtensionData::EMPTY; remaining_capacity as usize];
+            let mut frame_exts = vec![OpusExtensionData::EMPTY; remaining_capacity as usize];
             let mut frame_ext_count = remaining_capacity;
             let ret = opus_packet_extensions_parse(
                 self.paddings[i],
@@ -1189,10 +1172,7 @@ impl<'a> OpusRepacketizer<'a> {
                 write_pos += 1;
             } else {
                 // Code 2 (two VBR frames)
-                tot_size += len[0] as i32
-                    + len[1] as i32
-                    + 2
-                    + if len[0] >= 252 { 1 } else { 0 };
+                tot_size += len[0] as i32 + len[1] as i32 + 2 + if len[0] >= 252 { 1 } else { 0 };
                 if tot_size > maxlen {
                     return OPUS_BUFFER_TOO_SMALL;
                 }
@@ -1203,10 +1183,7 @@ impl<'a> OpusRepacketizer<'a> {
         }
 
         // Upgrade to Code 3 if needed (count > 2, or padding/extensions present)
-        if count > 2
-            || (pad_to_max && tot_size < maxlen)
-            || ext_count > 0
-        {
+        if count > 2 || (pad_to_max && tot_size < maxlen) || ext_count > 0 {
             // Code 3: restart from beginning
             write_pos = 0;
             tot_size = if self_delimited {
@@ -1344,13 +1321,7 @@ impl<'a> OpusRepacketizer<'a> {
 
     /// Emit frames `[begin, end)` as a new packet.
     /// Matches C `opus_repacketizer_out_range`.
-    pub fn out_range(
-        &self,
-        begin: usize,
-        end: usize,
-        data: &mut [u8],
-        maxlen: i32,
-    ) -> i32 {
+    pub fn out_range(&self, begin: usize, end: usize, data: &mut [u8], maxlen: i32) -> i32 {
         self.out_range_impl(begin, end, data, maxlen, false, false, &[])
     }
 
@@ -1399,11 +1370,7 @@ pub(crate) fn opus_packet_pad_impl(
 /// Matches C `opus_packet_pad`.
 pub fn opus_packet_pad(data: &mut [u8], len: i32, new_len: i32) -> i32 {
     let ret = opus_packet_pad_impl(data, len, new_len, true, &[]);
-    if ret > 0 {
-        OPUS_OK
-    } else {
-        ret
-    }
+    if ret > 0 { OPUS_OK } else { ret }
 }
 
 /// Strip all padding from a packet in-place.
@@ -1816,8 +1783,7 @@ mod tests {
 
         // Generate
         let mut buf = vec![0u8; size as usize];
-        let ret =
-            opus_packet_extensions_generate(Some(&mut buf), size, &[ext], 1, false);
+        let ret = opus_packet_extensions_generate(Some(&mut buf), size, &[ext], 1, false);
         assert_eq!(ret, size);
 
         // Parse back
@@ -1847,8 +1813,7 @@ mod tests {
         assert!(size > 0);
 
         let mut buf = vec![0u8; size as usize];
-        let ret =
-            opus_packet_extensions_generate(Some(&mut buf), size, &[ext], 1, false);
+        let ret = opus_packet_extensions_generate(Some(&mut buf), size, &[ext], 1, false);
         assert_eq!(ret, size);
 
         let mut parsed = [OpusExtensionData::EMPTY; 4];
@@ -1877,18 +1842,11 @@ mod tests {
             len: 1,
         };
 
-        let size =
-            opus_packet_extensions_generate(None, 256, &[ext0, ext1], 2, false);
+        let size = opus_packet_extensions_generate(None, 256, &[ext0, ext1], 2, false);
         assert!(size > 0);
 
         let mut buf = vec![0u8; size as usize];
-        let ret = opus_packet_extensions_generate(
-            Some(&mut buf),
-            size,
-            &[ext0, ext1],
-            2,
-            false,
-        );
+        let ret = opus_packet_extensions_generate(Some(&mut buf), size, &[ext0, ext1], 2, false);
         assert_eq!(ret, size);
 
         let mut parsed = [OpusExtensionData::EMPTY; 8];
@@ -1913,8 +1871,7 @@ mod tests {
             len: 2,
         };
 
-        let size =
-            opus_packet_extensions_generate(None, 256, &[ext0, ext1], 1, false);
+        let size = opus_packet_extensions_generate(None, 256, &[ext0, ext1], 1, false);
         let mut buf = vec![0u8; size as usize];
         opus_packet_extensions_generate(Some(&mut buf), size, &[ext0, ext1], 1, false);
 
@@ -1966,7 +1923,7 @@ mod tests {
         // Self-delimited Code 0: [TOC][sd_size][frame_data]
         let mut pkt = Vec::new();
         pkt.push(0x08u8); // TOC (code 0)
-        pkt.push(2);      // self-delimited size = 2
+        pkt.push(2); // self-delimited size = 2
         pkt.push(0xAA);
         pkt.push(0xBB);
         // Stream 2: [TOC][frame_data]

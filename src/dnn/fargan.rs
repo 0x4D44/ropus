@@ -11,9 +11,9 @@
 //! computation, exp, float-to-int16 conversion).
 
 use super::core::{
-    compute_generic_conv1d, compute_generic_dense, compute_generic_gru,
-    compute_glu, linear_init, parse_weights, LinearLayer, WeightArray,
-    ACTIVATION_LINEAR, ACTIVATION_SIGMOID, ACTIVATION_TANH,
+    ACTIVATION_LINEAR, ACTIVATION_SIGMOID, ACTIVATION_TANH, LinearLayer, WeightArray,
+    compute_generic_conv1d, compute_generic_dense, compute_generic_gru, compute_glu, linear_init,
+    parse_weights,
 };
 use super::lpcnet::{LPCNET_FRAME_SIZE, NB_BANDS, NB_FEATURES, PITCH_MAX_PERIOD};
 
@@ -224,7 +224,7 @@ pub fn init_fargan(arrays: &[WeightArray]) -> Result<FarganModel, ()> {
         None,
         None,
         None,
-        PEMBED_NUM_ENTRIES,     // 224
+        PEMBED_NUM_ENTRIES,       // 224
         COND_NET_PEMBED_OUT_SIZE, // 12
     )?;
 
@@ -267,8 +267,8 @@ pub fn init_fargan(arrays: &[WeightArray]) -> Result<FarganModel, ()> {
         None,
         None,
         Some("cond_net_fdense2_scale"),
-        COND_NET_FCONV1_OUT_SIZE,    // 128
-        COND_NET_FDENSE2_OUT_SIZE,   // 320
+        COND_NET_FCONV1_OUT_SIZE,  // 128
+        COND_NET_FDENSE2_OUT_SIZE, // 320
     )?;
 
     // -- Signal network --
@@ -297,7 +297,7 @@ pub fn init_fargan(arrays: &[WeightArray]) -> Result<FarganModel, ()> {
         None,
         None,
         Some("sig_net_fwc0_conv_scale"),
-        SIG_NET_INPUT_SIZE * 2, // 328
+        SIG_NET_INPUT_SIZE * 2,     // 328
         SIG_NET_FWC0_CONV_OUT_SIZE, // 192
     )?;
 
@@ -311,7 +311,7 @@ pub fn init_fargan(arrays: &[WeightArray]) -> Result<FarganModel, ()> {
         None,
         None,
         Some("sig_net_fwc0_glu_gate_scale"),
-        SIG_NET_FWC0_CONV_OUT_SIZE, // 192
+        SIG_NET_FWC0_CONV_OUT_SIZE,     // 192
         SIG_NET_FWC0_GLU_GATE_OUT_SIZE, // 192
     )?;
 
@@ -340,7 +340,7 @@ pub fn init_fargan(arrays: &[WeightArray]) -> Result<FarganModel, ()> {
         None,
         Some("sig_net_gru1_input_scale"),
         SIG_NET_FWC0_GLU_GATE_OUT_SIZE + 2 * FARGAN_SUBFRAME_SIZE, // 272
-        3 * SIG_NET_GRU1_STATE_SIZE, // 480
+        3 * SIG_NET_GRU1_STATE_SIZE,                               // 480
     )?;
     let sig_net_gru1_recurrent = linear_init(
         arrays,
@@ -378,7 +378,7 @@ pub fn init_fargan(arrays: &[WeightArray]) -> Result<FarganModel, ()> {
         None,
         Some("sig_net_gru2_input_scale"),
         SIG_NET_GRU1_OUT_SIZE + 2 * FARGAN_SUBFRAME_SIZE, // 240
-        3 * SIG_NET_GRU2_STATE_SIZE, // 384
+        3 * SIG_NET_GRU2_STATE_SIZE,                      // 384
     )?;
     let sig_net_gru2_recurrent = linear_init(
         arrays,
@@ -416,7 +416,7 @@ pub fn init_fargan(arrays: &[WeightArray]) -> Result<FarganModel, ()> {
         None,
         Some("sig_net_gru3_input_scale"),
         SIG_NET_GRU2_OUT_SIZE + 2 * FARGAN_SUBFRAME_SIZE, // 208
-        3 * SIG_NET_GRU3_STATE_SIZE, // 384
+        3 * SIG_NET_GRU3_STATE_SIZE,                      // 384
     )?;
     let sig_net_gru3_recurrent = linear_init(
         arrays,
@@ -542,14 +542,8 @@ fn compute_fargan_cond(
         NB_FEATURES + COND_NET_PEMBED_OUT_SIZE,
         model.cond_net_fdense1.nb_inputs
     );
-    debug_assert_eq!(
-        COND_NET_FCONV1_IN_SIZE,
-        model.cond_net_fdense1.nb_outputs
-    );
-    debug_assert_eq!(
-        COND_NET_FCONV1_OUT_SIZE,
-        model.cond_net_fconv1.nb_outputs
-    );
+    debug_assert_eq!(COND_NET_FCONV1_IN_SIZE, model.cond_net_fdense1.nb_outputs);
+    debug_assert_eq!(COND_NET_FCONV1_OUT_SIZE, model.cond_net_fconv1.nb_outputs);
 
     // Step 1: Pitch embedding lookup.
     // Clamp index to [0, 223].
@@ -560,7 +554,11 @@ fn compute_fargan_cond(
     let mut dense_in = [0.0f32; NB_FEATURES + COND_NET_PEMBED_OUT_SIZE];
 
     // Copy embedding vector into dense_in[NB_FEATURES..].
-    let fw = model.cond_net_pembed.float_weights.as_ref().expect("pembed float_weights");
+    let fw = model
+        .cond_net_pembed
+        .float_weights
+        .as_ref()
+        .expect("pembed float_weights");
     let emb_start = idx * COND_NET_PEMBED_OUT_SIZE;
     dense_in[NB_FEATURES..NB_FEATURES + COND_NET_PEMBED_OUT_SIZE]
         .copy_from_slice(&fw[emb_start..emb_start + COND_NET_PEMBED_OUT_SIZE]);
@@ -646,18 +644,16 @@ fn run_fargan_subframe(st: &mut FarganState, pcm: &mut [f32], cond: &[f32], peri
 
     // Read previous (most recent) samples from pitch buffer.
     for i in 0..FARGAN_SUBFRAME_SIZE {
-        prev[i] = (gain_1 * st.pitch_buf[PITCH_MAX_PERIOD - FARGAN_SUBFRAME_SIZE + i])
-            .clamp(-1.0, 1.0);
+        prev[i] =
+            (gain_1 * st.pitch_buf[PITCH_MAX_PERIOD - FARGAN_SUBFRAME_SIZE + i]).clamp(-1.0, 1.0);
     }
 
     // Step 3: FWConv (frame-wise convolution with kernel_size=2).
     // fwc0_in = [cond(80), pred(44), prev(40)]
     let mut fwc0_in = [0.0f32; SIG_NET_INPUT_SIZE];
     fwc0_in[..FARGAN_COND_SIZE].copy_from_slice(&cond[..FARGAN_COND_SIZE]);
-    fwc0_in[FARGAN_COND_SIZE..FARGAN_COND_SIZE + FARGAN_SUBFRAME_SIZE + 4]
-        .copy_from_slice(&pred);
-    fwc0_in[FARGAN_COND_SIZE + FARGAN_SUBFRAME_SIZE + 4..SIG_NET_INPUT_SIZE]
-        .copy_from_slice(&prev);
+    fwc0_in[FARGAN_COND_SIZE..FARGAN_COND_SIZE + FARGAN_SUBFRAME_SIZE + 4].copy_from_slice(&pred);
+    fwc0_in[FARGAN_COND_SIZE + FARGAN_SUBFRAME_SIZE + 4..SIG_NET_INPUT_SIZE].copy_from_slice(&prev);
 
     // gru1_in is reused: first holds fwc0 output, then gets pred/prev appended.
     let mut gru1_in = vec![0.0f32; SIG_NET_FWC0_CONV_OUT_SIZE + 2 * FARGAN_SUBFRAME_SIZE];
@@ -770,16 +766,14 @@ fn run_fargan_subframe(st: &mut FarganState, pcm: &mut [f32], cond: &[f32], peri
     );
 
     // gru1_glu_out = gru2_in[..160] (already computed above).
-    skip_cat[..SIG_NET_GRU1_OUT_SIZE]
-        .copy_from_slice(&gru2_in[..SIG_NET_GRU1_OUT_SIZE]);
+    skip_cat[..SIG_NET_GRU1_OUT_SIZE].copy_from_slice(&gru2_in[..SIG_NET_GRU1_OUT_SIZE]);
 
     // gru2_glu_out = gru3_in[..128] (already computed above).
     skip_cat[SIG_NET_GRU1_OUT_SIZE..SIG_NET_GRU1_OUT_SIZE + SIG_NET_GRU2_OUT_SIZE]
         .copy_from_slice(&gru3_in[..SIG_NET_GRU2_OUT_SIZE]);
 
     // fwc0_glu_out = gru1_in[..192].
-    let fwc0_offset =
-        SIG_NET_GRU1_OUT_SIZE + SIG_NET_GRU2_OUT_SIZE + SIG_NET_GRU3_OUT_SIZE;
+    let fwc0_offset = SIG_NET_GRU1_OUT_SIZE + SIG_NET_GRU2_OUT_SIZE + SIG_NET_GRU3_OUT_SIZE;
     skip_cat[fwc0_offset..fwc0_offset + SIG_NET_FWC0_CONV_OUT_SIZE]
         .copy_from_slice(&gru1_in[..SIG_NET_FWC0_CONV_OUT_SIZE]);
 
@@ -818,10 +812,8 @@ fn run_fargan_subframe(st: &mut FarganState, pcm: &mut [f32], cond: &[f32], peri
     }
 
     // Step 9: Update pitch buffer — shift left by subframe_size, append new output.
-    st.pitch_buf.copy_within(
-        FARGAN_SUBFRAME_SIZE..PITCH_MAX_PERIOD,
-        0,
-    );
+    st.pitch_buf
+        .copy_within(FARGAN_SUBFRAME_SIZE..PITCH_MAX_PERIOD, 0);
     st.pitch_buf[PITCH_MAX_PERIOD - FARGAN_SUBFRAME_SIZE..PITCH_MAX_PERIOD]
         .copy_from_slice(&pcm[..FARGAN_SUBFRAME_SIZE]);
 

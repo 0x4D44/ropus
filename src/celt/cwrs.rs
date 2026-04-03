@@ -179,7 +179,11 @@ static CELT_PVQ_U_DATA: [u32; 1272] = [
 #[inline(always)]
 fn pvq_u_row(row: usize, col: usize) -> u32 {
     let idx = CELT_PVQ_U_ROW_OFFSETS[row] + col;
-    if idx < CELT_PVQ_U_DATA.len() { CELT_PVQ_U_DATA[idx] } else { 0 }
+    if idx < CELT_PVQ_U_DATA.len() {
+        CELT_PVQ_U_DATA[idx]
+    } else {
+        0
+    }
 }
 
 /// U(N,K) with symmetry: uses min(N,K) as row to stay within the 15-row table.
@@ -501,12 +505,24 @@ mod tests {
         }
         // V(2, K) = 4K
         for k in 1..=20 {
-            assert_eq!(celt_pvq_v(2, k), 4 * k as u32, "V(2,{}) should be {}", k, 4 * k);
+            assert_eq!(
+                celt_pvq_v(2, k),
+                4 * k as u32,
+                "V(2,{}) should be {}",
+                k,
+                4 * k
+            );
         }
         // V(3, K) = 4K^2 + 2 for K > 0 (from the polynomial in the C comments)
         for k in 1..=10 {
             let expected = 4 * (k as u32) * (k as u32) + 2;
-            assert_eq!(celt_pvq_v(3, k), expected, "V(3,{}) should be {}", k, expected);
+            assert_eq!(
+                celt_pvq_v(3, k),
+                expected,
+                "V(3,{}) should be {}",
+                k,
+                expected
+            );
         }
     }
 
@@ -524,11 +540,22 @@ mod tests {
 
                     // Verify L1 norm equals K
                     let l1: i32 = y.iter().map(|&yi| yi.abs()).sum();
-                    assert_eq!(l1, k, "L1 norm mismatch: n={}, k={}, idx={}, y={:?}", n, k, idx, y);
+                    assert_eq!(
+                        l1, k,
+                        "L1 norm mismatch: n={}, k={}, idx={}, y={:?}",
+                        n, k, idx, y
+                    );
 
                     // Verify squared norm
-                    let expected_yy: i32 = y.iter().map(|&yi| (yi as i16 as i32) * (yi as i16 as i32)).sum();
-                    assert_eq!(yy, expected_yy, "yy mismatch: n={}, k={}, idx={}", n, k, idx);
+                    let expected_yy: i32 = y
+                        .iter()
+                        .map(|&yi| (yi as i16 as i32) * (yi as i16 as i32))
+                        .sum();
+                    assert_eq!(
+                        yy, expected_yy,
+                        "yy mismatch: n={}, k={}, idx={}",
+                        n, k, idx
+                    );
 
                     // Verify roundtrip
                     let encoded = icwrs(n, &y);
@@ -545,16 +572,15 @@ mod tests {
     #[test]
     fn test_known_n2_k1_mappings() {
         // V(2,1) = 4 codewords. Verify the exact mapping.
-        let expected: [(u32, [i32; 2]); 4] = [
-            (0, [1, 0]),
-            (1, [0, 1]),
-            (2, [0, -1]),
-            (3, [-1, 0]),
-        ];
+        let expected: [(u32, [i32; 2]); 4] = [(0, [1, 0]), (1, [0, 1]), (2, [0, -1]), (3, [-1, 0])];
         for &(idx, ref expected_y) in &expected {
             let mut y = [0i32; 2];
             cwrsi(2, 1, idx, &mut y);
-            assert_eq!(&y, expected_y, "cwrsi(2, 1, {}) = {:?}, expected {:?}", idx, y, expected_y);
+            assert_eq!(
+                &y, expected_y,
+                "cwrsi(2, 1, {}) = {:?}, expected {:?}",
+                idx, y, expected_y
+            );
             assert_eq!(icwrs(2, &y), idx, "icwrs(2, {:?}) != {}", y, idx);
         }
     }
@@ -611,9 +637,10 @@ mod tests {
             {
                 let mut dec = RangeDecoder::new(&buf);
                 let yy = decode_pulses(&mut y_dec, n, k, &mut dec);
-                let expected_yy: i32 = y_orig.iter().map(|&yi| {
-                    (yi as i16 as i32) * (yi as i16 as i32)
-                }).sum();
+                let expected_yy: i32 = y_orig
+                    .iter()
+                    .map(|&yi| (yi as i16 as i32) * (yi as i16 as i32))
+                    .sum();
                 assert_eq!(yy, expected_yy, "yy mismatch for {:?}", y_orig);
             }
 
@@ -628,7 +655,13 @@ mod tests {
         // Exact powers of 2: log2(2^k) = k, no fractional bits needed
         for k in 0..31i32 {
             let val = 1u32 << k;
-            assert_eq!(log2_frac(val, 4), k << 4, "log2_frac(2^{}, 4) should be {}", k, k << 4);
+            assert_eq!(
+                log2_frac(val, 4),
+                k << 4,
+                "log2_frac(2^{}, 4) should be {}",
+                k,
+                k << 4
+            );
         }
     }
 
@@ -651,7 +684,11 @@ mod tests {
         // log2(0xFFFFFFFF) ≈ 32.0 (just under)
         let result = log2_frac(0xFFFFFFFF, 4);
         // Should be close to 32 << 4 = 512 but slightly less
-        assert!(result >= 511 && result <= 512, "log2_frac(MAX, 4) = {}", result);
+        assert!(
+            result >= 511 && result <= 512,
+            "log2_frac(MAX, 4) = {}",
+            result
+        );
     }
 
     // --- get_required_bits ---
@@ -735,20 +772,20 @@ mod tests {
         // Verify that each row offset + the row's minimum K gives a valid index
         // and the value matches U(n, n) for diagonal entries
         let diagonal_values: [u32; 15] = [
-            1,         // U(0,0)
-            1,         // U(1,1)
-            3,         // U(2,2)
-            13,        // U(3,3)
-            63,        // U(4,4)
-            321,       // U(5,5)
-            1683,      // U(6,6)
-            8989,      // U(7,7)
-            48639,     // U(8,8)
-            265729,    // U(9,9)
-            1462563,   // U(10,10)
-            8097453,   // U(11,11)
-            45046719,  // U(12,12)
-            251595969, // U(13,13)
+            1,          // U(0,0)
+            1,          // U(1,1)
+            3,          // U(2,2)
+            13,         // U(3,3)
+            63,         // U(4,4)
+            321,        // U(5,5)
+            1683,       // U(6,6)
+            8989,       // U(7,7)
+            48639,      // U(8,8)
+            265729,     // U(9,9)
+            1462563,    // U(10,10)
+            8097453,    // U(11,11)
+            45046719,   // U(12,12)
+            251595969,  // U(13,13)
             1409933619, // U(14,14)
         ];
         for n in 0..15 {

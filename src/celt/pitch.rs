@@ -5,9 +5,9 @@
 //! All functions produce bit-exact output matching the C reference when
 //! compiled with `FIXED_POINT` and `OPUS_FAST_INT64`.
 
-use crate::types::*;
 use super::lpc::{celt_autocorr, celt_lpc};
 use super::math_ops::{celt_ilog2, celt_maxabs16, celt_maxabs32, celt_rsqrt_norm, frac_div32};
+use crate::types::*;
 
 // ===========================================================================
 // Constants
@@ -36,37 +36,48 @@ pub fn xcorr_kernel(x: &[i32], y: &[i32], sum: &mut [i32; 4], len: usize) {
     let mut xi: usize = 0;
     let mut yi: usize = 0;
 
-    let mut y_0 = y[yi]; yi += 1;
-    let mut y_1 = y[yi]; yi += 1;
-    let mut y_2 = y[yi]; yi += 1;
+    let mut y_0 = y[yi];
+    yi += 1;
+    let mut y_1 = y[yi];
+    yi += 1;
+    let mut y_2 = y[yi];
+    yi += 1;
     let mut y_3: i32 = 0; // Always assigned before use; init silences compiler
 
     // Main loop: process 4 x-values per iteration
     let mut j: usize = 0;
     while j + 3 < len {
-        let tmp = x[xi]; xi += 1;
-        y_3 = y[yi]; yi += 1;
+        let tmp = x[xi];
+        xi += 1;
+        y_3 = y[yi];
+        yi += 1;
         sum[0] = mac16_16(sum[0], tmp, y_0);
         sum[1] = mac16_16(sum[1], tmp, y_1);
         sum[2] = mac16_16(sum[2], tmp, y_2);
         sum[3] = mac16_16(sum[3], tmp, y_3);
 
-        let tmp = x[xi]; xi += 1;
-        y_0 = y[yi]; yi += 1;
+        let tmp = x[xi];
+        xi += 1;
+        y_0 = y[yi];
+        yi += 1;
         sum[0] = mac16_16(sum[0], tmp, y_1);
         sum[1] = mac16_16(sum[1], tmp, y_2);
         sum[2] = mac16_16(sum[2], tmp, y_3);
         sum[3] = mac16_16(sum[3], tmp, y_0);
 
-        let tmp = x[xi]; xi += 1;
-        y_1 = y[yi]; yi += 1;
+        let tmp = x[xi];
+        xi += 1;
+        y_1 = y[yi];
+        yi += 1;
         sum[0] = mac16_16(sum[0], tmp, y_2);
         sum[1] = mac16_16(sum[1], tmp, y_3);
         sum[2] = mac16_16(sum[2], tmp, y_0);
         sum[3] = mac16_16(sum[3], tmp, y_1);
 
-        let tmp = x[xi]; xi += 1;
-        y_2 = y[yi]; yi += 1;
+        let tmp = x[xi];
+        xi += 1;
+        y_2 = y[yi];
+        yi += 1;
         sum[0] = mac16_16(sum[0], tmp, y_3);
         sum[1] = mac16_16(sum[1], tmp, y_0);
         sum[2] = mac16_16(sum[2], tmp, y_1);
@@ -78,8 +89,10 @@ pub fn xcorr_kernel(x: &[i32], y: &[i32], sum: &mut [i32; 4], len: usize) {
     // Remainder: up to 3 more elements
     if j < len {
         j += 1;
-        let tmp = x[xi]; xi += 1;
-        y_3 = y[yi]; yi += 1;
+        let tmp = x[xi];
+        xi += 1;
+        y_3 = y[yi];
+        yi += 1;
         sum[0] = mac16_16(sum[0], tmp, y_0);
         sum[1] = mac16_16(sum[1], tmp, y_1);
         sum[2] = mac16_16(sum[2], tmp, y_2);
@@ -87,8 +100,10 @@ pub fn xcorr_kernel(x: &[i32], y: &[i32], sum: &mut [i32; 4], len: usize) {
     }
     if j < len {
         j += 1;
-        let tmp = x[xi]; xi += 1;
-        y_0 = y[yi]; yi += 1;
+        let tmp = x[xi];
+        xi += 1;
+        y_0 = y[yi];
+        yi += 1;
         sum[0] = mac16_16(sum[0], tmp, y_1);
         sum[1] = mac16_16(sum[1], tmp, y_2);
         sum[2] = mac16_16(sum[2], tmp, y_3);
@@ -107,12 +122,7 @@ pub fn xcorr_kernel(x: &[i32], y: &[i32], sum: &mut [i32; 4], len: usize) {
 /// Compute two inner products in a single pass.
 /// Returns `(dot(x, y01), dot(x, y02))` over `n` elements.
 #[inline(always)]
-pub fn dual_inner_prod(
-    x: &[i32],
-    y01: &[i32],
-    y02: &[i32],
-    n: usize,
-) -> (i32, i32) {
+pub fn dual_inner_prod(x: &[i32], y01: &[i32], y02: &[i32], n: usize) -> (i32, i32) {
     let mut xy01: i32 = 0;
     let mut xy02: i32 = 0;
     for i in 0..n {
@@ -277,8 +287,8 @@ fn find_best_pitch(
             }
         }
         // Slide energy window by 1: add y[i+len]², subtract y[i]²
-        syy += shr32(mult16_16(y[i + len], y[i + len]), yshift)
-             - shr32(mult16_16(y[i], y[i]), yshift);
+        syy +=
+            shr32(mult16_16(y[i + len], y[i + len]), yshift) - shr32(mult16_16(y[i], y[i]), yshift);
         syy = max32(1, syy);
     }
 }
@@ -340,13 +350,7 @@ fn celt_udiv(n: i32, d: i32) -> i32 {
 /// - `len`: output length (number of downsampled samples)
 /// - `c`: number of channels (1 or 2)
 /// - `factor`: downsampling factor (typically 2)
-pub fn pitch_downsample(
-    x: &[&[i32]],
-    x_lp: &mut [i32],
-    len: usize,
-    c: usize,
-    factor: usize,
-) {
+pub fn pitch_downsample(x: &[&[i32]], x_lp: &mut [i32], len: usize, c: usize, factor: usize) {
     let offset = factor / 2;
 
     // Fixed-point: compute dynamic shift to keep downsampled values in 16-bit range
@@ -369,8 +373,8 @@ pub fn pitch_downsample(
     // Downsample with 3-tap FIR [0.25, 0.5, 0.25]
     for i in 1..len {
         x_lp[i] = shr32(x[0][factor * i - offset], shift + 2)
-                 + shr32(x[0][factor * i + offset], shift + 2)
-                 + shr32(x[0][factor * i], shift + 1);
+            + shr32(x[0][factor * i + offset], shift + 2)
+            + shr32(x[0][factor * i], shift + 1);
     }
     // Boundary case: i=0 omits the (factor*i - offset) term
     x_lp[0] = shr32(x[0][offset], shift + 2) + shr32(x[0][0], shift + 1);
@@ -378,8 +382,8 @@ pub fn pitch_downsample(
     if c == 2 {
         for i in 1..len {
             x_lp[i] += shr32(x[1][factor * i - offset], shift + 2)
-                      + shr32(x[1][factor * i + offset], shift + 2)
-                      + shr32(x[1][factor * i], shift + 1);
+                + shr32(x[1][factor * i + offset], shift + 2)
+                + shr32(x[1][factor * i], shift + 1);
         }
         x_lp[0] += shr32(x[1][offset], shift + 2) + shr32(x[1][0], shift + 1);
     }
@@ -432,12 +436,7 @@ pub fn pitch_downsample(
 /// - `max_pitch`: maximum pitch period (at 2x decimated rate)
 ///
 /// Returns the best pitch period (at 2x decimated rate).
-pub fn pitch_search(
-    x_lp: &[i32],
-    y: &[i32],
-    len: usize,
-    max_pitch: usize,
-) -> i32 {
+pub fn pitch_search(x_lp: &[i32], y: &[i32], len: usize, max_pitch: usize) -> i32 {
     debug_assert!(len > 0);
     debug_assert!(max_pitch > 0);
 
@@ -463,8 +462,7 @@ pub fn pitch_search(
     // Fixed-point: normalize to prevent overflow in correlation
     let xmax = celt_maxabs16(&x_lp4);
     let ymax = celt_maxabs16(&y_lp4);
-    let mut shift =
-        celt_ilog2(max32(1, max32(xmax, ymax))) - 14 + celt_ilog2(len as i32) / 2;
+    let mut shift = celt_ilog2(max32(1, max32(xmax, ymax))) - 14 + celt_ilog2(len as i32) / 2;
     if shift > 0 {
         for j in 0..len4 {
             x_lp4[j] = shr16(x_lp4[j], shift);
@@ -482,16 +480,22 @@ pub fn pitch_search(
     let maxcorr = celt_pitch_xcorr(&x_lp4, &y_lp4, &mut xcorr, len4, max_pitch4);
 
     let mut best_pitch = [0i32; 2];
-    find_best_pitch(&xcorr, &y_lp4, len4, max_pitch4, &mut best_pitch, 0, maxcorr);
+    find_best_pitch(
+        &xcorr,
+        &y_lp4,
+        len4,
+        max_pitch4,
+        &mut best_pitch,
+        0,
+        maxcorr,
+    );
 
     // Stage 3: Fine correlation at 2x decimation
     // Only evaluate lags within ±2 of the two coarse candidates (scaled to 2x)
     let mut maxcorr: i32 = 1;
     for i in 0..max_pitch2 {
         xcorr[i] = 0;
-        if (i as i32 - 2 * best_pitch[0]).abs() > 2
-            && (i as i32 - 2 * best_pitch[1]).abs() > 2
-        {
+        if (i as i32 - 2 * best_pitch[0]).abs() > 2 && (i as i32 - 2 * best_pitch[1]).abs() > 2 {
             continue;
         }
         // Fixed-point inner product with shift applied
@@ -503,7 +507,15 @@ pub fn pitch_search(
         maxcorr = max32(maxcorr, sum);
     }
 
-    find_best_pitch(&xcorr, y, len2, max_pitch2, &mut best_pitch, shift + 1, maxcorr);
+    find_best_pitch(
+        &xcorr,
+        y,
+        len2,
+        max_pitch2,
+        &mut best_pitch,
+        shift + 1,
+        maxcorr,
+    );
 
     // Stage 4: Pseudo-interpolation refinement
     let offset;
@@ -566,19 +578,15 @@ pub fn remove_doubling(
     // Precompute energy lookup table via sliding window
     let mut yy_lookup = vec![0i32; (maxperiod as usize) + 1];
 
-    let (xx, xy) = dual_inner_prod(
-        &x[base..],
-        &x[base..],
-        &x[base - t0_val as usize..],
-        n,
-    );
+    let (xx, xy) = dual_inner_prod(&x[base..], &x[base..], &x[base - t0_val as usize..], n);
 
     yy_lookup[0] = xx;
     let mut yy = xx;
     for i in 1..=(maxperiod as usize) {
         // Slide window: add x[-i]², subtract x[N-i]² (wrapping matches C)
-        yy = yy.wrapping_add(mult16_16(x[base - i], x[base - i]))
-               .wrapping_sub(mult16_16(x[base + n - i], x[base + n - i]));
+        yy = yy
+            .wrapping_add(mult16_16(x[base - i], x[base - i]))
+            .wrapping_sub(mult16_16(x[base + n - i], x[base + n - i]));
         yy_lookup[i] = max32(0, yy);
     }
 

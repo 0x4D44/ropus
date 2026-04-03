@@ -62,47 +62,29 @@ const LOG256: f32 = 5.5451774445;
 /// Used by SIMD paths; the scalar fallback uses `tanh_approx` instead.
 #[allow(dead_code)]
 pub static TANSIG_TABLE: [f32; 201] = [
-    0.000000, 0.039979, 0.079830, 0.119427, 0.158649,
-    0.197375, 0.235496, 0.272905, 0.309507, 0.345214,
-    0.379949, 0.413644, 0.446244, 0.477700, 0.507977,
-    0.537050, 0.564900, 0.591519, 0.616909, 0.641077,
-    0.664037, 0.685809, 0.706419, 0.725897, 0.744277,
-    0.761594, 0.777888, 0.793199, 0.807569, 0.821040,
-    0.833655, 0.845456, 0.856485, 0.866784, 0.876393,
-    0.885352, 0.893698, 0.901468, 0.908698, 0.915420,
-    0.921669, 0.927473, 0.932862, 0.937863, 0.942503,
-    0.946806, 0.950795, 0.954492, 0.957917, 0.961090,
-    0.964028, 0.966747, 0.969265, 0.971594, 0.973749,
-    0.975743, 0.977587, 0.979293, 0.980869, 0.982327,
-    0.983675, 0.984921, 0.986072, 0.987136, 0.988119,
-    0.989027, 0.989867, 0.990642, 0.991359, 0.992020,
-    0.992631, 0.993196, 0.993718, 0.994199, 0.994644,
-    0.995055, 0.995434, 0.995784, 0.996108, 0.996407,
-    0.996682, 0.996937, 0.997172, 0.997389, 0.997590,
-    0.997775, 0.997946, 0.998104, 0.998249, 0.998384,
-    0.998508, 0.998623, 0.998728, 0.998826, 0.998916,
-    0.999000, 0.999076, 0.999147, 0.999213, 0.999273,
-    0.999329, 0.999381, 0.999428, 0.999472, 0.999513,
-    0.999550, 0.999585, 0.999617, 0.999646, 0.999673,
-    0.999699, 0.999722, 0.999743, 0.999763, 0.999781,
-    0.999798, 0.999813, 0.999828, 0.999841, 0.999853,
-    0.999865, 0.999875, 0.999885, 0.999893, 0.999902,
-    0.999909, 0.999916, 0.999923, 0.999929, 0.999934,
-    0.999939, 0.999944, 0.999948, 0.999952, 0.999956,
-    0.999959, 0.999962, 0.999965, 0.999968, 0.999970,
-    0.999973, 0.999975, 0.999977, 0.999978, 0.999980,
-    0.999982, 0.999983, 0.999984, 0.999986, 0.999987,
-    0.999988, 0.999989, 0.999990, 0.999990, 0.999991,
-    0.999992, 0.999992, 0.999993, 0.999994, 0.999994,
-    0.999994, 0.999995, 0.999995, 0.999996, 0.999996,
-    0.999996, 0.999997, 0.999997, 0.999997, 0.999997,
-    0.999997, 0.999998, 0.999998, 0.999998, 0.999998,
-    0.999998, 0.999998, 0.999999, 0.999999, 0.999999,
-    0.999999, 0.999999, 0.999999, 0.999999, 0.999999,
-    0.999999, 0.999999, 0.999999, 0.999999, 0.999999,
-    1.000000, 1.000000, 1.000000, 1.000000, 1.000000,
-    1.000000, 1.000000, 1.000000, 1.000000, 1.000000,
-    1.000000,
+    0.000000, 0.039979, 0.079830, 0.119427, 0.158649, 0.197375, 0.235496, 0.272905, 0.309507,
+    0.345214, 0.379949, 0.413644, 0.446244, 0.477700, 0.507977, 0.537050, 0.564900, 0.591519,
+    0.616909, 0.641077, 0.664037, 0.685809, 0.706419, 0.725897, 0.744277, 0.761594, 0.777888,
+    0.793199, 0.807569, 0.821040, 0.833655, 0.845456, 0.856485, 0.866784, 0.876393, 0.885352,
+    0.893698, 0.901468, 0.908698, 0.915420, 0.921669, 0.927473, 0.932862, 0.937863, 0.942503,
+    0.946806, 0.950795, 0.954492, 0.957917, 0.961090, 0.964028, 0.966747, 0.969265, 0.971594,
+    0.973749, 0.975743, 0.977587, 0.979293, 0.980869, 0.982327, 0.983675, 0.984921, 0.986072,
+    0.987136, 0.988119, 0.989027, 0.989867, 0.990642, 0.991359, 0.992020, 0.992631, 0.993196,
+    0.993718, 0.994199, 0.994644, 0.995055, 0.995434, 0.995784, 0.996108, 0.996407, 0.996682,
+    0.996937, 0.997172, 0.997389, 0.997590, 0.997775, 0.997946, 0.998104, 0.998249, 0.998384,
+    0.998508, 0.998623, 0.998728, 0.998826, 0.998916, 0.999000, 0.999076, 0.999147, 0.999213,
+    0.999273, 0.999329, 0.999381, 0.999428, 0.999472, 0.999513, 0.999550, 0.999585, 0.999617,
+    0.999646, 0.999673, 0.999699, 0.999722, 0.999743, 0.999763, 0.999781, 0.999798, 0.999813,
+    0.999828, 0.999841, 0.999853, 0.999865, 0.999875, 0.999885, 0.999893, 0.999902, 0.999909,
+    0.999916, 0.999923, 0.999929, 0.999934, 0.999939, 0.999944, 0.999948, 0.999952, 0.999956,
+    0.999959, 0.999962, 0.999965, 0.999968, 0.999970, 0.999973, 0.999975, 0.999977, 0.999978,
+    0.999980, 0.999982, 0.999983, 0.999984, 0.999986, 0.999987, 0.999988, 0.999989, 0.999990,
+    0.999990, 0.999991, 0.999992, 0.999992, 0.999993, 0.999994, 0.999994, 0.999994, 0.999995,
+    0.999995, 0.999996, 0.999996, 0.999996, 0.999997, 0.999997, 0.999997, 0.999997, 0.999997,
+    0.999998, 0.999998, 0.999998, 0.999998, 0.999998, 0.999998, 0.999999, 0.999999, 0.999999,
+    0.999999, 0.999999, 0.999999, 0.999999, 0.999999, 0.999999, 0.999999, 0.999999, 0.999999,
+    0.999999, 1.000000, 1.000000, 1.000000, 1.000000, 1.000000, 1.000000, 1.000000, 1.000000,
+    1.000000, 1.000000, 1.000000,
 ];
 
 // ===========================================================================
@@ -291,8 +273,7 @@ pub fn lpcnet_exp2(x: f32) -> f32 {
     }
     let frac = x - integer as f32;
     // Polynomial: K0 + K1*frac + K2*frac^2 + K3*frac^3
-    let res = 0.99992522_f32
-        + frac * (0.69583354 + frac * (0.22606716 + 0.078024523 * frac));
+    let res = 0.99992522_f32 + frac * (0.69583354 + frac * (0.22606716 + 0.078024523 * frac));
     let mut bits = res.to_bits();
     // Add integer to IEEE 754 exponent field, clear sign bit
     bits = bits.wrapping_add((integer as u32).wrapping_shl(23)) & 0x7FFFFFFF;
@@ -316,8 +297,7 @@ pub fn log2_approx(x: f32) -> f32 {
     let mantissa_bits = (bits - (integer << 23)) as u32;
     let mantissa = f32::from_bits(mantissa_bits);
     let frac = mantissa - 1.5;
-    let frac =
-        -0.41445418 + frac * (0.95909232 + frac * (-0.33951290 + frac * 0.16541097));
+    let frac = -0.41445418 + frac * (0.95909232 + frac * (-0.33951290 + frac * 0.16541097));
     1.0 + integer as f32 + frac
 }
 
@@ -398,14 +378,7 @@ fn vec_swish(data: &mut [f32], n: usize) {
 
 /// Dense float SGEMV. Column-major weights: W(i,j) = weights[j*col_stride + i].
 /// Matches C `sgemv` from vec.h (scalar fallback path).
-fn sgemv(
-    out: &mut [f32],
-    weights: &[f32],
-    rows: usize,
-    cols: usize,
-    col_stride: usize,
-    x: &[f32],
-) {
+fn sgemv(out: &mut [f32], weights: &[f32], rows: usize, cols: usize, col_stride: usize, x: &[f32]) {
     for i in 0..rows {
         out[i] = 0.0;
         for j in 0..cols {
@@ -733,11 +706,7 @@ pub fn compute_gated_activation(
 }
 
 /// In-place gated activation.
-pub fn compute_gated_activation_inplace(
-    layer: &LinearLayer,
-    data: &mut [f32],
-    activation: i32,
-) {
+pub fn compute_gated_activation_inplace(layer: &LinearLayer, data: &mut [f32], activation: i32) {
     let n = layer.nb_outputs;
     debug_assert_eq!(layer.nb_inputs, n);
     let mut act2 = vec![0.0f32; n];
@@ -850,13 +819,11 @@ fn conv2d_float(
             for t in 0..ktime {
                 for h in 0..kheight {
                     for j in 0..height {
-                        out[i * hstride + j] += weights
-                            [i * in_channels * ktime * kheight
-                                + m * ktime * kheight
-                                + t * kheight
-                                + h]
-                            * input
-                                [t * in_channels * in_stride + m * in_stride + j + h];
+                        out[i * hstride + j] += weights[i * in_channels * ktime * kheight
+                            + m * ktime * kheight
+                            + t * kheight
+                            + h]
+                            * input[t * in_channels * in_stride + m * in_stride + j + h];
                     }
                 }
             }
@@ -926,13 +893,15 @@ pub fn compute_conv2d(
     // Build input buffer: [mem (ktime-1 frames) | current input (1 frame)]
     let mem_frames = (conv.ktime - 1) * time_stride;
     in_buf[..mem_frames].copy_from_slice(&mem[..mem_frames]);
-    in_buf[mem_frames..mem_frames + time_stride]
-        .copy_from_slice(&input[..time_stride]);
+    in_buf[mem_frames..mem_frames + time_stride].copy_from_slice(&input[..time_stride]);
 
     // Update mem for next call: drop first frame, keep the rest
     mem[..mem_frames].copy_from_slice(&in_buf[time_stride..in_buf_size]);
 
-    let weights = conv.float_weights.as_ref().expect("conv2d requires float weights");
+    let weights = conv
+        .float_weights
+        .as_ref()
+        .expect("conv2d requires float weights");
     if conv.kheight == 3 && conv.ktime == 3 {
         conv2d_3x3_float(
             out,
@@ -1032,10 +1001,7 @@ fn parse_record(data: &[u8], offset: &mut usize) -> Result<WeightArray, i32> {
 
     // Parse null-terminated name from bytes 20..64
     let name_bytes = &data[base + 20..base + 64];
-    let nul_pos = name_bytes
-        .iter()
-        .position(|&b| b == 0)
-        .unwrap_or(44);
+    let nul_pos = name_bytes.iter().position(|&b| b == 0).unwrap_or(44);
     let name = String::from_utf8_lossy(&name_bytes[..nul_pos]).into_owned();
 
     let data_start = base + WEIGHT_BLOCK_SIZE;
@@ -1159,27 +1125,22 @@ pub fn linear_init(
         let (idx_data, total_blocks) = find_idx_check(arrays, idx_name, nb_inputs, nb_outputs)?;
         layer.weights_idx = Some(idx_data);
         if let Some(name) = weights_name {
-            let arr =
-                find_array_check(arrays, name, SPARSE_BLOCK_SIZE * total_blocks).ok_or(())?;
+            let arr = find_array_check(arrays, name, SPARSE_BLOCK_SIZE * total_blocks).ok_or(())?;
             layer.weights = Some(bytes_to_i8_vec(&arr.data));
         }
         if let Some(name) = float_weights_name {
-            if let Some(arr) =
-                opt_array_check(arrays, name, SPARSE_BLOCK_SIZE * total_blocks * 4)?
+            if let Some(arr) = opt_array_check(arrays, name, SPARSE_BLOCK_SIZE * total_blocks * 4)?
             {
                 layer.float_weights = Some(bytes_to_f32_vec(&arr.data));
             }
         }
     } else {
         if let Some(name) = weights_name {
-            let arr =
-                find_array_check(arrays, name, nb_inputs * nb_outputs).ok_or(())?;
+            let arr = find_array_check(arrays, name, nb_inputs * nb_outputs).ok_or(())?;
             layer.weights = Some(bytes_to_i8_vec(&arr.data));
         }
         if let Some(name) = float_weights_name {
-            if let Some(arr) =
-                opt_array_check(arrays, name, nb_inputs * nb_outputs * 4)?
-            {
+            if let Some(arr) = opt_array_check(arrays, name, nb_inputs * nb_outputs * 4)? {
                 layer.float_weights = Some(bytes_to_f32_vec(&arr.data));
             }
         }
@@ -1332,8 +1293,11 @@ pub fn adaconv_process_frame(
     let mut output_buffer = vec![0.0f32; ADACONV_MAX_FRAME_SIZE * ADACONV_MAX_OUTPUT_CHANNELS];
     let total_kernel = kernel_size * in_channels * out_channels;
     let mut kernel_buffer = vec![0.0f32; total_kernel];
-    let mut input_buffer =
-        vec![0.0f32; ADACONV_MAX_INPUT_CHANNELS * (ADACONV_MAX_FRAME_SIZE + ADACONV_MAX_KERNEL_SIZE)];
+    let mut input_buffer = vec![
+        0.0f32;
+        ADACONV_MAX_INPUT_CHANNELS
+            * (ADACONV_MAX_FRAME_SIZE + ADACONV_MAX_KERNEL_SIZE)
+    ];
     let mut gain_buffer = vec![0.0f32; out_channels];
 
     // Prepare input: prepend history per channel
@@ -1348,10 +1312,21 @@ pub fn adaconv_process_frame(
     }
 
     // Predict kernel and gain from features
-    compute_generic_dense(kernel_layer, &mut kernel_buffer, features, ACTIVATION_LINEAR);
+    compute_generic_dense(
+        kernel_layer,
+        &mut kernel_buffer,
+        features,
+        ACTIVATION_LINEAR,
+    );
     compute_generic_dense(gain_layer, &mut gain_buffer, features, ACTIVATION_TANH);
     transform_gains(&mut gain_buffer, out_channels, filter_gain_a, filter_gain_b);
-    scale_kernel(&mut kernel_buffer, in_channels, out_channels, kernel_size, &gain_buffer);
+    scale_kernel(
+        &mut kernel_buffer,
+        in_channels,
+        out_channels,
+        kernel_size,
+        &gain_buffer,
+    );
 
     // Overlap-add crossfading between last frame's kernel and new kernel
     let mut kernel0 = vec![0.0f32; ADACONV_MAX_KERNEL_SIZE];
@@ -1406,8 +1381,7 @@ pub fn adaconv_process_frame(
         }
     }
 
-    x_out[..out_channels * frame_size]
-        .copy_from_slice(&output_buffer[..out_channels * frame_size]);
+    x_out[..out_channels * frame_size].copy_from_slice(&output_buffer[..out_channels * frame_size]);
 
     // Update state: save history tail and current kernel
     for ic in 0..in_channels {
@@ -1462,8 +1436,18 @@ pub fn adacomb_process_frame(
     let p_input = kernel_size + ADACOMB_MAX_LAG;
 
     // Predict kernel, gain, global gain
-    compute_generic_dense(kernel_layer, &mut kernel_buffer[..kernel_size], features, ACTIVATION_LINEAR);
-    compute_generic_dense(gain_layer, std::slice::from_mut(&mut gain), features, ACTIVATION_RELU);
+    compute_generic_dense(
+        kernel_layer,
+        &mut kernel_buffer[..kernel_size],
+        features,
+        ACTIVATION_LINEAR,
+    );
+    compute_generic_dense(
+        gain_layer,
+        std::slice::from_mut(&mut gain),
+        features,
+        ACTIVATION_RELU,
+    );
     compute_generic_dense(
         global_gain_layer,
         std::slice::from_mut(&mut global_gain),
@@ -1475,7 +1459,13 @@ pub fn adacomb_process_frame(
     gain = exp_dp(log_gain_limit - gain);
     // C: global_gain = exp(filter_gain_a * global_gain + filter_gain_b)
     global_gain = exp_dp(filter_gain_a * global_gain + filter_gain_b);
-    scale_kernel(&mut kernel_buffer[..kernel_size], 1, 1, kernel_size, &[gain]);
+    scale_kernel(
+        &mut kernel_buffer[..kernel_size],
+        1,
+        1,
+        kernel_size,
+        &[gain],
+    );
 
     // Padded kernels for xcorr (ADACOMB_MAX_KERNEL_SIZE elements)
     let mut kernel = vec![0.0f32; ADACOMB_MAX_KERNEL_SIZE];
@@ -1509,8 +1499,7 @@ pub fn adacomb_process_frame(
             + global_gain * (1.0 - window[s]) * output_buffer[s];
     }
     for s in 0..overlap_size {
-        output_buffer[s] += (window[s] * state.last_global_gain
-            + (1.0 - window[s]) * global_gain)
+        output_buffer[s] += (window[s] * state.last_global_gain + (1.0 - window[s]) * global_gain)
             * input_buffer[p_input + s];
     }
 
@@ -1726,11 +1715,7 @@ mod tests {
     #[test]
     fn test_log_approx() {
         // ln(e) ≈ 1.0
-        assert!(approx_eq(
-            log_approx(std::f32::consts::E),
-            1.0,
-            0.01
-        ));
+        assert!(approx_eq(log_approx(std::f32::consts::E), 1.0, 0.01));
     }
 
     // --- GEMV ---

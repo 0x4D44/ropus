@@ -7,9 +7,9 @@
 //! Double precision is used where the C reference uses `double`.
 
 use super::core::{
-    compute_activation, compute_generic_conv1d, compute_generic_dense, compute_generic_gru,
-    compute_linear, lin2ulaw, log2_approx, lpcnet_exp, parse_weights, ulaw2lin, LinearLayer,
-    ACTIVATION_LINEAR, ACTIVATION_SIGMOID, ACTIVATION_TANH,
+    ACTIVATION_LINEAR, ACTIVATION_SIGMOID, ACTIVATION_TANH, LinearLayer, compute_activation,
+    compute_generic_conv1d, compute_generic_dense, compute_generic_gru, compute_linear, lin2ulaw,
+    log2_approx, lpcnet_exp, parse_weights, ulaw2lin,
 };
 
 // ===========================================================================
@@ -69,7 +69,12 @@ pub struct Kiss99Ctx {
 
 impl Default for Kiss99Ctx {
     fn default() -> Self {
-        Self { z: 0, w: 0, jsr: 0, jcong: 0 }
+        Self {
+            z: 0,
+            w: 0,
+            jsr: 0,
+            jcong: 0,
+        }
     }
 }
 
@@ -89,18 +94,34 @@ impl Kiss99Ctx {
             self.rand();
             i += 4;
         }
-        if i - 3 < ndata { self.z ^= data[i - 3] as u32; }
-        if i - 2 < ndata { self.w ^= data[i - 2] as u32; }
-        if i - 1 < ndata { self.jsr ^= data[i - 1] as u32; }
+        if i - 3 < ndata {
+            self.z ^= data[i - 3] as u32;
+        }
+        if i - 2 < ndata {
+            self.w ^= data[i - 2] as u32;
+        }
+        if i - 1 < ndata {
+            self.jsr ^= data[i - 1] as u32;
+        }
         // Fix potential short cycles (Rose 2018).
-        if self.z == 0 || self.z == 0x9068FFFF { self.z += 1; }
-        if self.w == 0 || self.w == 0x464FFFFF { self.w += 1; }
-        if self.jsr == 0 { self.jsr += 1; }
+        if self.z == 0 || self.z == 0x9068FFFF {
+            self.z += 1;
+        }
+        if self.w == 0 || self.w == 0x464FFFFF {
+            self.w += 1;
+        }
+        if self.jsr == 0 {
+            self.jsr += 1;
+        }
     }
 
     pub fn rand(&mut self) -> u32 {
-        let znew = 36969u32.wrapping_mul(self.z & 0xFFFF).wrapping_add(self.z >> 16);
-        let wnew = 18000u32.wrapping_mul(self.w & 0xFFFF).wrapping_add(self.w >> 16);
+        let znew = 36969u32
+            .wrapping_mul(self.z & 0xFFFF)
+            .wrapping_add(self.z >> 16);
+        let wnew = 18000u32
+            .wrapping_mul(self.w & 0xFFFF)
+            .wrapping_add(self.w >> 16);
         let mwc = (znew << 16).wrapping_add(wnew);
         // Swapped 13/17 from original 1999 to match KISS11 single maximal cycle.
         let mut shr3 = self.jsr ^ (self.jsr << 13);
@@ -127,23 +148,35 @@ pub struct Cpx {
 
 #[inline(always)]
 fn cmul(a: Cpx, b: Cpx) -> Cpx {
-    Cpx { r: a.r * b.r - a.i * b.i, i: a.r * b.i + a.i * b.r }
+    Cpx {
+        r: a.r * b.r - a.i * b.i,
+        i: a.r * b.i + a.i * b.r,
+    }
 }
 
 /// Complex multiply with conjugate of second operand: a * conj(b).
 #[inline(always)]
 fn cmulc(a: Cpx, b: Cpx) -> Cpx {
-    Cpx { r: a.r * b.r + a.i * b.i, i: a.i * b.r - a.r * b.i }
+    Cpx {
+        r: a.r * b.r + a.i * b.i,
+        i: a.i * b.r - a.r * b.i,
+    }
 }
 
 #[inline(always)]
 fn cadd(a: Cpx, b: Cpx) -> Cpx {
-    Cpx { r: a.r + b.r, i: a.i + b.i }
+    Cpx {
+        r: a.r + b.r,
+        i: a.i + b.i,
+    }
 }
 
 #[inline(always)]
 fn csub(a: Cpx, b: Cpx) -> Cpx {
-    Cpx { r: a.r - b.r, i: a.i - b.i }
+    Cpx {
+        r: a.r - b.r,
+        i: a.i - b.i,
+    }
 }
 
 // ===========================================================================
@@ -372,8 +405,14 @@ fn kf_bfly4(fout: &mut [Cpx], fstride: usize, m: usize, n: usize, mm: usize) {
             let s4 = csub(s0, s2);
             fout[base + m2 + j] = csub(f0p, s3);
             fout[base + j] = cadd(f0p, s3);
-            fout[base + m + j] = Cpx { r: s5.r + s4.i, i: s5.i - s4.r };
-            fout[base + m3 + j] = Cpx { r: s5.r - s4.i, i: s5.i + s4.r };
+            fout[base + m + j] = Cpx {
+                r: s5.r + s4.i,
+                i: s5.i - s4.r,
+            };
+            fout[base + m3 + j] = Cpx {
+                r: s5.r - s4.i,
+                i: s5.i + s4.r,
+            };
             tw1i += fstride;
             tw2i += fstride * 2;
             tw3i += fstride * 3;
@@ -433,7 +472,10 @@ fn opus_fft_320(fin: &[Cpx; WINDOW_SIZE], fout: &mut [Cpx; WINDOW_SIZE]) {
     // Bit-reverse copy with 1/N scaling.
     for i in 0..WINDOW_SIZE {
         let dst = FFT_BITREV[i] as usize;
-        fout[dst] = Cpx { r: fin[i].r * FFT_SCALE, i: fin[i].i * FFT_SCALE };
+        fout[dst] = Cpx {
+            r: fin[i].r * FFT_SCALE,
+            i: fin[i].i * FFT_SCALE,
+        };
     }
     // Stage 1: radix-4, fstride=80, m=1, N=80, mm=4
     kf_bfly4(fout, 80, 1, 80, 4);
@@ -560,8 +602,8 @@ static EBAND5MS: [usize; NB_BANDS] = [
 ];
 
 static COMPENSATION: [f32; NB_BANDS] = [
-    0.8, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
-    0.666667, 0.5, 0.5, 0.5, 0.333333, 0.25, 0.25, 0.2, 0.166667, 0.173913,
+    0.8, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.666667, 0.5, 0.5, 0.5, 0.333333, 0.25, 0.25, 0.2,
+    0.166667, 0.173913,
 ];
 
 static ATT_TABLE: [f32; 10] = [0.0, 0.0, -0.2, -0.2, -0.4, -0.4, -0.8, -0.8, -1.6, -1.6];
@@ -575,8 +617,12 @@ fn celt_log10_f32(x: f32) -> f32 {
     0.3010299957 * log2_approx(x)
 }
 
-fn fmax(a: f32, b: f32) -> f32 { if a > b { a } else { b } }
-fn fmin(a: f32, b: f32) -> f32 { if a < b { a } else { b } }
+fn fmax(a: f32, b: f32) -> f32 {
+    if a > b { a } else { b }
+}
+fn fmin(a: f32, b: f32) -> f32 {
+    if a < b { a } else { b }
+}
 
 pub fn apply_window(x: &mut [f32; WINDOW_SIZE]) {
     for i in 0..OVERLAP_SIZE {
@@ -588,7 +634,10 @@ pub fn apply_window(x: &mut [f32; WINDOW_SIZE]) {
 pub fn forward_transform(out: &mut [Cpx], input: &[f32]) {
     let mut x = [Cpx::default(); WINDOW_SIZE];
     for i in 0..WINDOW_SIZE {
-        x[i] = Cpx { r: input[i], i: 0.0 };
+        x[i] = Cpx {
+            r: input[i],
+            i: 0.0,
+        };
     }
     let mut y = [Cpx::default(); WINDOW_SIZE];
     opus_fft_320(&x, &mut y);
@@ -601,7 +650,10 @@ fn inverse_transform(out: &mut [f32; WINDOW_SIZE], input: &[Cpx]) {
         x[i] = input[i];
     }
     for i in FREQ_SIZE..WINDOW_SIZE {
-        x[i] = Cpx { r: x[WINDOW_SIZE - i].r, i: -x[WINDOW_SIZE - i].i };
+        x[i] = Cpx {
+            r: x[WINDOW_SIZE - i].r,
+            i: -x[WINDOW_SIZE - i].i,
+        };
     }
     let mut y = [Cpx::default(); WINDOW_SIZE];
     opus_fft_320(&x, &mut y);
@@ -676,8 +728,7 @@ fn interp_band_gain(g: &mut [f32], band_e: &[f32]) {
         let band_size = (EBAND5MS[i + 1] - EBAND5MS[i]) * WINDOW_SIZE_5MS;
         for j in 0..band_size {
             let frac = j as f32 / band_size as f32;
-            g[EBAND5MS[i] * WINDOW_SIZE_5MS + j] =
-                (1.0 - frac) * band_e[i] + frac * band_e[i + 1];
+            g[EBAND5MS[i] * WINDOW_SIZE_5MS + j] = (1.0 - frac) * band_e[i] + frac * band_e[i + 1];
         }
     }
 }
@@ -685,8 +736,12 @@ fn interp_band_gain(g: &mut [f32], band_e: &[f32]) {
 /// Levinson-Durbin recursion from autocorrelation. Float path (no Q-shifts).
 fn lpcn_lpc(lpc: &mut [f32], rc: &mut [f32], ac: &[f32], p: usize) -> f32 {
     let mut error = ac[0];
-    for v in lpc[..p].iter_mut() { *v = 0.0; }
-    for v in rc[..p].iter_mut() { *v = 0.0; }
+    for v in lpc[..p].iter_mut() {
+        *v = 0.0;
+    }
+    for v in rc[..p].iter_mut() {
+        *v = 0.0;
+    }
     if ac[0] != 0.0 {
         for i in 0..p {
             let mut rr = 0.0f32;
@@ -795,8 +850,12 @@ fn silk_inner_product_flp(d1: &[f32], d2: &[f32], size: usize) -> f64 {
 }
 
 pub fn silk_burg_analysis(
-    a: &mut [f32], x: &[f32], min_inv_gain: f32,
-    subfr_length: usize, nb_subfr: usize, d: usize,
+    a: &mut [f32],
+    x: &[f32],
+    min_inv_gain: f32,
+    subfr_length: usize,
+    nb_subfr: usize,
+    d: usize,
 ) -> f32 {
     debug_assert!(subfr_length * nb_subfr <= 384);
     let c0_full = silk_energy_flp(x, nb_subfr * subfr_length);
@@ -804,9 +863,7 @@ pub fn silk_burg_analysis(
     for s in 0..nb_subfr {
         let xp = s * subfr_length;
         for n in 1..d + 1 {
-            c_first[n - 1] += silk_inner_product_flp(
-                &x[xp..], &x[xp + n..], subfr_length - n,
-            );
+            c_first[n - 1] += silk_inner_product_flp(&x[xp..], &x[xp + n..], subfr_length - n);
         }
     }
     let mut c_last = [0.0f64; SILK_MAX_ORDER_LPC];
@@ -824,8 +881,8 @@ pub fn silk_burg_analysis(
             let (mut tmp1, mut tmp2) = (x[xp + n] as f64, x[xp + subfr_length - n - 1] as f64);
             for k in 0..n {
                 c_first[k] -= x[xp + n] as f64 * x[xp + n - k - 1] as f64;
-                c_last[k] -= x[xp + subfr_length - n - 1] as f64
-                    * x[xp + subfr_length - n + k] as f64;
+                c_last[k] -=
+                    x[xp + subfr_length - n - 1] as f64 * x[xp + subfr_length - n + k] as f64;
                 let atmp = af[k];
                 tmp1 += x[xp + n - k - 1] as f64 * atmp;
                 tmp2 += x[xp + subfr_length - n + k] as f64 * atmp;
@@ -856,7 +913,9 @@ pub fn silk_burg_analysis(
         let tmp1_inv = inv_gain * (1.0 - rc * rc);
         if tmp1_inv <= min_inv_gain as f64 {
             rc = (1.0 - min_inv_gain as f64 / inv_gain).sqrt();
-            if num > 0.0 { rc = -rc; }
+            if num > 0.0 {
+                rc = -rc;
+            }
             inv_gain = min_inv_gain as f64;
             reached_max = true;
         } else {
@@ -869,7 +928,9 @@ pub fn silk_burg_analysis(
         }
         af[n] = rc;
         if reached_max {
-            for k in n + 1..d { af[k] = 0.0; }
+            for k in n + 1..d {
+                af[k] = 0.0;
+            }
             break;
         }
         for k in 0..=n + 1 {
@@ -880,7 +941,9 @@ pub fn silk_burg_analysis(
     }
     let nrg_f;
     if reached_max {
-        for k in 0..d { a[k] = -(af[k] as f32); }
+        for k in 0..d {
+            a[k] = -(af[k] as f32);
+        }
         let mut c0 = c0_full;
         for s in 0..nb_subfr {
             c0 -= silk_energy_flp(&x[s * subfr_length..], d);
@@ -952,7 +1015,9 @@ pub fn burg_cepstral_analysis(ceps: &mut [f32], x: &[f32]) {
 #[inline]
 fn celt_inner_prod_f32(x: &[f32], y: &[f32], n: usize) -> f32 {
     let mut sum = 0.0f32;
-    for i in 0..n { sum += x[i] * y[i]; }
+    for i in 0..n {
+        sum += x[i] * y[i];
+    }
     sum
 }
 
@@ -1111,12 +1176,16 @@ pub struct PitchDNNState {
 }
 
 impl PitchDNNState {
-    pub fn init(&mut self) { self._initialized = true; }
+    pub fn init(&mut self) {
+        self._initialized = true;
+    }
     pub fn load_model(&mut self, data: &[u8]) -> i32 {
         let _ = data;
         0
     }
-    pub fn compute(&self, _if_features: &[f32], _xcorr_features: &[f32]) -> f32 { 0.0 }
+    pub fn compute(&self, _if_features: &[f32], _xcorr_features: &[f32]) -> f32 {
+        0.0
+    }
 }
 
 /// FARGAN state — delegates to the real implementation in `super::fargan`.
@@ -1126,9 +1195,15 @@ pub struct FARGANState {
 }
 
 impl FARGANState {
-    pub fn init(&mut self) { self.inner.init(); }
-    pub fn load_model(&mut self, data: &[u8]) -> i32 { self.inner.load_model(data) }
-    pub fn cont(&mut self, pcm: &[f32], features: &[f32]) { self.inner.cont(pcm, features); }
+    pub fn init(&mut self) {
+        self.inner.init();
+    }
+    pub fn load_model(&mut self, data: &[u8]) -> i32 {
+        self.inner.load_model(data)
+    }
+    pub fn cont(&mut self, pcm: &[f32], features: &[f32]) {
+        self.inner.cont(pcm, features);
+    }
     pub fn synthesize_int(&mut self, pcm: &mut [i16], features: &[f32]) {
         self.inner.synthesize_int(pcm, features);
     }
@@ -1138,12 +1213,14 @@ impl FARGANState {
 // LPCNet-specific compute functions
 // ===========================================================================
 
-fn compute_conv1d_layer(
-    layer: &Conv1dLayer, output: &mut [f32], mem: &mut [f32], input: &[f32],
-) {
+fn compute_conv1d_layer(layer: &Conv1dLayer, output: &mut [f32], mem: &mut [f32], input: &[f32]) {
     compute_generic_conv1d(
-        &layer.input_weights, output, mem, input,
-        layer.feature_size, layer.activation,
+        &layer.input_weights,
+        output,
+        mem,
+        input,
+        layer.feature_size,
+        layer.activation,
     );
 }
 
@@ -1159,9 +1236,13 @@ fn compute_sparse_gru(recurrent: &LinearLayer, state: &mut [f32], input: &[f32])
     let mut recur = vec![0.0f32; 3 * n];
     zrh[..3 * n].copy_from_slice(&input[..3 * n]);
     compute_linear(recurrent, &mut recur, state);
-    for i in 0..2 * n { zrh[i] += recur[i]; }
+    for i in 0..2 * n {
+        zrh[i] += recur[i];
+    }
     compute_activation(&mut zrh, 2 * n, ACTIVATION_SIGMOID);
-    for i in 0..n { zrh[2 * n + i] += recur[2 * n + i] * zrh[n + i]; }
+    for i in 0..n {
+        zrh[2 * n + i] += recur[2 * n + i] * zrh[n + i];
+    }
     compute_activation(&mut zrh[2 * n..], n, ACTIVATION_TANH);
     for i in 0..n {
         state[i] = zrh[i] * state[i] + (1.0 - zrh[i]) * zrh[2 * n + i];
@@ -1170,19 +1251,28 @@ fn compute_sparse_gru(recurrent: &LinearLayer, state: &mut [f32], input: &[f32])
 
 /// GRU-B with extra input from GRU-A state.
 fn compute_gru_b(
-    recurrent: &LinearLayer, input_dense: &LinearLayer,
-    gru_input: &mut [f32], state: &mut [f32], extra: &[f32],
+    recurrent: &LinearLayer,
+    input_dense: &LinearLayer,
+    gru_input: &mut [f32],
+    state: &mut [f32],
+    extra: &[f32],
 ) {
     let n = recurrent.nb_inputs;
     let mut recur = vec![0.0f32; 3 * n];
     compute_linear(recurrent, &mut recur, state);
-    for i in 0..2 * n { gru_input[i] += recur[i]; }
+    for i in 0..2 * n {
+        gru_input[i] += recur[i];
+    }
     compute_activation(gru_input, 2 * n, ACTIVATION_SIGMOID);
-    for i in 0..n { gru_input[2 * n + i] += recur[2 * n + i] * gru_input[n + i]; }
+    for i in 0..n {
+        gru_input[2 * n + i] += recur[2 * n + i] * gru_input[n + i];
+    }
     // Add dense transform of extra input to candidate h.
     let mut dense_out = vec![0.0f32; n];
     compute_linear(input_dense, &mut dense_out, extra);
-    for i in 0..n { gru_input[2 * n + i] += dense_out[i]; }
+    for i in 0..n {
+        gru_input[2 * n + i] += dense_out[i];
+    }
     compute_activation(&mut gru_input[2 * n..], n, ACTIVATION_TANH);
     for i in 0..n {
         state[i] = gru_input[i] * state[i] + (1.0 - gru_input[i]) * gru_input[2 * n + i];
@@ -1191,10 +1281,15 @@ fn compute_gru_b(
 
 /// Assemble GRU-A input: condition + three embedding lookups.
 fn compute_gru_a_input(
-    output: &mut [f32], condition: &[f32], size: usize,
-    embed_sig: &EmbeddingLayer, last_sig: usize,
-    embed_pred: &EmbeddingLayer, pred: usize,
-    embed_exc: &EmbeddingLayer, last_exc: usize,
+    output: &mut [f32],
+    condition: &[f32],
+    size: usize,
+    embed_sig: &EmbeddingLayer,
+    last_sig: usize,
+    embed_pred: &EmbeddingLayer,
+    pred: usize,
+    embed_exc: &EmbeddingLayer,
+    last_exc: usize,
 ) {
     output[..3 * size].copy_from_slice(&condition[..3 * size]);
     embed_sig.accum(output, last_sig);
@@ -1204,8 +1299,10 @@ fn compute_gru_a_input(
 
 /// Dual FC sampling. Returns mu-law index 0..255.
 fn sample_mdense(
-    layer: &MDenseLayer, state: &[f32],
-    logit_table: &[f32; 256], rng: &mut Kiss99Ctx,
+    layer: &MDenseLayer,
+    state: &[f32],
+    logit_table: &[f32; 256],
+    rng: &mut Kiss99Ctx,
 ) -> i32 {
     let mut out1 = vec![0.0f32; 256];
     let mut out2 = vec![0.0f32; 256];
@@ -1216,8 +1313,12 @@ fn sample_mdense(
         out2[i] += logit_table[i];
     }
     // Softmax (element-wise exp then normalize).
-    for i in 0..256 { out1[i] = lpcnet_exp(out1[i]); }
-    for i in 0..256 { out2[i] = lpcnet_exp(out2[i]); }
+    for i in 0..256 {
+        out1[i] = lpcnet_exp(out1[i]);
+    }
+    for i in 0..256 {
+        out2[i] = lpcnet_exp(out2[i]);
+    }
     let sum1: f32 = out1.iter().sum();
     let sum2: f32 = out2.iter().sum();
     let inv1 = if sum1 > 0.0 { 1.0 / sum1 } else { 0.0 };
@@ -1296,7 +1397,8 @@ impl LPCNetEncState {
         let mut x = [0.0f32; WINDOW_SIZE];
         x[..OVERLAP_SIZE].copy_from_slice(&self.analysis_mem);
         x[OVERLAP_SIZE..].copy_from_slice(&input[..FRAME_SIZE]);
-        self.analysis_mem.copy_from_slice(&input[FRAME_SIZE - OVERLAP_SIZE..FRAME_SIZE]);
+        self.analysis_mem
+            .copy_from_slice(&input[FRAME_SIZE - OVERLAP_SIZE..FRAME_SIZE]);
         apply_window(&mut x);
         forward_transform(x_out, &x);
         lpcn_compute_band_energy(ex, x_out);
@@ -1307,9 +1409,8 @@ impl LPCNetEncState {
         let lp_a: [f32; 2] = [-1.54220, 0.70781];
 
         let mut aligned_in = [0.0f32; FRAME_SIZE];
-        aligned_in[..TRAINING_OFFSET].copy_from_slice(
-            &self.analysis_mem[OVERLAP_SIZE - TRAINING_OFFSET..OVERLAP_SIZE],
-        );
+        aligned_in[..TRAINING_OFFSET]
+            .copy_from_slice(&self.analysis_mem[OVERLAP_SIZE - TRAINING_OFFSET..OVERLAP_SIZE]);
 
         let mut x_cpx = vec![Cpx::default(); FREQ_SIZE];
         let mut ex = [0.0f32; NB_BANDS];
@@ -1318,12 +1419,18 @@ impl LPCNetEncState {
         // Instantaneous frequency features.
         self.if_features[0] = fmax(
             -1.0,
-            fmin(1.0, (1.0 / 64.0) * (10.0 * celt_log10_f32(1e-15 + x_cpx[0].r * x_cpx[0].r) - 6.0)),
+            fmin(
+                1.0,
+                (1.0 / 64.0) * (10.0 * celt_log10_f32(1e-15 + x_cpx[0].r * x_cpx[0].r) - 6.0),
+            ),
         );
         for i in 1..PITCH_IF_MAX_FREQ {
             let prod = cmulc(x_cpx[i], self.prev_if[i]);
             let norm_1 = 1.0 / (1e-15 + prod.r * prod.r + prod.i * prod.i).sqrt();
-            let prod = Cpx { r: prod.r * norm_1, i: prod.i * norm_1 };
+            let prod = Cpx {
+                r: prod.r * norm_1,
+                i: prod.i * norm_1,
+            };
             self.if_features[3 * i - 2] = prod.r;
             self.if_features[3 * i - 1] = prod.i;
             self.if_features[3 * i] = fmax(
@@ -1331,7 +1438,10 @@ impl LPCNetEncState {
                 fmin(
                     1.0,
                     (1.0 / 64.0)
-                        * (10.0 * celt_log10_f32(1e-15 + x_cpx[i].r * x_cpx[i].r + x_cpx[i].i * x_cpx[i].i)
+                        * (10.0
+                            * celt_log10_f32(
+                                1e-15 + x_cpx[i].r * x_cpx[i].r + x_cpx[i].i * x_cpx[i].i,
+                            )
                             - 6.0),
                 ),
             );
@@ -1358,14 +1468,22 @@ impl LPCNetEncState {
         self.exc_buf.copy_within(FRAME_SIZE..PITCH_BUF_SIZE, 0);
         self.lp_buf.copy_within(FRAME_SIZE..PITCH_BUF_SIZE, 0);
 
-        aligned_in[TRAINING_OFFSET..FRAME_SIZE].copy_from_slice(&input[..FRAME_SIZE - TRAINING_OFFSET]);
+        aligned_in[TRAINING_OFFSET..FRAME_SIZE]
+            .copy_from_slice(&input[..FRAME_SIZE - TRAINING_OFFSET]);
 
         // LPC residual via FIR filter.
         let mut x_fir = [0.0f32; FRAME_SIZE + LPC_ORDER];
         x_fir[..LPC_ORDER].copy_from_slice(&self.pitch_mem);
         x_fir[LPC_ORDER..LPC_ORDER + FRAME_SIZE].copy_from_slice(&aligned_in);
-        self.pitch_mem.copy_from_slice(&aligned_in[FRAME_SIZE - LPC_ORDER..FRAME_SIZE]);
-        celt_fir_f32(&x_fir, &self.lpc, &mut self.lp_buf[PITCH_MAX_PERIOD..], FRAME_SIZE, LPC_ORDER);
+        self.pitch_mem
+            .copy_from_slice(&aligned_in[FRAME_SIZE - LPC_ORDER..FRAME_SIZE]);
+        celt_fir_f32(
+            &x_fir,
+            &self.lpc,
+            &mut self.lp_buf[PITCH_MAX_PERIOD..],
+            FRAME_SIZE,
+            LPC_ORDER,
+        );
 
         // Pitch pre-filter.
         for i in 0..FRAME_SIZE {
@@ -1377,9 +1495,12 @@ impl LPCNetEncState {
         // Biquad LP filter on lp_buf.
         let mut lp_out = [0.0f32; FRAME_SIZE];
         biquad(
-            &mut lp_out, &mut self.lp_mem,
+            &mut lp_out,
+            &mut self.lp_mem,
             &self.lp_buf[PITCH_MAX_PERIOD..PITCH_MAX_PERIOD + FRAME_SIZE],
-            &lp_b, &lp_a, FRAME_SIZE,
+            &lp_b,
+            &lp_a,
+            FRAME_SIZE,
         );
         self.lp_buf[PITCH_MAX_PERIOD..PITCH_MAX_PERIOD + FRAME_SIZE].copy_from_slice(&lp_out);
 
@@ -1411,20 +1532,30 @@ impl LPCNetEncState {
             self.xcorr_features[i] /= ener_norm[i];
         }
 
-        self.dnn_pitch = self.pitchdnn.compute(&self.if_features, &self.xcorr_features);
+        self.dnn_pitch = self
+            .pitchdnn
+            .compute(&self.if_features, &self.xcorr_features);
         let pitch = (0.5 + 256.0 / 2.0f32.powf((1.0 / 60.0) * ((self.dnn_pitch + 1.5) * 60.0)))
             .floor() as i32;
-        let pitch = pitch.max(PITCH_MIN_PERIOD as i32).min(PITCH_MAX_PERIOD as i32 - 1) as usize;
+        let pitch = pitch
+            .max(PITCH_MIN_PERIOD as i32)
+            .min(PITCH_MAX_PERIOD as i32 - 1) as usize;
 
         // Pitch correlation.
         let xx = celt_inner_prod_f32(
-            &self.lp_buf[PITCH_MAX_PERIOD..], &self.lp_buf[PITCH_MAX_PERIOD..], FRAME_SIZE,
+            &self.lp_buf[PITCH_MAX_PERIOD..],
+            &self.lp_buf[PITCH_MAX_PERIOD..],
+            FRAME_SIZE,
         );
         let yy = celt_inner_prod_f32(
-            &self.lp_buf[PITCH_MAX_PERIOD - pitch..], &self.lp_buf[PITCH_MAX_PERIOD - pitch..], FRAME_SIZE,
+            &self.lp_buf[PITCH_MAX_PERIOD - pitch..],
+            &self.lp_buf[PITCH_MAX_PERIOD - pitch..],
+            FRAME_SIZE,
         );
         let xy = celt_inner_prod_f32(
-            &self.lp_buf[PITCH_MAX_PERIOD..], &self.lp_buf[PITCH_MAX_PERIOD - pitch..], FRAME_SIZE,
+            &self.lp_buf[PITCH_MAX_PERIOD..],
+            &self.lp_buf[PITCH_MAX_PERIOD - pitch..],
+            FRAME_SIZE,
         );
         let mut frame_corr = xy / (1.0 + xx * yy).sqrt();
         // Soft-plus normalization.
@@ -1434,24 +1565,38 @@ impl LPCNetEncState {
     }
 
     fn compute_single_frame_features_impl(
-        &mut self, x: &mut [f32], features: &mut [f32; NB_TOTAL_FEATURES],
+        &mut self,
+        x: &mut [f32],
+        features: &mut [f32; NB_TOTAL_FEATURES],
     ) -> i32 {
-        preemphasis(x, &mut self.mem_preemph, &x.to_vec(), PREEMPHASIS_COEF, FRAME_SIZE);
+        preemphasis(
+            x,
+            &mut self.mem_preemph,
+            &x.to_vec(),
+            PREEMPHASIS_COEF,
+            FRAME_SIZE,
+        );
         self.compute_frame_features(x);
         features.copy_from_slice(&self.features);
         0
     }
 
     pub fn compute_single_frame_features(
-        &mut self, pcm: &[i16], features: &mut [f32; NB_TOTAL_FEATURES],
+        &mut self,
+        pcm: &[i16],
+        features: &mut [f32; NB_TOTAL_FEATURES],
     ) -> i32 {
         let mut x = [0.0f32; FRAME_SIZE];
-        for i in 0..FRAME_SIZE { x[i] = pcm[i] as f32; }
+        for i in 0..FRAME_SIZE {
+            x[i] = pcm[i] as f32;
+        }
         self.compute_single_frame_features_impl(&mut x, features)
     }
 
     pub fn compute_single_frame_features_float(
-        &mut self, pcm: &[f32], features: &mut [f32; NB_TOTAL_FEATURES],
+        &mut self,
+        pcm: &[f32],
+        features: &mut [f32; NB_TOTAL_FEATURES],
     ) -> i32 {
         let mut x = [0.0f32; FRAME_SIZE];
         x[..FRAME_SIZE].copy_from_slice(&pcm[..FRAME_SIZE]);
@@ -1564,13 +1709,17 @@ impl LPCNetState {
         let frame_input_size = NB_FEATURES + embed_dim;
         let mut frame_in = vec![0.0f32; frame_input_size];
         frame_in[..NB_FEATURES].copy_from_slice(&features[..NB_FEATURES]);
-        self.model.embed_pitch.compute(&mut frame_in[NB_FEATURES..], pitch);
+        self.model
+            .embed_pitch
+            .compute(&mut frame_in[NB_FEATURES..], pitch);
 
         // Feature conditioning network.
         let mut conv1_out = vec![0.0f32; conv1_out_size.max(1)];
         compute_conv1d_layer(
-            &self.model.feature_conv1, &mut conv1_out,
-            &mut self.nnet.feature_conv1_state, &frame_in,
+            &self.model.feature_conv1,
+            &mut conv1_out,
+            &mut self.nnet.feature_conv1_state,
+            &frame_in,
         );
         if self.frame_count < self.model.feature_conv1.kernel_size as i32 - 1 {
             conv1_out.fill(0.0);
@@ -1578,8 +1727,10 @@ impl LPCNetState {
 
         let mut conv2_out = vec![0.0f32; conv2_out_size.max(1)];
         compute_conv1d_layer(
-            &self.model.feature_conv2, &mut conv2_out,
-            &mut self.nnet.feature_conv2_state, &conv1_out,
+            &self.model.feature_conv2,
+            &mut conv2_out,
+            &mut self.nnet.feature_conv2_state,
+            &conv1_out,
         );
         if (self.frame_count as usize) < FEATURES_DELAY {
             conv2_out.fill(0.0);
@@ -1594,11 +1745,15 @@ impl LPCNetState {
         // GRU conditioning.
         self.gru_a_condition.resize(gru_a_cond_size, 0.0);
         lpcnet_compute_dense(
-            &self.model.gru_a_dense_feature, &mut self.gru_a_condition, &condition,
+            &self.model.gru_a_dense_feature,
+            &mut self.gru_a_condition,
+            &condition,
         );
         self.gru_b_condition.resize(gru_b_cond_size, 0.0);
         lpcnet_compute_dense(
-            &self.model.gru_b_dense_feature, &mut self.gru_b_condition, &condition,
+            &self.model.gru_b_dense_feature,
+            &mut self.gru_b_condition,
+            &condition,
         );
 
         // LPC from cepstrum with delay line.
@@ -1618,8 +1773,7 @@ impl LPCNetState {
     }
 
     pub fn run_frame_network_deferred(&mut self, features: &[f32]) {
-        let max_buf = self.model.feature_conv1.kernel_size
-            + self.model.feature_conv2.kernel_size;
+        let max_buf = self.model.feature_conv1.kernel_size + self.model.feature_conv2.kernel_size;
         let max_buf = if max_buf >= 2 { max_buf - 2 } else { 0 };
         let max_buf = max_buf.min(MAX_FEATURE_BUFFER_SIZE);
         if self.feature_buffer_fill == max_buf as i32 {
@@ -1630,8 +1784,7 @@ impl LPCNetState {
             self.feature_buffer_fill += 1;
         }
         let offset = (self.feature_buffer_fill as usize - 1) * NB_FEATURES;
-        self.feature_buffer[offset..offset + NB_FEATURES]
-            .copy_from_slice(&features[..NB_FEATURES]);
+        self.feature_buffer[offset..offset + NB_FEATURES].copy_from_slice(&features[..NB_FEATURES]);
     }
 
     pub fn run_frame_network_flush(&mut self) {
@@ -1646,32 +1799,50 @@ impl LPCNetState {
 
     fn run_sample_network(&mut self, last_exc: i32, last_sig_ulaw: i32, pred_ulaw: i32) -> i32 {
         let gru_a_size = self.nnet.gru_a_state.len();
-        if gru_a_size == 0 { return 128; }
+        if gru_a_size == 0 {
+            return 128;
+        }
         let mut gru_a_input = vec![0.0f32; 3 * gru_a_size];
         compute_gru_a_input(
-            &mut gru_a_input, &self.gru_a_condition, gru_a_size,
-            &self.model.gru_a_embed_sig, last_sig_ulaw as usize,
-            &self.model.gru_a_embed_pred, pred_ulaw as usize,
-            &self.model.gru_a_embed_exc, last_exc as usize,
+            &mut gru_a_input,
+            &self.gru_a_condition,
+            gru_a_size,
+            &self.model.gru_a_embed_sig,
+            last_sig_ulaw as usize,
+            &self.model.gru_a_embed_pred,
+            pred_ulaw as usize,
+            &self.model.gru_a_embed_exc,
+            last_exc as usize,
         );
-        compute_sparse_gru(&self.model.sparse_gru_a, &mut self.nnet.gru_a_state, &gru_a_input);
+        compute_sparse_gru(
+            &self.model.sparse_gru_a,
+            &mut self.nnet.gru_a_state,
+            &gru_a_input,
+        );
         let gru_b_size = self.nnet.gru_b_state.len();
         let in_b: Vec<f32> = self.nnet.gru_a_state.clone();
         let mut gru_b_input = self.gru_b_condition.clone();
         gru_b_input.resize(3 * gru_b_size, 0.0);
         compute_gru_b(
-            &self.model.gru_b_recurrent, &self.model.gru_b_input_dense,
-            &mut gru_b_input, &mut self.nnet.gru_b_state, &in_b,
+            &self.model.gru_b_recurrent,
+            &self.model.gru_b_input_dense,
+            &mut gru_b_input,
+            &mut self.nnet.gru_b_state,
+            &in_b,
         );
         sample_mdense(
-            &self.model.dual_fc, &self.nnet.gru_b_state,
-            &self.sampling_logit_table, &mut self.rng,
+            &self.model.dual_fc,
+            &self.nnet.gru_b_state,
+            &self.sampling_logit_table,
+            &mut self.rng,
         )
     }
 
     pub fn synthesize_tail_impl(&mut self, output: &mut [i16], n: usize, preload: usize) {
         if self.frame_count <= FEATURES_DELAY as i32 {
-            for s in output[..n].iter_mut() { *s = 0; }
+            for s in output[..n].iter_mut() {
+                *s = 0;
+            }
             return;
         }
         for i in 0..n {
@@ -1698,16 +1869,26 @@ impl LPCNetState {
             let pcm_out = pcm_val + PREEMPH * self.deemph_mem;
             self.deemph_mem = pcm_out;
             // Asymmetric clip [-32767, 32767] with rounding.
-            let clipped = if pcm_out < -32767.0 { -32767.0 }
-                else if pcm_out > 32767.0 { 32767.0 }
-                else { pcm_out };
+            let clipped = if pcm_out < -32767.0 {
+                -32767.0
+            } else if pcm_out > 32767.0 {
+                32767.0
+            } else {
+                pcm_out
+            };
             if i >= preload {
                 output[i] = (0.5 + clipped).floor() as i16;
             }
         }
     }
 
-    pub fn synthesize_impl(&mut self, features: &[f32], output: &mut [i16], n: usize, preload: usize) {
+    pub fn synthesize_impl(
+        &mut self,
+        features: &[f32],
+        output: &mut [i16],
+        n: usize,
+        preload: usize,
+    ) {
         self.run_frame_network(features);
         self.synthesize_tail_impl(output, n, preload);
     }
@@ -1803,7 +1984,9 @@ impl LPCNetPLCState {
         self.fec_skip = 0;
         self.features = [0.0; NB_TOTAL_FEATURES];
         self.cont_features.fill(0.0);
-        for fec_row in self.fec.iter_mut() { fec_row.fill(0.0); }
+        for fec_row in self.fec.iter_mut() {
+            fec_row.fill(0.0);
+        }
         self.plc_net = PLCNetState::default();
         self.plc_bak = [PLCNetState::default(), PLCNetState::default()];
     }
@@ -1822,7 +2005,9 @@ impl LPCNetPLCState {
 
     pub fn fec_add(&mut self, features: Option<&[f32]>) {
         match features {
-            None => { self.fec_skip += 1; }
+            None => {
+                self.fec_skip += 1;
+            }
             Some(f) => {
                 debug_assert!(self.fec_fill_pos < PLC_MAX_FEC);
                 self.fec[self.fec_fill_pos][..NB_FEATURES].copy_from_slice(&f[..NB_FEATURES]);
@@ -1842,15 +2027,22 @@ impl LPCNetPLCState {
         let mut tmp = vec![0.0f32; self.model.plc_dense_in.nb_outputs.max(1)];
         compute_generic_dense(&self.model.plc_dense_in, &mut tmp, input, ACTIVATION_TANH);
         compute_generic_gru(
-            &self.model.plc_gru1_input, &self.model.plc_gru1_recurrent,
-            &mut self.plc_net.gru1_state, &tmp,
+            &self.model.plc_gru1_input,
+            &self.model.plc_gru1_recurrent,
+            &mut self.plc_net.gru1_state,
+            &tmp,
         );
         compute_generic_gru(
-            &self.model.plc_gru2_input, &self.model.plc_gru2_recurrent,
-            &mut self.plc_net.gru2_state, &self.plc_net.gru1_state.clone(),
+            &self.model.plc_gru2_input,
+            &self.model.plc_gru2_recurrent,
+            &mut self.plc_net.gru2_state,
+            &self.plc_net.gru1_state.clone(),
         );
         compute_generic_dense(
-            &self.model.plc_dense_out, out, &self.plc_net.gru2_state, ACTIVATION_LINEAR,
+            &self.model.plc_dense_out,
+            out,
+            &self.plc_net.gru2_state,
+            ACTIVATION_LINEAR,
         );
     }
 
@@ -1868,13 +2060,16 @@ impl LPCNetPLCState {
         } else {
             let zeros = vec![0.0f32; 2 * NB_BANDS + NB_FEATURES + 1];
             self.compute_plc_pred(out, &zeros);
-            if self.fec_skip > 0 { self.fec_skip -= 1; }
+            if self.fec_skip > 0 {
+                self.fec_skip -= 1;
+            }
             false
         }
     }
 
     fn queue_features(&mut self, features: &[f32]) {
-        self.cont_features.copy_within(NB_FEATURES..CONT_VECTORS * NB_FEATURES, 0);
+        self.cont_features
+            .copy_within(NB_FEATURES..CONT_VECTORS * NB_FEATURES, 0);
         let start = (CONT_VECTORS - 1) * NB_FEATURES;
         self.cont_features[start..start + NB_FEATURES].copy_from_slice(&features[..NB_FEATURES]);
     }
@@ -1910,7 +2105,8 @@ impl LPCNetPLCState {
                 }
                 let mut plc_features = vec![0.0f32; 2 * NB_BANDS + NB_FEATURES + 1];
                 burg_cepstral_analysis(&mut plc_features, &x);
-                self.enc.compute_single_frame_features_float(&x, &mut self.features);
+                self.enc
+                    .compute_single_frame_features_float(&x, &mut self.features);
                 if (!self.analysis_gap || count > 0) && self.analysis_pos >= self.predict_pos {
                     self.queue_features(&self.features.clone());
                     plc_features[2 * NB_BANDS..2 * NB_BANDS + NB_FEATURES]
@@ -1956,7 +2152,11 @@ impl LPCNetPLCState {
         let mut pred = vec![0.0f32; NB_FEATURES];
         let got_fec = self.get_fec_or_pred(&mut pred);
         self.features[..NB_FEATURES].copy_from_slice(&pred);
-        if got_fec { self.loss_count = 0; } else { self.loss_count += 1; }
+        if got_fec {
+            self.loss_count = 0;
+        } else {
+            self.loss_count += 1;
+        }
 
         // Energy attenuation.
         if self.loss_count >= 10 {
@@ -1965,7 +2165,10 @@ impl LPCNetPLCState {
                 self.features[0] + ATT_TABLE[9] - 2.0 * (self.loss_count - 9) as f32,
             );
         } else {
-            self.features[0] = fmax(-15.0, self.features[0] + ATT_TABLE[self.loss_count as usize]);
+            self.features[0] = fmax(
+                -15.0,
+                self.features[0] + ATT_TABLE[self.loss_count as usize],
+            );
         }
 
         let features_copy = self.features;
@@ -2022,38 +2225,53 @@ mod tests {
         let mut recovered = [0.0f32; WINDOW_SIZE];
         inverse_transform(&mut recovered, &x_full);
         for i in 0..WINDOW_SIZE {
-            assert!((x[i] - recovered[i]).abs() < 1e-3,
-                "FFT roundtrip mismatch at {}: {} vs {}", i, x[i], recovered[i]);
+            assert!(
+                (x[i] - recovered[i]).abs() < 1e-3,
+                "FFT roundtrip mismatch at {}: {} vs {}",
+                i,
+                x[i],
+                recovered[i]
+            );
         }
     }
 
     #[test]
     fn test_dct_energy_preservation() {
         let input: [f32; NB_BANDS] = [
-            1.0, 0.5, -0.3, 0.2, 0.8, -0.1, 0.0, 0.4,
-            -0.6, 0.3, 0.7, -0.2, 0.1, -0.5, 0.9, 0.0, -0.4, 0.6,
+            1.0, 0.5, -0.3, 0.2, 0.8, -0.1, 0.0, 0.4, -0.6, 0.3, 0.7, -0.2, 0.1, -0.5, 0.9, 0.0,
+            -0.4, 0.6,
         ];
         let mut output = [0.0f32; NB_BANDS];
         dct(&mut output, &input);
         let e_in: f32 = input.iter().map(|x| x * x).sum();
         let e_out: f32 = output.iter().map(|x| x * x).sum();
         // Parseval's theorem: energy should be approximately preserved.
-        assert!((e_in - e_out).abs() < 1e-3, "DCT energy: in={} out={}", e_in, e_out);
+        assert!(
+            (e_in - e_out).abs() < 1e-3,
+            "DCT energy: in={} out={}",
+            e_in,
+            e_out
+        );
     }
 
     #[test]
     fn test_dct_idct_roundtrip() {
         let input: [f32; NB_BANDS] = [
-            -2.0, 0.1, -0.5, 0.3, -0.1, 0.2, 0.0, -0.3,
-            0.4, -0.2, 0.6, -0.4, 0.5, -0.6, 0.7, -0.7, 0.8, -0.8,
+            -2.0, 0.1, -0.5, 0.3, -0.1, 0.2, 0.0, -0.3, 0.4, -0.2, 0.6, -0.4, 0.5, -0.6, 0.7, -0.7,
+            0.8, -0.8,
         ];
         let mut dct_out = [0.0f32; NB_BANDS];
         let mut recovered = [0.0f32; NB_BANDS];
         dct(&mut dct_out, &input);
         idct(&mut recovered, &dct_out);
         for i in 0..NB_BANDS {
-            assert!((input[i] - recovered[i]).abs() < 1e-4,
-                "DCT roundtrip mismatch at {}: {} vs {}", i, input[i], recovered[i]);
+            assert!(
+                (input[i] - recovered[i]).abs() < 1e-4,
+                "DCT roundtrip mismatch at {}: {} vs {}",
+                i,
+                input[i],
+                recovered[i]
+            );
         }
     }
 
@@ -2072,7 +2290,9 @@ mod tests {
     #[test]
     fn test_burg_analysis_simple() {
         // White noise-like signal — Burg should return small coefficients.
-        let x: Vec<f32> = (0..160).map(|i| ((i * 7 + 13) % 37) as f32 / 37.0 - 0.5).collect();
+        let x: Vec<f32> = (0..160)
+            .map(|i| ((i * 7 + 13) % 37) as f32 / 37.0 - 0.5)
+            .collect();
         let mut a = [0.0f32; LPC_ORDER];
         let g = silk_burg_analysis(&mut a, &x, 1e-3, 160, 1, LPC_ORDER);
         assert!(g >= 0.0, "Residual energy should be non-negative");

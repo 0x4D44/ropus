@@ -54,8 +54,7 @@ const EC_WINDOW_SIZE: u32 = 32;
 
 /// Correction table for `tell_frac`. Threshold values for the normalized range
 /// at each 1/8-bit boundary: `correction[k] ≈ floor(2^16 · 2^(-(k+1)/8))`.
-const TELL_FRAC_CORRECTION: [u32; 8] =
-    [35733, 38967, 42495, 46340, 50535, 55109, 60097, 65535];
+const TELL_FRAC_CORRECTION: [u32; 8] = [35733, 38967, 42495, 46340, 50535, 55109, 60097, 65535];
 
 /// Computes bits used scaled by `2^BITRES` (1/8-bit units).
 ///
@@ -69,7 +68,11 @@ fn tell_frac_impl(nbits_total: i32, rng: u32) -> u32 {
     // Initial estimate from the top 4 bits of the normalized range
     let mut b = (r >> 12) - 8;
     // One correction step via the threshold table
-    b += if r > TELL_FRAC_CORRECTION[b as usize] { 1 } else { 0 };
+    b += if r > TELL_FRAC_CORRECTION[b as usize] {
+        1
+    } else {
+        0
+    };
     // Combine integer log2 part (l) and fractional 1/8-bit part (b)
     let l = (l << 3) + b;
     nbits - l
@@ -221,7 +224,15 @@ impl<'a> RangeEncoder<'a> {
 
     /// Debug: returns (val, offs, end_offs, storage, nend_bits, rem, ext).
     pub fn debug_state(&self) -> (u32, u32, u32, u32, i32, i32, u32) {
-        (self.val, self.offs, self.end_offs, self.storage, self.nend_bits, self.rem, self.ext)
+        (
+            self.val,
+            self.offs,
+            self.end_offs,
+            self.storage,
+            self.nend_bits,
+            self.rem,
+            self.ext,
+        )
     }
 
     /// Bits "used" so far (conservative, rounds up).
@@ -313,7 +324,9 @@ impl<'a> RangeEncoder<'a> {
     pub fn encode(&mut self, fl: u32, fh: u32, ft: u32) {
         let r = self.rng / ft;
         if fl > 0 {
-            self.val = self.val.wrapping_add(self.rng.wrapping_sub(r.wrapping_mul(ft.wrapping_sub(fl))));
+            self.val = self
+                .val
+                .wrapping_add(self.rng.wrapping_sub(r.wrapping_mul(ft.wrapping_sub(fl))));
             self.rng = r.wrapping_mul(fh.wrapping_sub(fl));
         } else {
             // First-symbol optimization: keep the division residual in the range
@@ -444,8 +457,7 @@ impl<'a> RangeEncoder<'a> {
             self.rem = ((self.rem as u32 & !mask) | (val << shift)) as i32;
         } else if self.rng <= EC_CODE_TOP >> nbits {
             // The renormalization loop has never been run — patch val directly
-            self.val = (self.val & !(mask << EC_CODE_SHIFT))
-                | (val << (EC_CODE_SHIFT + shift));
+            self.val = (self.val & !(mask << EC_CODE_SHIFT)) | (val << (EC_CODE_SHIFT + shift));
         } else {
             // Fewer than nbits have been encoded
             self.error = -1;
@@ -666,8 +678,8 @@ impl<'a> RangeDecoder<'a> {
             let sym = ((sym << EC_SYM_BITS) | self.rem) >> (EC_SYM_BITS - EC_CODE_EXTRA);
             // Subtract from val using the inverted representation:
             // EC_SYM_MAX & ~sym complements the input bits
-            self.val = ((self.val << EC_SYM_BITS) + (EC_SYM_MAX & !(sym as u32)))
-                & (EC_CODE_TOP - 1);
+            self.val =
+                ((self.val << EC_SYM_BITS) + (EC_SYM_MAX & !(sym as u32))) & (EC_CODE_TOP - 1);
         }
     }
 

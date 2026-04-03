@@ -41,7 +41,9 @@ fn read_wav(path: &Path) -> WavData {
 
     while pos + 8 <= data.len() {
         let chunk_id = &data[pos..pos + 4];
-        let chunk_size = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]) as usize;
+        let chunk_size =
+            u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
+                as usize;
         if chunk_id == b"fmt " {
             if chunk_size < 16 {
                 eprintln!("ERROR: fmt chunk too small");
@@ -49,11 +51,19 @@ fn read_wav(path: &Path) -> WavData {
             }
             let audio_format = u16::from_le_bytes([data[pos + 8], data[pos + 9]]);
             if audio_format != 1 {
-                eprintln!("ERROR: only PCM WAV supported (got format {})", audio_format);
+                eprintln!(
+                    "ERROR: only PCM WAV supported (got format {})",
+                    audio_format
+                );
                 process::exit(1);
             }
             channels = u16::from_le_bytes([data[pos + 10], data[pos + 11]]);
-            sample_rate = u32::from_le_bytes([data[pos + 12], data[pos + 13], data[pos + 14], data[pos + 15]]);
+            sample_rate = u32::from_le_bytes([
+                data[pos + 12],
+                data[pos + 13],
+                data[pos + 14],
+                data[pos + 15],
+            ]);
             bits_per_sample = u16::from_le_bytes([data[pos + 22], data[pos + 23]]);
             if bits_per_sample != 16 {
                 eprintln!("ERROR: only 16-bit PCM supported (got {})", bits_per_sample);
@@ -117,7 +127,12 @@ fn compare_bytes(a: &[u8], b: &[u8]) -> CompareStats {
             max_diff = max_diff.max(diff);
         }
     }
-    CompareStats { total, matching, first_diff_offset, max_diff }
+    CompareStats {
+        total,
+        matching,
+        first_diff_offset,
+        max_diff,
+    }
 }
 
 fn compare_samples(a: &[i16], b: &[i16]) -> CompareStats {
@@ -139,7 +154,12 @@ fn compare_samples(a: &[i16], b: &[i16]) -> CompareStats {
             max_diff = max_diff.max(diff);
         }
     }
-    CompareStats { total, matching, first_diff_offset, max_diff }
+    CompareStats {
+        total,
+        matching,
+        first_diff_offset,
+        max_diff,
+    }
 }
 
 fn print_result(label: &str, stats: &CompareStats, a: &[u8], b: &[u8]) {
@@ -219,7 +239,13 @@ fn print_sample_result(label: &str, stats: &CompareStats, a: &[i16], b: &[i16]) 
 // C reference encode/decode via FFI
 // ---------------------------------------------------------------------------
 
-fn c_encode(pcm: &[i16], sample_rate: i32, channels: i32, bitrate: i32, complexity: i32) -> Vec<u8> {
+fn c_encode(
+    pcm: &[i16],
+    sample_rate: i32,
+    channels: i32,
+    bitrate: i32,
+    complexity: i32,
+) -> Vec<u8> {
     unsafe {
         let mut error: i32 = 0;
         let enc = bindings::opus_encoder_create(
@@ -347,7 +373,7 @@ fn rust_encode(
     bitrate: i32,
     complexity: i32,
 ) -> Vec<u8> {
-    use mdopus::opus::encoder::{OpusEncoder, OPUS_APPLICATION_AUDIO};
+    use mdopus::opus::encoder::{OPUS_APPLICATION_AUDIO, OpusEncoder};
 
     let mut enc = match OpusEncoder::new(sample_rate, channels, OPUS_APPLICATION_AUDIO) {
         Ok(e) => e,
@@ -359,7 +385,10 @@ fn rust_encode(
     enc.set_bitrate(bitrate);
     enc.set_complexity(complexity);
     enc.set_vbr(0); // CBR for deterministic output
-    eprintln!("[RUST] encoder created: sr={} ch={} br={} cx={}", sample_rate, channels, bitrate, complexity);
+    eprintln!(
+        "[RUST] encoder created: sr={} ch={} br={} cx={}",
+        sample_rate, channels, bitrate, complexity
+    );
 
     let frame_size = (sample_rate / 50) as usize; // 20ms frames
     let samples_per_frame = frame_size * channels as usize;
@@ -369,19 +398,30 @@ fn rust_encode(
 
     let mut pos = 0;
     while pos + samples_per_frame <= pcm.len() {
-        match enc.encode(&pcm[pos..pos + samples_per_frame], frame_size as i32,
-                         &mut packet, max_packet as i32) {
+        match enc.encode(
+            &pcm[pos..pos + samples_per_frame],
+            frame_size as i32,
+            &mut packet,
+            max_packet as i32,
+        ) {
             Ok(ret) => {
                 let ret = ret as usize;
                 if pos == 0 {
-                    eprintln!("[RUST] first frame encoded: {} bytes, data[0..min(ret,16)]={:02x?}",
-                        ret, &packet[..ret.min(16)]);
+                    eprintln!(
+                        "[RUST] first frame encoded: {} bytes, data[0..min(ret,16)]={:02x?}",
+                        ret,
+                        &packet[..ret.min(16)]
+                    );
                 }
                 output.extend_from_slice(&(ret as u16).to_le_bytes());
                 output.extend_from_slice(&packet[..ret]);
             }
             Err(code) => {
-                eprintln!("ERROR: Rust encode failed at frame {}: {}", pos / samples_per_frame, code);
+                eprintln!(
+                    "ERROR: Rust encode failed at frame {}: {}",
+                    pos / samples_per_frame,
+                    code
+                );
                 return output; // Return partial output for debugging
             }
         }
@@ -414,13 +454,20 @@ fn rust_decode(encoded: &[u8], sample_rate: i32, channels: i32) -> Vec<i16> {
             break;
         }
 
-        match dec.decode(Some(&encoded[pos..pos + pkt_len]), &mut pcm,
-                         frame_size as i32, false) {
+        match dec.decode(
+            Some(&encoded[pos..pos + pkt_len]),
+            &mut pcm,
+            frame_size as i32,
+            false,
+        ) {
             Ok(ret) => {
                 output.extend_from_slice(&pcm[..ret as usize * channels as usize]);
             }
             Err(code) => {
-                eprintln!("ERROR: Rust decode failed at packet offset {}: {}", pos, code);
+                eprintln!(
+                    "ERROR: Rust decode failed at packet offset {}: {}",
+                    pos, code
+                );
                 return output; // Return partial for debugging
             }
         }
@@ -479,13 +526,14 @@ fn unit_range_coder() -> bool {
             }
         }
         if pass {
-            println!("  C range coder: encode/decode roundtrip OK ({} values)", test_values.len());
+            println!(
+                "  C range coder: encode/decode roundtrip OK ({} values)",
+                test_values.len()
+            );
         }
 
         // Test bit_logp
-        let logp_tests: Vec<(i32, u32)> = vec![
-            (0, 1), (1, 1), (0, 2), (1, 2), (0, 8), (1, 8),
-        ];
+        let logp_tests: Vec<(i32, u32)> = vec![(0, 1), (1, 1), (0, 2), (1, 2), (0, 8), (1, 8)];
         let mut buf2 = vec![0u8; 256];
         let mut enc2 = std::mem::zeroed::<bindings::ec_enc>();
         bindings::ec_enc_init(&mut enc2, buf2.as_mut_ptr(), buf2.len() as u32);
@@ -553,7 +601,10 @@ fn cmd_encode(wav_path: &str, bitrate: i32, complexity: i32) {
     let sr = wav.sample_rate as i32;
     let ch = wav.channels as i32;
 
-    println!("Encoding with C reference (bitrate={}, complexity={})...", bitrate, complexity);
+    println!(
+        "Encoding with C reference (bitrate={}, complexity={})...",
+        bitrate, complexity
+    );
     let c_encoded = c_encode(&wav.samples, sr, ch, bitrate, complexity);
     println!("  C encoded: {} bytes", c_encoded.len());
 

@@ -119,8 +119,8 @@ pub fn clt_mdct_backward(
         let half_ov = (overlap >> 1) as usize;
         let st = l.kfft[shift as usize];
         let input_len = input.len();
-        let mut xp1_idx: usize = 0;                           // walks forward by 2*stride
-        let mut xp2_idx: usize = (n2 - 1) as usize;           // walks backward
+        let mut xp1_idx: usize = 0; // walks forward by 2*stride
+        let mut xp2_idx: usize = (n2 - 1) as usize; // walks backward
         // Note: xp1 and xp2 index into input[] with stride spacing
         // but the actual read positions are xp1_idx*stride and xp2_idx*stride
 
@@ -180,8 +180,8 @@ pub fn clt_mdct_backward(
     // Works from both ends toward the middle, in-place.
     {
         let half_ov = (overlap >> 1) as usize;
-        let mut yp0 = half_ov;                     // walks forward by 2
-        let mut yp1 = half_ov + n2 as usize - 2;  // walks backward by 2
+        let mut yp0 = half_ov; // walks forward by 2
+        let mut yp1 = half_ov + n2 as usize - 2; // walks backward by 2
 
         // Loop to (N4+1)>>1 to handle odd N4. When N4 is odd, the
         // middle pair will be computed twice.
@@ -220,22 +220,16 @@ pub fn clt_mdct_backward(
     // ---- Mirror on both sides for TDAC (windowed overlap-add) ----
     {
         let ov = overlap as usize;
-        let mut xp1 = ov - 1;  // walks backward from end of overlap region
-        let mut yp1: usize = 0;         // walks forward from start
-        let mut wp1: usize = 0;         // window index, ascending
-        let mut wp2 = ov - 1;  // window index, descending
+        let mut xp1 = ov - 1; // walks backward from end of overlap region
+        let mut yp1: usize = 0; // walks forward from start
+        let mut wp1: usize = 0; // window index, ascending
+        let mut wp2 = ov - 1; // window index, descending
 
         for _i in 0..ov / 2 {
             let x1 = output[xp1];
             let x2 = output[yp1];
-            output[yp1] = sub32_ovflw(
-                s_mul(x2, window[wp2] as i32),
-                s_mul(x1, window[wp1] as i32),
-            );
-            output[xp1] = add32_ovflw(
-                s_mul(x2, window[wp1] as i32),
-                s_mul(x1, window[wp2] as i32),
-            );
+            output[yp1] = sub32_ovflw(s_mul(x2, window[wp2] as i32), s_mul(x1, window[wp1] as i32));
+            output[xp1] = add32_ovflw(s_mul(x2, window[wp1] as i32), s_mul(x1, window[wp2] as i32));
             yp1 += 1;
             xp1 -= 1;
             wp1 += 1;
@@ -628,8 +622,7 @@ pub static MDCT_TWIDDLES_960: [i16; 1800] = [
 // =========================================================================
 
 use super::fft::{
-    FFT_STATE_48000_960_0, FFT_STATE_48000_960_1,
-    FFT_STATE_48000_960_2, FFT_STATE_48000_960_3,
+    FFT_STATE_48000_960_0, FFT_STATE_48000_960_1, FFT_STATE_48000_960_2, FFT_STATE_48000_960_3,
 };
 
 /// Static MDCT lookup for the 48 kHz / 960-sample mode.
@@ -676,10 +669,10 @@ mod tests {
         let l = &MDCT_48000_960;
         assert_eq!(l.n, 1920);
         assert_eq!(l.maxshift, 3);
-        assert_eq!(l.kfft[0].nfft, 480);  // N/4 = 1920/4
-        assert_eq!(l.kfft[1].nfft, 240);  // 960/4
-        assert_eq!(l.kfft[2].nfft, 120);  // 480/4
-        assert_eq!(l.kfft[3].nfft, 60);   // 240/4
+        assert_eq!(l.kfft[0].nfft, 480); // N/4 = 1920/4
+        assert_eq!(l.kfft[1].nfft, 240); // 960/4
+        assert_eq!(l.kfft[2].nfft, 120); // 480/4
+        assert_eq!(l.kfft[3].nfft, 60); // 240/4
     }
 
     #[test]
@@ -747,6 +740,10 @@ mod tests {
 
         // Output should be bounded (no overflow to extreme values)
         let max_abs = output.iter().map(|x| x.abs()).max().unwrap_or(0);
-        assert!(max_abs < i32::MAX / 2, "output should be bounded, got max abs {}", max_abs);
+        assert!(
+            max_abs < i32::MAX / 2,
+            "output should be bounded, got max abs {}",
+            max_abs
+        );
     }
 }

@@ -3,17 +3,19 @@
 //! Matches `celt_decoder.c` and parts of `celt.c` from the C reference
 //! (FIXED_POINT path, non-QEXT, non-DEEP_PLC).
 
-use crate::types::*;
 use super::bands::{anti_collapse, celt_lcg_rand, denormalise_bands, quant_all_bands};
 use super::lpc::{celt_autocorr, celt_fir, celt_iir, celt_lpc};
 use super::math_ops::{celt_maxabs16, celt_sqrt, celt_zlog2, frac_div32};
-use super::mdct::{clt_mdct_backward, MDCT_48000_960};
-use super::modes::{CELTMode, DEC_PITCH_BUF_SIZE, MAX_PERIOD, MODE_48000_960_120, init_caps, resampling_factor};
+use super::mdct::{MDCT_48000_960, clt_mdct_backward};
+use super::modes::{
+    CELTMode, DEC_PITCH_BUF_SIZE, MAX_PERIOD, MODE_48000_960_120, init_caps, resampling_factor,
+};
 use super::pitch::{pitch_downsample, pitch_search};
-use super::quant_bands::{unquant_coarse_energy, unquant_fine_energy, unquant_energy_finalise};
+use super::quant_bands::{unquant_coarse_energy, unquant_energy_finalise, unquant_fine_energy};
 use super::range_coder::RangeDecoder;
-use super::rate::{clt_compute_allocation, BITRES};
+use super::rate::{BITRES, clt_compute_allocation};
 use super::vq::renormalise_vector;
+use crate::types::*;
 
 // ===========================================================================
 // Constants
@@ -54,16 +56,20 @@ static TAPSET_ICDF: [u8; 3] = [2, 1, 0];
 
 /// Time-frequency resolution select table [LM][4*isTransient + 2*tf_select + tf_changed].
 static TF_SELECT_TABLE: [[i8; 8]; 4] = [
-    [0, -1, 0, -1,    0, -1, 0, -1],
-    [0, -1, 0, -2,    1,  0, 1, -1],
-    [0, -2, 0, -3,    2,  0, 1, -1],
-    [0, -2, 0, -3,    3,  0, 1, -1],
+    [0, -1, 0, -1, 0, -1, 0, -1],
+    [0, -1, 0, -2, 1, 0, 1, -1],
+    [0, -2, 0, -3, 2, 0, 1, -1],
+    [0, -2, 0, -3, 3, 0, 1, -1],
 ];
 
 /// Comb filter tap gains for 3-tap post-filter, Q15.
 /// Indexed by tapset (0, 1, 2) × tap (center, ±1, ±2).
 static COMB_GAINS: [[i32; 3]; 3] = [
-    [qconst16(0.3066406250, 15), qconst16(0.2170410156, 15), qconst16(0.1296386719, 15)],
+    [
+        qconst16(0.3066406250, 15),
+        qconst16(0.2170410156, 15),
+        qconst16(0.1296386719, 15),
+    ],
     [qconst16(0.4638671875, 15), qconst16(0.2680664062, 15), 0],
     [qconst16(0.7998046875, 15), qconst16(0.1000976562, 15), 0],
 ];
@@ -135,22 +141,14 @@ pub struct CeltDecoder {
 /// Constant-parameter comb filter (after the overlap transition region).
 /// Matches C `comb_filter_const` (non-ARM path, FIXED_POINT).
 #[allow(dead_code)]
-fn comb_filter_const(
-    y: &mut [i32],
-    x: &[i32],
-    t: i32,
-    n: i32,
-    g10: i32,
-    g11: i32,
-    g12: i32,
-) {
+fn comb_filter_const(y: &mut [i32], x: &[i32], t: i32, n: i32, g10: i32, g11: i32, g12: i32) {
     let t = t as usize;
     debug_assert!(t >= COMBFILTER_MINPERIOD as usize);
     // Preload sliding window: x2=x[-T], x1=x[-T+1], x0=x[-T+2]
     let mut x4 = x[0_usize.wrapping_sub(t).wrapping_sub(2)]; // x[i-T-2] at i=0
     let mut x3 = x[0_usize.wrapping_sub(t).wrapping_sub(1)]; // x[i-T-1]
-    let mut x2 = x[0_usize.wrapping_sub(t)];                  // x[i-T]
-    let mut x1 = x[1_usize.wrapping_sub(t)];                  // x[i-T+1]
+    let mut x2 = x[0_usize.wrapping_sub(t)]; // x[i-T]
+    let mut x1 = x[1_usize.wrapping_sub(t)]; // x[i-T+1]
     let mut x0: i32;
     for i in 0..n as usize {
         x0 = x[i + 2 - t]; // x[i-T+2] — this wraps correctly because x points into decode_mem
@@ -221,8 +219,14 @@ fn comb_filter(
 
             // Old filter contribution (1-f) * old_comb
             let old_comb = mult16_32_q15(g00, buf[buf_off + i - t0])
-                + mult16_32_q15(g01, add32(buf[buf_off + i - t0 + 1], buf[buf_off + i - t0 - 1]))
-                + mult16_32_q15(g02, add32(buf[buf_off + i - t0 + 2], buf[buf_off + i - t0 - 2]));
+                + mult16_32_q15(
+                    g01,
+                    add32(buf[buf_off + i - t0 + 1], buf[buf_off + i - t0 - 1]),
+                )
+                + mult16_32_q15(
+                    g02,
+                    add32(buf[buf_off + i - t0 + 2], buf[buf_off + i - t0 - 2]),
+                );
 
             // New filter contribution: update sliding window
             let x0 = buf[buf_off + i + 2 - t1];
@@ -234,9 +238,7 @@ fn comb_filter(
             let f_q15 = shr32(f, 15);
             let one_f = Q15ONE - f_q15;
             buf[buf_off + i] = saturate(
-                buf[buf_off + i]
-                    + mult16_32_q15(one_f, old_comb)
-                    + mult16_32_q15(f_q15, new_comb),
+                buf[buf_off + i] + mult16_32_q15(one_f, old_comb) + mult16_32_q15(f_q15, new_comb),
                 SIG_SAT,
             );
 
@@ -286,12 +288,12 @@ fn comb_filter(
 /// Handles downsampling and accumulation modes.
 /// Matches C `deemphasis()` (FIXED_POINT, non-custom-mode path).
 fn deemphasis(
-    inp: &[&[i32]],   // per-channel input signal slices
-    pcm: &mut [i16],   // interleaved output
+    inp: &[&[i32]],  // per-channel input signal slices
+    pcm: &mut [i16], // interleaved output
     n: i32,
-    cc: i32,            // output channels
+    cc: i32, // output channels
     downsample: i32,
-    coef: &[i32; 4],   // preemph coefficients
+    coef: &[i32; 4],    // preemph coefficients
     mem: &mut [i32; 2], // per-channel IIR state
     accum: bool,
 ) {
@@ -363,7 +365,11 @@ fn tf_decode(
 
     for i in start..end {
         if tell + logp <= effective_budget as u32 {
-            curr ^= if dec.decode_bit_logp(logp as u32) { 1 } else { 0 };
+            curr ^= if dec.decode_bit_logp(logp as u32) {
+                1
+            } else {
+                0
+            };
             tell = dec.tell() as u32;
             tf_changed |= curr;
         }
@@ -397,13 +403,13 @@ fn tf_decode(
 fn celt_synthesis(
     mode: &CELTMode,
     x: &mut [i32],
-    out_syn: &mut [i32], // flat buffer: CC * (DECODE_BUFFER_SIZE + overlap)
+    out_syn: &mut [i32],       // flat buffer: CC * (DECODE_BUFFER_SIZE + overlap)
     out_syn_offsets: &[usize], // per-channel offset where out_syn[c] starts
     old_band_e: &[i32],
     start: i32,
     eff_end: i32,
-    c: i32,              // stream channels
-    cc: i32,             // output channels
+    c: i32,  // stream channels
+    cc: i32, // output channels
     is_transient: bool,
     lm: i32,
     downsample: i32,
@@ -425,7 +431,9 @@ fn celt_synthesis(
 
     if cc == 2 && c == 1 {
         // Mono stream → stereo output: decode once, IMDCT to both channels
-        denormalise_bands(mode, x, &mut freq, old_band_e, start, eff_end, big_m, downsample, silence);
+        denormalise_bands(
+            mode, x, &mut freq, old_band_e, start, eff_end, big_m, downsample, silence,
+        );
 
         // IMDCT for channel 0
         for b_idx in 0..b {
@@ -458,7 +466,9 @@ fn celt_synthesis(
         }
     } else if cc == 1 && c == 2 {
         // Stereo stream → mono output: decode both, average, IMDCT once
-        denormalise_bands(mode, x, &mut freq, old_band_e, start, eff_end, big_m, downsample, silence);
+        denormalise_bands(
+            mode, x, &mut freq, old_band_e, start, eff_end, big_m, downsample, silence,
+        );
         let mut freq2 = vec![0i32; n as usize];
         denormalise_bands(
             mode,
@@ -592,8 +602,7 @@ fn prefilter_and_fold(
             let w_rise = window[i] as i32;
             let w_fall = window[overlap - 1 - i] as i32;
             buf[off + decode_buffer_size - n as usize + i] =
-                mult16_32_q15(w_fall, etmp[overlap - 1 - i])
-                    + mult16_32_q15(w_rise, etmp[i]);
+                mult16_32_q15(w_fall, etmp[overlap - 1 - i]) + mult16_32_q15(w_rise, etmp[i]);
         }
     }
 }
@@ -752,10 +761,7 @@ impl CeltDecoder {
         let _buf_size_per_ch = self.buf_size();
 
         // Determine PLC strategy
-        let curr_frame_type = if self.plc_duration >= 40
-            || start != 0
-            || self.skip_plc != 0
-        {
+        let curr_frame_type = if self.plc_duration >= 40 || start != 0 || self.skip_plc != 0 {
             FRAME_PLC_NOISE
         } else {
             FRAME_PLC_PERIODIC
@@ -773,26 +779,39 @@ impl CeltDecoder {
             for c in 0..cc as usize {
                 let off = self.ch_off(c);
                 let copy_len = (DECODE_BUFFER_SIZE - n + overlap) as usize;
-                self.decode_mem.copy_within(off + n as usize..off + n as usize + copy_len, off);
+                self.decode_mem
+                    .copy_within(off + n as usize..off + n as usize + copy_len, off);
             }
 
             if self.prefilter_and_fold {
                 let offsets: Vec<usize> = (0..cc as usize).map(|c| self.ch_off(c)).collect();
                 prefilter_and_fold(
-                    &mut self.decode_mem, &offsets, cc, overlap, n,
-                    self.postfilter_period_old, self.postfilter_period,
-                    self.postfilter_gain_old, self.postfilter_gain,
-                    self.postfilter_tapset_old, self.postfilter_tapset,
+                    &mut self.decode_mem,
+                    &offsets,
+                    cc,
+                    overlap,
+                    n,
+                    self.postfilter_period_old,
+                    self.postfilter_period,
+                    self.postfilter_gain_old,
+                    self.postfilter_gain,
+                    self.postfilter_tapset_old,
+                    self.postfilter_tapset,
                     mode.window,
                 );
             }
 
             // Energy decay
-            let decay = if loss_duration == 0 { gconst(1.5) } else { gconst(0.5) };
+            let decay = if loss_duration == 0 {
+                gconst(1.5)
+            } else {
+                gconst(0.5)
+            };
             for c in 0..cc as usize {
                 for i in start as usize..end as usize {
                     let idx = c * nb_ebands as usize + i;
-                    self.old_band_e[idx] = imax(self.background_log_e[idx], self.old_band_e[idx] - decay);
+                    self.old_band_e[idx] =
+                        imax(self.background_log_e[idx], self.old_band_e[idx] - decay);
                 }
             }
 
@@ -816,9 +835,19 @@ impl CeltDecoder {
             let out_syn_offsets: Vec<usize> =
                 (0..cc as usize).map(|c| self.out_syn_off(c, n)).collect();
             celt_synthesis(
-                mode, &mut x, &mut self.decode_mem, &out_syn_offsets,
-                &self.old_band_e, start, eff_end, c_stream, cc,
-                false, lm, self.downsample, false,
+                mode,
+                &mut x,
+                &mut self.decode_mem,
+                &out_syn_offsets,
+                &self.old_band_e,
+                start,
+                eff_end,
+                c_stream,
+                cc,
+                false,
+                lm,
+                self.downsample,
+                false,
             );
 
             // Apply postfilter with last parameters
@@ -827,22 +856,32 @@ impl CeltDecoder {
                 self.postfilter_period = imax(self.postfilter_period, COMBFILTER_MINPERIOD);
                 self.postfilter_period_old = imax(self.postfilter_period_old, COMBFILTER_MINPERIOD);
                 comb_filter(
-                    &mut self.decode_mem, syn_off,
-                    self.postfilter_period_old, self.postfilter_period,
+                    &mut self.decode_mem,
+                    syn_off,
+                    self.postfilter_period_old,
+                    self.postfilter_period,
                     mode.short_mdct_size,
-                    self.postfilter_gain_old, self.postfilter_gain,
-                    self.postfilter_tapset_old, self.postfilter_tapset,
-                    mode.window, overlap,
+                    self.postfilter_gain_old,
+                    self.postfilter_gain,
+                    self.postfilter_tapset_old,
+                    self.postfilter_tapset,
+                    mode.window,
+                    overlap,
                 );
                 if lm != 0 {
                     let off2 = syn_off + mode.short_mdct_size as usize;
                     comb_filter(
-                        &mut self.decode_mem, off2,
-                        self.postfilter_period, self.postfilter_period,
+                        &mut self.decode_mem,
+                        off2,
+                        self.postfilter_period,
+                        self.postfilter_period,
                         n - mode.short_mdct_size,
-                        self.postfilter_gain, self.postfilter_gain,
-                        self.postfilter_tapset, self.postfilter_tapset,
-                        mode.window, overlap,
+                        self.postfilter_gain,
+                        self.postfilter_gain,
+                        self.postfilter_tapset,
+                        self.postfilter_tapset,
+                        mode.window,
+                        overlap,
                     );
                 }
             }
@@ -851,7 +890,6 @@ impl CeltDecoder {
             self.postfilter_tapset_old = self.postfilter_tapset;
             self.prefilter_and_fold = false;
             self.skip_plc = 1;
-
         } else {
             // --- Pitch-based PLC ---
             let mut fade: i32 = Q15ONE;
@@ -877,7 +915,8 @@ impl CeltDecoder {
                 let mut _exc = vec![0i32; (max_period + CELT_LPC_ORDER as i32) as usize];
                 let exc_base = CELT_LPC_ORDER; // exc[0] corresponds to _exc[CELT_LPC_ORDER]
                 for i in 0..(max_period + CELT_LPC_ORDER as i32) as usize {
-                    let src_idx = buf_off + decode_buffer_size - max_period as usize - CELT_LPC_ORDER + i;
+                    let src_idx =
+                        buf_off + decode_buffer_size - max_period as usize - CELT_LPC_ORDER + i;
                     _exc[i] = sround16(self.decode_mem[src_idx], SIG_SHIFT);
                 }
 
@@ -948,8 +987,7 @@ impl CeltDecoder {
                         exc_length as usize,
                         CELT_LPC_ORDER,
                     );
-                    _exc[fir_start..fir_start + exc_length as usize]
-                        .copy_from_slice(&fir_tmp);
+                    _exc[fir_start..fir_start + exc_length as usize].copy_from_slice(&fir_tmp);
                 }
 
                 // Compute decay factor from energy ratio of two half-periods
@@ -979,8 +1017,10 @@ impl CeltDecoder {
                 // Move decode memory left by N
                 {
                     let copy_len = (DECODE_BUFFER_SIZE - n) as usize;
-                    self.decode_mem
-                        .copy_within(buf_off + n as usize..buf_off + n as usize + copy_len, buf_off);
+                    self.decode_mem.copy_within(
+                        buf_off + n as usize..buf_off + n as usize + copy_len,
+                        buf_off,
+                    );
                 }
 
                 // Extrapolate excitation with pitch period and decay
@@ -1001,7 +1041,8 @@ impl CeltDecoder {
 
                     // Accumulate energy of the source signal for comparison
                     let src = buf_off + decode_buffer_size - max_period as usize - n as usize
-                        + extrapolation_offset + j;
+                        + extrapolation_offset
+                        + j;
                     let tmp = sround16(self.decode_mem[src], SIG_SHIFT);
                     s1 += shr32(mult16_16(tmp, tmp), 11);
 
@@ -1136,16 +1177,21 @@ impl CeltDecoder {
             self.decode_lost(n, lm);
 
             // Apply de-emphasis and return
-            let offsets: Vec<usize> = (0..cc as usize)
-                .map(|c| self.out_syn_off(c, n))
-                .collect();
+            let offsets: Vec<usize> = (0..cc as usize).map(|c| self.out_syn_off(c, n)).collect();
             let ds = self.downsample;
-            let inp: Vec<&[i32]> = offsets.iter()
+            let inp: Vec<&[i32]> = offsets
+                .iter()
                 .map(|&off| &self.decode_mem[off..off + n as usize])
                 .collect();
             deemphasis(
-                &inp, pcm, n, cc, ds,
-                &mode.preemph, &mut self.preemph_mem_d, accum,
+                &inp,
+                pcm,
+                n,
+                cc,
+                ds,
+                &mode.preemph,
+                &mut self.preemph_mem_d,
+                accum,
             );
             return Ok(frame_size);
         }
@@ -1167,7 +1213,8 @@ impl CeltDecoder {
         // --- For mono, ensure consistency across channel energy slots ---
         if c_stream == 1 {
             for i in 0..nb_ebands as usize {
-                self.old_band_e[i] = imax(self.old_band_e[i], self.old_band_e[nb_ebands as usize + i]);
+                self.old_band_e[i] =
+                    imax(self.old_band_e[i], self.old_band_e[nb_ebands as usize + i]);
             }
         }
 
@@ -1192,8 +1239,7 @@ impl CeltDecoder {
             let has_postfilter = dec.decode_bit_logp(1);
             if has_postfilter {
                 let octave = dec.decode_uint(6);
-                postfilter_pitch =
-                    (16 << octave) as i32 + dec.decode_bits(4 + octave) as i32 - 1;
+                postfilter_pitch = (16 << octave) as i32 + dec.decode_bits(4 + octave) as i32 - 1;
                 let qg = dec.decode_bits(3) as i32;
                 postfilter_gain = qconst16(0.09375, 15) * (qg + 1);
                 tell = dec.tell();
@@ -1257,8 +1303,14 @@ impl CeltDecoder {
         }
 
         unquant_coarse_energy(
-            mode, start, end, &mut self.old_band_e,
-            intra_ener, dec, c_stream, lm,
+            mode,
+            start,
+            end,
+            &mut self.old_band_e,
+            intra_ener,
+            dec,
+            c_stream,
+            lm,
         );
 
         // --- TF resolution ---
@@ -1331,26 +1383,45 @@ impl CeltDecoder {
         let mut balance = 0i32;
 
         let coded_bands = clt_compute_allocation(
-            mode, start, end,
-            &offsets, &cap, alloc_trim,
-            &mut intensity, &mut dual_stereo,
-            bits, &mut balance,
-            &mut pulses, &mut fine_quant, &mut fine_priority,
-            c_stream, lm, dec, false, // encode=false
-            0, // prev (not used in decode)
-            -1, // signal_bandwidth (not used in decode)
+            mode,
+            start,
+            end,
+            &offsets,
+            &cap,
+            alloc_trim,
+            &mut intensity,
+            &mut dual_stereo,
+            bits,
+            &mut balance,
+            &mut pulses,
+            &mut fine_quant,
+            &mut fine_priority,
+            c_stream,
+            lm,
+            dec,
+            false, // encode=false
+            0,     // prev (not used in decode)
+            -1,    // signal_bandwidth (not used in decode)
         );
 
         // --- Fine energy + coefficient decoding ---
         unquant_fine_energy(
-            mode, start, end, &mut self.old_band_e, None, &fine_quant, dec, c_stream,
+            mode,
+            start,
+            end,
+            &mut self.old_band_e,
+            None,
+            &fine_quant,
+            dec,
+            c_stream,
         );
 
         // Shift decode memory left by N
         for c in 0..cc as usize {
             let off = self.ch_off(c);
             let copy_len = (DECODE_BUFFER_SIZE - n + overlap) as usize;
-            self.decode_mem.copy_within(off + n as usize..off + n as usize + copy_len, off);
+            self.decode_mem
+                .copy_within(off + n as usize..off + n as usize + copy_len, off);
         }
 
         // Decode PVQ coefficients
@@ -1364,8 +1435,11 @@ impl CeltDecoder {
             let (x_part, y_part) = x.split_at_mut(n as usize);
             quant_all_bands(
                 false, // decode
-                mode, start, end,
-                x_part, Some(y_part),
+                mode,
+                start,
+                end,
+                x_part,
+                Some(y_part),
                 &mut collapse_masks,
                 &self.old_band_e,
                 &mut pulses,
@@ -1386,8 +1460,11 @@ impl CeltDecoder {
         } else {
             quant_all_bands(
                 false, // decode
-                mode, start, end,
-                &mut x, None,
+                mode,
+                start,
+                end,
+                &mut x,
+                None,
                 &mut collapse_masks,
                 &self.old_band_e,
                 &mut pulses,
@@ -1414,20 +1491,34 @@ impl CeltDecoder {
         }
         if anti_collapse_on != 0 {
             anti_collapse(
-                mode, &mut x, &mut collapse_masks, lm, c_stream, n,
-                start, end,
-                &self.old_band_e, &self.old_log_e, &self.old_log_e2,
-                &pulses, self.rng, false,
+                mode,
+                &mut x,
+                &mut collapse_masks,
+                lm,
+                c_stream,
+                n,
+                start,
+                end,
+                &self.old_band_e,
+                &self.old_log_e,
+                &self.old_log_e2,
+                &pulses,
+                self.rng,
+                false,
             );
         }
 
         // Finalize energy
         unquant_energy_finalise(
-            mode, start, end,
+            mode,
+            start,
+            end,
             Some(&mut self.old_band_e),
-            &fine_quant, &fine_priority,
+            &fine_quant,
+            &fine_priority,
             (data_len as i32) * 8 - dec.tell(),
-            dec, c_stream,
+            dec,
+            c_stream,
         );
 
         // Silence: set all energies to -28 dB
@@ -1441,19 +1532,36 @@ impl CeltDecoder {
         if self.prefilter_and_fold {
             let offsets: Vec<usize> = (0..cc as usize).map(|c| self.ch_off(c)).collect();
             prefilter_and_fold(
-                &mut self.decode_mem, &offsets, cc, overlap, n,
-                self.postfilter_period_old, self.postfilter_period,
-                self.postfilter_gain_old, self.postfilter_gain,
-                self.postfilter_tapset_old, self.postfilter_tapset,
+                &mut self.decode_mem,
+                &offsets,
+                cc,
+                overlap,
+                n,
+                self.postfilter_period_old,
+                self.postfilter_period,
+                self.postfilter_gain_old,
+                self.postfilter_gain,
+                self.postfilter_tapset_old,
+                self.postfilter_tapset,
                 mode.window,
             );
         }
 
         // --- Synthesis ---
         celt_synthesis(
-            mode, &mut x, &mut self.decode_mem, &out_syn_offsets,
-            &self.old_band_e, start, eff_end, c_stream, cc,
-            is_transient, lm, self.downsample, silence,
+            mode,
+            &mut x,
+            &mut self.decode_mem,
+            &out_syn_offsets,
+            &self.old_band_e,
+            start,
+            eff_end,
+            c_stream,
+            cc,
+            is_transient,
+            lm,
+            self.downsample,
+            silence,
         );
 
         // --- Postfilter application ---
@@ -1462,22 +1570,32 @@ impl CeltDecoder {
             self.postfilter_period = imax(self.postfilter_period, COMBFILTER_MINPERIOD);
             self.postfilter_period_old = imax(self.postfilter_period_old, COMBFILTER_MINPERIOD);
             comb_filter(
-                &mut self.decode_mem, syn_off,
-                self.postfilter_period_old, self.postfilter_period,
+                &mut self.decode_mem,
+                syn_off,
+                self.postfilter_period_old,
+                self.postfilter_period,
                 mode.short_mdct_size,
-                self.postfilter_gain_old, self.postfilter_gain,
-                self.postfilter_tapset_old, self.postfilter_tapset,
-                mode.window, overlap,
+                self.postfilter_gain_old,
+                self.postfilter_gain,
+                self.postfilter_tapset_old,
+                self.postfilter_tapset,
+                mode.window,
+                overlap,
             );
             if lm != 0 {
                 let off2 = syn_off + mode.short_mdct_size as usize;
                 comb_filter(
-                    &mut self.decode_mem, off2,
-                    self.postfilter_period, postfilter_pitch,
+                    &mut self.decode_mem,
+                    off2,
+                    self.postfilter_period,
+                    postfilter_pitch,
                     n - mode.short_mdct_size,
-                    self.postfilter_gain, postfilter_gain,
-                    self.postfilter_tapset, postfilter_tapset,
-                    mode.window, overlap,
+                    self.postfilter_gain,
+                    postfilter_gain,
+                    self.postfilter_tapset,
+                    postfilter_tapset,
+                    mode.window,
+                    overlap,
                 );
             }
         }
@@ -1512,12 +1630,13 @@ impl CeltDecoder {
         }
 
         // Background noise estimate: allow max +2.4 dB/second increase
-        let max_bg_increase = imin(160, self.loss_duration + big_m) as i64
-            * gconst(0.001) as i64;
+        let max_bg_increase = imin(160, self.loss_duration + big_m) as i64 * gconst(0.001) as i64;
         let max_bg_increase = max_bg_increase as i32;
         for i in 0..(2 * nb_ebands) as usize {
-            self.background_log_e[i] =
-                imin(self.background_log_e[i] + max_bg_increase, self.old_band_e[i]);
+            self.background_log_e[i] = imin(
+                self.background_log_e[i] + max_bg_increase,
+                self.old_band_e[i],
+            );
         }
 
         // Zero out-of-band energies
@@ -1540,16 +1659,21 @@ impl CeltDecoder {
         self.rng = dec.get_rng();
 
         // --- De-emphasis ---
-        let de_offsets: Vec<usize> = (0..cc as usize)
-            .map(|c| self.out_syn_off(c, n))
-            .collect();
+        let de_offsets: Vec<usize> = (0..cc as usize).map(|c| self.out_syn_off(c, n)).collect();
         let ds = self.downsample;
-        let inp: Vec<&[i32]> = de_offsets.iter()
+        let inp: Vec<&[i32]> = de_offsets
+            .iter()
             .map(|&off| &self.decode_mem[off..off + n as usize])
             .collect();
         deemphasis(
-            &inp, pcm, n, cc, ds,
-            &mode.preemph, &mut self.preemph_mem_d, accum,
+            &inp,
+            pcm,
+            n,
+            cc,
+            ds,
+            &mode.preemph,
+            &mut self.preemph_mem_d,
+            accum,
         );
 
         // Reset PLC state

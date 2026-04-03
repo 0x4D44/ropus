@@ -10,8 +10,8 @@
 //! Pipeline: IF features + xcorr features → conv2d → dense → GRU → soft argmax → pitch.
 
 use super::core::{
-    compute_conv2d, compute_generic_dense, compute_generic_gru, conv2d_init, linear_init,
-    parse_weights, Conv2dLayer, LinearLayer, WeightArray, ACTIVATION_LINEAR, ACTIVATION_TANH,
+    ACTIVATION_LINEAR, ACTIVATION_TANH, Conv2dLayer, LinearLayer, WeightArray, compute_conv2d,
+    compute_generic_dense, compute_generic_gru, conv2d_init, linear_init, parse_weights,
 };
 
 // ===========================================================================
@@ -312,8 +312,7 @@ impl PitchDnnState {
         let mut conv1_tmp1 = [0.0f32; CONV_TMP_SIZE];
         let mut conv1_tmp2 = [0.0f32; CONV_TMP_SIZE];
 
-        conv1_tmp1[1..1 + NB_XCORR_FEATURES]
-            .copy_from_slice(&xcorr_features[..NB_XCORR_FEATURES]);
+        conv1_tmp1[1..1 + NB_XCORR_FEATURES].copy_from_slice(&xcorr_features[..NB_XCORR_FEATURES]);
 
         // Output at offset 1 with hstride=226 leaves [0]=0 per channel for conv2d_2's padding.
         compute_conv2d(
@@ -610,10 +609,7 @@ mod tests {
 
         // Weighted average should be very close to 100 (symmetric neighbors)
         let weighted = sum / count;
-        assert!(
-            (weighted - 100.0).abs() < 0.01,
-            "weighted avg: {weighted}"
-        );
+        assert!((weighted - 100.0).abs() < 0.01, "weighted avg: {weighted}");
 
         // Result should be (1/60)*100 - 1.5 ≈ 0.1667
         let expected = (1.0f32 / 60.0) * 100.0;

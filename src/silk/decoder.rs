@@ -6,10 +6,10 @@
 //! stereo_MS_to_LR.c, stereo_decode_pred.c, decoder_set_fs.c,
 //! resampler.c, biquad_alt.c, and associated resampler private functions.
 
-use crate::types::*;
 use crate::celt::range_coder::RangeDecoder;
 use crate::silk::common::*;
 use crate::silk::tables::*;
+use crate::types::*;
 
 // ===========================================================================
 // State structures
@@ -442,10 +442,7 @@ fn silk_decode_indices(
     if cond_coding == CODE_CONDITIONALLY {
         indices.gains_indices[0] = rc.decode_icdf(&SILK_DELTA_GAIN_ICDF, 8) as i8;
     } else {
-        let msb = rc.decode_icdf(
-            &SILK_GAIN_ICDF[indices.signal_type as usize],
-            8,
-        );
+        let msb = rc.decode_icdf(&SILK_GAIN_ICDF[indices.signal_type as usize], 8);
         let lsb = rc.decode_icdf(&SILK_UNIFORM8_ICDF, 8);
         indices.gains_indices[0] = ((msb << 3) + lsb) as i8;
     }
@@ -457,12 +454,16 @@ fn silk_decode_indices(
     let sig_type_half = (indices.signal_type as usize) >> 1;
     let n_vectors = dec.nlsf_cb.n_vectors as usize;
     let cb1_icdf_offset = sig_type_half * n_vectors;
-    indices.nlsf_indices[0] =
-        rc.decode_icdf(&dec.nlsf_cb.cb1_icdf[cb1_icdf_offset..], 8) as i8;
+    indices.nlsf_indices[0] = rc.decode_icdf(&dec.nlsf_cb.cb1_icdf[cb1_icdf_offset..], 8) as i8;
 
     let mut ec_ix: [i16; MAX_LPC_ORDER] = [0; MAX_LPC_ORDER];
     let mut pred_q8: [u8; MAX_LPC_ORDER] = [0; MAX_LPC_ORDER];
-    silk_nlsf_unpack(&mut ec_ix, &mut pred_q8, dec.nlsf_cb, indices.nlsf_indices[0] as usize);
+    silk_nlsf_unpack(
+        &mut ec_ix,
+        &mut pred_q8,
+        dec.nlsf_cb,
+        indices.nlsf_indices[0] as usize,
+    );
 
     for i in 0..dec.lpc_order {
         let icdf_offset = ec_ix[i] as usize;
@@ -477,8 +478,7 @@ fn silk_decode_indices(
 
     // 4. NLSF interpolation coefficient
     if dec.nb_subfr == MAX_NB_SUBFR {
-        indices.nlsf_interp_coef_q2 =
-            rc.decode_icdf(&SILK_NLSF_INTERPOLATION_FACTOR_ICDF, 8) as i8;
+        indices.nlsf_interp_coef_q2 = rc.decode_icdf(&SILK_NLSF_INTERPOLATION_FACTOR_ICDF, 8) as i8;
     } else {
         indices.nlsf_interp_coef_q2 = 4; // No interpolation for 10ms
     }
@@ -532,11 +532,7 @@ fn silk_decode_indices(
 
 /// Decode a single split in the shell coder tree.
 #[inline]
-fn decode_split(
-    rc: &mut RangeDecoder,
-    p: i32,
-    shell_table: &[u8],
-) -> (i16, i16) {
+fn decode_split(rc: &mut RangeDecoder, p: i32, shell_table: &[u8]) -> (i16, i16) {
     if p > 0 {
         let offset = SILK_SHELL_CODE_TABLE_OFFSETS[p as usize] as usize;
         let child1 = rc.decode_icdf(&shell_table[offset..], 8) as i16;
@@ -547,11 +543,7 @@ fn decode_split(
 }
 
 /// Decode 16 pulse values from the shell coder.
-fn silk_shell_decoder(
-    pulses0: &mut [i16],
-    rc: &mut RangeDecoder,
-    pulses4: i32,
-) {
+fn silk_shell_decoder(pulses0: &mut [i16], rc: &mut RangeDecoder, pulses4: i32) {
     let mut pulses3: [i16; 2] = [0; 2];
     let mut pulses2: [i16; 4] = [0; 4];
     let mut pulses1: [i16; 8] = [0; 8];
@@ -569,18 +561,22 @@ fn silk_shell_decoder(
     pulses1[1] = p1b;
 
     let (a, b) = decode_split(rc, pulses1[0] as i32, &SILK_SHELL_CODE_TABLE0);
-    pulses0[0] = a; pulses0[1] = b;
+    pulses0[0] = a;
+    pulses0[1] = b;
     let (a, b) = decode_split(rc, pulses1[1] as i32, &SILK_SHELL_CODE_TABLE0);
-    pulses0[2] = a; pulses0[3] = b;
+    pulses0[2] = a;
+    pulses0[3] = b;
 
     let (p1a, p1b) = decode_split(rc, pulses2[1] as i32, &SILK_SHELL_CODE_TABLE1);
     pulses1[2] = p1a;
     pulses1[3] = p1b;
 
     let (a, b) = decode_split(rc, pulses1[2] as i32, &SILK_SHELL_CODE_TABLE0);
-    pulses0[4] = a; pulses0[5] = b;
+    pulses0[4] = a;
+    pulses0[5] = b;
     let (a, b) = decode_split(rc, pulses1[3] as i32, &SILK_SHELL_CODE_TABLE0);
-    pulses0[6] = a; pulses0[7] = b;
+    pulses0[6] = a;
+    pulses0[7] = b;
 
     // Right subtree of level 3
     let (p2a, p2b) = decode_split(rc, pulses3[1] as i32, &SILK_SHELL_CODE_TABLE2);
@@ -592,18 +588,22 @@ fn silk_shell_decoder(
     pulses1[5] = p1b;
 
     let (a, b) = decode_split(rc, pulses1[4] as i32, &SILK_SHELL_CODE_TABLE0);
-    pulses0[8] = a; pulses0[9] = b;
+    pulses0[8] = a;
+    pulses0[9] = b;
     let (a, b) = decode_split(rc, pulses1[5] as i32, &SILK_SHELL_CODE_TABLE0);
-    pulses0[10] = a; pulses0[11] = b;
+    pulses0[10] = a;
+    pulses0[11] = b;
 
     let (p1a, p1b) = decode_split(rc, pulses2[3] as i32, &SILK_SHELL_CODE_TABLE1);
     pulses1[6] = p1a;
     pulses1[7] = p1b;
 
     let (a, b) = decode_split(rc, pulses1[6] as i32, &SILK_SHELL_CODE_TABLE0);
-    pulses0[12] = a; pulses0[13] = b;
+    pulses0[12] = a;
+    pulses0[13] = b;
     let (a, b) = decode_split(rc, pulses1[7] as i32, &SILK_SHELL_CODE_TABLE0);
-    pulses0[14] = a; pulses0[15] = b;
+    pulses0[14] = a;
+    pulses0[15] = b;
 }
 
 /// Decode signs for excitation pulses.
@@ -647,10 +647,8 @@ fn silk_decode_pulses(
     frame_length: usize,
 ) {
     // 1. Rate level
-    let rate_level = rc.decode_icdf(
-        &SILK_RATE_LEVELS_ICDF[(signal_type >> 1) as usize],
-        8,
-    ) as usize;
+    let rate_level =
+        rc.decode_icdf(&SILK_RATE_LEVELS_ICDF[(signal_type >> 1) as usize], 8) as usize;
 
     // 2. Shell blocks
     let iter = (frame_length + SHELL_CODEC_FRAME_LENGTH - 1) / SHELL_CODEC_FRAME_LENGTH;
@@ -659,10 +657,7 @@ fn silk_decode_pulses(
 
     for i in 0..iter {
         n_lshifts[i] = 0;
-        sum_pulses[i] = rc.decode_icdf(
-            &SILK_PULSES_PER_BLOCK_ICDF[rate_level],
-            8,
-        );
+        sum_pulses[i] = rc.decode_icdf(&SILK_PULSES_PER_BLOCK_ICDF[rate_level], 8);
         // Handle overflow: while sum_pulses == SILK_MAX_PULSES + 1
         while sum_pulses[i] == SILK_MAX_PULSES + 1 {
             n_lshifts[i] += 1;
@@ -791,14 +786,12 @@ fn silk_decode_parameters(
         for k in 0..nb_subfr {
             let ix = indices.ltp_index[k] as usize;
             for i in 0..LTP_ORDER {
-                dec_ctrl.ltp_coef_q14[k * LTP_ORDER + i] =
-                    (cbk[ix * LTP_ORDER + i] as i16) << 7;
+                dec_ctrl.ltp_coef_q14[k * LTP_ORDER + i] = (cbk[ix * LTP_ORDER + i] as i16) << 7;
             }
         }
 
         // LTP scaling
-        dec_ctrl.ltp_scale_q14 =
-            SILK_LTP_SCALES_TABLE_Q14[indices.ltp_scale_index as usize] as i32;
+        dec_ctrl.ltp_scale_q14 = SILK_LTP_SCALES_TABLE_Q14[indices.ltp_scale_index as usize] as i32;
     } else {
         // Unvoiced
         dec_ctrl.pitch_l = [0; MAX_NB_SUBFR];
@@ -826,8 +819,8 @@ fn silk_decode_core(
     let quant_offset_type = dec.indices.quant_offset_type as i32;
 
     // Quantization offset from table
-    let offset_q10 = SILK_QUANTIZATION_OFFSETS_Q10
-        [(signal_type >> 1) as usize][quant_offset_type as usize] as i32;
+    let offset_q10 = SILK_QUANTIZATION_OFFSETS_Q10[(signal_type >> 1) as usize]
+        [quant_offset_type as usize] as i32;
 
     // NLSF interpolation flag
     let nlsf_interp = (dec.indices.nlsf_interp_coef_q2 as i32) < 4;
@@ -897,7 +890,8 @@ fn silk_decode_core(
             // Re-whitening at subframe 0 or 2 (if interpolated)
             if k == 0 || (k == 2 && nlsf_interp) {
                 // LPC analysis filter on outBuf to produce sLTP
-                let start_idx = ltp_mem_length as i32 - lag - lpc_order as i32 - LTP_ORDER as i32 / 2;
+                let start_idx =
+                    ltp_mem_length as i32 - lag - lpc_order as i32 - LTP_ORDER as i32 / 2;
                 let start_idx = imax(start_idx, 0) as usize;
 
                 for i in start_idx..ltp_mem_length {
@@ -930,11 +924,8 @@ fn silk_decode_core(
                 }
             } else if dec_ctrl.gains_q16[k] != dec_ctrl.gains_q16[k - 1] {
                 // Scale existing LTP state when gain changes
-                let gain_adj_q16 = silk_div32_var_q(
-                    dec_ctrl.gains_q16[k - 1],
-                    dec_ctrl.gains_q16[k],
-                    16,
-                );
+                let gain_adj_q16 =
+                    silk_div32_var_q(dec_ctrl.gains_q16[k - 1], dec_ctrl.gains_q16[k], 16);
                 let n_start = s_ltp_buf_idx as i64 - lag as i64 - LTP_ORDER as i64 / 2;
                 let n_start = imax(n_start as i32, 0) as usize;
                 for i in n_start..s_ltp_buf_idx {
@@ -1002,7 +993,8 @@ fn silk_decode_core(
     }
 
     // Save LPC state for next frame
-    dec.s_lpc_q14_buf.copy_from_slice(&s_lpc_q14[..MAX_LPC_ORDER]);
+    dec.s_lpc_q14_buf
+        .copy_from_slice(&s_lpc_q14[..MAX_LPC_ORDER]);
     dec.prev_gain_q16 = prev_gain_q16;
 }
 
@@ -1025,7 +1017,10 @@ fn silk_plc_update(dec: &mut SilkDecoderState, dec_ctrl: &SilkDecoderControl) {
 
         // Save LTP state, collapse to single tap
         dec.s_plc.ltp_coef_q14 = [0; LTP_ORDER];
-        let gain_clamped = imin(imax(ltp_gain_q14, V_PITCH_GAIN_START_MIN_Q14), V_PITCH_GAIN_START_MAX_Q14);
+        let gain_clamped = imin(
+            imax(ltp_gain_q14, V_PITCH_GAIN_START_MIN_Q14),
+            V_PITCH_GAIN_START_MAX_Q14,
+        );
         dec.s_plc.ltp_coef_q14[LTP_ORDER / 2] = gain_clamped as i16;
 
         // Save pitch in Q8
@@ -1045,10 +1040,7 @@ fn silk_plc_update(dec: &mut SilkDecoderState, dec_ctrl: &SilkDecoderControl) {
     dec.s_plc.prev_ltp_scale_q14 = dec_ctrl.ltp_scale_q14 as i16;
 }
 
-fn silk_plc_conceal(
-    dec: &mut SilkDecoderState,
-    frame: &mut [i16],
-) {
+fn silk_plc_conceal(dec: &mut SilkDecoderState, frame: &mut [i16]) {
     let frame_length = dec.frame_length;
     let subfr_length = dec.subfr_length;
     let nb_subfr = dec.nb_subfr;
@@ -1083,7 +1075,8 @@ fn silk_plc_conceal(
             }
             rand_scale_q14 -= ltp_sum;
             rand_scale_q14 = imax(rand_scale_q14, 3277); // Min 0.2 in Q14
-            rand_scale_q14 = ((rand_scale_q14 as i64 * dec.s_plc.prev_ltp_scale_q14 as i64) >> 14) as i32;
+            rand_scale_q14 =
+                ((rand_scale_q14 as i64 * dec.s_plc.prev_ltp_scale_q14 as i64) >> 14) as i32;
         }
     }
 
@@ -1108,17 +1101,15 @@ fn silk_plc_conceal(
         for i in 0..subfr_length {
             rand_seed = silk_rand(rand_seed);
             let idx = ((rand_seed >> 25) as usize) & RAND_BUF_MASK;
-            let rand_val = if idx < exc_buf.len() {
-                exc_buf[idx]
-            } else {
-                0
-            };
+            let rand_val = if idx < exc_buf.len() { exc_buf[idx] } else { 0 };
 
             // LTP prediction for voiced
             let ltp_pred = if dec.prev_signal_type == TYPE_VOICED {
                 let mut pred: i32 = 2; // Rounding bias
                 for j in 0..LTP_ORDER {
-                    let s_idx = frame_offset as i64 + i as i64 - pitch_lag as i64 + (LTP_ORDER / 2) as i64 - j as i64;
+                    let s_idx = frame_offset as i64 + i as i64 - pitch_lag as i64
+                        + (LTP_ORDER / 2) as i64
+                        - j as i64;
                     if s_idx >= 0 && (s_idx as usize) < s_ltp_q14.len() {
                         pred += ((s_ltp_q14[s_idx as usize] as i64 * b_q14[j] as i64) >> 16) as i32;
                     }
@@ -1129,8 +1120,7 @@ fn silk_plc_conceal(
             };
 
             // Combine: LTP_pred + rand_noise * rand_scale
-            let exc = shl32(ltp_pred, 2)
-                + ((rand_val as i64 * rand_scale_q14 as i64 >> 14) as i32);
+            let exc = shl32(ltp_pred, 2) + ((rand_val as i64 * rand_scale_q14 as i64 >> 14) as i32);
 
             if frame_offset + i < s_ltp_q14.len() {
                 s_ltp_q14[frame_offset + i] = exc;
@@ -1145,11 +1135,13 @@ fn silk_plc_conceal(
                 }
             }
 
-            s_lpc_q14[MAX_LPC_ORDER + i] =
-                silk_add_sat32(exc, silk_lshift_sat32(lpc_pred_q10, 4));
+            s_lpc_q14[MAX_LPC_ORDER + i] = silk_add_sat32(exc, silk_lshift_sat32(lpc_pred_q10, 4));
 
             // Scale and output
-            let out_val = silk_rshift_round(silk_smulww(s_lpc_q14[MAX_LPC_ORDER + i], prev_gain_q10_1), 8);
+            let out_val = silk_rshift_round(
+                silk_smulww(s_lpc_q14[MAX_LPC_ORDER + i], prev_gain_q10_1),
+                8,
+            );
             frame[frame_offset + i] = sat16(out_val);
         }
 
@@ -1162,10 +1154,7 @@ fn silk_plc_conceal(
         // Drift pitch upward
         let pitch_incr = ((dec.s_plc.pitch_l_q8 as i64 * PITCH_DRIFT_FAC_Q16 as i64) >> 16) as i32;
         dec.s_plc.pitch_l_q8 += pitch_incr;
-        dec.s_plc.pitch_l_q8 = imin(
-            dec.s_plc.pitch_l_q8,
-            (MAX_PITCH_LAG_MS * dec.fs_khz) << 8,
-        );
+        dec.s_plc.pitch_l_q8 = imin(dec.s_plc.pitch_l_q8, (MAX_PITCH_LAG_MS * dec.fs_khz) << 8);
         pitch_lag = (dec.s_plc.pitch_l_q8 >> 8).max(1);
 
         // Shift LPC state
@@ -1176,16 +1165,13 @@ fn silk_plc_conceal(
     }
 
     // Save state
-    dec.s_lpc_q14_buf.copy_from_slice(&s_lpc_q14[..MAX_LPC_ORDER]);
+    dec.s_lpc_q14_buf
+        .copy_from_slice(&s_lpc_q14[..MAX_LPC_ORDER]);
     dec.s_plc.rand_seed = rand_seed;
     dec.s_plc.rand_scale_q14 = rand_scale_q14 as i16;
 }
 
-fn silk_plc_glue_frames(
-    dec: &mut SilkDecoderState,
-    frame: &mut [i16],
-    length: usize,
-) {
+fn silk_plc_glue_frames(dec: &mut SilkDecoderState, frame: &mut [i16], length: usize) {
     if dec.loss_cnt > 0 {
         // Transitioning from loss to good: compute concealment energy
         let (energy, shift) = silk_sum_sqr_shift(&frame[..length]);
@@ -1206,10 +1192,10 @@ fn silk_plc_glue_frames(
 
             if conc_e < new_energy {
                 // New frame louder than concealment: fade in
-                let gain_q16 = silk_sqrt_approx(
-                    ((conc_e as i64) << 16) as i32 / imax(new_energy, 1),
-                );
-                let mut slope_q16 = ((65536 - gain_q16) as i64 / imax(length as i32, 1) as i64) as i32;
+                let gain_q16 =
+                    silk_sqrt_approx(((conc_e as i64) << 16) as i32 / imax(new_energy, 1));
+                let mut slope_q16 =
+                    ((65536 - gain_q16) as i64 / imax(length as i32, 1) as i64) as i32;
                 slope_q16 = shl32(slope_q16, 2); // 4x steeper
 
                 let mut cur_gain_q16 = gain_q16;
@@ -1273,7 +1259,9 @@ fn silk_cng(
             let diff = dec_ctrl.gains_q16[k] - dec.s_cng.cng_smth_gain_q16;
             dec.s_cng.cng_smth_gain_q16 += ((diff as i64 * CNG_GAIN_SMTH_Q16 as i64) >> 16) as i32;
             // Fast adapt if 3dB above
-            if dec.s_cng.cng_smth_gain_q16 > ((dec_ctrl.gains_q16[k] as i64 * CNG_GAIN_SMTH_THRESHOLD_Q16 as i64) >> 16) as i32 {
+            if dec.s_cng.cng_smth_gain_q16
+                > ((dec_ctrl.gains_q16[k] as i64 * CNG_GAIN_SMTH_THRESHOLD_Q16 as i64) >> 16) as i32
+            {
                 dec.s_cng.cng_smth_gain_q16 = dec_ctrl.gains_q16[k];
             }
         }
@@ -1291,7 +1279,8 @@ fn silk_cng(
         let mut seed = dec.s_cng.rand_seed;
         for i in 0..length {
             seed = silk_rand(seed);
-            let idx = ((seed >> 24) as usize) & CNG_BUF_MASK_MAX.min(dec.subfr_length.saturating_sub(1));
+            let idx =
+                ((seed >> 24) as usize) & CNG_BUF_MASK_MAX.min(dec.subfr_length.saturating_sub(1));
             cng_sig_q14[MAX_LPC_ORDER + i] = if idx < MAX_FRAME_LENGTH {
                 dec.s_cng.cng_exc_buf_q14[idx]
             } else {
@@ -1311,11 +1300,14 @@ fn silk_cng(
                 let idx = MAX_LPC_ORDER + i - j - 1;
                 lpc_pred_q10 += ((cng_sig_q14[idx] as i64 * cng_a_q12[j] as i64) >> 16) as i32;
             }
-            cng_sig_q14[MAX_LPC_ORDER + i] =
-                silk_add_sat32(cng_sig_q14[MAX_LPC_ORDER + i], silk_lshift_sat32(lpc_pred_q10, 4));
+            cng_sig_q14[MAX_LPC_ORDER + i] = silk_add_sat32(
+                cng_sig_q14[MAX_LPC_ORDER + i],
+                silk_lshift_sat32(lpc_pred_q10, 4),
+            );
 
             // Add CNG to frame output
-            let cng_sample = silk_rshift_round(silk_smulww(cng_sig_q14[MAX_LPC_ORDER + i], gain_q10), 8);
+            let cng_sample =
+                silk_rshift_round(silk_smulww(cng_sig_q14[MAX_LPC_ORDER + i], gain_q10), 8);
             frame[i] = sat16(frame[i] as i32 + sat16(cng_sample) as i32);
         }
 
@@ -1334,10 +1326,7 @@ fn silk_cng(
 // ===========================================================================
 
 /// Decode stereo mid/side predictor coefficients.
-pub fn silk_stereo_decode_pred(
-    rc: &mut RangeDecoder,
-    pred_q13: &mut [i16; 2],
-) {
+pub fn silk_stereo_decode_pred(rc: &mut RangeDecoder, pred_q13: &mut [i16; 2]) {
     // Decode joint index
     let n = rc.decode_icdf(&SILK_STEREO_PRED_JOINT_ICDF, 8);
     let mut ix = [[0i32; 3]; 2];
@@ -1416,7 +1405,7 @@ pub fn silk_stereo_ms_to_lr(
             // Apply prediction: side'[n+1] = side[n+1] + pred0*lowpass(mid) + pred1*mid[n+1]
             let sum_mid = (mid[n] as i32 + 2 * mid[n + 1] as i32 + mid[n + 2] as i32) << 9;
             let pred_side = ((side[n + 1] as i32) << 8)
-                .wrapping_add(((sum_mid as i64 * pred0_q13 as i64 >> 7) as i32))
+                .wrapping_add((sum_mid as i64 * pred0_q13 as i64 >> 7) as i32)
                 .wrapping_add((((mid[n + 1] as i32) << 11) as i64 * pred1_q13 as i64 >> 7) as i32);
             side[n + 1] = sat16(pred_side >> 8);
         }
@@ -1428,7 +1417,7 @@ pub fn silk_stereo_ms_to_lr(
     for n in interp_len..frame_length {
         let sum_mid = (mid[n] as i32 + 2 * mid[n + 1] as i32 + mid[n + 2] as i32) << 9;
         let pred_side = ((side[n + 1] as i32) << 8)
-            .wrapping_add(((sum_mid as i64 * pred0_q13 as i64 >> 7) as i32))
+            .wrapping_add((sum_mid as i64 * pred0_q13 as i64 >> 7) as i32)
             .wrapping_add((((mid[n + 1] as i32) << 11) as i64 * pred1_q13 as i64 >> 7) as i32);
         side[n + 1] = sat16(pred_side >> 8);
     }
@@ -1453,12 +1442,12 @@ pub fn silk_stereo_ms_to_lr(
 
 /// Delay compensation tables (encoder): in=[8,12,16,24,48,96] out=[8,12,16].
 const DELAY_MATRIX_ENC: [[i32; 3]; 6] = [
-    [6,  0,  3],  //  8 kHz in
-    [0,  7,  3],  // 12 kHz in
-    [0,  1, 10],  // 16 kHz in
-    [0,  2,  6],  // 24 kHz in
+    [6, 0, 3],    //  8 kHz in
+    [0, 7, 3],    // 12 kHz in
+    [0, 1, 10],   // 16 kHz in
+    [0, 2, 6],    // 24 kHz in
     [18, 10, 12], // 48 kHz in
-    [0,  0, 44],  // 96 kHz in
+    [0, 0, 44],   // 96 kHz in
 ];
 
 /// Delay compensation tables (decoder): in=[8,12,16] out=[8,12,16,24,48,96].
@@ -1480,12 +1469,7 @@ fn rate_id(r: i32) -> usize {
 }
 
 /// Initialize the resampler.
-fn silk_resampler_init(
-    s: &mut SilkResamplerState,
-    fs_hz_in: i32,
-    fs_hz_out: i32,
-    for_enc: bool,
-) {
+fn silk_resampler_init(s: &mut SilkResamplerState, fs_hz_in: i32, fs_hz_out: i32, for_enc: bool) {
     *s = SilkResamplerState::default();
     s.fs_in_khz = fs_hz_in / 1000;
     s.fs_out_khz = fs_hz_out / 1000;
@@ -1573,7 +1557,7 @@ fn silk_resampler_private_up2_hq(
 ) {
     // Allpass coefficients (from resampler_rom.h)
     const UP2_HQ_0: [i32; 3] = [1746, 14986, -26453]; // Even path
-    const UP2_HQ_1: [i32; 3] = [6854, 25769, -9994];  // Odd path
+    const UP2_HQ_1: [i32; 3] = [6854, 25769, -9994]; // Odd path
 
     for k in 0..len {
         let in32 = (input[k] as i32) << 10;
@@ -1861,14 +1845,22 @@ fn silk_resampler_private_iir_fir(
             let table_index = smulwb(index_q16 & 0xFFFF, 12) as usize;
             let buf_idx = (index_q16 >> 16) as usize;
 
-            let mut res_q15 = (buf[buf_idx] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[table_index][0] as i32);
-            res_q15 += (buf[buf_idx + 1] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[table_index][1] as i32);
-            res_q15 += (buf[buf_idx + 2] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[table_index][2] as i32);
-            res_q15 += (buf[buf_idx + 3] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[table_index][3] as i32);
-            res_q15 += (buf[buf_idx + 4] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[11 - table_index][3] as i32);
-            res_q15 += (buf[buf_idx + 5] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[11 - table_index][2] as i32);
-            res_q15 += (buf[buf_idx + 6] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[11 - table_index][1] as i32);
-            res_q15 += (buf[buf_idx + 7] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[11 - table_index][0] as i32);
+            let mut res_q15 =
+                (buf[buf_idx] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[table_index][0] as i32);
+            res_q15 +=
+                (buf[buf_idx + 1] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[table_index][1] as i32);
+            res_q15 +=
+                (buf[buf_idx + 2] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[table_index][2] as i32);
+            res_q15 +=
+                (buf[buf_idx + 3] as i32) * (SILK_RESAMPLER_FRAC_FIR_12[table_index][3] as i32);
+            res_q15 += (buf[buf_idx + 4] as i32)
+                * (SILK_RESAMPLER_FRAC_FIR_12[11 - table_index][3] as i32);
+            res_q15 += (buf[buf_idx + 5] as i32)
+                * (SILK_RESAMPLER_FRAC_FIR_12[11 - table_index][2] as i32);
+            res_q15 += (buf[buf_idx + 6] as i32)
+                * (SILK_RESAMPLER_FRAC_FIR_12[11 - table_index][1] as i32);
+            res_q15 += (buf[buf_idx + 7] as i32)
+                * (SILK_RESAMPLER_FRAC_FIR_12[11 - table_index][0] as i32);
 
             if out_ptr < out.len() {
                 out[out_ptr] = sat16(silk_rshift_round(res_q15, 15));
@@ -1917,12 +1909,7 @@ fn silk_resampler_private_ar2(
 }
 
 /// Main resampler entry point.
-pub fn silk_resampler(
-    s: &mut SilkResamplerState,
-    out: &mut [i16],
-    input: &[i16],
-    in_len: usize,
-) {
+pub fn silk_resampler(s: &mut SilkResamplerState, out: &mut [i16], input: &[i16], in_len: usize) {
     // C reference: all modes share delay buffer setup/teardown
     // (resampler.c lines 197-200, 220-221)
     let n_samples = (s.fs_in_khz - s.input_delay).max(0) as usize;
@@ -1942,12 +1929,7 @@ pub fn silk_resampler(
     if s.resampler_function == USE_SILK_RESAMPLER_UP2_HQ {
         let delay_len = fs_in.min(s.delay_buf.len());
         let delay_copy: Vec<i16> = s.delay_buf[..delay_len].to_vec();
-        silk_resampler_private_up2_hq(
-            &mut s.s_iir,
-            out,
-            &delay_copy,
-            delay_len,
-        );
+        silk_resampler_private_up2_hq(&mut s.s_iir, out, &delay_copy, delay_len);
         if in_len > fs_in {
             silk_resampler_private_up2_hq(
                 &mut s.s_iir,
@@ -2022,8 +2004,8 @@ pub fn silk_decode_frame(
         let mut dec_ctrl = SilkDecoderControl::default();
 
         // Allocate pulse buffer (rounded up to shell codec frame)
-        let pulse_len = (frame_length + SHELL_CODEC_FRAME_LENGTH - 1)
-            & !(SHELL_CODEC_FRAME_LENGTH - 1);
+        let pulse_len =
+            (frame_length + SHELL_CODEC_FRAME_LENGTH - 1) & !(SHELL_CODEC_FRAME_LENGTH - 1);
         let mut pulses = vec![0i16; pulse_len];
 
         // Decode indices
@@ -2192,10 +2174,7 @@ pub fn silk_decode(
                     if nfpp == 1 {
                         decoder.channel_state[n].lbrr_flags[0] = true;
                     } else {
-                        let symbol = rc.decode_icdf(
-                            SILK_LBRR_FLAGS_ICDF_PTR[nfpp - 2],
-                            8,
-                        );
+                        let symbol = rc.decode_icdf(SILK_LBRR_FLAGS_ICDF_PTR[nfpp - 2], 8);
                         for i in 0..nfpp {
                             decoder.channel_state[n].lbrr_flags[i] = ((symbol >> i) & 1) != 0;
                         }
@@ -2218,13 +2197,7 @@ pub fn silk_decode(
                             } else {
                                 CODE_INDEPENDENTLY
                             };
-                            silk_decode_indices(
-                                &mut decoder.channel_state[n],
-                                rc,
-                                i,
-                                true,
-                                cond,
-                            );
+                            silk_decode_indices(&mut decoder.channel_state[n], rc, i, true, cond);
                             let fl = decoder.channel_state[n].frame_length;
                             let mut dummy_pulses = vec![0i16; fl + SHELL_CODEC_FRAME_LENGTH];
                             silk_decode_pulses(
@@ -2247,8 +2220,7 @@ pub fn silk_decode(
     if n_channels_internal == 2 {
         if lost_flag == FLAG_DECODE_NORMAL
             || (lost_flag == FLAG_DECODE_LBRR
-                && decoder.channel_state[1].lbrr_flags
-                    [decoder.channel_state[0].n_frames_decoded])
+                && decoder.channel_state[1].lbrr_flags[decoder.channel_state[0].n_frames_decoded])
         {
             silk_stereo_decode_pred(rc, &mut ms_pred_q13);
             if n_channels_internal == 2 {
@@ -2346,8 +2318,7 @@ pub fn silk_decode(
         let mult_tab: [i32; 3] = [6, 4, 3]; // for fs_kHz in {8, 12, 16}
         let fs_khz = decoder.channel_state[0].fs_khz;
         let idx = ((fs_khz - 8) >> 2) as usize;
-        dec_control.prev_pitch_lag =
-            decoder.channel_state[0].lag_prev * mult_tab[idx.min(2)];
+        dec_control.prev_pitch_lag = decoder.channel_state[0].lag_prev * mult_tab[idx.min(2)];
     } else {
         dec_control.prev_pitch_lag = 0;
     }
@@ -2476,7 +2447,13 @@ mod tests {
         let min_lag = PITCH_EST_MIN_LAG_MS as i32 * 16;
         let max_lag = PITCH_EST_MAX_LAG_MS as i32 * 16;
         for &lag in &pitch_lags {
-            assert!(lag >= min_lag && lag <= max_lag, "lag {} out of range [{}, {}]", lag, min_lag, max_lag);
+            assert!(
+                lag >= min_lag && lag <= max_lag,
+                "lag {} out of range [{}, {}]",
+                lag,
+                min_lag,
+                max_lag
+            );
         }
     }
 

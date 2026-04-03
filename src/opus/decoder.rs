@@ -6,7 +6,7 @@
 use crate::celt::decoder::CeltDecoder;
 use crate::celt::math_ops::celt_exp2;
 use crate::celt::range_coder::RangeDecoder;
-use crate::silk::decoder::{silk_decode, SilkDecControl, SilkDecoder};
+use crate::silk::decoder::{SilkDecControl, SilkDecoder, silk_decode};
 use crate::types::*;
 
 // ===========================================================================
@@ -68,7 +68,11 @@ pub fn opus_packet_get_samples_per_frame(data: &[u8], fs: i32) -> i32 {
         (fs << audiosize) / 400
     } else if (data[0] & 0x60) == 0x60 {
         // Hybrid: bit 3 selects 10/20ms
-        if data[0] & 0x08 != 0 { fs / 50 } else { fs / 100 }
+        if data[0] & 0x08 != 0 {
+            fs / 50
+        } else {
+            fs / 100
+        }
     } else {
         // SILK-only: bits 4-3 select 10/20/40/60ms
         let audiosize = ((data[0] >> 3) & 0x3) as i32;
@@ -402,11 +406,7 @@ fn smooth_fade(
             let idx = i * channels as usize + c;
             // out = w * in2 + (1-w) * in1, result >>15 back to Q0
             out[idx] = shr32(
-                mac16_16(
-                    mult16_16(w, in2[idx] as i32),
-                    Q15ONE - w,
-                    in1[idx] as i32,
-                ),
+                mac16_16(mult16_16(w, in2[idx] as i32), Q15ONE - w, in1[idx] as i32),
                 15,
             ) as i16;
         }
@@ -816,7 +816,8 @@ impl OpusDecoder {
         // --- 5 ms redundant frame for CELT→SILK ---
         if redundancy && celt_to_silk {
             let _ = self.celt_dec.set_start_band(0);
-            let redundancy_data = &frame_data[len as usize..len as usize + redundancy_bytes as usize];
+            let redundancy_data =
+                &frame_data[len as usize..len as usize + redundancy_bytes as usize];
             let _ = self.celt_dec.decode_with_ec(
                 Some(redundancy_data),
                 &mut redundant_audio,
@@ -881,7 +882,8 @@ impl OpusDecoder {
         if redundancy && !celt_to_silk {
             self.celt_dec.reset();
             let _ = self.celt_dec.set_start_band(0);
-            let redundancy_data = &frame_data[len as usize..len as usize + redundancy_bytes as usize];
+            let redundancy_data =
+                &frame_data[len as usize..len as usize + redundancy_bytes as usize];
             let _ = self.celt_dec.decode_with_ec(
                 Some(redundancy_data),
                 &mut redundant_audio,
@@ -910,9 +912,7 @@ impl OpusDecoder {
         }
 
         // --- Apply CELT→SILK redundancy to output ---
-        if redundancy
-            && celt_to_silk
-            && (self.prev_mode != MODE_SILK_ONLY || self.prev_redundancy)
+        if redundancy && celt_to_silk && (self.prev_mode != MODE_SILK_ONLY || self.prev_redundancy)
         {
             let ch = self.channels as usize;
             let n_f2_5 = f2_5 as usize * ch;
@@ -1013,9 +1013,7 @@ impl OpusDecoder {
             return Err(OPUS_BAD_ARG);
         }
         // For FEC/PLC, frame_size must be a multiple of 2.5 ms
-        let is_plc_or_fec = decode_fec
-            || data.is_none()
-            || data.map_or(true, |d| d.is_empty());
+        let is_plc_or_fec = decode_fec || data.is_none() || data.map_or(true, |d| d.is_empty());
         if is_plc_or_fec && frame_size % (self.fs / 400) != 0 {
             return Err(OPUS_BAD_ARG);
         }
@@ -1092,8 +1090,7 @@ impl OpusDecoder {
             self.bandwidth = packet_bandwidth;
             self.frame_size = packet_frame_size;
             self.stream_channels = packet_stream_channels;
-            let fec_offset =
-                (frame_size - packet_frame_size) as usize * self.channels as usize;
+            let fec_offset = (frame_size - packet_frame_size) as usize * self.channels as usize;
             let ret = self.decode_frame(
                 Some(&payload[..sizes[0] as usize]),
                 &mut pcm[fec_offset..],
@@ -1183,14 +1180,7 @@ impl OpusDecoder {
             }
         }
         let mut out = vec![0i16; actual_frame_size as usize * self.channels as usize];
-        let ret = self.decode_native(
-            data,
-            &mut out,
-            actual_frame_size,
-            decode_fec,
-            false,
-            None,
-        )?;
+        let ret = self.decode_native(data, &mut out, actual_frame_size, decode_fec, false, None)?;
         // Convert i16 → i32 (24-bit): SHL32(EXTEND32(a), 8)
         let n = ret as usize * self.channels as usize;
         for i in 0..n {
@@ -1222,14 +1212,7 @@ impl OpusDecoder {
             }
         }
         let mut out = vec![0i16; actual_frame_size as usize * self.channels as usize];
-        let ret = self.decode_native(
-            data,
-            &mut out,
-            actual_frame_size,
-            decode_fec,
-            false,
-            None,
-        )?;
+        let ret = self.decode_native(data, &mut out, actual_frame_size, decode_fec, false, None)?;
         // Convert i16 → f32: a / 32768.0
         let n = ret as usize * self.channels as usize;
         for i in 0..n {
@@ -1334,20 +1317,47 @@ impl OpusDecoder {
     // pub(crate) accessors for multistream module
     // -----------------------------------------------------------------------
 
-    pub(crate) fn ms_get_sample_rate(&self) -> i32 { self.fs }
-    pub(crate) fn ms_get_bandwidth(&self) -> i32 { self.bandwidth }
-    pub(crate) fn ms_get_range_final(&self) -> u32 { self.range_final }
-    pub(crate) fn ms_get_last_packet_duration(&self) -> i32 { self.last_packet_duration }
-    pub(crate) fn ms_get_gain(&self) -> i32 { self.decode_gain }
-    pub(crate) fn ms_set_gain(&mut self, gain: i32) { self.decode_gain = gain; }
-    pub(crate) fn ms_get_complexity(&self) -> i32 { self.complexity }
-    pub(crate) fn ms_set_complexity(&mut self, v: i32) { self.complexity = v; }
+    #[allow(dead_code)]
+    pub(crate) fn ms_get_sample_rate(&self) -> i32 {
+        self.fs
+    }
+    #[allow(dead_code)]
+    pub(crate) fn ms_get_bandwidth(&self) -> i32 {
+        self.bandwidth
+    }
+    #[allow(dead_code)]
+    pub(crate) fn ms_get_range_final(&self) -> u32 {
+        self.range_final
+    }
+    #[allow(dead_code)]
+    pub(crate) fn ms_get_last_packet_duration(&self) -> i32 {
+        self.last_packet_duration
+    }
+    #[allow(dead_code)]
+    pub(crate) fn ms_get_gain(&self) -> i32 {
+        self.decode_gain
+    }
+    #[allow(dead_code)]
+    pub(crate) fn ms_set_gain(&mut self, gain: i32) {
+        self.decode_gain = gain;
+    }
+    #[allow(dead_code)]
+    pub(crate) fn ms_get_complexity(&self) -> i32 {
+        self.complexity
+    }
+    #[allow(dead_code)]
+    pub(crate) fn ms_set_complexity(&mut self, v: i32) {
+        self.complexity = v;
+    }
+    #[allow(dead_code)]
     pub(crate) fn ms_get_phase_inversion_disabled(&self) -> i32 {
         if self.celt_dec.disable_inv { 1 } else { 0 }
     }
+    #[allow(dead_code)]
     pub(crate) fn ms_set_phase_inversion_disabled(&mut self, v: i32) {
         self.celt_dec.disable_inv = v != 0;
     }
+    #[allow(dead_code)]
     pub(crate) fn ms_reset(&mut self) {
         // Reset decoder state
         self.stream_channels = self.channels;
@@ -1446,15 +1456,24 @@ mod tests {
     #[test]
     fn test_get_bandwidth() {
         // CELT: bits 6-5 = 00 → mediumband (mapped to narrowband)
-        assert_eq!(opus_packet_get_bandwidth(&[0x80]), OPUS_BANDWIDTH_NARROWBAND);
+        assert_eq!(
+            opus_packet_get_bandwidth(&[0x80]),
+            OPUS_BANDWIDTH_NARROWBAND
+        );
         // CELT: bits 6-5 = 01 → wideband
         assert_eq!(opus_packet_get_bandwidth(&[0xA0]), OPUS_BANDWIDTH_WIDEBAND);
         // Hybrid: bit 4 = 0 → superwideband
-        assert_eq!(opus_packet_get_bandwidth(&[0x60]), OPUS_BANDWIDTH_SUPERWIDEBAND);
+        assert_eq!(
+            opus_packet_get_bandwidth(&[0x60]),
+            OPUS_BANDWIDTH_SUPERWIDEBAND
+        );
         // Hybrid: bit 4 = 1 → fullband
         assert_eq!(opus_packet_get_bandwidth(&[0x70]), OPUS_BANDWIDTH_FULLBAND);
         // SILK: bits 6-5 = 00 → narrowband
-        assert_eq!(opus_packet_get_bandwidth(&[0x00]), OPUS_BANDWIDTH_NARROWBAND);
+        assert_eq!(
+            opus_packet_get_bandwidth(&[0x00]),
+            OPUS_BANDWIDTH_NARROWBAND
+        );
     }
 
     #[test]

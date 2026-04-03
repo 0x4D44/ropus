@@ -40,18 +40,16 @@ pub fn isqrt32(mut val: u32) -> u32 {
 /// Integer log2. Returns `EC_ILOG(x) - 1`. Safe for x <= 0 (returns 0).
 #[inline(always)]
 pub fn celt_ilog2(x: i32) -> i32 {
-    if x <= 0 { return 0; }
+    if x <= 0 {
+        return 0;
+    }
     ec_ilog(x as u32) - 1
 }
 
 /// Integer log2, safe for zero (returns 0 for x <= 0).
 #[inline(always)]
 pub fn celt_zlog2(x: i32) -> i32 {
-    if x <= 0 {
-        0
-    } else {
-        celt_ilog2(x)
-    }
+    if x <= 0 { 0 } else { celt_ilog2(x) }
 }
 
 // ===========================================================================
@@ -67,7 +65,10 @@ pub fn celt_rsqrt_norm(x: i32) -> i32 {
     // Minimax quadratic seed (Q14):
     //   r = 1.4378 + n*(-0.8234 + n*0.4096)
     //   Coefficients: 23557, -13490, 6713
-    let r: i32 = add16(23557, mult16_16_q15(n, add16(-13490, mult16_16_q15(n, 6713))));
+    let r: i32 = add16(
+        23557,
+        mult16_16_q15(n, add16(-13490, mult16_16_q15(n, 6713))),
+    );
 
     // y = x*r*r - 1 in Q15, range [-1564, 1594]
     let r2: i32 = mult16_16_q15(r, r);
@@ -239,10 +240,7 @@ pub fn celt_sqrt(x: i32) -> i32 {
                         C[2],
                         mult16_16_q15(
                             n,
-                            add16(
-                                C[3],
-                                mult16_16_q15(n, add16(C[4], mult16_16_q15(n, C[5]))),
-                            ),
+                            add16(C[3], mult16_16_q15(n, add16(C[4], mult16_16_q15(n, C[5])))),
                         ),
                     ),
                 ),
@@ -354,7 +352,10 @@ pub fn celt_cos_norm32(x: i32) -> i32 {
     let x_sq_q29 = mult32_32_q31(x, x);
 
     // Horner evaluation with step-by-step expansion
-    let mut tmp = add32(COS_NORM_COEFF_A3, mult32_32_q31(x_sq_q29, COS_NORM_COEFF_A4));
+    let mut tmp = add32(
+        COS_NORM_COEFF_A3,
+        mult32_32_q31(x_sq_q29, COS_NORM_COEFF_A4),
+    );
     tmp = add32(COS_NORM_COEFF_A2, mult32_32_q31(x_sq_q29, tmp));
     tmp = add32(COS_NORM_COEFF_A1, mult32_32_q31(x_sq_q29, tmp));
 
@@ -420,7 +421,10 @@ fn celt_exp2_frac(x: i32) -> i32 {
     let frac = shl16(x, 4);
     add16(
         D0,
-        mult16_16_q15(frac, add16(D1, mult16_16_q15(frac, add16(D2, mult16_16_q15(D3, frac))))),
+        mult16_16_q15(
+            frac,
+            add16(D1, mult16_16_q15(frac, add16(D2, mult16_16_q15(D3, frac)))),
+        ),
     )
 }
 
@@ -518,7 +522,10 @@ pub fn celt_atan01(x: i32) -> i32 {
         x,
         add32(
             M1,
-            mult16_16_p15(x, add32(M2, mult16_16_p15(x, add32(M3, mult16_16_p15(M4, x))))),
+            mult16_16_p15(
+                x,
+                add32(M2, mult16_16_p15(x, add32(M3, mult16_16_p15(M4, x)))),
+            ),
         ),
     )
 }
@@ -636,7 +643,9 @@ mod tests {
     #[test]
     fn test_isqrt32_property() {
         // For a range of values, verify floor(sqrt(n))^2 <= n < (floor(sqrt(n))+1)^2
-        for val in [1u32, 2, 7, 15, 255, 1023, 65535, 100000, 0x7FFFFFFF, 0xFFFFFFFE] {
+        for val in [
+            1u32, 2, 7, 15, 255, 1023, 65535, 100000, 0x7FFFFFFF, 0xFFFFFFFE,
+        ] {
             let s = isqrt32(val);
             assert!(
                 (s as u64) * (s as u64) <= val as u64,

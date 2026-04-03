@@ -3,9 +3,9 @@
 //! Matches the C reference: `celt_lpc.c`, `celt_lpc.h` (fixed-point path only,
 //! OPUS_FAST_INT64 enabled). All functions produce bit-exact output.
 
-use crate::types::*;
 use super::math_ops::{celt_ilog2, frac_div32};
 use super::pitch::{celt_pitch_xcorr, xcorr_kernel};
+use crate::types::*;
 
 // ===========================================================================
 // Levinson-Durbin LPC analysis
@@ -244,7 +244,7 @@ pub fn celt_fir(x: &[i32], num: &[i32], y: &mut [i32], n: usize, ord: usize) {
         // = xcorr_kernel(rnum, x + i, sum, ord)
         xcorr_kernel(&rnum, &x[i..], &mut sum, ord);
 
-        y[i]     = sround16(sum[0], SIG_SHIFT);
+        y[i] = sround16(sum[0], SIG_SHIFT);
         y[i + 1] = sround16(sum[1], SIG_SHIFT);
         y[i + 2] = sround16(sum[2], SIG_SHIFT);
         y[i + 3] = sround16(sum[3], SIG_SHIFT);
@@ -283,14 +283,7 @@ pub fn celt_fir(x: &[i32], num: &[i32], y: &mut [i32], n: usize, ord: usize) {
 /// Here, `x` and `y_out` may refer to the same data — the caller can copy
 /// the input beforehand if needed, or the function handles it by reading
 /// `x[i]` before writing `y_out[i]`.
-pub fn celt_iir(
-    x: &[i32],
-    den: &[i32],
-    y_out: &mut [i32],
-    n: usize,
-    ord: usize,
-    mem: &mut [i32],
-) {
+pub fn celt_iir(x: &[i32], den: &[i32], y_out: &mut [i32], n: usize, ord: usize, mem: &mut [i32]) {
     debug_assert!(ord & 3 == 0, "celt_iir: order must be a multiple of 4");
 
     // Reverse denominator coefficients
@@ -322,23 +315,23 @@ pub fn celt_iir(
 
         // Patch up: account for the IIR feedback between the 4 outputs that
         // xcorr_kernel couldn't know about (it treated them as FIR).
-        y[i + ord]     = -sround16(sum[0], SIG_SHIFT);
-        y_out[i]       = sum[0];
+        y[i + ord] = -sround16(sum[0], SIG_SHIFT);
+        y_out[i] = sum[0];
 
         sum[1] = mac16_16(sum[1], y[i + ord], den[0]);
         y[i + ord + 1] = -sround16(sum[1], SIG_SHIFT);
-        y_out[i + 1]   = sum[1];
+        y_out[i + 1] = sum[1];
 
         sum[2] = mac16_16(sum[2], y[i + ord + 1], den[0]);
-        sum[2] = mac16_16(sum[2], y[i + ord],     den[1]);
+        sum[2] = mac16_16(sum[2], y[i + ord], den[1]);
         y[i + ord + 2] = -sround16(sum[2], SIG_SHIFT);
-        y_out[i + 2]   = sum[2];
+        y_out[i + 2] = sum[2];
 
         sum[3] = mac16_16(sum[3], y[i + ord + 2], den[0]);
         sum[3] = mac16_16(sum[3], y[i + ord + 1], den[1]);
-        sum[3] = mac16_16(sum[3], y[i + ord],     den[2]);
+        sum[3] = mac16_16(sum[3], y[i + ord], den[2]);
         y[i + ord + 3] = -sround16(sum[3], SIG_SHIFT);
-        y_out[i + 3]   = sum[3];
+        y_out[i + 3] = sum[3];
 
         i += 4;
     }

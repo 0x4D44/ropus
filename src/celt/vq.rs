@@ -4,10 +4,10 @@
 //! and stereo angle computation. Matches `vq.c`/`vq.h` in the C reference
 //! (FIXED_POINT path, no ENABLE_QEXT, no SIMD overrides).
 
-use crate::types::*;
-use super::math_ops::*;
+use super::cwrs::{celt_pvq_v, cwrsi, icwrs};
 use super::ec_ctx::EcCoder;
-use super::cwrs::{icwrs, cwrsi, celt_pvq_v};
+use super::math_ops::*;
+use crate::types::*;
 
 // ===========================================================================
 // Constants
