@@ -23,7 +23,7 @@ use super::range_coder::RangeEncoder;
 use super::rate::{
     BITRES, SPREAD_ICDF, TAPSET_ICDF, TF_SELECT_TABLE, TRIM_ICDF, clt_compute_allocation,
 };
-use super::tables::E_MEANS;
+use super::quant_bands::EMEANS;
 use super::vq::celt_inner_prod_norm_shift;
 use crate::types::*;
 
@@ -42,6 +42,12 @@ const MAX_PACKET_BYTES: i32 = 1275;
 
 /// Silence/reset energy level in log2 domain (≈ -168 dB).
 const GCONST_NEG28: i32 = -28 << DB_SHIFT;
+
+/// Convert floating-point constant to Q(DB_SHIFT) fixed-point.
+/// Matches C `GCONST(x)` = `(celt_glog)(0.5 + x * (1 << DB_SHIFT))`.
+const fn gconst(x: f64) -> i32 {
+    qconst32(x, DB_SHIFT as u32)
+}
 
 /// Opus error codes matching the C reference.
 pub const OPUS_OK: i32 = 0;
@@ -927,25 +933,6 @@ fn tf_analysis(
         }
     }
 
-    // Debug: dump metric and importance
-    {
-        static TF_FC: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
-        let tffc = TF_FC.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        if tffc <= 2 {
-            eprintln!("[RS TF_METRIC] frame={} metric[0..8]=[{},{},{},{},{},{},{},{}] imp[0..8]=[{},{},{},{},{},{},{},{}]",
-                tffc,
-                metric.get(0).copied().unwrap_or(-1), metric.get(1).copied().unwrap_or(-1),
-                metric.get(2).copied().unwrap_or(-1), metric.get(3).copied().unwrap_or(-1),
-                metric.get(4).copied().unwrap_or(-1), metric.get(5).copied().unwrap_or(-1),
-                metric.get(6).copied().unwrap_or(-1), metric.get(7).copied().unwrap_or(-1),
-                importance.get(0).copied().unwrap_or(-1), importance.get(1).copied().unwrap_or(-1),
-                importance.get(2).copied().unwrap_or(-1), importance.get(3).copied().unwrap_or(-1),
-                importance.get(4).copied().unwrap_or(-1), importance.get(5).copied().unwrap_or(-1),
-                importance.get(6).copied().unwrap_or(-1), importance.get(7).copied().unwrap_or(-1),
-            );
-        }
-    }
-
     // Search for optimal tf_select
     let mut tf_select = 0i32;
     let mut selcost = [0i32; 2];
@@ -1272,9 +1259,9 @@ fn median_of_3(a: i32, b: i32, c: i32) -> i32 {
 /// Matches C `dynalloc_analysis()` from `celt_encoder.c`.
 /// Computes per-band boost offsets based on spectral envelope analysis.
 fn dynalloc_analysis(
-    _band_log_e: &[i32],
+    band_log_e: &[i32],
     band_log_e2: &[i32],
-    _old_band_e: &[i32],
+    old_band_e: &[i32],
     nb_ebands: i32,
     start: i32,
     end: i32,
@@ -1294,159 +1281,231 @@ fn dynalloc_analysis(
     _analysis: &AnalysisInfo,
     importance: &mut [i32],
     spread_weight: &mut [i32],
-    _tone_freq: i32,
-    _toneishness: i32,
+    tone_freq: i32,
+    toneishness: i32,
 ) -> i32 {
     let nbu = nb_ebands as usize;
-    let mut max_depth: i32 = GCONST_NEG28;
+    // C: maxDepth=-GCONST(31.9f)
+    let mut max_depth: i32 = -gconst(31.9);
     *tot_boost = 0;
+    for i in 0..nbu {
+        offsets[i] = 0;
+    }
 
     let mut follower = vec![0i32; c as usize * nbu];
     let mut noise_floor = vec![0i32; nbu];
 
-    // Compute noise floor per band
-    for i in start as usize..end as usize {
-        let log_n_val = (log_n[i] as i32) << (DB_SHIFT - 4); // Approximate conversion
-        noise_floor[i] = log_n_val / 16 + (1 << (DB_SHIFT - 1)) + (9 - lsb_depth) * (1 << DB_SHIFT)
-            - shl32(E_MEANS[i] as i32, DB_SHIFT - 4);
+    // Compute noise floor per band (C: lines 1076-1083)
+    // noise_floor[i] = GCONST(0.0625)*logN[i] + GCONST(0.5) + SHL32(9-lsb_depth,DB_SHIFT)
+    //                - SHL32(eMeans[i],DB_SHIFT-4) + GCONST(0.0062)*(i+5)*(i+5)
+    for i in 0..end as usize {
+        noise_floor[i] = gconst(0.0625) * (log_n[i] as i32)
+            + gconst(0.5)
+            + shl32(9 - lsb_depth, DB_SHIFT)
+            - shl32(EMEANS[i] as i32, DB_SHIFT - 4)
+            + gconst(0.0062) * ((i as i32 + 5) * (i as i32 + 5));
     }
 
-    // Compute SMR (signal-to-mask ratio) for each band and channel
-    let mut band_log_e3 = vec![0i32; nbu];
-    for i in start as usize..end as usize {
-        let mut max_e = GCONST_NEG28;
+    // Compute maxDepth from bandLogE (C: lines 1084-1088)
+    for ch in 0..c as usize {
+        for i in 0..end as usize {
+            max_depth = max_depth.max(band_log_e[ch * nbu + i] - noise_floor[i]);
+        }
+    }
+
+    // Masking model for spread_weight (C: lines 1089-1124)
+    {
+        let mut mask = vec![0i32; nbu];
+        let mut sig = vec![0i32; nbu];
+        for i in 0..end as usize {
+            mask[i] = band_log_e[i] - noise_floor[i];
+        }
+        if c == 2 {
+            for i in 0..end as usize {
+                mask[i] = mask[i].max(band_log_e[nbu + i] - noise_floor[i]);
+            }
+        }
+        sig[..end as usize].copy_from_slice(&mask[..end as usize]);
+        for i in 1..end as usize {
+            mask[i] = mask[i].max(mask[i - 1] - gconst(2.0));
+        }
+        for i in (0..end as usize - 1).rev() {
+            mask[i] = mask[i].max(mask[i + 1] - gconst(3.0));
+        }
+        for i in 0..end as usize {
+            // SMR: mask is never more than 72 dB below peak, never below noise floor
+            let smr = sig[i] - 0i32.max(max_depth - gconst(12.0)).max(mask[i]);
+            // Clamp SMR to compute shift (C uses PSHR32 for fixed-point)
+            let shift = -pshr32((-gconst(5.0)).max(smr.min(0)), DB_SHIFT);
+            spread_weight[i] = 32 >> shift;
+        }
+    }
+
+    // Main dynalloc computation (C: lines 1128-1276)
+    // Guard: only compute when we have enough bytes (C: effectiveBytes >= 30+5*LM)
+    if effective_bytes >= (30 + 5 * lm) && lfe == 0 {
+        let mut band_log_e3 = vec![0i32; nbu];
+        let mut last = 0i32;
+
+        // Per-channel follower computation (C: lines 1131-1173)
         for ch in 0..c as usize {
-            let e = band_log_e2[ch * nbu + i];
-            max_e = max_e.max(e);
-        }
-        band_log_e3[i] = max_e;
-        max_depth = max_depth.max(max_e - noise_floor[i]);
-    }
+            // Copy bandLogE2 for this channel
+            band_log_e3[..end as usize]
+                .copy_from_slice(&band_log_e2[ch * nbu..ch * nbu + end as usize]);
 
-    // Follower envelope with median filtering (matches C dynalloc_analysis)
-    let offset = 1i32 << DB_SHIFT;
-    if end - start > 4 {
-        // Interior bands: median-of-5
-        for i in (start + 2) as usize..(end - 2) as usize {
-            let med = median_of_5(&band_log_e3[i - 2..]);
-            follower[i] = imax(follower[i], med - offset);
-        }
-        // Edge bands: median-of-3 (C: lines 1157-1162)
-        let tmp = median_of_3(band_log_e3[0], band_log_e3[1], band_log_e3[2]) - offset;
-        follower[start as usize] = imax(follower[start as usize], tmp);
-        if start + 1 < end {
-            follower[(start + 1) as usize] = imax(follower[(start + 1) as usize], tmp);
-        }
-        let e = end as usize;
-        if e >= 3 {
+            // For LM==0, take max with oldBandE (C: lines 1137-1142)
+            if lm == 0 {
+                for i in 0..8.min(end as usize) {
+                    band_log_e3[i] =
+                        band_log_e3[i].max(old_band_e[ch * nbu + i]);
+                }
+            }
+
+            let f = &mut follower[ch * nbu..];
+
+            // Forward smoothing (C: lines 1145-1153)
+            f[0] = band_log_e3[0];
+            for i in 1..end as usize {
+                if band_log_e3[i] > band_log_e3[i - 1] + gconst(0.5) {
+                    last = i as i32;
+                }
+                f[i] = (f[i - 1] + gconst(1.5)).min(band_log_e3[i]);
+            }
+
+            // Backward smoothing from last (C: lines 1155-1156)
+            for i in (0..last as usize).rev() {
+                f[i] = f[i].min((f[i + 1] + gconst(2.0)).min(band_log_e3[i]));
+            }
+
+            // Median filter overlay (C: lines 1161-1169)
+            let offset = gconst(1.0);
+            for i in 2..end as usize - 2 {
+                f[i] = f[i].max(median_of_5(&band_log_e3[i - 2..]) - offset);
+            }
+            let tmp = median_of_3(band_log_e3[0], band_log_e3[1], band_log_e3[2]) - offset;
+            f[0] = f[0].max(tmp);
+            f[1] = f[1].max(tmp);
+            let e = end as usize;
             let tmp =
                 median_of_3(band_log_e3[e - 3], band_log_e3[e - 2], band_log_e3[e - 1]) - offset;
-            follower[e - 2] = imax(follower[e - 2], tmp);
-            follower[e - 1] = imax(follower[e - 1], tmp);
-        }
-    } else {
-        for i in start as usize..end as usize {
-            follower[i] = band_log_e3[i] - offset;
-        }
-    }
+            f[e - 2] = f[e - 2].max(tmp);
+            f[e - 1] = f[e - 1].max(tmp);
 
-    // Noise floor
-    for i in start as usize..end as usize {
-        follower[i] = imax(follower[i], noise_floor[i]);
-    }
-
-    // Downward spreading: -1.5 dB/band forward
-    for i in (start + 1) as usize..end as usize {
-        follower[i] = follower[i].min(follower[i - 1] + (3 << (DB_SHIFT - 1)));
-    }
-    // Upward spreading: -2 dB/band backward
-    for i in (start as usize..(end - 1) as usize).rev() {
-        follower[i] = follower[i].min(follower[i + 1] + (2 << DB_SHIFT));
-    }
-
-    // Transform follower to excess energy (C line 1186-1189)
-    // In C, follower[i] is overwritten: follower[i] = MAX(0, bandLogE[i] - follower[i])
-    // C uses bandLogE (first param, before LM compensation), not bandLogE2
-    let band_log_e = _band_log_e;
-    if c == 2 {
-        for i in start as usize..end as usize {
-            // Cross-channel masking (24 dB cross-talk)
-            follower[nbu + i] = follower[nbu + i].max(follower[i] - (4 << DB_SHIFT));
-            follower[i] = follower[i].max(follower[nbu + i] - (4 << DB_SHIFT));
-            follower[i] = half32(
-                (band_log_e[i] - follower[i]).max(0)
-                    + (band_log_e[nbu + i] - follower[nbu + i]).max(0),
-            );
-        }
-    } else {
-        for i in start as usize..end as usize {
-            follower[i] = (band_log_e[i] - follower[i]).max(0);
-        }
-    }
-
-    // Add surround dynalloc to follower (C line 1192-1193)
-    for i in start as usize..end as usize {
-        if i < surround_dynalloc.len() {
-            follower[i] = follower[i].max(surround_dynalloc[i]);
-        }
-    }
-
-    // Compute importance from transformed follower (C line 1194-1201)
-    for i in start as usize..end as usize {
-        // C: importance[i] = PSHR32(13*celt_exp2_db(MIN(follower[i], 4.f)), 16)
-        // celt_exp2_db(x) = celt_exp2(PSHR32(x, DB_SHIFT-10)) for non-QEXT
-        let follow_clamped = follower[i].min(4 << DB_SHIFT);
-        let exp_val = celt_exp2(pshr32(follow_clamped, DB_SHIFT - 10));
-        importance[i] = pshr32(13 * exp_val, 16).max(1);
-    }
-
-    // For non-transient CBR/CVBR, halve the follower (C line 1203-1206)
-    if (vbr == 0 || constrained_vbr != 0) && !is_transient {
-        for i in start as usize..end as usize {
-            follower[i] = half32(follower[i]);
-        }
-    }
-
-    // Compute boosts from follower (C line 1208+)
-    for i in start as usize..end as usize {
-        let width = (e_bands[i + 1] - e_bands[i]) as i32;
-
-        // Convert boost to offset units
-        offsets[i] = if follower[i] > (2 << DB_SHIFT) {
-            ((follower[i] - (1 << DB_SHIFT)) >> (DB_SHIFT - 3)).min(8)
-        } else {
-            0
-        };
-
-        // Add surround dynalloc to offsets
-        if i < surround_dynalloc.len() {
-            let surr_boost = (surround_dynalloc[i] >> (DB_SHIFT - 3)).min(4);
-            offsets[i] = offsets[i].max(surr_boost);
-        }
-
-        spread_weight[i] = (width << lm).max(1);
-    }
-
-    // LFE override
-    if lfe != 0 {
-        for i in start as usize..end as usize {
-            offsets[i] = 0;
-            importance[i] = 13;
-        }
-    }
-
-    // Cap dynalloc at budget fraction for CBR/CVBR
-    if vbr == 0 || (constrained_vbr != 0 && !is_transient) {
-        let dynalloc_budget = effective_bytes * 2 / 3;
-        let mut boost_sum = 0i32;
-        for i in start as usize..end as usize {
-            boost_sum += offsets[i] * ((e_bands[i + 1] - e_bands[i]) as i32) << lm;
-        }
-        if boost_sum > dynalloc_budget << BITRES {
-            // Scale down
-            for i in start as usize..end as usize {
-                offsets[i] = offsets[i] * dynalloc_budget / (boost_sum >> BITRES).max(1);
+            // Noise floor enforcement (C: lines 1171-1172)
+            for i in 0..end as usize {
+                f[i] = f[i].max(noise_floor[i]);
             }
+        }
+
+        // Transform follower to excess energy (C: lines 1174-1188)
+        if c == 2 {
+            for i in start as usize..end as usize {
+                // Cross-channel masking (24 dB)
+                follower[nbu + i] = follower[nbu + i].max(follower[i] - gconst(4.0));
+                follower[i] = follower[i].max(follower[nbu + i] - gconst(4.0));
+                follower[i] = half32(
+                    (band_log_e[i] - follower[i]).max(0)
+                        + (band_log_e[nbu + i] - follower[nbu + i]).max(0),
+                );
+            }
+        } else {
+            for i in start as usize..end as usize {
+                follower[i] = (band_log_e[i] - follower[i]).max(0);
+            }
+        }
+
+        // Add surround dynalloc (C: lines 1189-1190)
+        for i in start as usize..end as usize {
+            if i < surround_dynalloc.len() {
+                follower[i] = follower[i].max(surround_dynalloc[i]);
+            }
+        }
+
+        // Compute importance (C: lines 1191-1198)
+        for i in start as usize..end as usize {
+            let follow_clamped = follower[i].min(gconst(4.0));
+            let exp_val = celt_exp2(pshr32(follow_clamped, DB_SHIFT - 10));
+            importance[i] = pshr32(13 * exp_val, 16);
+        }
+
+        // CBR/CVBR halving: C: `(!vbr || constrained_vbr) && !isTransient`
+        if (vbr == 0 || constrained_vbr != 0) && !is_transient {
+            for i in start as usize..end as usize {
+                follower[i] = half32(follower[i]);
+            }
+        }
+
+        // Band scaling (C: lines 1205-1211)
+        for i in start as usize..end as usize {
+            if i < 8 {
+                follower[i] *= 2;
+            }
+            if i >= 12 {
+                follower[i] = half32(follower[i]);
+            }
+        }
+
+        // Tone compensation (C: lines 1212-1229)
+        if toneishness > qconst32(0.98, 29) {
+            let freq_bin = pshr32(
+                (tone_freq as i64 * qconst16(120.0 / std::f64::consts::PI, 9) as i64) as i32,
+                13 + 9,
+            );
+            for i in start as usize..end as usize {
+                if freq_bin >= e_bands[i] as i32 && freq_bin <= e_bands[i + 1] as i32 {
+                    follower[i] += gconst(2.0);
+                }
+                if freq_bin >= e_bands[i] as i32 - 1 && freq_bin <= e_bands[i + 1] as i32 + 1 {
+                    follower[i] += gconst(1.0);
+                }
+                if freq_bin >= e_bands[i] as i32 - 2 && freq_bin <= e_bands[i + 1] as i32 + 2 {
+                    follower[i] += gconst(1.0);
+                }
+                if freq_bin >= e_bands[i] as i32 - 3 && freq_bin <= e_bands[i + 1] as i32 + 3 {
+                    follower[i] += gconst(0.5);
+                }
+            }
+            if freq_bin >= e_bands[end as usize] as i32 {
+                follower[end as usize - 1] += gconst(2.0);
+                follower[end as usize - 2] += gconst(1.0);
+            }
+        }
+
+        // Compute offsets from follower (C: lines 1239-1272)
+        for i in start as usize..end as usize {
+            let width = c * (e_bands[i + 1] - e_bands[i]) as i32 * (1 << lm);
+
+            follower[i] = follower[i].min(gconst(4.0));
+            follower[i] = shr32(follower[i], 8);
+
+            let (boost, boost_bits) = if width < 6 {
+                let b = shr32(follower[i], DB_SHIFT - 8) as i32;
+                (b, b * width << BITRES)
+            } else if width > 48 {
+                let b = shr32(follower[i] * 8, DB_SHIFT - 8) as i32;
+                (b, (b * width << BITRES) / 8)
+            } else {
+                let b = shr32(follower[i] * width / 6, DB_SHIFT - 8) as i32;
+                (b, b * 6 << BITRES)
+            };
+
+            // CBR cap: limit to 2/3 of effective bytes
+            if ((vbr == 0 || constrained_vbr != 0) && !is_transient)
+                && (*tot_boost + boost_bits) >> BITRES >> 3 > 2 * effective_bytes / 3
+            {
+                let cap = (2 * effective_bytes / 3) << BITRES << 3;
+                offsets[i] = cap - *tot_boost;
+                *tot_boost = cap;
+                break;
+            } else {
+                offsets[i] = boost;
+                *tot_boost += boost_bits;
+            }
+        }
+    } else {
+        // Not enough bytes for dynalloc — set importance to 13 (C: lines 1273-1276)
+        for i in start as usize..end as usize {
+            importance[i] = 13;
         }
     }
 
@@ -2350,7 +2409,8 @@ fn celt_encode_core(
             0
         };
         for i in start as usize..end as usize {
-            follow = follow.max(shr32(band_log_e[i], 5) - offset) - (1 << (DB_SHIFT - 5));
+            // C: follow = MAX(follow - QCONST32(1.0, DB_SHIFT-5), SHR32(bandLogE[i],5) - offset)
+            follow = (follow - (1 << (DB_SHIFT - 5))).max(shr32(band_log_e[i], 5) - offset);
             if c == 2 {
                 follow = follow.max(shr32(band_log_e[i + nb_ebands as usize], 5) - offset);
             }
