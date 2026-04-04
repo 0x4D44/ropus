@@ -2032,17 +2032,15 @@ fn celt_encode_core(
     } else {
         // Encode pitch pre-filter on
         enc_ref.encode_bit_logp(true, 1);
-        // Encode pitch octave + fine period
-        let octave = (celt_ilog2(pitch_index) - 5).max(0);
+        // Encode pitch octave + fine period (C adds 1 before encoding, subtracts after)
+        let pi_enc = pitch_index + 1;
+        let octave = ec_ilog(pi_enc as u32) as i32 - 5;
         enc_ref.encode_uint(octave as u32, 6);
-        let fine = pitch_index.wrapping_sub(16 << octave);
-        enc_ref.encode_bits(fine as u32, (4 + octave) as u32);
+        enc_ref.encode_bits((pi_enc - (16 << octave)) as u32, (4 + octave) as u32);
         // Encode gain (3 bits)
         enc_ref.encode_bits(qg as u32, 3);
         // Encode tapset
-        if st.complexity >= 2 {
-            enc_ref.encode_icdf(prefilter_tapset as u32, &TAPSET_ICDF, 4);
-        }
+        enc_ref.encode_icdf(prefilter_tapset as u32, &TAPSET_ICDF, 2);
     }
 
     // Transient flag
