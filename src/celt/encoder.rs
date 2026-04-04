@@ -927,6 +927,25 @@ fn tf_analysis(
         }
     }
 
+    // Debug: dump metric and importance
+    {
+        static TF_FC: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+        let tffc = TF_FC.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if tffc <= 2 {
+            eprintln!("[RS TF_METRIC] frame={} metric[0..8]=[{},{},{},{},{},{},{},{}] imp[0..8]=[{},{},{},{},{},{},{},{}]",
+                tffc,
+                metric.get(0).copied().unwrap_or(-1), metric.get(1).copied().unwrap_or(-1),
+                metric.get(2).copied().unwrap_or(-1), metric.get(3).copied().unwrap_or(-1),
+                metric.get(4).copied().unwrap_or(-1), metric.get(5).copied().unwrap_or(-1),
+                metric.get(6).copied().unwrap_or(-1), metric.get(7).copied().unwrap_or(-1),
+                importance.get(0).copied().unwrap_or(-1), importance.get(1).copied().unwrap_or(-1),
+                importance.get(2).copied().unwrap_or(-1), importance.get(3).copied().unwrap_or(-1),
+                importance.get(4).copied().unwrap_or(-1), importance.get(5).copied().unwrap_or(-1),
+                importance.get(6).copied().unwrap_or(-1), importance.get(7).copied().unwrap_or(-1),
+            );
+        }
+    }
+
     // Search for optimal tf_select
     let mut tf_select = 0i32;
     let mut selcost = [0i32; 2];
@@ -1345,28 +1364,66 @@ fn dynalloc_analysis(
         follower[i] = follower[i].min(follower[i + 1] + (2 << DB_SHIFT));
     }
 
-    // Compute boosts and importance
+    // Transform follower to excess energy (C line 1186-1189)
+    // In C, follower[i] is overwritten: follower[i] = MAX(0, bandLogE[i] - follower[i])
+    // C uses bandLogE (first param, before LM compensation), not bandLogE2
+    let band_log_e = _band_log_e;
+    if c == 2 {
+        for i in start as usize..end as usize {
+            // Cross-channel masking (24 dB cross-talk)
+            follower[nbu + i] = follower[nbu + i].max(follower[i] - (4 << DB_SHIFT));
+            follower[i] = follower[i].max(follower[nbu + i] - (4 << DB_SHIFT));
+            follower[i] = half32(
+                (band_log_e[i] - follower[i]).max(0)
+                    + (band_log_e[nbu + i] - follower[nbu + i]).max(0),
+            );
+        }
+    } else {
+        for i in start as usize..end as usize {
+            follower[i] = (band_log_e[i] - follower[i]).max(0);
+        }
+    }
+
+    // Add surround dynalloc to follower (C line 1192-1193)
     for i in start as usize..end as usize {
-        let boost = (band_log_e3[i] - follower[i]).max(0);
+        if i < surround_dynalloc.len() {
+            follower[i] = follower[i].max(surround_dynalloc[i]);
+        }
+    }
+
+    // Compute importance from transformed follower (C line 1194-1201)
+    for i in start as usize..end as usize {
+        // C: importance[i] = PSHR32(13*celt_exp2_db(MIN(follower[i], 4.f)), 16)
+        // celt_exp2_db(x) = celt_exp2(PSHR32(x, DB_SHIFT-10)) for non-QEXT
+        let follow_clamped = follower[i].min(4 << DB_SHIFT);
+        let exp_val = celt_exp2(pshr32(follow_clamped, DB_SHIFT - 10));
+        importance[i] = pshr32(13 * exp_val, 16).max(1);
+    }
+
+    // For non-transient CBR/CVBR, halve the follower (C line 1203-1206)
+    if (vbr == 0 || constrained_vbr != 0) && !is_transient {
+        for i in start as usize..end as usize {
+            follower[i] = half32(follower[i]);
+        }
+    }
+
+    // Compute boosts from follower (C line 1208+)
+    for i in start as usize..end as usize {
         let width = (e_bands[i + 1] - e_bands[i]) as i32;
 
         // Convert boost to offset units
-        offsets[i] = if boost > (2 << DB_SHIFT) {
-            ((boost - (1 << DB_SHIFT)) >> (DB_SHIFT - 3)).min(8)
+        offsets[i] = if follower[i] > (2 << DB_SHIFT) {
+            ((follower[i] - (1 << DB_SHIFT)) >> (DB_SHIFT - 3)).min(8)
         } else {
             0
         };
 
-        // Add surround dynalloc
-        if surround_dynalloc.len() > i {
+        // Add surround dynalloc to offsets
+        if i < surround_dynalloc.len() {
             let surr_boost = (surround_dynalloc[i] >> (DB_SHIFT - 3)).min(4);
             offsets[i] = offsets[i].max(surr_boost);
         }
 
-        // Importance based on follower level (C: PSHR32(13*celt_exp2_db(MIN(follower,4.f)),16))
-        let follow_clamped = follower[i].min(4 << DB_SHIFT);
-        let exp_val = celt_exp2(follow_clamped.min(4 << DB_SHIFT));
-        importance[i] = (13i64 * exp_val as i64 >> 16).max(1) as i32;
         spread_weight[i] = (width << lm).max(1);
     }
 
