@@ -2128,25 +2128,12 @@ impl OpusEncoder {
                             std::sync::atomic::AtomicI32::new(0);
                         let fc = CELT_FC.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                         if fc <= 2 {
+                            let g = |i: usize| pcm_buf.get(i).copied().unwrap_or(0);
                             eprintln!(
                                 "[RS CELT_IN] frame={} pcm_buf[0..8]=[{},{},{},{},{},{},{},{}] pcm_buf[190..198]=[{},{},{},{},{},{},{},{}]",
                                 fc,
-                                pcm_buf[0],
-                                pcm_buf[1],
-                                pcm_buf[2],
-                                pcm_buf[3],
-                                pcm_buf[4],
-                                pcm_buf[5],
-                                pcm_buf[6],
-                                pcm_buf[7],
-                                pcm_buf[190],
-                                pcm_buf[191],
-                                pcm_buf[192],
-                                pcm_buf[193],
-                                pcm_buf[194],
-                                pcm_buf[195],
-                                pcm_buf[196],
-                                pcm_buf[197]
+                                g(0), g(1), g(2), g(3), g(4), g(5), g(6), g(7),
+                                g(190), g(191), g(192), g(193), g(194), g(195), g(196), g(197)
                             );
                         }
                     }

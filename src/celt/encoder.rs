@@ -1301,7 +1301,7 @@ fn dynalloc_analysis(
     let mut max_depth: i32 = GCONST_NEG28;
     *tot_boost = 0;
 
-    let mut follower = vec![0i32; nbu];
+    let mut follower = vec![0i32; c as usize * nbu];
     let mut noise_floor = vec![0i32; nbu];
 
     // Compute noise floor per band
@@ -2141,6 +2141,31 @@ fn celt_encode_core(
         let in_start = ch * (n as usize + overlap as usize);
         for i in 0..overlap as usize {
             input[in_start + i] = st.prefilter_mem[ov_start + i];
+        }
+    }
+
+    // Trace pre-emphasis output before run_prefilter (matches C _pfc2 checkpoint)
+    {
+        static FC2: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+        let fc = FC2.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if fc <= 2 {
+            let ov = overlap as usize;
+            eprintln!(
+                "[RS PREEMPH] frame={} input[0..4]=[{},{},{},{}] input[ov-2..ov+2]=[{},{},{},{}] input[ov+118..ov+122]=[{},{},{},{}]",
+                fc,
+                input[0],
+                input[1],
+                input[2],
+                input[3],
+                input[ov - 2],
+                input[ov - 1],
+                input[ov],
+                input[ov + 1],
+                input.get(ov + 118).copied().unwrap_or(0),
+                input.get(ov + 119).copied().unwrap_or(0),
+                input.get(ov + 120).copied().unwrap_or(0),
+                input.get(ov + 121).copied().unwrap_or(0),
+            );
         }
     }
 
