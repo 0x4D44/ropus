@@ -1089,77 +1089,127 @@ fn alloc_trim_analysis(
     _analysis: &AnalysisInfo,
     stereo_saving: &mut i32,
     tf_estimate: i32,
-    _intensity: i32,
+    intensity: i32,
     surround_trim: i32,
     equiv_rate: i32,
 ) -> i32 {
-    let _nb_ebands = m.nb_ebands;
+    let nb_ebands = m.nb_ebands;
     let n0u = n0 as usize;
 
     // Base trim (Q8)
-    let mut trim = qconst16(5.0, 8);
+    // C: trim = QCONST16(5.f, 8);
+    let mut trim: i32 = qconst16(5.0, 8);
     if equiv_rate < 64000 {
         trim = qconst16(4.0, 8);
     } else if equiv_rate < 80000 {
-        let frac = (equiv_rate - 64000) as i32;
-        trim =
-            qconst16(4.0, 8) + mult16_16_q15(qconst16(1.0 / 16000.0, 15) * frac, qconst16(1.0, 8));
+        // C: frac = (equiv_rate-64000) >> 10;
+        //    trim = QCONST16(4.f, 8) + QCONST16(1.f/16.f, 8)*frac;
+        let frac = (equiv_rate - 64000) >> 10;
+        trim = qconst16(4.0, 8) + qconst16(1.0 / 16.0, 8) * frac;
     }
 
     // Stereo analysis: compute inter-channel correlation
     if c == 2 {
-        let mut sum: i32 = 0;
-        let mut min_xc: i32 = Q15_ONE;
+        let mut sum: i32 = 0; // Q10
+        let mut min_xc: i32;
 
-        // Bands 0-7: full correlation
-        let corr_end = 8.min(end as usize);
-        for i in 0..corr_end {
-            let n = ((m.ebands[i + 1] - m.ebands[i]) as usize) << lm as usize;
-            let x_off = m.ebands[i] as usize * (1 << lm as usize);
-            if n > 0 && x_off + n <= x.len() && n0u * (1 << lm as usize) + x_off + n <= x.len() {
-                let xc = celt_inner_prod_norm_shift(
-                    &x[x_off..x_off + n],
-                    &x[n0u * (1 << lm as usize) + x_off..],
-                    n,
-                );
-                sum += xc;
-                min_xc = min_xc.min(xc);
-            }
+        // Bands 0-7: accumulate correlation into sum (Q10)
+        // C: for (i=0;i<8;i++) {
+        //      partial = celt_inner_prod_norm_shift(...);
+        //      sum = ADD16(sum, EXTRACT16(SHR32(partial, 18)));
+        //    }
+        for i in 0..8usize {
+            let partial = celt_inner_prod_norm_shift(
+                &x[(m.ebands[i] as usize) << lm as usize..],
+                &x[n0u + ((m.ebands[i] as usize) << lm as usize)..],
+                ((m.ebands[i + 1] - m.ebands[i]) as usize) << lm as usize,
+            );
+            sum = add16(sum, extract16(shr32(partial, 18)));
         }
-        if corr_end > 0 {
-            sum = mult16_16_q15(qconst16(1.0 / 8.0, 15), sum);
+        // C: sum = MULT16_16_Q15(QCONST16(1.f/8, 15), sum);
+        sum = mult16_16_q15(qconst16(1.0 / 8.0, 15), sum);
+        // C: sum = MIN16(QCONST16(1.f, 10), ABS16(sum));
+        sum = min16(qconst16(1.0, 10), abs16(sum));
+        // C: minXC = sum;
+        min_xc = sum;
+
+        // Bands 8..intensity: update minXC
+        // C: for (i=8;i<intensity;i++) {
+        //      partial = celt_inner_prod_norm_shift(...);
+        //      minXC = MIN16(minXC, ABS16(EXTRACT16(SHR32(partial, 18))));
+        //    }
+        for i in 8..(intensity as usize) {
+            let partial = celt_inner_prod_norm_shift(
+                &x[(m.ebands[i] as usize) << lm as usize..],
+                &x[n0u + ((m.ebands[i] as usize) << lm as usize)..],
+                ((m.ebands[i + 1] - m.ebands[i]) as usize) << lm as usize,
+            );
+            min_xc = min16(min_xc, abs16(extract16(shr32(partial, 18))));
         }
+        // C: minXC = MIN16(QCONST16(1.f, 10), ABS16(minXC));
+        min_xc = min16(qconst16(1.0, 10), abs16(min_xc));
 
-        // Compute stereo savings
-        let log_xc = celt_log2(qconst32(1.001, 20) - mult16_16(sum, sum));
-        let log_xc2 = (log_xc / 2).max(celt_log2(qconst32(1.001, 20) - mult16_16(min_xc, min_xc)));
+        // Mid-side savings based on LF average
+        // C: logXC = celt_log2(QCONST32(1.001f, 20)-MULT16_16(sum, sum));
+        let mut log_xc = celt_log2(qconst32(1.001, 20) - mult16_16(sum, sum));
+        // Mid-side savings based on min correlation
+        // C: logXC2 = MAX16(HALF16(logXC), celt_log2(QCONST32(1.001f, 20)-MULT16_16(minXC, minXC)));
+        let mut log_xc2 = max16(
+            half16(log_xc),
+            celt_log2(qconst32(1.001, 20) - mult16_16(min_xc, min_xc)),
+        );
 
-        *stereo_saving = shr32(log_xc2 - (log_xc / 2), DB_SHIFT - 8).min(qconst16(2.0, 8));
-        trim += (qconst16(0.5, 8).max(*stereo_saving)).max(-qconst16(4.0, 8));
+        // FIXED_POINT: compensate for Q20 vs Q14 input and convert to Q8
+        // C: logXC = PSHR32(logXC-QCONST16(6.f, 10),10-8);
+        //    logXC2 = PSHR32(logXC2-QCONST16(6.f, 10),10-8);
+        log_xc = pshr32(log_xc - qconst16(6.0, 10), 10 - 8);
+        log_xc2 = pshr32(log_xc2 - qconst16(6.0, 10), 10 - 8);
+
+        // C: trim += MAX16(-QCONST16(4.f, 8), MULT16_16_Q15(QCONST16(.75f,15),logXC));
+        trim += max16(-qconst16(4.0, 8), mult16_16_q15(qconst16(0.75, 15), log_xc));
+        // C: *stereo_saving = MIN16(*stereo_saving + QCONST16(0.25f, 8), -HALF16(logXC2));
+        *stereo_saving = min16(*stereo_saving + qconst16(0.25, 8), -half16(log_xc2));
     }
 
-    // Spectral tilt: measure energy distribution across bands
-    let mut tilt: i32 = 0;
-    for i in 1..end as usize {
-        let diff = band_log_e[i] - band_log_e[i - 1];
-        tilt += diff;
+    // Estimate spectral tilt
+    // C: c=0; do {
+    //      for (i=0;i<end-1;i++)
+    //         diff += SHR32(bandLogE[i+c*m->nbEBands], 5)*(opus_int32)(2+2*i-end);
+    //    } while (++c<C);
+    //    diff /= C*(end-1);
+    let mut diff: i32 = 0;
+    let mut ch = 0;
+    loop {
+        for i in 0..(end - 1) as usize {
+            diff += shr32(band_log_e[i + ch * nb_ebands as usize], 5)
+                * (2 + 2 * i as i32 - end);
+        }
+        ch += 1;
+        if ch >= c as usize {
+            break;
+        }
     }
-    if end > 1 {
-        tilt /= (end - 1) as i32;
-    }
-    trim -= pshr32(tilt, DB_SHIFT - 8)
-        .max(-qconst16(2.0, 8))
-        .min(qconst16(2.0, 8));
+    diff /= c * (end - 1);
+
+    // C: trim -= MAX32(-QCONST16(2.f, 8), MIN32(QCONST16(2.f, 8),
+    //          SHR32(diff+QCONST32(1.f, DB_SHIFT-5),DB_SHIFT-13)/6 ));
+    trim -= (-qconst16(2.0, 8)).max(
+        qconst16(2.0, 8).min(shr32(diff + qconst32(1.0, DB_SHIFT as u32 - 5), DB_SHIFT - 13) / 6),
+    );
 
     // Surround masking adjustment
-    trim -= surround_trim;
+    // C: trim -= SHR16(surround_trim, DB_SHIFT-8);
+    trim -= shr16(surround_trim, DB_SHIFT - 8);
 
     // TF estimate adjustment
-    trim -= pshr32((tf_estimate - qconst16(0.2, 14)) as i32 * 2, 14 - 8)
-        .max(-qconst16(2.0, 8))
-        .min(qconst16(2.0, 8));
+    // C: trim -= 2*SHR16(tf_estimate, 14-8);
+    trim -= 2 * shr16(tf_estimate, 14 - 8);
+
+    // DISABLE_FLOAT_API: skip analysis-based adjustments (analysis is unused)
 
     // Quantize to integer 0–10
+    // C: trim_index = PSHR32(trim, 8);
+    //    trim_index = IMAX(0, IMIN(10, trim_index));
     let trim_index = pshr32(trim, 8).max(0).min(10);
     trim_index
 }
