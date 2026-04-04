@@ -1857,11 +1857,15 @@ impl OpusEncoder {
                 }
 
                 // Prefill SILK on mode transition
+                // C: resets encoder, sets payloadSize_ms=10, complexity=0
                 if prefill != 0 {
                     if let Some(ref mut silk) = self.silk_enc {
                         let db = self.delay_buffer.clone();
                         let db_samples = (self.encoder_buffer * self.channels) as usize;
                         let mut prefill_control = self.silk_mode.clone();
+                        // C: encControl->payloadSize_ms = 10; encControl->complexity = 0;
+                        prefill_control.payload_size_ms = 10;
+                        prefill_control.complexity = 0;
                         let mut zero = 0i32;
                         let prefill_pcm = if db_samples > 0 {
                             &db[..db_samples]
