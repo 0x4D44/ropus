@@ -2121,6 +2121,33 @@ impl OpusEncoder {
                     }));
 
                     // Encode if there's room
+                    {
+                        static CELT_FC: std::sync::atomic::AtomicI32 =
+                            std::sync::atomic::AtomicI32::new(0);
+                        let fc = CELT_FC.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                        if fc <= 2 {
+                            eprintln!(
+                                "[RS CELT_IN] frame={} pcm_buf[0..8]=[{},{},{},{},{},{},{},{}] pcm_buf[190..198]=[{},{},{},{},{},{},{},{}]",
+                                fc,
+                                pcm_buf[0],
+                                pcm_buf[1],
+                                pcm_buf[2],
+                                pcm_buf[3],
+                                pcm_buf[4],
+                                pcm_buf[5],
+                                pcm_buf[6],
+                                pcm_buf[7],
+                                pcm_buf[190],
+                                pcm_buf[191],
+                                pcm_buf[192],
+                                pcm_buf[193],
+                                pcm_buf[194],
+                                pcm_buf[195],
+                                pcm_buf[196],
+                                pcm_buf[197]
+                            );
+                        }
+                    }
                     if enc.tell() <= 8 * nb_compr_bytes {
                         let mut dummy_buf = vec![0u8; nb_compr_bytes as usize + 1];
                         ret = celt_encode_with_ec(

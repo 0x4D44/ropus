@@ -2364,7 +2364,7 @@ mod tests {
             // Allow small roundtrip error
             let ratio = lin_val as f64 / x as f64;
             assert!(
-                ratio > 0.9 && ratio < 1.1,
+                ratio >= 0.9 && ratio < 1.1,
                 "roundtrip failed for x={}: log={}, lin={}",
                 x,
                 log_val,

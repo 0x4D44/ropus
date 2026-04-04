@@ -534,6 +534,22 @@ fn compute_mdcts(
                 fft_st,
                 trig,
             );
+            if short_blocks != 0 && ch == 0 {
+                let o0 = output[out_base];
+                let o1 = if out_base + 2 * stride as usize <= output.len() {
+                    output[out_base + 2 * stride as usize]
+                } else {
+                    0
+                };
+                // Also trace input values at key positions
+                let i0 = input.get(in_start + 60).copied().unwrap_or(0);
+                let i1 = input.get(in_start + 119).copied().unwrap_or(0);
+                let i2 = input.get(in_start + 120).copied().unwrap_or(0);
+                eprintln!(
+                    "[RS MDCT_BLK] blk={} out[0]={} out[2s]={} in[60]={} in[119]={} in[120]={}",
+                    blk, o0, o1, i0, i1, i2
+                );
+            }
         }
     }
 
@@ -1010,7 +1026,7 @@ fn tf_encode(
     mut tf_select: i32,
     ec: &mut RangeEncoder,
 ) {
-    let mut budget = ec.buffer().len() as u32 * 8;
+    let mut budget = ec.storage() * 8;
     let mut tell = ec.tell() as u32;
     let mut logp: u32 = if is_transient { 2 } else { 4 };
     // Reserve space to code the tf_select decision.
@@ -1416,186 +1432,315 @@ fn run_prefilter(
     qgain: &mut i32,
     enabled: bool,
     complexity: i32,
-    _tf_estimate: i32,
-    _nb_available_bytes: i32,
-    _tone_freq: i32,
-    _toneishness: i32,
+    tf_estimate: i32,
+    nb_available_bytes: i32,
+    tone_freq: i32,
+    toneishness: i32,
 ) -> i32 {
-    let overlap = st.mode.overlap;
+    let mode = st.mode;
+    let overlap = mode.overlap;
     let nu = n as usize;
     let ovu = overlap as usize;
-
-    *pitch_index = COMBFILTER_MINPERIOD;
-    *gain = 0;
-    *qgain = 0;
-
-    if !enabled || complexity < 1 {
-        // Copy prefilter memory to overlap region and update memory
-        for c in 0..cc as usize {
-            let mem_start = c * COMBFILTER_MAXPERIOD as usize;
-            let in_start = c * (nu + ovu);
-            // Copy overlap from prefilter memory
-            let src_start = mem_start + COMBFILTER_MAXPERIOD as usize - ovu;
-            for i in 0..ovu {
-                input[in_start + i] = st.prefilter_mem[src_start + i];
-            }
-        }
-        // Update prefilter memory with new input
-        for c in 0..cc as usize {
-            let mem_start = c * COMBFILTER_MAXPERIOD as usize;
-            let in_start = c * (nu + ovu) + ovu;
-            // Shift memory
-            let shift = nu.min(COMBFILTER_MAXPERIOD as usize);
-            if COMBFILTER_MAXPERIOD as usize > shift {
-                let keep = COMBFILTER_MAXPERIOD as usize - shift;
-                for i in 0..keep {
-                    st.prefilter_mem[mem_start + i] = st.prefilter_mem[mem_start + shift + i];
-                }
-            }
-            // Copy new samples
-            let dst_start = mem_start + (COMBFILTER_MAXPERIOD as usize).saturating_sub(shift);
-            for i in 0..shift.min(nu) {
-                st.prefilter_mem[dst_start + i] = input[in_start + nu - shift + i];
-            }
-        }
-        return 0;
-    }
-
-    // Pitch search
-    let max_period = COMBFILTER_MAXPERIOD.min(n);
+    let max_period = COMBFILTER_MAXPERIOD;
     let min_period = COMBFILTER_MINPERIOD;
+    let mpu = max_period as usize;
 
-    // Downsample for pitch search
-    let pitch_buf_len = (max_period + n) as usize;
-    let mut pitch_buf = vec![0i32; pitch_buf_len];
-
-    // Build pitch buffer from prefilter memory + current input
-    for c in 0..cc.min(1) as usize {
-        let mem_start = c * COMBFILTER_MAXPERIOD as usize;
-        let in_start = c * (nu + ovu) + ovu;
-
-        // Copy from prefilter memory
-        for i in 0..max_period as usize {
-            let mem_idx = COMBFILTER_MAXPERIOD as usize - max_period as usize + i;
-            pitch_buf[i] = st.prefilter_mem[mem_start + mem_idx];
-        }
-        // Copy current frame
-        for i in 0..nu.min(pitch_buf_len - max_period as usize) {
-            pitch_buf[max_period as usize + i] = input[in_start + i];
-        }
+    // --- Build work buffer: pre[c] = prefilter_mem[c] ++ input[c][overlap..] ---
+    // Allocate per-channel work buffers (unfiltered signal with history prepended)
+    let mut pre: Vec<Vec<i32>> = Vec::with_capacity(cc as usize);
+    for c in 0..cc as usize {
+        let mut buf = vec![0i32; nu + mpu];
+        // Copy history from prefilter_mem
+        buf[..mpu].copy_from_slice(&st.prefilter_mem[c * mpu..(c + 1) * mpu]);
+        // Copy current frame (after overlap region)
+        let in_off = c * (nu + ovu) + ovu;
+        buf[mpu..mpu + nu].copy_from_slice(&input[in_off..in_off + nu]);
+        pre.push(buf);
     }
 
-    // Downsample for coarse pitch search
-    let ds_len = pitch_buf_len / 2;
-    let mut x_lp = vec![0i32; ds_len];
-    let input_refs: [&[i32]; 1] = [&pitch_buf];
-    pitch_downsample(&input_refs, &mut x_lp, ds_len, 1, 2);
+    // =========================================================================
+    // Phase 1: Pitch estimation (C lines 1447-1546)
+    // =========================================================================
 
-    // Coarse pitch search
-    let mut t0 = pitch_search(
-        &x_lp[max_period as usize / 2..],
-        &x_lp,
-        ds_len - max_period as usize / 2,
-        max_period as usize / 2,
-    );
-    t0 = t0 * 2;
+    let mut pitch_idx: i32;
+    let mut gain1: i32;
+    let mut pf_on: i32;
+    let mut qg: i32;
 
-    // Fine pitch search
-    let mut gain1 = remove_doubling(
-        &pitch_buf,
-        max_period,
-        min_period,
-        n,
-        &mut t0,
-        st.prefilter_period,
-        st.prefilter_gain,
-    );
+    // Path 1: Tone detection (toneishness > 0.99)
+    if enabled && toneishness > qconst32(0.99, 29) {
+        let mut tf = tone_freq;
+        // Alias correction: mirror frequencies above pi
+        if tf >= qconst16(3.1416, 13) {
+            tf = qconst16(3.141593, 13) - tone_freq;
+        }
+        // Find pitch doubling multiple
+        let mut multiple: i32 = 1;
+        while tf >= multiple * qconst16(0.39, 13) {
+            multiple += 1;
+        }
+        if tf > qconst16(0.006148, 13) {
+            pitch_idx = ((51472 * multiple + tf / 2) / tf).min(COMBFILTER_MAXPERIOD - 2);
+        } else {
+            pitch_idx = COMBFILTER_MINPERIOD;
+        }
+        gain1 = qconst16(0.75, 15);
+    }
+    // Path 2: Standard pitch search (enabled && complexity >= 5)
+    else if enabled && complexity >= 5 {
+        let pb_len = ((max_period + n) >> 1) as usize;
+        let mut pitch_buf = vec![0i32; pb_len];
 
-    *pitch_index = t0;
+        // pitch_downsample takes full-resolution pre[] refs, outputs half-res pitch_buf
+        let pre_refs: Vec<&[i32]> = pre.iter().map(|v| v.as_slice()).collect();
+        pitch_downsample(&pre_refs, &mut pitch_buf, pb_len, cc as usize, 2);
 
-    // Gain thresholding
-    let gain_threshold = qconst16(0.2, 15);
-    if gain1 < gain_threshold {
+        // Coarse pitch search: pass full-resolution N and max_period-3*min_period
+        let search_result = pitch_search(
+            &pitch_buf[(max_period >> 1) as usize..],
+            &pitch_buf,
+            n as usize,
+            (max_period - 3 * min_period) as usize,
+        );
+        pitch_idx = max_period - search_result;
+
+        // Fine pitch search via remove_doubling
+        gain1 = remove_doubling(
+            &pitch_buf,
+            max_period,
+            min_period,
+            n,
+            &mut pitch_idx,
+            st.prefilter_period,
+            st.prefilter_gain,
+        );
+        if pitch_idx > max_period - 2 {
+            pitch_idx = max_period - 2;
+        }
+
+        // Scale gain by 0.7
+        gain1 = mult16_16_q15(qconst16(0.7, 15), gain1);
+
+        // Loss rate attenuation
+        if st.loss_rate > 2 {
+            gain1 = half32(gain1);
+        }
+        if st.loss_rate > 4 {
+            gain1 = half32(gain1);
+        }
+        if st.loss_rate > 8 {
+            gain1 = 0;
+        }
+    }
+    // Path 3: Disabled
+    else {
         gain1 = 0;
-        *pitch_index = COMBFILTER_MINPERIOD;
+        pitch_idx = COMBFILTER_MINPERIOD;
     }
 
-    // Quantize gain
-    if gain1 > 0 {
-        let qg_raw = ((gain1 + 1536) >> 10) / 3 - 1;
-        *qgain = qg_raw.max(0).min(7);
-        // Dequantize
-        *gain = (*qgain * 3 + 1) * 1024 / 32; // Approximate Q15 gain
-        gain1 = *gain;
+    // --- Adaptive threshold and quantization (C lines 1506-1546) ---
+
+    let mut pf_threshold = qconst16(0.2, 15);
+
+    // Pitch continuity check
+    if (pitch_idx - st.prefilter_period).abs() * 10 > pitch_idx {
+        pf_threshold += qconst16(0.2, 15);
+        // Disable on strong transients without continuity
+        if tf_estimate > qconst16(0.98, 14) {
+            gain1 = 0;
+        }
+    }
+    // Byte budget adjustments
+    if nb_available_bytes < 25 {
+        pf_threshold += qconst16(0.1, 15);
+    }
+    if nb_available_bytes < 35 {
+        pf_threshold += qconst16(0.1, 15);
+    }
+    // Previous gain adjustments
+    if st.prefilter_gain > qconst16(0.4, 15) {
+        pf_threshold -= qconst16(0.1, 15);
+    }
+    if st.prefilter_gain > qconst16(0.55, 15) {
+        pf_threshold -= qconst16(0.1, 15);
+    }
+
+    // Hard floor at 0.2
+    pf_threshold = pf_threshold.max(qconst16(0.2, 15));
+
+    if gain1 < pf_threshold {
+        gain1 = 0;
+        pf_on = 0;
+        qg = 0;
     } else {
-        *qgain = 0;
-        *gain = 0;
+        // Gain hysteresis: snap to previous if within 0.1
+        if (gain1 - st.prefilter_gain).abs() < qconst16(0.1, 15) {
+            gain1 = st.prefilter_gain;
+        }
+        // Quantize to 3-bit index (0..7)
+        qg = ((gain1 + 1536) >> 10) / 3 - 1;
+        qg = qg.max(0).min(7);
+        // Dequantize: gain1 = QCONST16(0.09375, 15) * (qg + 1) = 3072 * (qg + 1)
+        gain1 = qconst16(0.09375, 15) * (qg + 1);
+        pf_on = 1;
     }
 
-    // Apply the comb filter to the input
-    if gain1 > 0 {
-        let old_period = st.prefilter_period.max(COMBFILTER_MINPERIOD);
-        let old_gain = st.prefilter_gain;
-        let old_tapset = st.prefilter_tapset;
+    // =========================================================================
+    // Phase 2: Comb filter application (C lines 1549-1590)
+    // ALWAYS runs — even when gain1==0 — to crossfade from old_gain to 0.
+    // =========================================================================
 
-        for c in 0..cc as usize {
-            let in_start = c * (nu + ovu) + ovu;
-            // The comb filter operates on the pre-emphasis output
-            // We need prefilter memory as history
-            let mem_start = c * COMBFILTER_MAXPERIOD as usize;
+    let mut before = [0i32; 2];
+    let mut after = [0i32; 2];
 
-            // Build a working buffer with history + current frame
-            let work_len = COMBFILTER_MAXPERIOD as usize + nu;
-            let mut work = vec![0i32; work_len];
-            for i in 0..COMBFILTER_MAXPERIOD as usize {
-                work[i] = st.prefilter_mem[mem_start + i];
-            }
-            for i in 0..nu {
-                work[COMBFILTER_MAXPERIOD as usize + i] = input[in_start + i];
-            }
+    // Clamp old period
+    st.prefilter_period = st.prefilter_period.max(COMBFILTER_MINPERIOD);
 
-            // Apply comb filter
-            let mut out = vec![0i32; nu];
+    for c in 0..cc as usize {
+        let offset = (mode.short_mdct_size - overlap) as usize;
+        let in_base = c * (nu + ovu);
+
+        // 1. Copy filtered overlap from in_mem (NOT prefilter_mem)
+        input[in_base..in_base + ovu].copy_from_slice(&st.in_mem[c * ovu..(c + 1) * ovu]);
+
+        // 2. Compute before-energy: sum of abs(input[overlap..overlap+N] >> 12)
+        for i in 0..nu {
+            before[c] += shr32(input[in_base + ovu + i], 12).abs();
+        }
+
+        // 3. Apply comb filter with NEGATIVE gains (analysis filter)
+        //    Two segments: constant old filter, then crossfade old→new.
+
+        // Segment 1: constant old filter (offset samples, 0 for 48kHz)
+        if offset > 0 {
+            let mut out_seg = vec![0i32; offset];
             comb_filter(
-                &mut out,
-                &work,
-                COMBFILTER_MAXPERIOD as usize,
-                old_period,
-                *pitch_index,
-                n,
-                old_gain,
-                gain1,
-                old_tapset,
+                &mut out_seg,
+                &pre[c],
+                mpu,
+                st.prefilter_period,
+                st.prefilter_period,
+                offset as i32,
+                -st.prefilter_gain,
+                -st.prefilter_gain,
+                st.prefilter_tapset,
+                st.prefilter_tapset,
+                &[], // window=NULL, overlap=0
+                0,
+            );
+            input[in_base + ovu..in_base + ovu + offset].copy_from_slice(&out_seg);
+        }
+
+        // Segment 2: crossfade old→new (N-offset samples)
+        let seg2_len = nu - offset;
+        let mut out_seg2 = vec![0i32; seg2_len];
+        comb_filter(
+            &mut out_seg2,
+            &pre[c],
+            mpu + offset,
+            st.prefilter_period,
+            pitch_idx,
+            seg2_len as i32,
+            -st.prefilter_gain,
+            -gain1,
+            st.prefilter_tapset,
+            *prefilter_tapset,
+            mode.window,
+            overlap,
+        );
+        input[in_base + ovu + offset..in_base + ovu + nu].copy_from_slice(&out_seg2);
+
+        // 4. Compute after-energy
+        for i in 0..nu {
+            after[c] += shr32(input[in_base + ovu + i], 12).abs();
+        }
+    }
+
+    // 5. Cancel check
+    let mut cancel_pitch = false;
+    if cc == 2 {
+        // Stereo: threshold with cross-channel coupling
+        // C declares thresh as opus_val16 (i16), so truncation is intentional
+        let thresh0 = (mult16_32_q15(mult16_16_q15(qconst16(0.25, 15), gain1), before[0])
+            + mult16_32_q15(qconst16(0.01, 15), before[1])) as i16 as i32;
+        let thresh1 = (mult16_32_q15(mult16_16_q15(qconst16(0.25, 15), gain1), before[1])
+            + mult16_32_q15(qconst16(0.01, 15), before[0])) as i16 as i32;
+        // Don't use the filter if one channel gets significantly worse
+        if after[0] - before[0] > thresh0 || after[1] - before[1] > thresh1 {
+            cancel_pitch = true;
+        }
+        // Use the filter only if at least one channel gets significantly better
+        if before[0] - after[0] < thresh0 && before[1] - after[1] < thresh1 {
+            cancel_pitch = true;
+        }
+    } else {
+        // Mono: check that the channel actually got better
+        if after[0] > before[0] {
+            cancel_pitch = true;
+        }
+    }
+
+    // If cancelled, revert to unfiltered and crossfade old_gain → 0
+    if cancel_pitch {
+        for c in 0..cc as usize {
+            let offset = (mode.short_mdct_size - overlap) as usize;
+            let in_base = c * (nu + ovu);
+
+            // Revert: copy unfiltered pre[] back
+            input[in_base + ovu..in_base + ovu + nu].copy_from_slice(&pre[c][mpu..mpu + nu]);
+
+            // Apply one final crossfade: old_gain → 0 (only overlap samples)
+            let mut out_seg = vec![0i32; ovu];
+            comb_filter(
+                &mut out_seg,
+                &pre[c],
+                mpu + offset,
+                st.prefilter_period,
+                pitch_idx,
+                overlap,
+                -st.prefilter_gain,
+                0, // -0 = 0
+                st.prefilter_tapset,
                 *prefilter_tapset,
-                st.mode.window,
+                mode.window,
                 overlap,
             );
-
-            // Write filtered output back
-            for i in 0..nu {
-                input[in_start + i] = out[i];
-            }
+            input[in_base + ovu + offset..in_base + ovu + offset + ovu].copy_from_slice(&out_seg);
         }
+        gain1 = 0;
+        pf_on = 0;
+        qg = 0;
     }
 
-    // Update prefilter memory
+    // =========================================================================
+    // Phase 3: Memory update (C lines 1592-1602)
+    // =========================================================================
+
     for c in 0..cc as usize {
-        let mem_start = c * COMBFILTER_MAXPERIOD as usize;
-        let in_start = c * (nu + ovu) + ovu;
-        let shift = nu.min(COMBFILTER_MAXPERIOD as usize);
-        if COMBFILTER_MAXPERIOD as usize > shift {
-            let keep = COMBFILTER_MAXPERIOD as usize - shift;
+        let in_base = c * (nu + ovu);
+
+        // Save filtered tail for next frame's overlap (from in[])
+        st.in_mem[c * ovu..(c + 1) * ovu].copy_from_slice(&input[in_base + nu..in_base + nu + ovu]);
+
+        // Save unfiltered history for next frame's pitch search (from pre[])
+        let pm_base = c * mpu;
+        if nu > mpu {
+            st.prefilter_mem[pm_base..pm_base + mpu].copy_from_slice(&pre[c][nu..nu + mpu]);
+        } else {
+            // Shift old memory left by N, append N new samples from pre[]
+            // OPUS_MOVE: overlapping copy (src > dst, so forward copy is safe)
+            let keep = mpu - nu;
             for i in 0..keep {
-                st.prefilter_mem[mem_start + i] = st.prefilter_mem[mem_start + shift + i];
+                st.prefilter_mem[pm_base + i] = st.prefilter_mem[pm_base + nu + i];
             }
-        }
-        let dst_start = mem_start + (COMBFILTER_MAXPERIOD as usize).saturating_sub(shift);
-        for i in 0..shift.min(nu) {
-            st.prefilter_mem[dst_start + i] = input[in_start + nu - shift + i];
+            st.prefilter_mem[pm_base + keep..pm_base + mpu].copy_from_slice(&pre[c][mpu..mpu + nu]);
         }
     }
 
-    if gain1 > 0 { 1 } else { 0 }
+    *gain = gain1;
+    *pitch_index = pitch_idx;
+    *qgain = qg;
+    pf_on
 }
 
 // ===========================================================================
@@ -1929,6 +2074,31 @@ fn celt_encode_core(
             for i in 0..nb_ebands as usize {
                 band_log_e2[ch * nb_ebands as usize + i] += half32(shl32(lm, DB_SHIFT));
             }
+        }
+    }
+
+    // Trace pre-emphasis output before main MDCT
+    {
+        static FC: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+        let fc = FC.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if fc <= 2 {
+            let ov = overlap as usize;
+            eprintln!(
+                "[RS PREEMPH] frame={} input[0..4]=[{},{},{},{}] input[ov-2..ov+2]=[{},{},{},{}] input[ov+118..ov+122]=[{},{},{},{}]",
+                fc,
+                input[0],
+                input[1],
+                input[2],
+                input[3],
+                input[ov - 2],
+                input[ov - 1],
+                input[ov],
+                input[ov + 1],
+                input.get(ov + 118).copied().unwrap_or(0),
+                input.get(ov + 119).copied().unwrap_or(0),
+                input.get(ov + 120).copied().unwrap_or(0),
+                input.get(ov + 121).copied().unwrap_or(0),
+            );
         }
     }
 
