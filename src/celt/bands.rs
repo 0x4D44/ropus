@@ -9,7 +9,7 @@ use super::ec_ctx::EcCoder;
 use super::math_ops::*;
 use super::modes::CELTMode;
 use super::rate::*;
-use super::tables::E_MEANS;
+use super::quant_bands::EMEANS;
 use super::vq::{
     alg_quant, alg_unquant, celt_inner_prod_norm_shift, renormalise_vector, stereo_itheta,
 };
@@ -233,7 +233,7 @@ pub fn denormalise_bands(
         let j_start = big_m * m.ebands[iu] as i32;
         let band_end = big_m * m.ebands[iu + 1] as i32;
         // lg = bandLogE[i] + eMeans[i] << (DB_SHIFT - 4)
-        let lg = add32(band_log_e[iu], shl32(E_MEANS[iu] as i32, DB_SHIFT - 4));
+        let lg = add32(band_log_e[iu], shl32(EMEANS[iu] as i32, DB_SHIFT - 4));
 
         let (g, shift) = {
             // Handle the integer part of the log energy

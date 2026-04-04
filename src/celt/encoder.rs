@@ -2308,6 +2308,9 @@ fn celt_encode_core(
         );
     }
 
+    // Clamp toneishness (C: MIN32(toneishness, QCONST32(1.f,29)-SHL32(tf_estimate,15)))
+    toneishness = toneishness.min(qconst32(1.0, 29) - shl32(tf_estimate, 15));
+
     // Pitch pre-filter
     let prefilter_enabled = ((st.lfe != 0 && nb_available_bytes > 3)
         || nb_available_bytes > 12 * c)
@@ -2436,6 +2439,11 @@ fn celt_encode_core(
         st.upsample,
     );
     compute_band_energies(mode, &freq, &mut band_e, eff_end, c, lm);
+
+    // Reset tf_chan when stereo is downmixed to mono (C: celt_encoder.c)
+    if cc == 2 && c == 1 {
+        tf_chan = 0;
+    }
 
     // LFE band limiting
     if st.lfe != 0 {
@@ -2881,10 +2889,10 @@ fn celt_encode_core(
         signal_bandwidth,
     );
 
-    // Update lastCodedBands with hysteresis
-    if coded_bands <= st.last_coded_bands.min(end) && coded_bands > st.last_coded_bands.min(end) - 2
-    {
-        st.last_coded_bands = st.last_coded_bands.min(end) - 1;
+    // Update lastCodedBands with hysteresis (C: celt_encoder.c ~2631-2634)
+    if st.last_coded_bands != 0 {
+        st.last_coded_bands =
+            (st.last_coded_bands + 1).min((st.last_coded_bands - 1).max(coded_bands));
     } else {
         st.last_coded_bands = coded_bands;
     }
@@ -3010,6 +3018,13 @@ fn celt_encode_core(
             st.old_band_e[ch * nbu + i] = 0;
             st.old_log_e[ch * nbu + i] = GCONST_NEG28;
             st.old_log_e2[ch * nbu + i] = GCONST_NEG28;
+        }
+    }
+
+    // Reset old band energies for silence frames (C: celt_encoder.c)
+    if silence {
+        for i in 0..c as usize * nbu {
+            st.old_band_e[i] = gconst(-28.0);
         }
     }
 
