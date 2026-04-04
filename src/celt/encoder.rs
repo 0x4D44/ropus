@@ -791,49 +791,52 @@ fn patch_transient_decision(
     c: i32,
 ) -> bool {
     let mut mean_diff: i32 = 0;
-    let mut spread_old = vec![0i32; nb_ebands as usize];
+    let mut spread_old = [0i32; 26];
+    let nb = nb_ebands as usize;
+    let s = start as usize;
+    let e = end as usize;
 
-    for ch in 0..c {
-        // Get max of channels for stereo
-        for i in 0..nb_ebands as usize {
-            let old_e = if c == 2 {
-                old_band_e[i].max(old_band_e[i + nb_ebands as usize])
-            } else {
-                old_band_e[i]
-            };
-            spread_old[i] = old_e;
+    // Compute spread_old ONCE, outside the channel loop (Bug 1 fix).
+    // Apply an aggressive (-6 dB/Bark) spreading function to the old frame
+    // to avoid false detection caused by irrelevant bands.
+    if c == 1 {
+        // Bug 3 fix: only initialize spread_old[start], not entire array.
+        spread_old[s] = old_band_e[s];
+        // Bug 2 fix: forward loop starts from start+1, not 1.
+        for i in (s + 1)..e {
+            spread_old[i] = spread_old[i - 1].wrapping_sub(gconst(1.0)).max(old_band_e[i]);
         }
-
-        // Apply aggressive forward spreading (-1 dB/band in log2 domain)
-        for i in 1..end as usize {
-            spread_old[i] = spread_old[i].max(spread_old[i - 1] - (1 << DB_SHIFT));
-        }
-        // Backward spreading
-        for i in (start as usize..(end as usize - 1)).rev() {
-            spread_old[i] = spread_old[i].max(spread_old[i + 1] - (1 << DB_SHIFT));
-        }
-
-        for i in (start.max(2) as usize)..(end as usize) {
-            let new_e = if c == 2 {
-                band_log_e[i + ch as usize * nb_ebands as usize]
-                    .max(band_log_e[i + (1 - ch as usize) * nb_ebands as usize])
-            } else {
-                band_log_e[i]
-            };
-            let diff = new_e - spread_old[i];
-            if diff > 0 {
-                mean_diff += diff;
-            }
+    } else {
+        spread_old[s] = old_band_e[s].max(old_band_e[s + nb]);
+        for i in (s + 1)..e {
+            spread_old[i] = spread_old[i - 1]
+                .wrapping_sub(gconst(1.0))
+                .max(old_band_e[i].max(old_band_e[i + nb]));
         }
     }
-
-    let count = c * (end - 1 - start.max(2));
-    if count > 0 {
-        mean_diff /= count;
+    // Backward spreading
+    for i in (s..=(e.wrapping_sub(2))).rev() {
+        spread_old[i] = spread_old[i].max(spread_old[i + 1].wrapping_sub(gconst(1.0)));
     }
 
-    // Threshold: 1.0 in Q(DB_SHIFT) = 1 << DB_SHIFT
-    mean_diff > (1 << DB_SHIFT)
+    // Compute mean increase (channel loop)
+    // Bug 5 fix: use per-channel newE[i + c*nbEBands], not max of both channels.
+    // Bug 4 fix: upper bound is end-1, not end.
+    let mut ch = 0;
+    loop {
+        for i in (2.max(s))..(e - 1) {
+            let x1 = 0i32.max(band_log_e[i + ch * nb]);
+            let x2 = 0i32.max(spread_old[i]);
+            mean_diff = mean_diff.wrapping_add(0i32.max(x1.wrapping_sub(x2)));
+        }
+        ch += 1;
+        if ch >= c as usize {
+            break;
+        }
+    }
+    mean_diff /= c * (end - 1 - start.max(2));
+
+    mean_diff > gconst(1.0)
 }
 
 // ===========================================================================
@@ -1539,8 +1542,9 @@ fn dynalloc_analysis(
                 (b, b * 6 << BITRES)
             };
 
-            // CBR cap: limit to 2/3 of effective bytes
-            if ((vbr == 0 || constrained_vbr != 0) && !is_transient)
+            // CBR cap: C: `(!vbr || (cvbr && !trans)) && budget_exceeded`
+            // Note: !trans only qualifies cvbr, not pure CBR
+            if (vbr == 0 || (constrained_vbr != 0 && !is_transient))
                 && (*tot_boost + boost_bits) >> BITRES >> 3 > 2 * effective_bytes / 3
             {
                 let cap = (2 * effective_bytes / 3) << BITRES << 3;
@@ -2498,9 +2502,9 @@ fn celt_encode_core(
             compute_band_energies(mode, &freq, &mut band_e, eff_end, c, lm);
             amp2log2(mode, eff_end, end, &band_e, &mut band_log_e, c);
             for ch in 0..c as usize {
-                for i in 0..nb_ebands as usize {
-                    band_log_e2[ch * nb_ebands as usize + i] =
-                        band_log_e[ch * nb_ebands as usize + i] + half32(shl32(lm, DB_SHIFT));
+                for i in 0..end as usize {
+                    band_log_e2[nb_ebands as usize * ch + i] +=
+                        half32(shl32(lm, DB_SHIFT));
                 }
             }
             tf_estimate = qconst16(0.2, 14);
