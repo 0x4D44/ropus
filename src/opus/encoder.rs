@@ -677,37 +677,27 @@ fn stereo_fade(
     window: &[i16],
     fs: i32,
 ) {
-    if channels != 2 {
-        return;
-    }
-    let overlap = overlap48 * fs / 48000;
-    let inc = (48000 / fs) as usize;
-    for i in 0..overlap as usize {
+    // Matches C stereo_fade() exactly: invert gains then subtract scaled diff.
+    let inc = imax(1, 48000 / fs) as usize;
+    let overlap = overlap48 as usize / inc;
+    let g1 = Q15ONE - g1;
+    let g2 = Q15ONE - g2;
+    for i in 0..overlap {
         let w = window[i * inc] as i32;
         let w = mult16_16_q15(w, w);
-        // Interpolate gain
-        let g = ((w as i64 * g2 as i64 + (Q15ONE - w) as i64 * g1 as i64) >> 15) as i32;
-        let idx_l = i * 2;
-        let idx_r = i * 2 + 1;
-        let l = pcm[idx_l] as i32;
-        let r = pcm[idx_r] as i32;
-        let mid = shr32(l + r, 1);
-        let side = shr32(l - r, 1);
-        let side_scaled = mult16_16_q15(g, side);
-        pcm[idx_l] = sat16(mid + side_scaled);
-        pcm[idx_r] = sat16(mid - side_scaled);
+        let g = shr32(mac16_16(mult16_16(w, g2), Q15ONE - w, g1), 15);
+        let diff = half32(pcm[i * channels as usize] as i32
+            - pcm[i * channels as usize + 1] as i32);
+        let diff = mult16_16_q15(g, diff);
+        pcm[i * channels as usize] = sat16(pcm[i * channels as usize] as i32 - diff);
+        pcm[i * channels as usize + 1] = sat16(pcm[i * channels as usize + 1] as i32 + diff);
     }
-    // Apply constant g2 to remaining samples
-    for i in overlap as usize..frame_size as usize {
-        let idx_l = i * 2;
-        let idx_r = i * 2 + 1;
-        let l = pcm[idx_l] as i32;
-        let r = pcm[idx_r] as i32;
-        let mid = shr32(l + r, 1);
-        let side = shr32(l - r, 1);
-        let side_scaled = mult16_16_q15(g2, side);
-        pcm[idx_l] = sat16(mid + side_scaled);
-        pcm[idx_r] = sat16(mid - side_scaled);
+    for i in overlap..frame_size as usize {
+        let diff = half32(pcm[i * channels as usize] as i32
+            - pcm[i * channels as usize + 1] as i32);
+        let diff = mult16_16_q15(g2, diff);
+        pcm[i * channels as usize] = sat16(pcm[i * channels as usize] as i32 - diff);
+        pcm[i * channels as usize + 1] = sat16(pcm[i * channels as usize + 1] as i32 + diff);
     }
 }
 
@@ -814,15 +804,17 @@ fn compute_stereo_width(pcm: &[i16], frame_size: i32, fs: i32, mem: &mut StereoW
 
         // width = sqrt(1 - corr²) * ldiff
         let corr_sq = mult16_16(corr, corr);
-        let decorr = celt_sqrt(imax(0, mult16_32_q15(Q15ONE - corr_sq, 2)));
-        let width = imin(Q15ONE, mult16_16_q15(decorr, ldiff));
+        let decorr = celt_sqrt(imax(0, qconst32(1.0, 30) - corr_sq));
+        let width = mult16_16_q15(imin(Q15ONE, decorr), ldiff);
 
         // 1-second smoothing
         mem.smoothed_width += (width - mem.smoothed_width) / frame_rate;
 
-        // Peak follower: decay 0.02/frame_rate
-        let decay = imax(1, qconst16(0.02, 15) / frame_rate);
-        mem.max_follower = imax(mem.max_follower - decay, mem.smoothed_width);
+        // Peak follower
+        mem.max_follower = imax(
+            mem.max_follower - qconst16(0.02, 15) / frame_rate,
+            mem.smoothed_width,
+        );
     }
 
     imin(Q15ONE, 20 * mem.max_follower)
@@ -1980,36 +1972,40 @@ impl OpusEncoder {
             self.prev_hb_gain = hb_gain;
 
             // --- Stereo width ---
+            // Matches C: compute stereoWidth_Q14 for non-hybrid or mono stream
             if self.mode != MODE_HYBRID || self.stream_channels == 1 {
-                let equiv16 = equiv_rate / 16000;
-                let width_q14 = if equiv16 >= 2 {
-                    imin(1 << 14, (equiv16 - 1) << 14)
+                if equiv_rate > 32000 {
+                    self.silk_mode.stereo_width_q14 = 16384;
+                } else if equiv_rate < 16000 {
+                    self.silk_mode.stereo_width_q14 = 0;
                 } else {
-                    0
-                };
-                self.hybrid_stereo_width_q14 = width_q14 as i16;
-                self.silk_mode.stereo_width_q14 = width_q14;
+                    self.silk_mode.stereo_width_q14 =
+                        16384 - 2048 * (32000 - equiv_rate) / (equiv_rate - 14000);
+                }
             }
-
+            // Apply stereo width reduction (at low bitrates)
             if self.channels == 2
-                && (self.hybrid_stereo_width_q14 as i32) < (1 << 14)
-                && self.mode != MODE_SILK_ONLY
+                && ((self.hybrid_stereo_width_q14 as i32) < (1 << 14)
+                    || self.silk_mode.stereo_width_q14 < (1 << 14))
             {
-                let mode_ref = if let Some(ref celt) = self.celt_enc {
-                    celt.mode
-                } else {
-                    return Err(OPUS_INTERNAL_ERROR);
-                };
-                stereo_fade(
-                    &mut pcm_buf,
-                    self.hybrid_stereo_width_q14 as i32,
-                    self.hybrid_stereo_width_q14 as i32,
-                    mode_ref.overlap as i32,
-                    frame_size,
-                    self.channels,
-                    mode_ref.window,
-                    self.fs,
-                );
+                let mut g1 = self.hybrid_stereo_width_q14 as i32;
+                let mut g2 = self.silk_mode.stereo_width_q14;
+                // Scale Q14 -> Q15: 16384 maps to Q15ONE, others shift left by 1
+                g1 = if g1 == 16384 { Q15ONE } else { shl16(g1, 1) };
+                g2 = if g2 == 16384 { Q15ONE } else { shl16(g2, 1) };
+                if let Some(ref celt) = self.celt_enc {
+                    stereo_fade(
+                        &mut pcm_buf,
+                        g1,
+                        g2,
+                        celt.mode.overlap as i32,
+                        frame_size,
+                        self.channels,
+                        celt.mode.window,
+                        self.fs,
+                    );
+                }
+                self.hybrid_stereo_width_q14 = self.silk_mode.stereo_width_q14 as i16;
             }
 
             // --- Redundancy signaling ---

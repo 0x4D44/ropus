@@ -1226,34 +1226,34 @@ fn alloc_trim_analysis(
 /// Matches C `stereo_analysis()` from `celt_encoder.c`.
 fn stereo_analysis(m: &CELTMode, x: &[i32], lm: i32, n0: i32) -> i32 {
     let n0u = n0 as usize;
-    let mut sum_lr: i32 = 0;
-    let mut sum_ms: i32 = 0;
+    let mut sum_lr: i32 = EPSILON;
+    let mut sum_ms: i32 = EPSILON;
 
-    let analysis_end = 13.min(m.nb_ebands as usize);
-    let reduced_end = if lm <= 1 {
-        analysis_end.saturating_sub(8)
-    } else {
-        analysis_end
-    };
-
-    for i in 0..reduced_end {
-        let n = ((m.ebands[i + 1] - m.ebands[i]) as usize) << lm as usize;
-        let x_off = m.ebands[i] as usize * (1 << lm as usize);
-        let y_off = n0u * (1 << lm as usize) + x_off;
-
-        for j in 0..n {
-            if x_off + j < x.len() && y_off + j < x.len() {
-                let l = x[x_off + j];
-                let r = x[y_off + j];
-                sum_lr += abs32(l) + abs32(r);
-                sum_ms += abs32(l + r) + abs32(l - r);
-            }
+    // Use the L1 norm to model the entropy of the L/R signal vs the M/S signal.
+    // Always loop 13 bands (the theta adjustment handles LM<=1 separately).
+    for i in 0..13 {
+        let j_start = (m.ebands[i] as usize) << (lm as usize);
+        let j_end = (m.ebands[i + 1] as usize) << (lm as usize);
+        for j in j_start..j_end {
+            // SHR32 normalization: shift from Q(NORM_SHIFT) to Q14
+            let l = shr32(x[j], NORM_SHIFT - 14);
+            let r = shr32(x[n0u + j], NORM_SHIFT - 14);
+            let ms_m = l + r;
+            let s = l - r;
+            sum_lr += abs32(l) + abs32(r);
+            sum_ms += abs32(ms_m) + abs32(s);
         }
     }
 
-    // M/S is better if sumMS < 0.707 * sumLR
-    let scaled_ms = mult16_32_q15(qconst16(0.707107, 15), sum_ms);
-    (scaled_ms < sum_lr) as i32
+    let sum_ms = mult16_32_q15(qconst16(0.707107, 15), sum_ms);
+    // We don't need thetas for lower bands with LM<=1
+    let mut thetas: i32 = 13;
+    if lm <= 1 {
+        thetas -= 8;
+    }
+    let ebands13 = m.ebands[13] as i32;
+    (mult16_32_q15((ebands13 << (lm + 1)) + thetas, sum_ms)
+        > mult16_32_q15(ebands13 << (lm + 1), sum_lr)) as i32
 }
 
 // ===========================================================================
