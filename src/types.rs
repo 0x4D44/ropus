@@ -143,7 +143,11 @@ pub fn extract16(x: i32) -> i32 {
     x as i16 as i32
 }
 
-/// Identity cast to i32. Matches C: `(opus_val32)(x)`.
+/// Widen to i32. In C this is `(opus_val32)(x)` — a no-op for i32.
+/// Note: C's `EXTEND32` macro also casts through `opus_val16` (i16) which
+/// truncates, but the C code only applies it to already-i16-typed values.
+/// In Rust where everything is i32, we keep this as identity to avoid
+/// corrupting values that are legitimately wider than i16.
 #[inline(always)]
 pub fn extend32(x: i32) -> i32 {
     x

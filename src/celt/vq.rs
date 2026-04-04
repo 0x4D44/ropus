@@ -276,11 +276,12 @@ fn op_pvq_search(x: &mut [i32], iy: &mut [i32], k: i32, n: usize) -> i32 {
         for j in 0..n {
             // Round toward zero -- critical to not exceed K total pulses
             iy[j] = mult16_16_q15(x[j], rcp);
-            y[j] = iy[j];
+            y[j] = iy[j] as i16 as i32;
             yy = mac16_16(yy, y[j], y[j]);
             xy = mac16_16(xy, x[j], y[j]);
             // Store 2*iy[j] to avoid multiply by 2 in the greedy inner loop
             y[j] *= 2;
+            y[j] = y[j] as i16 as i32;
             pulses_left -= iy[j];
         }
     }
@@ -337,6 +338,7 @@ fn op_pvq_search(x: &mut [i32], iy: &mut [i32], k: i32, n: usize) -> i32 {
 
         // y stores 2*iy, so increment by 2
         y[best_id] += 2;
+        y[best_id] = y[best_id] as i16 as i32;
         iy[best_id] += 1;
     }
 
