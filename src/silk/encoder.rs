@@ -7616,11 +7616,26 @@ pub fn silk_encode(
 ) -> i32 {
     let mut ret = SILK_NO_ERROR;
 
+    // C: reducedDependency handling (enc_API.c:173-177)
+    if enc_control.reduced_dependency != 0 {
+        for n in 0..enc_control.n_channels_api as usize {
+            enc.state_fxx[n].s_cmn.first_frame_after_reset = 1;
+        }
+    }
+
+    // C: Reset nFramesEncoded for ALL API channels (enc_API.c:179-181)
+    for n in 0..enc_control.n_channels_api as usize {
+        enc.state_fxx[n].s_cmn.n_frames_encoded = 0;
+    }
+
     // Validate control input
     ret = check_control_input(enc_control);
     if ret != SILK_NO_ERROR {
         return ret;
     }
+
+    // C: Reset switchReady (enc_API.c:189)
+    enc_control.switch_ready = 0;
 
     let n_channels_internal = enc_control.n_channels_internal as usize;
 
