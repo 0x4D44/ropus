@@ -1791,9 +1791,11 @@ impl OpusEncoder {
                         self.stream_channels,
                     );
                     // HB gain attenuation
+                    // C: HB_gain = Q15ONE - SHR32(celt_exp2(-celt_rate * QCONST16(1.f/1024, 10)), 1)
+                    // QCONST16(1.f/1024, 10) = round(1/1024 * 2^10) = 1, so argument is -celt_rate (Q10)
                     let celt_rate = total_bit_rate - self.silk_mode.bit_rate;
                     if celt_rate > 0 {
-                        hb_gain = Q15ONE - shr32(celt_exp2(-celt_rate / 1024), 1);
+                        hb_gain = Q15ONE - shr32(celt_exp2(-celt_rate), 1);
                         hb_gain = imax(0, hb_gain);
                     }
                 } else {
@@ -1920,12 +1922,11 @@ impl OpusEncoder {
                 }
 
                 // DTX: if SILK produced 0 bytes
+                // C returns immediately without updating delay buffer
                 if n_bytes == 0 {
                     self.range_final = 0;
                     toc_slice[0] =
                         gen_toc(self.mode, frame_rate, curr_bandwidth, self.stream_channels);
-                    self.update_state(to_celt, frame_size);
-                    self.update_delay_buffer(pcm, frame_size);
                     return Ok(1);
                 }
 
@@ -1950,7 +1951,8 @@ impl OpusEncoder {
             }
 
             // --- Update delay buffer BEFORE CELT encoding ---
-            self.update_delay_buffer(pcm, frame_size);
+            // C copies from pcm_buf (dc_reject'd), not raw pcm
+            self.update_delay_buffer_from_pcm_buf(&pcm_buf, frame_size, total_buffer);
 
             // --- HB gain fade ---
             if (self.prev_hb_gain < Q15ONE || hb_gain < Q15ONE) && self.mode != MODE_SILK_ONLY {
@@ -2277,6 +2279,7 @@ impl OpusEncoder {
         self.first = 0;
     }
 
+    /// Update delay buffer from raw pcm (for early return paths before pcm_buf exists).
     fn update_delay_buffer(&mut self, pcm: &[i16], frame_size: i32) {
         if self.encoder_buffer == 0 || self.delay_buffer.is_empty() {
             return;
@@ -2285,19 +2288,53 @@ impl OpusEncoder {
         let eb = self.encoder_buffer as usize;
         let fs = frame_size as usize;
         let db = &mut self.delay_buffer;
-
         if eb > fs {
-            // Shift existing data left, copy new PCM to end
             db.copy_within(fs * ch..eb * ch, 0);
             let new_start = (eb - fs) * ch;
             let copy_len = (fs * ch).min(pcm.len());
             db[new_start..new_start + copy_len].copy_from_slice(&pcm[..copy_len]);
         } else {
-            // Copy tail of PCM
             let skip = (fs - eb) * ch;
             let copy_len = (eb * ch).min(pcm.len().saturating_sub(skip));
             if skip < pcm.len() {
                 db[..copy_len].copy_from_slice(&pcm[skip..skip + copy_len]);
+            }
+        }
+    }
+
+    /// Update delay buffer from pcm_buf (dc_reject'd data), matching C reference.
+    /// C: copies from pcm_buf, NOT from raw pcm input.
+    fn update_delay_buffer_from_pcm_buf(
+        &mut self,
+        pcm_buf: &[i16],
+        frame_size: i32,
+        total_buffer: i32,
+    ) {
+        if self.encoder_buffer == 0 || self.delay_buffer.is_empty() {
+            return;
+        }
+        let ch = self.channels as usize;
+        let eb = self.encoder_buffer as usize;
+        let fs = frame_size as usize;
+        let tb = total_buffer as usize;
+        let db = &mut self.delay_buffer;
+
+        if ch * (eb.saturating_sub(fs + tb)) > 0 {
+            // Case 1: encoder_buffer > frame_size + total_buffer
+            // Shift existing delay_buffer left by frame_size, then copy all of pcm_buf
+            let shift_src = fs * ch;
+            let shift_len = (eb - fs - tb) * ch;
+            db.copy_within(shift_src..shift_src + shift_len, 0);
+            let copy_start = shift_len;
+            let copy_len = ((fs + tb) * ch).min(pcm_buf.len());
+            db[copy_start..copy_start + copy_len].copy_from_slice(&pcm_buf[..copy_len]);
+        } else {
+            // Case 2: encoder_buffer <= frame_size + total_buffer
+            // Copy tail of pcm_buf into delay_buffer
+            let src_offset = (fs + tb - eb) * ch;
+            let copy_len = (eb * ch).min(pcm_buf.len().saturating_sub(src_offset));
+            if src_offset < pcm_buf.len() {
+                db[..copy_len].copy_from_slice(&pcm_buf[src_offset..src_offset + copy_len]);
             }
         }
     }

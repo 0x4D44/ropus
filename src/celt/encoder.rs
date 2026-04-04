@@ -1401,16 +1401,145 @@ fn dynalloc_analysis(
 // ===========================================================================
 
 /// Detect pure tones in the input signal.
-///
+/// Normalize tone input levels (fixed-point only).
+/// Matches C `normalize_tone_input()` from `celt_encoder.c`.
+fn normalize_tone_input(x: &mut [i16], len: usize) {
+    let mut ac0: i32 = len as i32;
+    for i in 0..len {
+        ac0 += shr32(mult16_16(x[i] as i32, x[i] as i32), 10);
+    }
+    let shift = 5 - (28 - celt_ilog2(ac0)) / 2;
+    if shift > 0 {
+        for i in 0..len {
+            x[i] = pshr32(x[i] as i32, shift) as i16;
+        }
+    }
+}
+
+/// Fixed-point acos approximation. Input in Q29, output in Q13 (radians).
+/// Matches C `acos_approx()` from `celt_encoder.c`.
+fn acos_approx(x: i32) -> i32 {
+    let flip = x < 0;
+    let x = x.abs();
+    let x14: i32 = x >> 15; // Q14
+    let mut tmp: i32 = (762i32 * x14 >> 14) - 3308;
+    tmp = (tmp * x14 >> 14) + 25726;
+    tmp = tmp * celt_sqrt(imax(0, (1 << 30) - (x << 1))) >> 16;
+    if flip {
+        25736 - tmp
+    } else {
+        tmp
+    }
+}
+
+/// Compute 2nd-order LPC via forward+backward covariance method.
+/// Matches C `tone_lpc()` from `celt_encoder.c`.
+/// Returns 1 on failure (degenerate), 0 on success.
+fn tone_lpc(x: &[i16], len: usize, delay: usize, lpc: &mut [i32; 2]) -> bool {
+    #[allow(unused_assignments)]
+    let (mut r00, mut r01, mut r11, mut r02, mut r12, mut r22): (i32, i32, i32, i32, i32, i32) =
+        (0, 0, 0, 0, 0, 0);
+    let d2 = 2 * delay;
+    // Forward prediction correlations
+    for i in 0..len - d2 {
+        r00 += mult16_16(x[i] as i32, x[i] as i32);
+        r01 += mult16_16(x[i] as i32, x[i + delay] as i32);
+        r02 += mult16_16(x[i] as i32, x[i + d2] as i32);
+    }
+    // Edge corrections for r11, r22, r12
+    let mut edges: i32 = 0;
+    for i in 0..delay {
+        edges += mult16_16(x[len + i - d2] as i32, x[len + i - d2] as i32)
+            - mult16_16(x[i] as i32, x[i] as i32);
+    }
+    r11 = r00 + edges;
+    edges = 0;
+    for i in 0..delay {
+        edges += mult16_16(x[len + i - delay] as i32, x[len + i - delay] as i32)
+            - mult16_16(x[i + delay] as i32, x[i + delay] as i32);
+    }
+    r22 = r11 + edges;
+    edges = 0;
+    for i in 0..delay {
+        edges += mult16_16(x[len + i - d2] as i32, x[len + i - delay] as i32)
+            - mult16_16(x[i] as i32, x[i + delay] as i32);
+    }
+    r12 = r01 + edges;
+    // Combine forward and backward
+    let r00_save = r00;
+    let r01_save = r01;
+    r00 = r00_save + r22;
+    r01 = r01_save + r12;
+    r11 = 2 * r11;
+    r02 = 2 * r02;
+    r12 = r12 + r01_save;
+    r22 = r00_save + r22;
+    let _ = r22; // r22 not used after this
+
+    // Solve 2x2 system
+    let den = mult32_32_q31(r00, r11) - mult32_32_q31(r01, r01);
+    if den <= shr32(mult32_32_q31(r00, r11), 10) {
+        return true; // fail
+    }
+    let num1 = mult32_32_q31(r02, r11) - mult32_32_q31(r01, r12);
+    if num1 >= den {
+        lpc[1] = qconst32(1.0, 29);
+    } else if num1 <= -den {
+        lpc[1] = -qconst32(1.0, 29);
+    } else {
+        lpc[1] = frac_div32_q29(num1, den);
+    }
+    let num0 = mult32_32_q31(r00, r12) - mult32_32_q31(r02, r01);
+    if half32(num0) >= den {
+        lpc[0] = qconst32(1.999999, 29);
+    } else if half32(num0) <= -den {
+        lpc[0] = -qconst32(1.999999, 29);
+    } else {
+        lpc[0] = frac_div32_q29(num0, den);
+    }
+    false // success
+}
+
+/// Detect pure or nearly-pure tones.
 /// Matches C `tone_detect()` from `celt_encoder.c`.
-/// Returns the detected tone frequency (Q13) or -1 if no tone.
-fn tone_detect(_input: &[i32], _cc: i32, _n: i32, toneishness: &mut i32, _fs: i32) -> i32 {
-    // Tone detection is primarily used for very specific edge cases
-    // (pure sinusoid detection to prevent false transients).
-    // For the initial port, we return "no tone detected" which is safe
-    // — it just means we won't get the tone protection optimization.
-    *toneishness = 0;
-    -1 // No tone detected
+/// Returns detected tone frequency (Q13) or -1 if no tone.
+fn tone_detect(input: &[i32], cc: i32, n: i32, toneishness: &mut i32, fs: i32) -> i32 {
+    let nu = n as usize;
+    let mut x = vec![0i16; nu];
+
+    // Downscale input
+    if cc == 2 {
+        for i in 0..nu {
+            x[i] = pshr32(shr32(input[i], 1) + shr32(input[i + nu], 1), SIG_SHIFT + 2) as i16;
+        }
+    } else {
+        for i in 0..nu {
+            x[i] = pshr32(input[i], SIG_SHIFT + 2) as i16;
+        }
+    }
+
+    normalize_tone_input(&mut x, nu);
+
+    let mut delay: usize = 1;
+    let mut lpc = [0i32; 2];
+    let mut fail = tone_lpc(&x, nu, delay, &mut lpc);
+
+    // If LPC resonates too close to DC, retry with downsampling
+    while delay as i32 <= fs / 3000 && (fail || (lpc[0] > qconst32(1.0, 29) && lpc[1] < 0)) {
+        delay *= 2;
+        fail = tone_lpc(&x, nu, delay, &mut lpc);
+    }
+
+    // Check for complex roots
+    if !fail
+        && mult32_32_q31(lpc[0], lpc[0]) + mult32_32_q31(qconst32(3.999999, 29), lpc[1]) < 0
+    {
+        *toneishness = -lpc[1];
+        (acos_approx(lpc[0] >> 1) + delay as i32 / 2) / delay as i32
+    } else {
+        *toneishness = 0;
+        -1
+    }
 }
 
 // ===========================================================================
