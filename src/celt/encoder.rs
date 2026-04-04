@@ -2370,6 +2370,7 @@ fn celt_encode_core(
         enc_ref.encode_icdf(prefilter_tapset as u32, &TAPSET_ICDF, 2);
     }
 
+
     // Transient flag
     let mut transient_got_disabled = false;
     if lm > 0 && enc_ref.tell() as i32 + 3 <= total_bits {
@@ -2524,6 +2525,7 @@ fn celt_encode_core(
         enc_ref.encode_bit_logp(is_transient, 3);
     }
 
+
     // Band normalization
     let x_size = c as usize * n as usize;
     let mut x_norm = vec![0i32; x_size];
@@ -2644,6 +2646,8 @@ fn celt_encode_core(
         st.lfe,
     );
 
+
+
     // TF encoding
     tf_encode(
         start,
@@ -2655,6 +2659,7 @@ fn celt_encode_core(
         enc_ref,
     );
     tell = enc_ref.tell() as i32;
+
 
     // Spread decision
     if tell + 4 <= total_bits {
@@ -2695,6 +2700,7 @@ fn celt_encode_core(
         st.spread_decision = SPREAD_NORMAL;
     }
 
+
     // Caps initialization
     let mut cap = vec![0i32; nb_ebands as usize];
     init_caps(mode, &mut cap, lm, c);
@@ -2726,7 +2732,7 @@ fn celt_encode_core(
             j += 1;
         }
         if j > 0 {
-            dynalloc_logp = dynalloc_logp.max(2) - 1;
+            dynalloc_logp = (dynalloc_logp - 1).max(2);
         }
         offsets[i] = boost;
     }
@@ -2773,6 +2779,7 @@ fn celt_encode_core(
         }
         enc_ref.encode_icdf(alloc_trim as u32, &TRIM_ICDF, 7);
     }
+
 
     // Minimum allowed bytes
     let min_allowed = ((enc_ref.tell_frac() as i32 + total_boost_enc + (1 << (BITRES + 3)) - 1)
