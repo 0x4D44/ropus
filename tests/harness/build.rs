@@ -197,11 +197,17 @@ fn main() {
         build.file(ref_dir.join(src));
     }
 
+    // Debug helper for direct function comparisons
+    build.file(harness_dir.join("debug_helper.c"));
+
     build.compile("opus_ref");
 
     // Tell cargo to link the static library
     println!("cargo:rustc-link-lib=static=opus_ref");
     println!("cargo:rerun-if-changed=tests/harness/config.h");
     println!("cargo:rerun-if-changed=tests/harness/build.rs");
+    println!("cargo:rerun-if-changed=tests/harness/debug_helper.c");
     println!("cargo:rerun-if-changed=reference/celt/celt_decoder.c");
 }
+// force rebuild
+// force rebuild 2

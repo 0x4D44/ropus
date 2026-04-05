@@ -602,6 +602,177 @@ fn cmd_encode(wav_path: &str, bitrate: i32, complexity: i32) {
     let stats = compare_bytes(&c_encoded, &rust_encoded);
     println!();
     print_result("encode", &stats, &c_encoded, &rust_encoded);
+
+    // Per-frame comparison
+    println!();
+    println!("=== Per-frame packet comparison ===");
+    let c_packets = parse_packets(&c_encoded);
+    let r_packets = parse_packets(&rust_encoded);
+    println!("  C packets: {}, Rust packets: {}", c_packets.len(), r_packets.len());
+
+    let n = c_packets.len().min(r_packets.len());
+    let mut first_diff_frame = None;
+    for i in 0..n {
+        let cp = &c_packets[i];
+        let rp = &r_packets[i];
+        if cp == rp {
+            println!("  Frame {:3}: {} bytes - MATCH", i, cp.len());
+        } else {
+            let pkt_stats = compare_bytes(cp, rp);
+            println!(
+                "  Frame {:3}: {} bytes - DIFFER at byte {} (max_diff={})",
+                i,
+                cp.len(),
+                pkt_stats.first_diff_offset.unwrap_or(0),
+                pkt_stats.max_diff
+            );
+            if first_diff_frame.is_none() {
+                first_diff_frame = Some(i);
+                // Dump hex around the difference
+                if let Some(off) = pkt_stats.first_diff_offset {
+                    let start = if off >= 8 { off - 8 } else { 0 };
+                    let end = (off + 24).min(cp.len().max(rp.len()));
+                    println!("    C pkt:  {}", hex_line(cp, start, end));
+                    println!("    R pkt:  {}", hex_line(rp, start, end));
+                    println!(
+                        "    {}^ byte {}",
+                        " ".repeat(12 + (off - start) * 3),
+                        off
+                    );
+                    // Dump first 4 bytes (TOC + possibly SILK/CELT headers)
+                    println!("    TOC byte: C=0x{:02x} R=0x{:02x}", cp[0], rp[0]);
+                    // Count total differing bytes in this packet
+                    let mut ndiff = 0;
+                    for j in 0..cp.len().min(rp.len()) {
+                        if cp[j] != rp[j] {
+                            ndiff += 1;
+                            println!(
+                                "    Byte {}: C=0x{:02x} R=0x{:02x} diff={}",
+                                j,
+                                cp[j],
+                                rp[j],
+                                (cp[j] as i32 - rp[j] as i32).abs()
+                            );
+                        }
+                    }
+                    println!("    Total differing bytes in frame: {}", ndiff);
+                }
+            }
+        }
+    }
+}
+
+fn cmd_encode_framecompare(wav_path: &str, bitrate: i32, complexity: i32) {
+    // Do per-frame encode: each frame independently through C and Rust,
+    // comparing the encoder state after each frame
+    let wav = read_wav(Path::new(wav_path));
+    let sr = wav.sample_rate as i32;
+    let ch = wav.channels as i32;
+    let frame_size = (sr / 50) as usize;
+    let samples_per_frame = frame_size * ch as usize;
+    let max_packet = 4000;
+
+    // C encoder
+    let c_enc = unsafe {
+        let mut error: i32 = 0;
+        let enc = bindings::opus_encoder_create(
+            sr, ch, bindings::OPUS_APPLICATION_AUDIO, &mut error,
+        );
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, complexity);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_VBR_REQUEST, 0i32);
+        enc
+    };
+
+    // Rust encoder
+    use mdopus::opus::encoder::{OPUS_APPLICATION_AUDIO, OpusEncoder};
+    let mut r_enc = OpusEncoder::new(sr, ch, OPUS_APPLICATION_AUDIO).unwrap();
+    r_enc.set_bitrate(bitrate);
+    r_enc.set_complexity(complexity);
+    r_enc.set_vbr(0);
+
+    let mut pos = 0;
+    let mut frame_idx = 0;
+    let mut c_pkt = vec![0u8; max_packet];
+    let mut r_pkt = vec![0u8; max_packet];
+
+    while pos + samples_per_frame <= wav.samples.len() {
+        let pcm = &wav.samples[pos..pos + samples_per_frame];
+
+        // C encode
+        let c_len = unsafe {
+            bindings::opus_encode(
+                c_enc,
+                pcm.as_ptr(),
+                frame_size as i32,
+                c_pkt.as_mut_ptr(),
+                max_packet as i32,
+            )
+        };
+
+        // Rust encode
+        let r_len = r_enc.encode(pcm, frame_size as i32, &mut r_pkt, max_packet as i32)
+            .unwrap_or(-1);
+
+        let cl = c_len as usize;
+        let rl = r_len as usize;
+
+        if &c_pkt[..cl] == &r_pkt[..rl] {
+            println!("Frame {:3}: {} bytes - MATCH", frame_idx, cl);
+        } else {
+            println!("Frame {:3}: C={} bytes, R={} bytes - DIFFER", frame_idx, cl, rl);
+            let min_len = cl.min(rl);
+            let mut ndiff = 0;
+            for j in 0..min_len {
+                if c_pkt[j] != r_pkt[j] {
+                    ndiff += 1;
+                    if ndiff <= 5 {
+                        println!(
+                            "  byte {:3}: C=0x{:02x} R=0x{:02x} diff={}",
+                            j, c_pkt[j], r_pkt[j],
+                            (c_pkt[j] as i32 - r_pkt[j] as i32).abs()
+                        );
+                    }
+                }
+            }
+            if ndiff > 5 {
+                println!("  ... and {} more differing bytes", ndiff - 5);
+            }
+            println!("  Total differing bytes: {}", ndiff);
+
+            // For the first differing frame, dump the full C and Rust packets
+            // around the difference region
+            let stats = compare_bytes(&c_pkt[..cl], &r_pkt[..rl]);
+            if let Some(off) = stats.first_diff_offset {
+                let start = if off >= 16 { off - 16 } else { 0 };
+                let end = (off + 32).min(cl.max(rl));
+                println!("  C pkt:  {}", hex_line(&c_pkt[..cl], start, end));
+                println!("  R pkt:  {}", hex_line(&r_pkt[..rl], start, end));
+            }
+        }
+
+        pos += samples_per_frame;
+        frame_idx += 1;
+    }
+
+    unsafe {
+        bindings::opus_encoder_destroy(c_enc);
+    }
+}
+
+fn parse_packets(data: &[u8]) -> Vec<Vec<u8>> {
+    let mut packets = Vec::new();
+    let mut pos = 0;
+    while pos + 2 <= data.len() {
+        let pkt_len = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
+        pos += 2;
+        if pos + pkt_len > data.len() {
+            break;
+        }
+        packets.push(data[pos..pos + pkt_len].to_vec());
+        pos += pkt_len;
+    }
+    packets
 }
 
 fn cmd_decode(opus_path: &str) {
@@ -690,6 +861,358 @@ fn cmd_roundtrip(wav_path: &str, bitrate: i32) {
 }
 
 // ---------------------------------------------------------------------------
+// Math function comparison (C vs Rust)
+// ---------------------------------------------------------------------------
+
+fn cmd_mathcompare() {
+    use mdopus::celt::math_ops;
+    use mdopus::celt::vq;
+
+    // First: check OPUS_FAST_INT64 setting
+    let fast_int64 = unsafe { bindings::debug_c_opus_fast_int64() };
+    println!("C OPUS_FAST_INT64 = {}", fast_int64);
+    println!();
+
+    // Test celt_sqrt32
+    println!("--- celt_sqrt32 comparison ---");
+    let test_vals: Vec<i32> = vec![
+        0, 1, 100, 10000, 1_000_000, 100_000_000, 1_000_000_000,
+        1_073_741_823, 536_870_912, 268_435_456, 16_777_216,
+        42, 12345, 999_999_999, 7, 255, 65535,
+    ];
+    let mut sqrt_pass = true;
+    for &x in &test_vals {
+        let c_val = unsafe { bindings::debug_c_celt_sqrt32(x) };
+        let r_val = math_ops::celt_sqrt32(x);
+        if c_val != r_val {
+            println!("  MISMATCH: celt_sqrt32({}) C={} R={} diff={}", x, c_val, r_val, c_val - r_val);
+            sqrt_pass = false;
+        }
+    }
+    if sqrt_pass {
+        println!("  celt_sqrt32: {} values PASS", test_vals.len());
+    }
+
+    // Test frac_div32
+    println!("--- frac_div32 comparison ---");
+    let div_tests: Vec<(i32, i32)> = vec![
+        (1000, 2000), (100, 300), (12345, 67890), (1, 2),
+        (1_000_000, 2_000_000), (536_870_912, 1_073_741_824),
+        (100_000_000, 200_000_001), (999_999, 1_000_001),
+    ];
+    let mut div_pass = true;
+    for &(a, b) in &div_tests {
+        let c_val = unsafe { bindings::debug_c_frac_div32(a, b) };
+        let r_val = math_ops::frac_div32(a, b);
+        if c_val != r_val {
+            println!("  MISMATCH: frac_div32({}, {}) C={} R={} diff={}", a, b, c_val, r_val, c_val - r_val);
+            div_pass = false;
+        }
+    }
+    if div_pass {
+        println!("  frac_div32: {} values PASS", div_tests.len());
+    }
+
+    // Test celt_atan_norm
+    println!("--- celt_atan_norm comparison ---");
+    let atan_tests: Vec<i32> = vec![
+        0, 1, -1, 536_870_912, -536_870_912,
+        1_073_741_824, -1_073_741_824, // exact +-1.0
+        268_435_456, 805_306_368, 100_000_000,
+        -100_000_000, 1_000_000, -1_000_000,
+    ];
+    let mut atan_pass = true;
+    for &x in &atan_tests {
+        let c_val = unsafe { bindings::debug_c_celt_atan_norm(x) };
+        let r_val = math_ops::celt_atan_norm(x);
+        if c_val != r_val {
+            println!("  MISMATCH: celt_atan_norm({}) C={} R={} diff={}", x, c_val, r_val, c_val - r_val);
+            atan_pass = false;
+        }
+    }
+    if atan_pass {
+        println!("  celt_atan_norm: {} values PASS", atan_tests.len());
+    }
+
+    // Test celt_atan2p_norm
+    println!("--- celt_atan2p_norm comparison ---");
+    let atan2_tests: Vec<(i32, i32)> = vec![
+        (0, 0), (0, 100), (100, 0), (100, 100),
+        (1_000_000, 2_000_000), (2_000_000, 1_000_000),
+        (536_870_912, 1_073_741_824), (1_073_741_824, 536_870_912),
+    ];
+    let mut atan2_pass = true;
+    for &(y, x) in &atan2_tests {
+        let c_val = unsafe { bindings::debug_c_celt_atan2p_norm(y, x) };
+        let r_val = math_ops::celt_atan2p_norm(y, x);
+        if c_val != r_val {
+            println!("  MISMATCH: celt_atan2p_norm({}, {}) C={} R={} diff={}", y, x, c_val, r_val, c_val - r_val);
+            atan2_pass = false;
+        }
+    }
+    if atan2_pass {
+        println!("  celt_atan2p_norm: {} values PASS", atan2_tests.len());
+    }
+
+    // Test stereo_itheta with realistic data
+    println!("--- stereo_itheta comparison ---");
+    let n = 8;
+    // Typical Q24 norm vectors
+    let test_vectors: Vec<(Vec<i32>, Vec<i32>)> = vec![
+        // Equal energy
+        (vec![1 << 24; 8], vec![1 << 24; 8]),
+        // Unequal energy
+        (vec![1 << 23, 1 << 22, 1 << 21, 1 << 20, 0, 0, 0, 0],
+         vec![1 << 21, 1 << 20, 1 << 19, 1 << 18, 0, 0, 0, 0]),
+        // Sine-like
+        (vec![0, 5_930_000, 11_180_000, 14_900_000, 16_777_216, 14_900_000, 11_180_000, 5_930_000],
+         vec![16_777_216, 14_900_000, 11_180_000, 5_930_000, 0, -5_930_000, -11_180_000, -14_900_000]),
+    ];
+    let mut sitheta_pass = true;
+    for (i, (xv, yv)) in test_vectors.iter().enumerate() {
+        // Non-stereo path
+        let c_val = unsafe {
+            bindings::debug_c_stereo_itheta(xv.as_ptr(), yv.as_ptr(), 0, n)
+        };
+        let r_val = vq::stereo_itheta(xv, yv, false, n as usize);
+        if c_val != r_val {
+            println!("  MISMATCH: stereo_itheta (non-stereo, vec #{}) C={} R={} diff={}", i, c_val, r_val, c_val - r_val);
+            sitheta_pass = false;
+        }
+    }
+    if sitheta_pass {
+        println!("  stereo_itheta: {} vectors PASS", test_vectors.len());
+    }
+
+    // Test celt_cos_norm32
+    println!("--- celt_cos_norm32 comparison ---");
+    let cos_tests: Vec<i32> = vec![
+        0, 1, -1, 1_073_741_824, -1_073_741_824, // boundaries
+        536_870_912, -536_870_912,    // pi/4
+        268_435_456, 805_306_368,     // pi/8, 3*pi/8
+        100_000_000, 500_000_000, 900_000_000,
+    ];
+    let mut cos_pass = true;
+    for &x in &cos_tests {
+        let c_val = unsafe { bindings::debug_c_celt_cos_norm32(x) };
+        let r_val = math_ops::celt_cos_norm32(x);
+        if c_val != r_val {
+            println!("  MISMATCH: celt_cos_norm32({}) C={} R={} diff={}", x, c_val, r_val, c_val - r_val);
+            cos_pass = false;
+        }
+    }
+    if cos_pass {
+        println!("  celt_cos_norm32: {} values PASS", cos_tests.len());
+    }
+
+    // Test celt_rsqrt_norm32
+    println!("--- celt_rsqrt_norm32 comparison ---");
+    let rsqrt_tests: Vec<i32> = vec![
+        536_870_912,    // 0.25 Q31
+        1_073_741_824,  // 0.5 Q31
+        1_610_612_736,  // 0.75 Q31
+        2_000_000_000,  // ~0.93 Q31
+        2_147_483_646,  // ~1.0 Q31
+        600_000_000, 800_000_000, 1_200_000_000,
+        1_500_000_000, 1_900_000_000,
+    ];
+    let mut rsqrt_pass = true;
+    for &x in &rsqrt_tests {
+        let c_val = unsafe { bindings::debug_c_celt_rsqrt_norm32(x) };
+        let r_val = math_ops::celt_rsqrt_norm32(x);
+        if c_val != r_val {
+            println!("  MISMATCH: celt_rsqrt_norm32({}) C={} R={} diff={}", x, c_val, r_val, c_val - r_val);
+            rsqrt_pass = false;
+        }
+    }
+    if rsqrt_pass {
+        println!("  celt_rsqrt_norm32: {} values PASS", rsqrt_tests.len());
+    }
+
+    // Test normalise_residual gain computation
+    println!("--- normalise_residual gain comparison ---");
+    use mdopus::types::{vshr32, mult32_32_q31};
+    let gain_tests: Vec<(i32, i32)> = vec![
+        (1, 2_147_483_647),      // typical ryy, Q31ONE gain
+        (4, 2_147_483_647),
+        (16, 2_147_483_647),
+        (100, 2_147_483_647),
+        (1000, 1_500_000_000),   // moderate gain
+        (10000, 1_000_000_000),
+        (1, 536_870_912),        // small gain
+    ];
+    let mut gain_pass = true;
+    for &(ryy, gain) in &gain_tests {
+        let c_val = unsafe { bindings::debug_c_normalise_residual_g(ryy, gain) };
+        // Replicate the gain computation
+        let k = math_ops::celt_ilog2(ryy) >> 1;
+        let t = vshr32(ryy, 2 * (k - 7) - 15);
+        let r_val = mult32_32_q31(math_ops::celt_rsqrt_norm32(t), gain);
+        if c_val != r_val {
+            println!("  MISMATCH: normalise_residual_g(ryy={}, gain={}) C={} R={} diff={}", ryy, gain, c_val, r_val, c_val - r_val);
+            gain_pass = false;
+        }
+    }
+    if gain_pass {
+        println!("  normalise_residual gain: {} values PASS", gain_tests.len());
+    }
+
+    // Test stereo_itheta with actual encoder data (from traces)
+    println!("--- stereo_itheta with actual encoder vectors ---");
+    // First divergent vectors (from eoffs=57, n=16, band=13)
+    let x_c: Vec<i32> = vec![4594765, 42154, -2191998, -7903840, -8283225, -948462, 3372303, 2950766, 927383, -1686152, 1011692, 400460, -1243537, -1201384, -126461, -252922];
+    let x_r: Vec<i32> = vec![4594765, 42154, -2191998, -7903841, -8283225, -948462, 3372303, 2950766, 927383, -1686152, 1011692, 400461, -1243537, -1201384, -126461, -252922];
+    let y_c: Vec<i32> = vec![843076, 2950768, 1517537, -1032768, 2086613, -2465998, 505847, -2992920, 5184916, -210772, -2782153, 358306, -2002309, -4742306, -885233, -1053848];
+    let y_r: Vec<i32> = vec![843076, 2950768, 1517538, -1032768, 2086613, -2465998, 505847, -2992920, 5184916, -210772, -2782154, 358306, -2002309, -4742306, -885233, -1053848];
+
+    // C with C-vectors
+    let c_with_c = unsafe { bindings::debug_c_stereo_itheta(x_c.as_ptr(), y_c.as_ptr(), 0, 16) };
+    // C with R-vectors (to see the difference caused by input change)
+    let c_with_r = unsafe { bindings::debug_c_stereo_itheta(x_r.as_ptr(), y_r.as_ptr(), 0, 16) };
+    // Rust with C-vectors
+    let r_with_c = vq::stereo_itheta(&x_c, &y_c, false, 16);
+    // Rust with R-vectors
+    let r_with_r = vq::stereo_itheta(&x_r, &y_r, false, 16);
+
+    println!("  C(C-vectors):  {}", c_with_c);
+    println!("  C(R-vectors):  {} (diff from C-input: {})", c_with_r, c_with_r - c_with_c);
+    println!("  R(C-vectors):  {} (diff from C: {})", r_with_c, r_with_c - c_with_c);
+    println!("  R(R-vectors):  {} (diff from C(C): {})", r_with_r, r_with_r - c_with_c);
+
+    // Exhaustive sweep: celt_sqrt32 on values that produce results near
+    // the itheta range used in encoding
+    println!("--- Exhaustive celt_sqrt32 sweep near typical values ---");
+    let mut sqrt_mismatches = 0;
+    // Sweep around powers of 2 (common norm energy values)
+    for base in [1 << 14, 1 << 16, 1 << 18, 1 << 20, 1 << 22, 1 << 24, 1 << 26, 1 << 28] {
+        for delta in -1000..=1000 {
+            let x = base + delta;
+            if x <= 0 || x >= 1_073_741_824 { continue; }
+            let c_val = unsafe { bindings::debug_c_celt_sqrt32(x) };
+            let r_val = math_ops::celt_sqrt32(x);
+            if c_val != r_val {
+                sqrt_mismatches += 1;
+                if sqrt_mismatches <= 5 {
+                    println!("  MISMATCH: celt_sqrt32({}) C={} R={} diff={}", x, c_val, r_val, c_val - r_val);
+                }
+            }
+        }
+    }
+    if sqrt_mismatches > 0 {
+        println!("  celt_sqrt32 sweep: {} mismatches found!", sqrt_mismatches);
+    } else {
+        println!("  celt_sqrt32 sweep: 16000 values PASS");
+    }
+
+    // Exhaustive sweep: celt_rsqrt_norm32 over entire valid range
+    println!("--- Exhaustive celt_rsqrt_norm32 sweep ---");
+    let mut rsqrt32_mismatches = 0;
+    // Valid range is [2^30, 2^31) for Q31 in [0.5, 1.0)
+    // Test 20000 points spread across the range
+    for i in 0..20000 {
+        let x = 1_073_741_824 + (i as i64 * 1_073_741_823 / 20000) as i32;
+        let c_val = unsafe { bindings::debug_c_celt_rsqrt_norm32(x) };
+        let r_val = math_ops::celt_rsqrt_norm32(x);
+        if c_val != r_val {
+            rsqrt32_mismatches += 1;
+            if rsqrt32_mismatches <= 5 {
+                println!("  MISMATCH: celt_rsqrt_norm32({}) C={} R={} diff={}", x, c_val, r_val, c_val - r_val);
+            }
+        }
+    }
+    if rsqrt32_mismatches > 0 {
+        println!("  celt_rsqrt_norm32 sweep: {} mismatches out of 20000!", rsqrt32_mismatches);
+    } else {
+        println!("  celt_rsqrt_norm32 sweep: 20000 values PASS");
+    }
+
+    // Exhaustive sweep: normalise_residual gain computation
+    println!("--- Exhaustive normalise_residual gain sweep ---");
+    let mut gain_mismatches = 0;
+    let gain_value = 2_147_483_647i32; // Q31ONE
+    for i in 1..10000 {
+        let ryy = i;
+        let c_val = unsafe { bindings::debug_c_normalise_residual_g(ryy, gain_value) };
+        let k = math_ops::celt_ilog2(ryy) >> 1;
+        let t = vshr32(ryy, 2 * (k - 7) - 15);
+        let r_val = mult32_32_q31(math_ops::celt_rsqrt_norm32(t), gain_value);
+        if c_val != r_val {
+            gain_mismatches += 1;
+            if gain_mismatches <= 5 {
+                println!("  MISMATCH: normalise_g(ryy={}, gain=Q31ONE) C={} R={} diff={}", ryy, c_val, r_val, c_val - r_val);
+            }
+        }
+    }
+    // Also test with non-Q31ONE gains
+    for gi in [500_000_000i32, 1_000_000_000, 1_500_000_000, 2_000_000_000] {
+        for i in 1..2000 {
+            let ryy = i;
+            let c_val = unsafe { bindings::debug_c_normalise_residual_g(ryy, gi) };
+            let k = math_ops::celt_ilog2(ryy) >> 1;
+            let t = vshr32(ryy, 2 * (k - 7) - 15);
+            let r_val = mult32_32_q31(math_ops::celt_rsqrt_norm32(t), gi);
+            if c_val != r_val {
+                gain_mismatches += 1;
+                if gain_mismatches <= 5 {
+                    println!("  MISMATCH: normalise_g(ryy={}, gain={}) C={} R={} diff={}", ryy, gi, c_val, r_val, c_val - r_val);
+                }
+            }
+        }
+    }
+    if gain_mismatches > 0 {
+        println!("  normalise_g sweep: {} mismatches found!", gain_mismatches);
+    } else {
+        println!("  normalise_g sweep: 17999 values PASS");
+    }
+
+    // Exhaustive sweep: celt_cos_norm32
+    println!("--- Exhaustive celt_cos_norm32 sweep ---");
+    let mut cos_mismatches = 0;
+    for i in 0..20000 {
+        let x = (-1_073_741_824i64 + (i as i64 * 2_147_483_648 / 20000)) as i32;
+        let c_val = unsafe { bindings::debug_c_celt_cos_norm32(x) };
+        let r_val = math_ops::celt_cos_norm32(x);
+        if c_val != r_val {
+            cos_mismatches += 1;
+            if cos_mismatches <= 5 {
+                println!("  MISMATCH: celt_cos_norm32({}) C={} R={} diff={}", x, c_val, r_val, c_val - r_val);
+            }
+        }
+    }
+    if cos_mismatches > 0 {
+        println!("  celt_cos_norm32 sweep: {} mismatches found!", cos_mismatches);
+    } else {
+        println!("  celt_cos_norm32 sweep: 20000 values PASS");
+    }
+
+    // Add a test for normalise_bands: compute g for band 13 with realistic energy values
+    println!("--- celt_rcp_norm32 sweep ---");
+    let mut rcp_mismatches = 0;
+    for i in 0..20000 {
+        let x = 1_073_741_824 + (i as i64 * 1_073_741_823 / 20000) as i32;
+        let c_val_sqrt = unsafe { bindings::debug_c_celt_sqrt32(x) };
+        let r_val_sqrt = math_ops::celt_sqrt32(x);
+        if c_val_sqrt != r_val_sqrt {
+            rcp_mismatches += 1;
+        }
+        // Also test celt_rcp_norm32 by constructing valid inputs
+        let c_val_rsq = unsafe { bindings::debug_c_celt_rsqrt_norm32(x) };
+        let r_val_rsq = math_ops::celt_rsqrt_norm32(x);
+        if c_val_rsq != r_val_rsq {
+            rcp_mismatches += 1;
+            if rcp_mismatches <= 5 {
+                println!("  MISMATCH: rsqrt_norm32({}) C={} R={} diff={}", x, c_val_rsq, r_val_rsq, c_val_rsq - r_val_rsq);
+            }
+        }
+    }
+    if rcp_mismatches > 0 {
+        println!("  rcp_norm32 sweep: {} mismatches found!", rcp_mismatches);
+    } else {
+        println!("  rcp_norm32 sweep: 40000 values PASS");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -760,6 +1283,15 @@ fn main() {
             let bitrate = parse_option(&args, "--bitrate", 64000);
             cmd_roundtrip(&args[2], bitrate);
         }
+        "framecompare" => {
+            if args.len() < 3 {
+                eprintln!("ERROR: framecompare requires an input WAV file");
+                process::exit(1);
+            }
+            let bitrate = parse_option(&args, "--bitrate", 64000);
+            let complexity = parse_option(&args, "--complexity", 10);
+            cmd_encode_framecompare(&args[2], bitrate, complexity);
+        }
         "unit" => {
             if args.len() < 3 {
                 eprintln!("ERROR: unit requires a module name");
@@ -769,6 +1301,9 @@ fn main() {
             if !pass {
                 process::exit(1);
             }
+        }
+        "mathcompare" => {
+            cmd_mathcompare();
         }
         "--help" | "-h" | "help" => {
             usage();

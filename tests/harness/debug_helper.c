@@ -5,6 +5,8 @@
 #include "silk/fixed/structs_FIX.h"
 #include "celt/celt.h"
 #include "celt/modes.h"
+#include "celt/mathops.h"
+#include "celt/vq.h"
 
 #include <stdio.h>
 #include <stddef.h>
@@ -134,4 +136,70 @@ void debug_dump_silk_indices(OpusEncoder *enc) {
     fprintf(stderr, "[C SILK] seed=%d n_frames_encoded=%d\n",
         (int)state->indices.Seed,
         state->nFramesEncoded);
+}
+
+/* ======================================================================
+ * Math function comparison helpers
+ * ====================================================================== */
+
+opus_int32 debug_c_celt_sqrt32(opus_int32 x) {
+    return celt_sqrt32(x);
+}
+
+opus_int32 debug_c_celt_atan2p_norm(opus_int32 y, opus_int32 x) {
+    return celt_atan2p_norm(y, x);
+}
+
+opus_int32 debug_c_celt_atan_norm(opus_int32 x) {
+    return celt_atan_norm(x);
+}
+
+opus_int32 debug_c_frac_div32(opus_int32 a, opus_int32 b) {
+    return frac_div32(a, b);
+}
+
+opus_int32 debug_c_stereo_itheta(const opus_int32 *X, const opus_int32 *Y,
+                                  int stereo, int N) {
+    return stereo_itheta(X, Y, stereo, N, 0);
+}
+
+opus_int32 debug_c_celt_inner_prod_norm_shift(const opus_int32 *x,
+                                               const opus_int32 *y, int len) {
+    return celt_inner_prod_norm_shift(x, y, len, 0);
+}
+
+opus_int32 debug_c_celt_cos_norm32(opus_int32 x) {
+    return celt_cos_norm32(x);
+}
+
+opus_int32 debug_c_celt_rsqrt_norm32(opus_int32 x) {
+    return celt_rsqrt_norm32(x);
+}
+
+opus_int32 debug_c_normalise_residual_g(opus_int32 ryy, opus_int32 gain) {
+    /* Replicate the gain computation from normalise_residual */
+    int k = celt_ilog2(ryy) >> 1;
+    opus_int32 t = VSHR32(ryy, 2*(k-7)-15);
+    opus_int32 g = MULT32_32_Q31(celt_rsqrt_norm32(t), gain);
+    return g;
+}
+
+/* Compute normalise_bands for a single band, matching C exactly. */
+void debug_c_normalise_band(opus_int32 *X_out, const opus_int32 *freq,
+                             opus_int32 bandE, int start_j, int end_j) {
+    int j;
+    int shift;
+    opus_int32 E, g;
+    E = bandE;
+    if (E < 10) E += 1 /* EPSILON */;
+    shift = 30 - celt_zlog2(E);
+    E = SHL32(E, shift);
+    g = celt_rcp_norm32(E);
+    for (j = start_j; j < end_j; j++) {
+        X_out[j - start_j] = PSHR32(MULT32_32_Q31(g, SHL32(freq[j], shift)), 30-24);
+    }
+}
+
+int debug_c_opus_fast_int64(void) {
+    return OPUS_FAST_INT64;
 }

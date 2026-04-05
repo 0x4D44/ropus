@@ -128,6 +128,26 @@ unsafe extern "C" {
     pub fn ec_dec_bit_logp(this: *mut ec_dec, logp: c_uint) -> c_int;
     pub fn ec_dec_bits(this: *mut ec_dec, ftb: c_uint) -> opus_uint32;
 
+    // Debug math comparison helpers
+    pub fn debug_c_celt_sqrt32(x: opus_int32) -> opus_int32;
+    pub fn debug_c_celt_atan2p_norm(y: opus_int32, x: opus_int32) -> opus_int32;
+    pub fn debug_c_celt_atan_norm(x: opus_int32) -> opus_int32;
+    pub fn debug_c_frac_div32(a: opus_int32, b: opus_int32) -> opus_int32;
+    pub fn debug_c_stereo_itheta(
+        x: *const opus_int32,
+        y: *const opus_int32,
+        stereo: c_int,
+        n: c_int,
+    ) -> opus_int32;
+    pub fn debug_c_celt_inner_prod_norm_shift(
+        x: *const opus_int32,
+        y: *const opus_int32,
+        len: c_int,
+    ) -> opus_int32;
+    pub fn debug_c_celt_cos_norm32(x: opus_int32) -> opus_int32;
+    pub fn debug_c_celt_rsqrt_norm32(x: opus_int32) -> opus_int32;
+    pub fn debug_c_normalise_residual_g(ryy: opus_int32, gain: opus_int32) -> opus_int32;
+    pub fn debug_c_opus_fast_int64() -> c_int;
 }
 
 // ---------------------------------------------------------------------------
