@@ -4328,7 +4328,6 @@ pub fn silk_nsq_del_dec(
 
                     // Copy final part of signals from winner state
                     let dd = &ps_del_dec[winner_ind];
-                    let gain_q10_k1 = gains_q16[1] >> 6;
                     let mut last_smple_idx = smpl_buf_idx + decision_delay;
                     for j in 0..decision_delay as usize {
                         last_smple_idx = (last_smple_idx - 1).rem_euclid(DECISION_DELAY as i32);
@@ -4337,8 +4336,8 @@ pub fn silk_nsq_del_dec(
                         pulses[out_idx] = silk_rshift_round(dd.q_q10[ls], 10) as i8;
                         nsq.xq[ltp_mem_length + 2 * subfr_length + j - decision_delay as usize] =
                             sat16(silk_rshift_round(
-                                silk_smulww(dd.xq_q14[ls], gain_q10_k1),
-                                8,
+                                silk_smulww(dd.xq_q14[ls], gains_q16[1]),
+                                14,
                             ));
                         nsq.s_ltp_shp_q14
                             [(nsq.s_ltp_shp_buf_idx - decision_delay + j as i32) as usize] =
@@ -7940,8 +7939,6 @@ pub fn silk_encode(
     // Clamp to [5000, bitRate]
     let target_rate = target_rate.max(5000).min(enc_control.bit_rate);
 
-    silk_control_snr(&mut enc.state_fxx[0].s_cmn, target_rate);
-
     // Copy sMid lookback into inputBuf[0:2] and save tail for next frame
     // Matches C: silk_memcpy(inputBuf, sStereo.sMid, 2) + save back
     {
@@ -7975,7 +7972,9 @@ pub fn silk_encode(
             CODE_CONDITIONALLY
         };
 
-        let channel_rate = enc_control.bit_rate;
+        // C: channelRate_bps = TargetRate_bps (mono) — use the adjusted
+        // rate that accounts for LBRR bits, bit reservoir, and balance.
+        let channel_rate = target_rate;
         if channel_rate > 0 {
             silk_control_snr(&mut enc.state_fxx[n].s_cmn, channel_rate);
         }
