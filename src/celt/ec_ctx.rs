@@ -53,6 +53,27 @@ pub trait EcCoder {
     fn ec_dec_bit_logp(&mut self, _logp: u32) -> bool {
         unreachable!("ec_dec_bit_logp called on encoder")
     }
+
+    // -- Encoder snapshot/restore for theta_rdo (override in RangeEncoder) --
+
+    fn ec_snapshot(&self) -> super::range_coder::EncoderSnapshot {
+        unreachable!("encoder-only")
+    }
+    fn ec_restore(&mut self, _snap: &super::range_coder::EncoderSnapshot) {
+        unreachable!("encoder-only")
+    }
+    fn ec_range_bytes_usize(&self) -> usize {
+        unreachable!("encoder-only")
+    }
+    fn ec_storage_usize(&self) -> usize {
+        unreachable!("encoder-only")
+    }
+    fn ec_buffer(&self) -> &[u8] {
+        unreachable!("encoder-only")
+    }
+    fn ec_buffer_mut(&mut self) -> &mut [u8] {
+        unreachable!("encoder-only")
+    }
 }
 
 impl<'a> EcCoder for RangeEncoder<'a> {
@@ -76,6 +97,24 @@ impl<'a> EcCoder for RangeEncoder<'a> {
     }
     fn ec_enc_bit_logp(&mut self, val: bool, logp: u32) {
         self.encode_bit_logp(val, logp);
+    }
+    fn ec_snapshot(&self) -> super::range_coder::EncoderSnapshot {
+        self.snapshot()
+    }
+    fn ec_restore(&mut self, snap: &super::range_coder::EncoderSnapshot) {
+        self.restore(snap)
+    }
+    fn ec_range_bytes_usize(&self) -> usize {
+        self.range_bytes() as usize
+    }
+    fn ec_storage_usize(&self) -> usize {
+        self.storage() as usize
+    }
+    fn ec_buffer(&self) -> &[u8] {
+        self.buffer()
+    }
+    fn ec_buffer_mut(&mut self) -> &mut [u8] {
+        self.buffer_mut()
     }
 }
 

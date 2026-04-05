@@ -367,7 +367,6 @@ pub fn anti_collapse(
 
 /// Compute per-channel weights for stereo distortion optimization.
 /// Matches C `compute_channel_weights()`.
-#[allow(dead_code)]
 fn compute_channel_weights(ex: i32, ey: i32) -> [i32; 2] {
     let min_e = min32(ex, ey);
     let ex = add32(ex, min_e / 3);
@@ -1566,7 +1565,7 @@ fn special_hybrid_folding(
 // ===========================================================================
 
 /// Quantize/dequantize all bands. This is the main band processing entry point.
-/// Matches C `quant_all_bands()` (no ENABLE_QEXT, no theta_rdo).
+/// Matches C `quant_all_bands()` (no ENABLE_QEXT).
 ///
 /// - `encode`: true for encoding, false for decoding.
 /// - `x_`, `y_`: spectral coefficients for channels 0 and 1 (Y may be None for mono).
@@ -1596,15 +1595,14 @@ pub fn quant_all_bands<EC: EcCoder>(
     lm: i32,
     coded_bands: i32,
     seed: &mut u32,
-    _complexity: i32,
+    complexity: i32,
     disable_inv: bool,
 ) {
     let big_m = 1 << lm;
     let big_b = if short_blocks { big_m } else { 1 };
     let c_channels: i32 = if y_.is_some() { 2 } else { 1 };
 
-    // theta_rdo is disabled (equivalent to complexity < 8)
-    let theta_rdo = false;
+    let theta_rdo = encode && y_.is_some() && !dual_stereo && complexity >= 8;
     let resynth = !encode || theta_rdo;
 
     let norm_offset = (big_m * m.ebands[start as usize] as i32) as usize;
@@ -1619,6 +1617,19 @@ pub fn quant_all_bands<EC: EcCoder>(
         0
     };
     let mut _lowband_scratch = vec![0i32; scratch_size];
+
+    // theta_rdo save buffers (for two-pass stereo encoding)
+    let resynth_alloc = if theta_rdo {
+        ((m.ebands[m.nb_ebands as usize] - m.ebands[m.nb_ebands as usize - 1]) as i32) << lm
+    } else {
+        0
+    } as usize;
+    let mut x_save = vec![0i32; resynth_alloc];
+    let mut y_save = vec![0i32; resynth_alloc];
+    let mut x_save2 = vec![0i32; resynth_alloc];
+    let mut y_save2 = vec![0i32; resynth_alloc];
+    let mut norm_save2 = vec![0i32; resynth_alloc];
+    let mut bytes_save = vec![0u8; if theta_rdo { 1275 } else { 0 }];
 
     // Norm buffer accessors: norm = _norm[0..norm_size], norm2 = _norm[norm_size..]
     let mut lowband_offset: i32 = 0;
@@ -1705,9 +1716,9 @@ pub fn quant_all_bands<EC: EcCoder>(
                 big_m * m.ebands[lowband_offset as usize] as i32 - norm_offset as i32 - n,
             );
             let mut fold_start = lowband_offset as usize;
-            while big_m * m.ebands[fold_start - 1] as i32 > effective_lowband + norm_offset as i32 {
+            loop {
                 fold_start -= 1;
-                if fold_start == 0 {
+                if !(big_m * m.ebands[fold_start] as i32 > effective_lowband + norm_offset as i32) {
                     break;
                 }
             }
@@ -1723,10 +1734,15 @@ pub fn quant_all_bands<EC: EcCoder>(
             }
             x_cm = 0;
             y_cm = 0;
-            for fold_i in fold_start..fold_end {
+            let mut fold_i = fold_start;
+            loop {
                 x_cm |= collapse_masks[fold_i * c_channels as usize] as u32;
                 y_cm |=
                     collapse_masks[fold_i * c_channels as usize + (c_channels as usize - 1)] as u32;
+                fold_i += 1;
+                if fold_i >= fold_end {
+                    break;
+                }
             }
         } else {
             x_cm = (1u32 << big_b as u32) - 1;
@@ -1857,60 +1873,210 @@ pub fn quant_all_bands<EC: EcCoder>(
             if has_y {
                 // MS stereo or intensity stereo
                 let lb = lowband_ref.as_deref();
-                // theta_rdo is disabled, so just call quant_band_stereo directly
-                // We need both x and y slices
                 let (x_slice, y_slice) = {
                     let y_buf = y_.as_deref_mut().unwrap();
                     let xs = &mut x_[band_start..band_end_bin];
                     let ys = &mut y_buf[band_start..band_end_bin];
-                    // Can't borrow both through the Option, so use raw index math
-                    // Actually the y_ Option is already taken. Need a different approach.
                     (xs, ys)
                 };
 
-                // Oops - we can't get y_ as deref_mut because it's behind Option in the parameter.
-                // We need to restructure. Let me use a different approach with the y_ parameter.
-                // Actually the issue is y_ is moved. Let me restructure this.
-                // For now, let's work around by noting that this whole branch is unreachable
-                // if y_ is None (has_y is false).
+                if theta_rdo && i_band < intensity {
+                    // Two-pass stereo: try theta_round=-1 and +1, pick lower distortion
+                    let nu = n as usize;
+                    let nbe = m.nb_ebands as usize;
+                    let w = compute_channel_weights(band_e[iu], band_e[iu + nbe]);
+                    let cm = x_cm | y_cm;
 
-                let mut ctx = BandCtx {
-                    encode,
-                    resynth,
-                    m,
-                    i: i_band,
-                    intensity,
-                    spread,
-                    tf_change,
-                    ec,
-                    remaining_bits,
-                    band_e,
-                    seed: ctx_seed,
-                    theta_round: 0,
-                    disable_inv,
-                    avoid_split_noise: ctx_avoid_split_noise,
-                };
+                    // Save pre-pass state
+                    let ec_snap = ec.ec_snapshot();
+                    let nstart = ec.ec_range_bytes_usize();
+                    let nend = ec.ec_storage_usize();
+                    let save_bytes_len = nend - nstart;
+                    let save_seed = ctx_seed;
+                    let save_avoid = ctx_avoid_split_noise;
+                    x_save[..nu].copy_from_slice(&x_slice[..nu]);
+                    y_save[..nu].copy_from_slice(&y_slice[..nu]);
 
-                let mut lbo_buf = vec![0i32; n as usize];
-                x_cm = quant_band_stereo(
-                    &mut ctx,
-                    x_slice,
-                    y_slice,
-                    n,
-                    b,
-                    big_b,
-                    lb,
-                    lm,
-                    if !last { Some(&mut lbo_buf) } else { None },
-                    None, // lowband_scratch
-                    (x_cm | y_cm) as i32,
-                );
-                y_cm = x_cm;
-                if !last {
-                    let out_off = norm_out_offset.unwrap();
-                    _norm[out_off..out_off + n as usize].copy_from_slice(&lbo_buf);
+                    // --- Pass 1: theta_round = -1 (round down) ---
+                    let mut ctx = BandCtx {
+                        encode,
+                        resynth,
+                        m,
+                        i: i_band,
+                        intensity,
+                        spread,
+                        tf_change,
+                        ec,
+                        remaining_bits,
+                        band_e,
+                        seed: ctx_seed,
+                        theta_round: -1,
+                        disable_inv,
+                        avoid_split_noise: ctx_avoid_split_noise,
+                    };
+                    let mut lbo_buf = vec![0i32; nu];
+                    x_cm = quant_band_stereo(
+                        &mut ctx,
+                        x_slice,
+                        y_slice,
+                        n,
+                        b,
+                        big_b,
+                        lb,
+                        lm,
+                        if !last { Some(&mut lbo_buf) } else { None },
+                        None,
+                        cm as i32,
+                    );
+                    let dist0 = mult16_32_q15(
+                        w[0],
+                        celt_inner_prod_norm_shift(&x_save[..nu], &x_slice[..nu], nu),
+                    ) + mult16_32_q15(
+                        w[1],
+                        celt_inner_prod_norm_shift(&y_save[..nu], &y_slice[..nu], nu),
+                    );
+                    ctx_seed = ctx.seed;
+                    ctx_avoid_split_noise = ctx.avoid_split_noise;
+                    let ec = ctx.ec; // release borrow
+
+                    // Save pass-1 result (scalar state + X/Y/norm + buffer bytes)
+                    let cm2 = x_cm;
+                    let ec_snap2 = ec.ec_snapshot();
+                    let save_seed2 = ctx_seed;
+                    let save_avoid2 = ctx_avoid_split_noise;
+                    x_save2[..nu].copy_from_slice(&x_slice[..nu]);
+                    y_save2[..nu].copy_from_slice(&y_slice[..nu]);
+                    if !last {
+                        norm_save2[..nu].copy_from_slice(&lbo_buf[..nu]);
+                    }
+                    // Save buffer bytes AFTER pass 1 (buffer is shared, so this
+                    // captures the post-pass-1 content at the pre-pass byte offsets).
+                    // Matches C: bytes_buf = ec_save.buf + nstart_bytes; OPUS_COPY(bytes_save, bytes_buf, save_bytes);
+                    bytes_save[..save_bytes_len]
+                        .copy_from_slice(&ec.ec_buffer()[nstart..nend]);
+
+                    // Restore pre-pass-1 state for pass 2
+                    // ec_restore only restores scalar state; we must also restore buffer bytes
+                    ec.ec_restore(&ec_snap);
+                    // In C, *ec = ec_save restores all scalars but buf pointer stays the same.
+                    // Pass 2 will overwrite the buffer. We do NOT need to restore bytes here
+                    // because ec_restore put the scalar offsets back, and pass 2 will write
+                    // starting from those offsets. The buffer region beyond the current write
+                    // position still has pass-1 data, which is fine — pass 2 will overwrite it.
+                    ctx_seed = save_seed;
+                    ctx_avoid_split_noise = save_avoid;
+                    x_slice[..nu].copy_from_slice(&x_save[..nu]);
+                    y_slice[..nu].copy_from_slice(&y_save[..nu]);
+
+                    // Re-apply special hybrid folding if band == start+1
+                    if i_band == start + 1 {
+                        let (norm1, norm2) = _norm.split_at_mut(norm_size);
+                        special_hybrid_folding(m, norm1, norm2, start, big_m, dual_stereo);
+                    }
+
+                    // --- Pass 2: theta_round = +1 (round up) ---
+                    let mut ctx = BandCtx {
+                        encode,
+                        resynth,
+                        m,
+                        i: i_band,
+                        intensity,
+                        spread,
+                        tf_change,
+                        ec,
+                        remaining_bits,
+                        band_e,
+                        seed: ctx_seed,
+                        theta_round: 1,
+                        disable_inv,
+                        avoid_split_noise: ctx_avoid_split_noise,
+                    };
+                    let mut lbo_buf2 = vec![0i32; nu];
+                    x_cm = quant_band_stereo(
+                        &mut ctx,
+                        x_slice,
+                        y_slice,
+                        n,
+                        b,
+                        big_b,
+                        lb,
+                        lm,
+                        if !last { Some(&mut lbo_buf2) } else { None },
+                        None,
+                        cm as i32,
+                    );
+                    let dist1 = mult16_32_q15(
+                        w[0],
+                        celt_inner_prod_norm_shift(&x_save[..nu], &x_slice[..nu], nu),
+                    ) + mult16_32_q15(
+                        w[1],
+                        celt_inner_prod_norm_shift(&y_save[..nu], &y_slice[..nu], nu),
+                    );
+                    ctx_seed = ctx.seed;
+                    ctx_avoid_split_noise = ctx.avoid_split_noise;
+                    let ec = ctx.ec;
+
+                    // Pick the pass with higher correlation (lower distortion)
+                    if dist0 >= dist1 {
+                        // Pass 1 won — restore its state
+                        x_cm = cm2;
+                        ec.ec_restore(&ec_snap2);
+                        ctx_seed = save_seed2;
+                        ctx_avoid_split_noise = save_avoid2;
+                        x_slice[..nu].copy_from_slice(&x_save2[..nu]);
+                        y_slice[..nu].copy_from_slice(&y_save2[..nu]);
+                        if !last {
+                            let out_off = norm_out_offset.unwrap();
+                            _norm[out_off..out_off + nu].copy_from_slice(&norm_save2[..nu]);
+                        }
+                        // Restore pass-1 buffer bytes (pass 2 overwrote them)
+                        ec.ec_buffer_mut()[nstart..nend]
+                            .copy_from_slice(&bytes_save[..save_bytes_len]);
+                    } else if !last {
+                        // Pass 2 won — write its norm output
+                        let out_off = norm_out_offset.unwrap();
+                        _norm[out_off..out_off + nu].copy_from_slice(&lbo_buf2[..nu]);
+                    }
+                } else {
+                    // Non-theta_rdo path: single pass with theta_round = 0
+                    let mut ctx = BandCtx {
+                        encode,
+                        resynth,
+                        m,
+                        i: i_band,
+                        intensity,
+                        spread,
+                        tf_change,
+                        ec,
+                        remaining_bits,
+                        band_e,
+                        seed: ctx_seed,
+                        theta_round: 0,
+                        disable_inv,
+                        avoid_split_noise: ctx_avoid_split_noise,
+                    };
+
+                    let mut lbo_buf = vec![0i32; n as usize];
+                    x_cm = quant_band_stereo(
+                        &mut ctx,
+                        x_slice,
+                        y_slice,
+                        n,
+                        b,
+                        big_b,
+                        lb,
+                        lm,
+                        if !last { Some(&mut lbo_buf) } else { None },
+                        None,
+                        (x_cm | y_cm) as i32,
+                    );
+                    if !last {
+                        let out_off = norm_out_offset.unwrap();
+                        _norm[out_off..out_off + n as usize].copy_from_slice(&lbo_buf);
+                    }
+                    ctx_seed = ctx.seed;
                 }
-                ctx_seed = ctx.seed;
+                y_cm = x_cm;
             } else {
                 // Mono
                 let lb = lowband_ref.as_deref();
