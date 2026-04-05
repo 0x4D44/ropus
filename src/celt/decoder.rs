@@ -419,12 +419,10 @@ fn celt_synthesis(
     let nb_ebands = mode.nb_ebands;
     let n = mode.short_mdct_size << lm;
     let big_m = 1 << lm;
-    let shift = mode.max_lm - lm;
-
-    let (b, nb) = if is_transient {
-        (big_m, mode.short_mdct_size)
+    let (b, nb, shift) = if is_transient {
+        (big_m, mode.short_mdct_size, mode.max_lm)
     } else {
-        (1, mode.short_mdct_size << lm)
+        (1, mode.short_mdct_size << lm, mode.max_lm - lm)
     };
 
     let mut freq = vec![0i32; n as usize];
@@ -1207,7 +1205,7 @@ impl CeltDecoder {
             &mut owned_dec
         };
 
-        let total_bits = (data_len as i32) * 8;
+        let mut total_bits = (data_len as i32) * 8;
         let mut tell = dec.tell();
 
         // --- For mono, ensure consistency across channel energy slots ---
@@ -1332,24 +1330,25 @@ impl CeltDecoder {
 
         let mut offsets = vec![0i32; nb_ebands as usize];
         let mut dynalloc_logp = 6i32;
-        let mut _total_boost = 0i32;
-        tell = dec.tell();
+        total_bits <<= BITRES;
+        tell = dec.tell_frac() as i32;
 
         for i in start as usize..end as usize {
             let width = c_stream * ((ebands[i + 1] - ebands[i]) as i32) << lm;
             let quanta = imin(width << BITRES, imax(6 << BITRES, width));
+            let mut dynalloc_loop_logp = dynalloc_logp;
             let mut boost = 0i32;
-            while (tell as i32) + (dynalloc_logp << BITRES) + 1 <= (total_bits << BITRES)
+            while tell + (dynalloc_loop_logp << BITRES) < total_bits
                 && boost < cap[i]
             {
-                let flag = dec.decode_bit_logp(dynalloc_logp as u32);
-                tell = dec.tell();
+                let flag = dec.decode_bit_logp(dynalloc_loop_logp as u32);
+                tell = dec.tell_frac() as i32;
                 if !flag {
                     break;
                 }
                 boost += quanta;
-                _total_boost += quanta;
-                dynalloc_logp = 1;
+                total_bits -= quanta;
+                dynalloc_loop_logp = 1;
             }
             offsets[i] = boost;
             // After first band gets a boost, tighten the probability
@@ -1359,19 +1358,21 @@ impl CeltDecoder {
         }
 
         // Alloc trim
-        let alloc_trim = if tell + (6 << BITRES) <= total_bits << BITRES {
+        let alloc_trim = if tell + (6 << BITRES) <= total_bits {
             dec.decode_icdf(&TRIM_ICDF, 7)
         } else {
             5
         };
 
         // Anti-collapse reservation
-        let anti_collapse_rsv = if is_transient && lm >= 2 && total_bits >= (lm + 2) << BITRES {
+        let tell_frac_here = dec.tell_frac() as i32;
+        let bits_pre_acr = ((data_len as i32) << 3 << BITRES) - tell_frac_here - 1;
+        let anti_collapse_rsv = if is_transient && lm >= 2 && bits_pre_acr >= (lm + 2) << BITRES {
             1 << BITRES
         } else {
             0
         };
-        let bits = ((data_len as i32) << 3 << BITRES) - anti_collapse_rsv;
+        let bits = bits_pre_acr - anti_collapse_rsv;
 
         // Compute allocation
         let eff_end = imax(start, imin(end, mode.eff_ebands));
@@ -1427,7 +1428,7 @@ impl CeltDecoder {
         // Decode PVQ coefficients
         let mut x = vec![0i32; c_stream as usize * n as usize];
         let mut collapse_masks = vec![0u8; c_stream as usize * nb_ebands as usize];
-        let total_bits_alloc = (data_len as i32) << 3;
+        let total_bits_alloc = (data_len as i32) * (8 << BITRES) - anti_collapse_rsv;
 
         // For stereo, quant_all_bands needs X and Y as separate mutable slices.
         // We use split_at_mut to avoid double-borrow, and pass the parts directly.
@@ -1484,11 +1485,26 @@ impl CeltDecoder {
             );
         }
 
-        // Anti-collapse
+        // Anti-collapse bit: read as raw bit from end (ec_dec_bits), NOT range coder!
         let mut anti_collapse_on = 0i32;
         if anti_collapse_rsv > 0 {
-            anti_collapse_on = if dec.decode_bit_logp(1) { 1 } else { 0 };
+            anti_collapse_on = dec.decode_bits(1) as i32;
         }
+
+        // Finalize energy (MUST come before anti_collapse, matching C order)
+        unquant_energy_finalise(
+            mode,
+            start,
+            end,
+            Some(&mut self.old_band_e),
+            &fine_quant,
+            &fine_priority,
+            (data_len as i32) * 8 - dec.tell(),
+            dec,
+            c_stream,
+        );
+
+        // Anti-collapse (after finalise, using updated old_band_e)
         if anti_collapse_on != 0 {
             anti_collapse(
                 mode,
@@ -1507,19 +1523,6 @@ impl CeltDecoder {
                 false,
             );
         }
-
-        // Finalize energy
-        unquant_energy_finalise(
-            mode,
-            start,
-            end,
-            Some(&mut self.old_band_e),
-            &fine_quant,
-            &fine_priority,
-            (data_len as i32) * 8 - dec.tell(),
-            dec,
-            c_stream,
-        );
 
         // Silence: set all energies to -28 dB
         if silence {

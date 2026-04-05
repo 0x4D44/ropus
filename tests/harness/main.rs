@@ -275,10 +275,7 @@ fn c_encode(
         let mut output = Vec::new();
         let mut packet = vec![0u8; max_packet];
 
-        bindings::debug_test_gains_quant();
-
         let mut pos = 0;
-        let mut frame_num = 0usize;
         while pos + samples_per_frame <= pcm.len() {
             let ret = bindings::opus_encode(
                 enc,
@@ -287,10 +284,6 @@ fn c_encode(
                 packet.as_mut_ptr(),
                 max_packet as i32,
             );
-            if frame_num < 2 {
-                bindings::debug_dump_silk_indices(enc);
-            }
-            frame_num += 1;
             if ret < 0 {
                 eprintln!(
                     "ERROR: C opus_encode failed: {}",
@@ -385,10 +378,6 @@ fn rust_encode(
     enc.set_bitrate(bitrate);
     enc.set_complexity(complexity);
     enc.set_vbr(0); // CBR for deterministic output
-    eprintln!(
-        "[RUST] encoder created: sr={} ch={} br={} cx={}",
-        sample_rate, channels, bitrate, complexity
-    );
 
     let frame_size = (sample_rate / 50) as usize; // 20ms frames
     let samples_per_frame = frame_size * channels as usize;
@@ -406,13 +395,6 @@ fn rust_encode(
         ) {
             Ok(ret) => {
                 let ret = ret as usize;
-                if pos == 0 {
-                    eprintln!(
-                        "[RUST] first frame encoded: {} bytes, data[0..min(ret,16)]={:02x?}",
-                        ret,
-                        &packet[..ret.min(16)]
-                    );
-                }
                 output.extend_from_slice(&(ret as u16).to_le_bytes());
                 output.extend_from_slice(&packet[..ret]);
             }
@@ -694,6 +676,17 @@ fn cmd_roundtrip(wav_path: &str, bitrate: i32) {
     let stats = compare_samples(&c_decoded, &rust_decoded);
     println!();
     print_sample_result("roundtrip", &stats, &c_decoded, &rust_decoded);
+
+    // --- Decode-only comparison (same bitstream) ---
+    println!();
+    println!("=== Decode-only comparison (C-encoded data decoded by both) ===");
+    let rust_decoded_c_data = rust_decode(&c_encoded, sr, ch);
+    println!(
+        "  Rust decoded C data: {} samples",
+        rust_decoded_c_data.len()
+    );
+    let dec_stats = compare_samples(&c_decoded, &rust_decoded_c_data);
+    print_sample_result("decode-only", &dec_stats, &c_decoded, &rust_decoded_c_data);
 }
 
 // ---------------------------------------------------------------------------

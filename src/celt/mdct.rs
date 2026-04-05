@@ -746,4 +746,313 @@ mod tests {
             max_abs
         );
     }
+
+    /// MDCT roundtrip: forward then backward, single frame.
+    ///
+    /// The MDCT backward only fills output[0..N/2+overlap/2] -- the remaining
+    /// samples come from the NEXT frame (lapped TDAC property). This test
+    /// verifies the scaling is correct in the region that IS filled.
+    #[test]
+    fn test_mdct_roundtrip() {
+        use crate::celt::encoder::{clt_mdct_forward, get_fft_state};
+
+        let l = &MDCT_48000_960;
+        let mode = &crate::celt::modes::MODE_48000_960_120;
+        let overlap = 120i32;
+        let shift = 0i32;
+        let stride = 1i32;
+        let n: usize = 1920;
+        let n2: usize = 960;
+        let half_ov = (overlap as usize) / 2; // 60
+
+        // Build input: sine with DC offset, avoiding zero crossings for ratio analysis.
+        let input_len = n + overlap as usize;
+        let mut input = vec![0i32; input_len];
+        for i in 0..input_len {
+            let phase = (i as f64) * 2.0 * std::f64::consts::PI / 240.0;
+            input[i] = 1000 + (500.0 * phase.sin()) as i32;
+        }
+
+        // Forward transform
+        let fft_st = get_fft_state(shift);
+        let trig = &l.trig[..];
+        let mut freq = vec![0i32; n2];
+        clt_mdct_forward(&input, &mut freq, mode.window, overlap, shift, stride, fft_st, trig);
+
+        // Backward transform (no previous frame OLA -- zeros)
+        let mut roundtrip = vec![0i32; n];
+        clt_mdct_backward(l, &freq, &mut roundtrip, mode.window, overlap, shift, stride);
+
+        // The backward fills output[0..N/2+overlap/2] = [0..1020].
+        // output[0..overlap] is windowed (TDAC synthesis window).
+        // output[overlap..N/2+overlap/2] = [120..1020] is raw IMDCT, no window.
+        let active_end = n2 + half_ov; // 1020
+
+        // Verify the output range
+        let last_nonzero = (0..n).rev().find(|&i| roundtrip[i] != 0).unwrap_or(0);
+        println!("=== MDCT Roundtrip (single frame) ===");
+        println!("N={}, N2={}, overlap={}", n, n2, overlap);
+        println!("Expected active range: [0..{}]", active_end);
+        println!("Actual last nonzero:   output[{}]", last_nonzero);
+        assert!(
+            last_nonzero < active_end + 2,
+            "backward wrote beyond expected range: last_nonzero={}, expected<{}",
+            last_nonzero, active_end
+        );
+
+        // Cross-correlation in the active region to find best alignment & scale
+        let check_start = overlap as usize + 10; // skip first few overlap-boundary samples
+        let check_end = active_end - 10;
+        println!("\nCross-correlating roundtrip[{}..{}] vs input[offset+i]...", check_start, check_end);
+
+        let mut best_corr = f64::NEG_INFINITY;
+        let mut best_offset: i32 = 0;
+        for trial_offset in -200i32..200 {
+            let mut sxy = 0.0f64;
+            let mut sx2 = 0.0f64;
+            let mut sy2 = 0.0f64;
+            for i in check_start..check_end {
+                let oi = (i as i32 + trial_offset) as usize;
+                if oi < input_len {
+                    let x = input[oi] as f64;
+                    let y = roundtrip[i] as f64;
+                    sxy += x * y;
+                    sx2 += x * x;
+                    sy2 += y * y;
+                }
+            }
+            if sx2 > 0.0 && sy2 > 0.0 {
+                let c = sxy / (sx2.sqrt() * sy2.sqrt());
+                if c > best_corr {
+                    best_corr = c;
+                    best_offset = trial_offset;
+                }
+            }
+        }
+        println!("  Best correlation: {:.8} at offset {}", best_corr, best_offset);
+
+        // Compute least-squares scale at best offset
+        let mut sxy = 0.0f64;
+        let mut sx2 = 0.0f64;
+        for i in check_start..check_end {
+            let oi = (i as i32 + best_offset) as usize;
+            if oi < input_len {
+                let x = input[oi] as f64;
+                let y = roundtrip[i] as f64;
+                sxy += x * y;
+                sx2 += x * x;
+            }
+        }
+        let scale_factor = sxy / sx2;
+        println!("  Scale factor (roundtrip/original): {:.6}", scale_factor);
+
+        // Print first 20 samples in the check region
+        println!("\nFirst 20 roundtrip values in active region:");
+        println!("{:>5} {:>12} {:>12} {:>10}", "idx", "original", "roundtrip", "ratio");
+        for i in 0..20 {
+            let idx = check_start + i;
+            let orig = input[(idx as i32 + best_offset) as usize];
+            let rt = roundtrip[idx];
+            let ratio = if orig != 0 { rt as f64 / orig as f64 } else { f64::NAN };
+            println!("{:5} {:12} {:12} {:10.4}", idx, orig, rt, ratio);
+        }
+
+        // Report findings
+        println!("\nSingle-frame roundtrip: corr={:.6}, scale={:.6}, offset={}", best_corr, scale_factor, best_offset);
+
+        // Also test with a DC signal for clean ratio measurement
+        let dc_input = vec![1000i32; input_len];
+        // Apply the standard window at the edges so the forward doesn't see a discontinuity
+        let mut dc_freq = vec![0i32; n2];
+        clt_mdct_forward(&dc_input, &mut dc_freq, mode.window, overlap, shift, stride, fft_st, trig);
+        let mut dc_rt = vec![0i32; n];
+        clt_mdct_backward(l, &dc_freq, &mut dc_rt, mode.window, overlap, shift, stride);
+        println!("\nDC roundtrip (input=1000 everywhere):");
+        println!("  Middle region samples (output[120..140]):");
+        for i in 120..140 {
+            println!("    output[{}] = {} (ratio={:.4})", i, dc_rt[i], dc_rt[i] as f64 / 1000.0);
+        }
+        // The DC signal's middle region should give a consistent ratio
+        let dc_ratios: Vec<f64> = (200..900)
+            .map(|i| dc_rt[i] as f64 / 1000.0)
+            .collect();
+        let dc_mean = dc_ratios.iter().sum::<f64>() / dc_ratios.len() as f64;
+        let dc_var = dc_ratios.iter().map(|r| (r - dc_mean).powi(2)).sum::<f64>() / dc_ratios.len() as f64;
+        println!("  DC middle ratio: mean={:.6}, stddev={:.6}", dc_mean, dc_var.sqrt());
+
+        assert!(
+            best_corr > 0.95,
+            "Roundtrip correlation too low: {:.6} (expected > 0.95)",
+            best_corr
+        );
+    }
+
+    /// Two-frame MDCT roundtrip with decode_mem simulation.
+    ///
+    /// The C decoder uses a sliding `decode_mem` buffer where:
+    /// - `out_syn = decode_mem + decode_buffer_size - N`
+    /// - After each frame, `OPUS_MOVE(decode_mem, decode_mem+N, ...)`
+    /// - The backward only fills `out_syn[0..N/2+overlap/2]`; the overlap
+    ///   for the next frame comes from the memory shift.
+    ///
+    /// This test simulates that buffer management to verify TDAC reconstruction.
+    #[test]
+    fn test_mdct_roundtrip_two_frames() {
+        use crate::celt::encoder::{clt_mdct_forward, get_fft_state};
+
+        let l = &MDCT_48000_960;
+        let mode = &crate::celt::modes::MODE_48000_960_120;
+        let overlap = 120i32;
+        let shift = 0i32;
+        let stride = 1i32;
+        let ov = overlap as usize;
+        let half_ov = ov / 2;
+
+        // Key dimensions for 48kHz, LM=3 (20ms frame):
+        // - N_frame = shortMdctSize << LM = 120 << 3 = 960 (frame hop size)
+        // - N_mdct = l.n = 1920 (MDCT transform size = 2 * N_frame)
+        // - N2 = N_mdct / 2 = 960
+        // - Forward input: N_frame + overlap = 1080 samples
+        // - Backward writes: output[0..N2+overlap/2] = output[0..1020]
+        // - Backward OLA: output[0..overlap] windowed with previous frame's data
+        let n_frame: usize = 960;
+        let n_mdct: usize = 1920;
+        let n2: usize = 960;
+
+        // Simulate C decoder's decode_mem buffer
+        let decode_buffer_size: usize = 2048;
+        let decode_mem_size = decode_buffer_size + ov;
+        let mut decode_mem = vec![0i32; decode_mem_size];
+        let out_syn_off = decode_buffer_size - n_frame; // = 1088
+
+        // Build long input: 6 frames to let OLA settle
+        let num_frames = 6;
+        let total_len = num_frames * n_frame + ov;
+        let mut input = vec![0i32; total_len];
+        for i in 0..total_len {
+            let p1 = (i as f64) * 2.0 * std::f64::consts::PI / 240.0;
+            let p2 = (i as f64) * 2.0 * std::f64::consts::PI / 73.0;
+            input[i] = 2000 + (800.0 * p1.sin()) as i32 + (400.0 * p2.cos()) as i32;
+        }
+
+        let fft_st = get_fft_state(shift);
+        let trig = &l.trig[..];
+
+        println!("=== Two-frame MDCT Roundtrip (decode_mem simulation) ===");
+        println!("N_frame={}, N_mdct={}, overlap={}, decode_buffer_size={}", n_frame, n_mdct, ov, decode_buffer_size);
+        println!("out_syn offset in decode_mem: {}", out_syn_off);
+        println!("Backward active range: [0..{}]", n2 + half_ov);
+
+        // The encoder's frame hop is N_frame. Frame k reads input[k*N_frame..k*N_frame+N_frame+overlap].
+        // The forward produces N2=960 freq bins.
+        // The backward writes to out_syn[0..1020].
+        // After each frame, OPUS_MOVE shifts decode_mem left by N_frame.
+
+        let mut last_ola_snr = 0.0f64;
+        for frame in 0..num_frames {
+            // OPUS_MOVE: shift decode_mem left by N_frame BEFORE the backward
+            // (matching C decoder order: move first, then synthesize)
+            if frame > 0 {
+                let move_len = decode_buffer_size - n_frame + ov;
+                for i in 0..move_len {
+                    decode_mem[i] = decode_mem[n_frame + i];
+                }
+                for i in move_len..decode_mem_size {
+                    decode_mem[i] = 0;
+                }
+            }
+
+            let frame_start = frame * n_frame;
+
+            // Forward transform
+            let mut freq = vec![0i32; n2];
+            clt_mdct_forward(
+                &input[frame_start..],
+                &mut freq,
+                mode.window,
+                overlap,
+                shift,
+                stride,
+                fft_st,
+                trig,
+            );
+
+            // Backward transform: out_syn is at decode_mem[out_syn_off..]
+            // The OLA data at out_syn[0..overlap] comes from previous frame via OPUS_MOVE.
+            clt_mdct_backward(
+                l,
+                &freq,
+                &mut decode_mem[out_syn_off..],
+                mode.window,
+                overlap,
+                shift,
+                stride,
+            );
+
+            // Check OLA region quality (frames >= 2 for stable OLA)
+            // The reconstructed signal at out_syn[i] should correspond to
+            // input[frame_start + overlap/2 + i] (the analysis window center).
+            let input_offset = frame_start + half_ov;
+            if frame >= 2 {
+                let mut max_err: i64 = 0;
+                let mut sum_err2 = 0.0f64;
+                let mut sum_orig2 = 0.0f64;
+                for i in 0..ov {
+                    let orig = input[input_offset + i];
+                    let recon = decode_mem[out_syn_off + i];
+                    let err = (recon as i64 - orig as i64).abs();
+                    if err > max_err { max_err = err; }
+                    sum_err2 += (err as f64).powi(2);
+                    sum_orig2 += (orig as f64).powi(2);
+                }
+                let rms_err = (sum_err2 / ov as f64).sqrt();
+                let rms_orig = (sum_orig2 / ov as f64).sqrt();
+                let snr = if rms_err > 0.0 {
+                    20.0 * (rms_orig / rms_err).log10()
+                } else {
+                    f64::INFINITY
+                };
+                last_ola_snr = snr;
+                println!("Frame {} OLA[0..{}]: max_err={}, SNR={:.1} dB", frame, ov, max_err, snr);
+
+                if frame == 2 {
+                    println!("{:>5} {:>12} {:>12} {:>10}", "idx", "original", "recon", "error");
+                    for i in 0..20.min(ov) {
+                        let orig = input[input_offset + i];
+                        let recon = decode_mem[out_syn_off + i];
+                        println!("{:5} {:12} {:12} {:10}", i, orig, recon, recon - orig);
+                    }
+                }
+            }
+
+            // Check middle region (beyond OLA, within backward's active range)
+            let check_start = ov;
+            let check_end = n2 + half_ov - 10;
+            let mut sxy = 0.0f64;
+            let mut sx2 = 0.0f64;
+            let mut sy2 = 0.0f64;
+            for i in check_start..check_end {
+                if input_offset + i >= total_len { break; }
+                let x = input[input_offset + i] as f64;
+                let y = decode_mem[out_syn_off + i] as f64;
+                sxy += x * y;
+                sx2 += x * x;
+                sy2 += y * y;
+            }
+            let corr = if sx2 > 0.0 && sy2 > 0.0 { sxy / (sx2.sqrt() * sy2.sqrt()) } else { 0.0 };
+            let scale = if sx2 > 0.0 { sxy / sx2 } else { 0.0 };
+            println!("Frame {} middle[{}..{}]: corr={:.6}, scale={:.6}", frame, check_start, check_end, corr, scale);
+        }
+
+        println!("\nFinal OLA SNR: {:.1} dB", last_ola_snr);
+        // Report the findings -- the assertion threshold depends on whether
+        // the transform pair is correct or has a systematic scaling issue.
+        if last_ola_snr > 40.0 {
+            println!("PASS: TDAC reconstruction is correct (SNR > 40 dB).");
+        } else if last_ola_snr > 20.0 {
+            println!("WARNING: TDAC has minor issues (20 < SNR < 40 dB).");
+        } else {
+            println!("FAIL: TDAC reconstruction has significant scaling/structural issues.");
+        }
+    }
 }

@@ -1,8 +1,13 @@
-/* Small helper to extract SILK encoder indices from the C reference encoder. */
+/* Debug helpers for extracting internal state from C reference encoder/decoder. */
 
 #include "opus.h"
 #include "opus_types.h"
 #include "silk/fixed/structs_FIX.h"
+#include "celt/celt.h"
+#include "celt/modes.h"
+
+#include <stdio.h>
+#include <stddef.h>
 
 /* Internal opus_encoder layout - first two i32 fields are offsets */
 typedef struct {
@@ -10,7 +15,13 @@ typedef struct {
     opus_int32 silk_enc_offset;
 } OpusEncoderOffsets;
 
-#include <stdio.h>
+/* Internal opus_decoder layout - first two i32 fields are offsets */
+typedef struct {
+    opus_int32 celt_dec_offset;
+    opus_int32 silk_dec_offset;
+    opus_int32 channels;
+    opus_int32 Fs;
+} OpusDecoderOffsets;
 
 /* Forward declarations for SILK functions we want to test */
 extern opus_int32 silk_lin2log(const opus_int32 inLin);
@@ -30,6 +41,66 @@ void debug_test_gains_quant(void) {
         (int)ind[0], (int)ind[1], (int)ind[2], (int)ind[3], (int)prev_ind);
     fprintf(stderr, "[C TEST] gains_q16_after=[%d, %d, %d, %d]\n",
         gains[0], gains[1], gains[2], gains[3]);
+}
+
+/* ======================================================================
+ * CELT decoder trace: dump oldBandE after opus_decode
+ * ======================================================================
+ *
+ * Replicate the CELTDecoder struct layout (fixed-point, no QEXT, no DEEP_PLC)
+ * so we can compute the offset of oldBandE without modifying the C reference.
+ */
+struct CELTDecoder_trace {
+    const OpusCustomMode *mode;
+    int overlap;
+    int channels;
+    int stream_channels;
+    int downsample;
+    int start, end;
+    int signalling;
+    int disable_inv;
+    int complexity;
+    int arch;
+    /* DECODER_RESET_START */
+    opus_uint32 rng;
+    int error;
+    int last_pitch_index;
+    int loss_duration;
+    int plc_duration;
+    int last_frame_type;
+    int skip_plc;
+    int postfilter_period;
+    int postfilter_period_old;
+    opus_int16 postfilter_gain;
+    opus_int16 postfilter_gain_old;
+    int postfilter_tapset;
+    int postfilter_tapset_old;
+    int prefilter_and_fold;
+    opus_int32 preemph_memD[2];
+    opus_int32 decode_mem[1]; /* variable-length */
+};
+
+void debug_dump_celt_decoder_bands(OpusDecoder *opus_dec) {
+    OpusDecoderOffsets *hdr = (OpusDecoderOffsets *)opus_dec;
+    struct CELTDecoder_trace *celt =
+        (struct CELTDecoder_trace *)((char *)opus_dec + hdr->celt_dec_offset);
+
+    int nbEBands = celt->mode->nbEBands;
+    int overlap = celt->overlap;
+    int CC = hdr->channels;
+    int decode_buffer_size = 2048; /* DEC_PITCH_BUF_SIZE, non-QEXT */
+
+    /* oldBandE follows _decode_mem, same formula as celt_decoder.c line 1183 */
+    opus_int32 *oldBandE = celt->decode_mem + (decode_buffer_size + overlap) * CC;
+
+    fprintf(stderr, "[C  DEC] oldBandE[0..10]:");
+    {
+        int i;
+        for (i = 0; i < 10 && i < 2 * nbEBands; i++) {
+            fprintf(stderr, " %d", (int)oldBandE[i]);
+        }
+    }
+    fprintf(stderr, "\n");
 }
 
 void debug_dump_silk_indices(OpusEncoder *enc) {

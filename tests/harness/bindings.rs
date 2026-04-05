@@ -128,9 +128,6 @@ unsafe extern "C" {
     pub fn ec_dec_bit_logp(this: *mut ec_dec, logp: c_uint) -> c_int;
     pub fn ec_dec_bits(this: *mut ec_dec, ftb: c_uint) -> opus_uint32;
 
-    // Debug helper
-    pub fn debug_dump_silk_indices(enc: *mut OpusEncoder);
-    pub fn debug_test_gains_quant();
 }
 
 // ---------------------------------------------------------------------------
