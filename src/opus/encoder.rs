@@ -1390,26 +1390,26 @@ impl OpusEncoder {
 
         // --- Bandwidth selection ---
         if mode == MODE_CELT_ONLY || self.first != 0 || self.silk_mode.allow_bandwidth_switch != 0 {
-            let bw_thresholds = if self.channels == 2 {
-                if voice_est > 100 {
-                    &STEREO_VOICE_BANDWIDTH_THRESHOLDS
+            let (voice_bw_thresholds, music_bw_thresholds) =
+                if self.channels == 2 && self.force_channels != 1 {
+                    (&STEREO_VOICE_BANDWIDTH_THRESHOLDS, &STEREO_MUSIC_BANDWIDTH_THRESHOLDS)
                 } else {
-                    &STEREO_MUSIC_BANDWIDTH_THRESHOLDS
-                }
-            } else {
-                if voice_est > 100 {
-                    &MONO_VOICE_BANDWIDTH_THRESHOLDS
-                } else {
-                    &MONO_MUSIC_BANDWIDTH_THRESHOLDS
-                }
-            };
+                    (&MONO_VOICE_BANDWIDTH_THRESHOLDS, &MONO_MUSIC_BANDWIDTH_THRESHOLDS)
+                };
+
+            // Interpolate bandwidth thresholds depending on voice estimation
+            let mut bandwidth_thresholds = [0i32; 8];
+            for i in 0..8 {
+                bandwidth_thresholds[i] = music_bw_thresholds[i]
+                    + ((voice_est * voice_est * (voice_bw_thresholds[i] - music_bw_thresholds[i])) >> 14);
+            }
 
             let mut bw = OPUS_BANDWIDTH_FULLBAND;
             while bw > OPUS_BANDWIDTH_NARROWBAND {
                 let idx = 2 * (bw - OPUS_BANDWIDTH_MEDIUMBAND) as usize;
-                if idx + 1 < bw_thresholds.len() {
-                    let mut thr = bw_thresholds[idx];
-                    let hys = bw_thresholds[idx + 1];
+                if idx + 1 < bandwidth_thresholds.len() {
+                    let mut thr = bandwidth_thresholds[idx];
+                    let hys = bandwidth_thresholds[idx + 1];
                     if self.first == 0 {
                         if self.auto_bandwidth >= bw {
                             thr -= hys;
