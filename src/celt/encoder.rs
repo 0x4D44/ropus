@@ -2924,9 +2924,9 @@ fn celt_encode_core(
 
     // Residual quantization
     let mut collapse_masks = vec![0u8; c as usize * nb_ebands as usize];
-    let mut y_norm_buf = vec![0i32; n as usize];
+    let (x_norm_x, x_norm_y) = x_norm.split_at_mut(n as usize);
     let y_norm_opt = if c == 2 {
-        Some(&mut y_norm_buf[..])
+        Some(&mut x_norm_y[..])
     } else {
         None
     };
@@ -2935,7 +2935,7 @@ fn celt_encode_core(
         mode,
         start,
         end,
-        &mut x_norm,
+        x_norm_x,
         y_norm_opt,
         &mut collapse_masks,
         &band_e,
