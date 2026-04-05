@@ -661,7 +661,10 @@ fn dc_reject(
             // LP update: mem += (x - mem) >> shift
             hp_mem[2 * c] += pshr32(x - hp_mem[2 * c], shift);
             // Output: round Q14 back, saturate
-            output[idx] = sat16(pshr32(y, 14));
+            // C reference uses SATURATE(val, 32767) which clamps symmetrically
+            // to [-32767, 32767], not [-32768, 32767] like sat16.
+            let val = pshr32(y, 14);
+            output[idx] = val.max(-32767).min(32767) as i16;
         }
     }
 }

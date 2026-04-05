@@ -527,7 +527,7 @@ fn celt_synthesis(
     // Saturate output to SIG_SAT
     for ch in 0..cc as usize {
         let off = out_syn_offsets[ch];
-        for i in 0..(n + overlap) as usize {
+        for i in 0..n as usize {
             out_syn[off + i] = saturate(out_syn[off + i], SIG_SAT);
         }
     }

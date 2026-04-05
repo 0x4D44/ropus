@@ -1212,8 +1212,7 @@ fn quant_band<EC: EcCoder>(
     // Copy lowband to scratch if we'll be modifying it via Haar transforms
     let mut scratch_buf: Option<Vec<i32>> = None;
     let mut use_scratch_as_lowband = false;
-    if lowband_scratch.is_some()
-        && lowband.is_some()
+    if lowband.is_some()
         && (recombine != 0 || ((n_b & 1) == 0 && tf_change < 0) || b0 > 1)
     {
         if let Some(lb) = lowband {
@@ -1303,6 +1302,7 @@ fn quant_band<EC: EcCoder>(
             cm = BIT_DEINTERLEAVE_TABLE[cm as usize] as u32;
             haar1(x, n0 >> k, 1 << k);
         }
+        big_b <<= recombine;
 
         // Scale output for later folding
         if let Some(lbo) = lowband_out {

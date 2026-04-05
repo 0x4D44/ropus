@@ -4802,7 +4802,7 @@ pub fn silk_scale_copy_vector16(data_out: &mut [i16], data_in: &[i16], gain_q16:
 pub fn silk_gains_id(ind: &[i8], nb_subfr: usize) -> i32 {
     let mut gains_id = 0i32;
     for k in 0..nb_subfr {
-        gains_id = gains_id * 51 + ind[k] as i32;
+        gains_id = (gains_id << 8) + ind[k] as i32;
     }
     gains_id
 }
