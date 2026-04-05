@@ -7005,8 +7005,8 @@ pub fn silk_encode_frame_fix(
         let mut found_upper = false;
         let mut n_bits_lower: i32 = 0;
         let mut n_bits_upper: i32 = 0;
-        let mut gain_mult_lower: i16 = 0;
-        let mut gain_mult_upper: i16 = 0;
+        let mut gain_mult_lower: i32 = 0;
+        let mut gain_mult_upper: i32 = 0;
 
         let gains_id_initial = silk_gains_id(&ps_enc.s_cmn.indices.gains_indices, nb_subfr);
         let mut gains_id = gains_id_initial;
@@ -7029,7 +7029,7 @@ pub fn silk_encode_frame_fix(
         let mut best_sum = [0i32; MAX_NB_SUBFR];
 
         for iter in 0..=max_iter {
-            let n_bits: i32;
+            let mut n_bits: i32;
             if gains_id == gains_id_lower && found_lower {
                 n_bits = n_bits_lower;
             } else if gains_id == gains_id_upper && found_upper {
@@ -7149,6 +7149,7 @@ pub fn silk_encode_frame_fix(
                         &ps_enc.s_cmn.pulses,
                         frame_length,
                     );
+                    n_bits = range_enc.tell();
                 }
 
                 // VBR early exit: first iter and within budget
@@ -7181,13 +7182,13 @@ pub fn silk_encode_frame_fix(
                 } else {
                     found_upper = true;
                     n_bits_upper = n_bits;
-                    gain_mult_upper = gain_mult_q8;
+                    gain_mult_upper = gain_mult_q8 as i32;
                     gains_id_upper = gains_id;
                 }
             } else if n_bits < max_bits - bits_margin {
                 found_lower = true;
                 n_bits_lower = n_bits;
-                gain_mult_lower = gain_mult_q8;
+                gain_mult_lower = gain_mult_q8 as i32;
                 if gains_id != gains_id_lower {
                     gains_id_lower = gains_id;
                     rc_snap_lower = Some(range_enc.save_snapshot());
@@ -7225,16 +7226,16 @@ pub fn silk_encode_frame_fix(
                 }
             } else {
                 // Interpolate
-                let range = gain_mult_upper as i32 - gain_mult_lower as i32;
+                let range = gain_mult_upper - gain_mult_lower;
                 let denom = n_bits_upper - n_bits_lower;
                 gain_mult_q8 = if denom != 0 {
-                    (gain_mult_lower as i32 + (range * (max_bits - n_bits_lower)) / denom) as i16
+                    (gain_mult_lower + (range * (max_bits - n_bits_lower)) / denom) as i16
                 } else {
-                    gain_mult_lower
+                    gain_mult_lower as i16
                 };
                 // Clamp to 25%-75% of range
-                let upper_bound = gain_mult_lower as i32 + (range >> 2);
-                let lower_bound = gain_mult_upper as i32 - (range >> 2);
+                let upper_bound = gain_mult_lower + (range >> 2);
+                let lower_bound = gain_mult_upper - (range >> 2);
                 if (gain_mult_q8 as i32) > upper_bound {
                     gain_mult_q8 = upper_bound as i16;
                 } else if (gain_mult_q8 as i32) < lower_bound {
@@ -7901,8 +7902,44 @@ pub fn silk_encode(
     // Apply HP variable cutoff filter
     silk_hp_variable_cutoff(&mut enc.state_fxx[0]);
 
-    // Compute target bitrate
-    let target_rate = enc_control.bit_rate;
+    // Compute target bitrate (C enc_API.c:422-454)
+    const BITRESERVOIR_DECAY_TIME_MS: i32 = 500;
+
+    // Total bits for packet
+    let mut n_bits_target = silk_div32_16(
+        silk_mul(enc_control.bit_rate, enc_control.payload_size_ms), 1000);
+
+    // Subtract LBRR bits (if not prefill)
+    if prefill_flag == 0 {
+        n_bits_target -= enc.n_bits_used_lbrr;
+    }
+
+    // Divide by frames per packet
+    n_bits_target = silk_div32_16(n_bits_target, n_frames_per_packet);
+
+    // Convert to bps
+    let mut target_rate = if enc_control.payload_size_ms == 10 {
+        silk_smulbb(n_bits_target, 100)
+    } else {
+        silk_smulbb(n_bits_target, 50)
+    };
+
+    // Subtract bit reservoir decay
+    target_rate -= silk_div32_16(
+        silk_mul(enc.n_bits_exceeded, 1000), BITRESERVOIR_DECAY_TIME_MS);
+
+    // Intra-packet balance for frame 2+
+    if prefill_flag == 0 && enc.state_fxx[0].s_cmn.n_frames_encoded > 0 {
+        let bits_balance = range_enc.tell()
+            - enc.n_bits_used_lbrr
+            - n_bits_target * enc.state_fxx[0].s_cmn.n_frames_encoded;
+        target_rate -= silk_div32_16(
+            silk_mul(bits_balance, 1000), BITRESERVOIR_DECAY_TIME_MS);
+    }
+
+    // Clamp to [5000, bitRate]
+    let target_rate = target_rate.max(5000).min(enc_control.bit_rate);
+
     silk_control_snr(&mut enc.state_fxx[0].s_cmn, target_rate);
 
     // Copy sMid lookback into inputBuf[0:2] and save tail for next frame
@@ -7986,6 +8023,12 @@ pub fn silk_encode(
         } else {
             *n_bytes_out = (range_enc.tell() + 7) >> 3;
         }
+
+        // Update bit reservoir (C enc_API.c:566-568)
+        enc.n_bits_exceeded += (*n_bytes_out as i32) * 8;
+        enc.n_bits_exceeded -= silk_div32_16(
+            silk_mul(enc_control.bit_rate, enc_control.payload_size_ms), 1000);
+        enc.n_bits_exceeded = enc.n_bits_exceeded.max(0).min(10000);
 
         // Reset frame counter for next packet
         for n in 0..n_channels_internal {
