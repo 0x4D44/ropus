@@ -709,6 +709,15 @@ fn compute_theta<EC: EcCoder>(
     if encode {
         let itheta_q30 = stereo_itheta(&x[..nu], &y[..nu], stereo, nu);
         itheta = itheta_q30 >> 16;
+
+        // Debug: trace theta for band 13
+        if i == 13 {
+            let (_, eoffs, _) = ctx.ec.ec_debug_state();
+            if eoffs >= 50 && eoffs <= 65 {
+                eprintln!("[R CT] band={} n={} qn={} itheta_q30={} itheta_q14={} eoffs={}",
+                    i, n, qn, itheta_q30, itheta, eoffs);
+            }
+        }
     }
 
     let tell = ctx.ec.ec_tell_frac();
@@ -718,6 +727,13 @@ fn compute_theta<EC: EcCoder>(
         if encode {
             if !stereo || ctx.theta_round == 0 {
                 itheta = ((itheta as i64 * qn as i64 + 8192) >> 14) as i32;
+                // Debug: trace quantized theta for band 13
+                if i == 13 {
+                    let (_, eoffs, _) = ctx.ec.ec_debug_state();
+                    if eoffs >= 50 && eoffs <= 65 {
+                        eprintln!("[R CT quant] band={} qn={} itheta_quant={} eoffs={}", i, qn, itheta, eoffs);
+                    }
+                }
                 if !stereo && ctx.avoid_split_noise && itheta > 0 && itheta < qn {
                     // Check if theta will cause noise injection on one side
                     let unquantized = celt_udiv(itheta as u32 * 16384, qn as u32) as i32;
@@ -1649,6 +1665,15 @@ pub fn quant_all_bands<EC: EcCoder>(
     // We need separate norm buffers for dual stereo
     // norm = _norm[..norm_size], norm2 = _norm[norm_size..] (only if stereo)
 
+    // Debug: frame counter for quant_all_bands calls (encoder-only)
+    static QAB_FRAME_CTR: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+    let qab_frame = if encode {
+        QAB_FRAME_CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    } else {
+        -1
+    };
+    let trace_qab = qab_frame == 7; // 0-indexed, frame 7
+
     for i_band in start..end {
         let iu = i_band as usize;
         let last = i_band == end - 1;
@@ -2099,6 +2124,17 @@ pub fn quant_all_bands<EC: EcCoder>(
                 };
 
                 let x_slice = &mut x_[band_start..band_end_bin];
+                // Debug: dump input spectrum for band 13 in frame 7
+                if trace_qab && i_band == 13 {
+                    eprintln!("[QAB F7] band 13 INPUT x[0..min(32,n)]={:?}",
+                        &x_slice[..n.min(32) as usize]);
+                    if let Some(ref lbr) = lb {
+                        eprintln!("[QAB F7] band 13 LOWBAND[0..min(16,n)]={:?}",
+                            &lbr[..n.min(16) as usize]);
+                    }
+                    eprintln!("[QAB F7] band 13 params: n={} b={} bigB={} lm={} seed={}",
+                        n, b, big_b, lm, ctx_seed);
+                }
                 let mut lbo_buf = vec![0i32; n as usize];
                 x_cm = quant_band(
                     &mut ctx,
@@ -2120,6 +2156,14 @@ pub fn quant_all_bands<EC: EcCoder>(
                 }
                 ctx_seed = ctx.seed;
             }
+        }
+
+        // Debug: trace per-band state in frame 7
+        if trace_qab {
+            let (offs, eoffs, storage) = ec.ec_debug_state();
+            let byte261 = if 261 < ec.ec_buffer().len() { ec.ec_buffer()[261] } else { 0 };
+            eprintln!("[QAB F7] band {:2}: offs={:3} eoffs={:3} tell={:5} b={:5} n={:3} tf={} byte261=0x{:02x}",
+                i_band, offs, eoffs, ec.ec_tell(), b, n, tf_change, byte261);
         }
 
         collapse_masks[iu * c_channels as usize] = x_cm as u8;

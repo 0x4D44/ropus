@@ -2153,6 +2153,11 @@ fn celt_encode_core(
     let end = st.end;
     let hybrid = start != 0;
 
+    // Debug frame counter
+    static CELT_FRAME_CTR: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+    let celt_frame = CELT_FRAME_CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let trace_frame = celt_frame == 7; // 0-indexed
+
     // Validate inputs
     if nb_compressed_bytes < 2 || pcm.is_empty() {
         return OPUS_BAD_ARG;
@@ -2531,6 +2536,17 @@ fn celt_encode_core(
     let mut x_norm = vec![0i32; x_size];
     normalise_bands(mode, &freq, &mut x_norm, &band_e, eff_end, c, m);
 
+    if trace_frame {
+        eprintln!("[CELT F7] band_e={:?}", &band_e[..nb_ebands as usize]);
+        // band 13 spans ebands[13]..ebands[14], each scaled by m (1<<lm)
+        let b13_start = (m * mode.ebands[13] as i32) as usize;
+        let b13_end = (m * mode.ebands[14] as i32) as usize;
+        eprintln!("[CELT F7] freq band13 [{},{}): {:?}", b13_start, b13_end,
+            &freq[b13_start..b13_end]);
+        eprintln!("[CELT F7] x_norm band13: {:?}",
+            &x_norm[b13_start..b13_end]);
+    }
+
     // TF analysis
     let enable_tf_analysis = effective_bytes >= 15 * c
         && !hybrid
@@ -2646,6 +2662,17 @@ fn celt_encode_core(
         st.lfe,
     );
 
+    // --- DEBUG: trace range coder state at key checkpoints ---
+    // (frame counter moved to top of function)
+    if trace_frame {
+        let (offs, eoffs, storage, rng, val, rem, ext) = enc_ref.enc_debug_state();
+        eprintln!("[CELT F7] after coarse_energy: offs={} eoffs={} tell={} rng=0x{:08x} val=0x{:08x} rem={} ext={} byte261=0x{:02x}",
+            offs, eoffs, enc_ref.tell(), rng, val, rem, ext, enc_ref.enc_debug_byte(261));
+        eprintln!("[CELT F7] band_log_e={:?}", &band_log_e);
+        eprintln!("[CELT F7] old_band_e={:?}", &st.old_band_e[..nb_ebands as usize]);
+        eprintln!("[CELT F7] error={:?}", &error);
+    }
+
 
 
     // TF encoding
@@ -2660,6 +2687,11 @@ fn celt_encode_core(
     );
     tell = enc_ref.tell() as i32;
 
+    if trace_frame {
+        let (offs, eoffs, _storage, rng, val, rem, ext) = enc_ref.enc_debug_state();
+        eprintln!("[CELT F7] after tf_encode: offs={} eoffs={} tell={} rng=0x{:08x} byte261=0x{:02x}",
+            offs, eoffs, enc_ref.tell(), rng, enc_ref.enc_debug_byte(261));
+    }
 
     // Spread decision
     if tell + 4 <= total_bits {
@@ -2700,6 +2732,12 @@ fn celt_encode_core(
         st.spread_decision = SPREAD_NORMAL;
     }
 
+
+    if trace_frame {
+        let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
+        eprintln!("[CELT F7] after spread: offs={} eoffs={} tell={} rng=0x{:08x} byte261=0x{:02x}",
+            offs, eoffs, enc_ref.tell(), rng, enc_ref.enc_debug_byte(261));
+    }
 
     // Caps initialization
     let mut cap = vec![0i32; nb_ebands as usize];
@@ -2780,6 +2818,12 @@ fn celt_encode_core(
         enc_ref.encode_icdf(alloc_trim as u32, &TRIM_ICDF, 7);
     }
 
+
+    if trace_frame {
+        let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
+        eprintln!("[CELT F7] after dynalloc+trim: offs={} eoffs={} tell={} alloc_trim={} byte261=0x{:02x}",
+            offs, eoffs, enc_ref.tell(), alloc_trim, enc_ref.enc_debug_byte(261));
+    }
 
     // Minimum allowed bytes
     let min_allowed = ((enc_ref.tell_frac() as i32 + total_boost_enc + (1 << (BITRES + 3)) - 1)
@@ -2896,6 +2940,14 @@ fn celt_encode_core(
         signal_bandwidth,
     );
 
+    if trace_frame {
+        let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
+        eprintln!("[CELT F7] after clt_compute_allocation: offs={} eoffs={} tell={} coded_bands={} byte261=0x{:02x}",
+            offs, eoffs, enc_ref.tell(), coded_bands, enc_ref.enc_debug_byte(261));
+        eprintln!("[CELT F7]   pulses={:?}", &pulses);
+        eprintln!("[CELT F7]   fine_quant={:?}", &fine_quant);
+    }
+
     // Update lastCodedBands with hysteresis (C: celt_encoder.c ~2631-2634)
     if st.last_coded_bands != 0 {
         st.last_coded_bands =
@@ -2917,9 +2969,20 @@ fn celt_encode_core(
         c,
     );
 
+    if trace_frame {
+        let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
+        eprintln!("[CELT F7] after quant_fine_energy: offs={} eoffs={} tell={} byte261=0x{:02x}",
+            offs, eoffs, enc_ref.tell(), enc_ref.enc_debug_byte(261));
+    }
+
     // Clear energy error
     for i in 0..nb_ebands as usize * cc as usize {
         st.energy_error[i] = 0;
+    }
+
+    // Enable raw-bit tracing for frame 7's quant_all_bands
+    if trace_frame {
+        RangeEncoder::set_trace_bits(true);
     }
 
     // Residual quantization
@@ -2955,6 +3018,17 @@ fn celt_encode_core(
         st.disable_inv != 0,
     );
 
+    // Disable raw-bit tracing
+    if trace_frame {
+        RangeEncoder::set_trace_bits(false);
+    }
+
+    if trace_frame {
+        let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
+        eprintln!("[CELT F7] after quant_all_bands: offs={} eoffs={} tell={} byte261=0x{:02x}",
+            offs, eoffs, enc_ref.tell(), enc_ref.enc_debug_byte(261));
+    }
+
     // Anti-collapse
     let anti_collapse_on;
     if anti_collapse_rsv > 0 {
@@ -2975,6 +3049,12 @@ fn celt_encode_core(
         enc_ref,
         c,
     );
+
+    if trace_frame {
+        let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
+        eprintln!("[CELT F7] after energy_finalise: offs={} eoffs={} tell={} byte261=0x{:02x}",
+            offs, eoffs, enc_ref.tell(), enc_ref.enc_debug_byte(261));
+    }
 
     // Store energy error for next frame
     for i in 0..nb_ebands as usize * cc as usize {
@@ -3046,7 +3126,23 @@ fn celt_encode_core(
     st.rng = enc_ref.get_rng();
 
     // Finalize bitstream
+    if trace_frame {
+        let (offs, eoffs, _storage, rng, val, rem, ext) = enc_ref.enc_debug_state();
+        eprintln!("[CELT F7] BEFORE done(): offs={} eoffs={} rng=0x{:08x} val=0x{:08x} rem={} ext={} byte261=0x{:02x}",
+            offs, eoffs, rng, val, rem, ext, enc_ref.enc_debug_byte(261));
+    }
     enc_ref.done();
+    if trace_frame {
+        let (offs, eoffs, _storage, _rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
+        eprintln!("[CELT F7] AFTER done(): offs={} eoffs={} byte261=0x{:02x}",
+            offs, eoffs, enc_ref.enc_debug_byte(261));
+        // Also dump bytes around byte 261
+        let mut hex = String::new();
+        for i in 255..270 {
+            hex.push_str(&format!("{:02x} ", enc_ref.enc_debug_byte(i)));
+        }
+        eprintln!("[CELT F7] bytes[255..270]: {}", hex);
+    }
     if enc_ref.error() {
         return OPUS_INTERNAL_ERROR;
     }
