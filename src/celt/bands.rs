@@ -1678,7 +1678,7 @@ pub fn quant_all_bands<EC: EcCoder>(
     } else {
         -1
     };
-    let trace_qab = false; // disabled
+    let trace_qab = false;
 
     for i_band in start..end {
         let iu = i_band as usize;
@@ -1694,7 +1694,7 @@ pub fn quant_all_bands<EC: EcCoder>(
         if i_band != start {
             balance -= tell as i32;
         }
-        let remaining_bits = total_bits - tell as i32 - 1;
+        let mut remaining_bits = total_bits - tell as i32 - 1;
 
         let b;
         if i_band <= coded_bands - 1 {
@@ -1856,7 +1856,8 @@ pub fn quant_all_bands<EC: EcCoder>(
                     _norm[out_off..out_off + n as usize].copy_from_slice(&lbo_buf);
                 }
                 ctx_seed = ctx.seed;
-                // Update remaining_bits from ctx (it's modified during quantization)
+                // Propagate remaining_bits from X quantization (C shares ctx)
+                remaining_bits = ctx.remaining_bits;
             }
 
             // Quantize Y
@@ -1871,7 +1872,7 @@ pub fn quant_all_bands<EC: EcCoder>(
                     spread,
                     tf_change,
                     ec,
-                    remaining_bits, // This is approximate; the C code shares ctx
+                    remaining_bits, // Propagated from X quantization to match C
                     band_e,
                     seed: ctx_seed,
                     theta_round: 0,
@@ -2171,8 +2172,8 @@ pub fn quant_all_bands<EC: EcCoder>(
         // Debug: trace per-band state
         if trace_qab {
             let (offs, eoffs, _storage, rem) = ec.ec_debug_state();
-            eprintln!("[RS QAB F13] band {:2}: tell={:5} offs={:3} eoffs={:3} rem={:4}",
-                i_band, ec.ec_tell(), offs, eoffs, rem);
+            eprintln!("[RS QAB] band {:2}: tell={:5} offs={:3} eoffs={:3} b={:6} n={:4}",
+                i_band, ec.ec_tell(), offs, eoffs, b, n);
         }
 
         collapse_masks[iu * c_channels as usize] = x_cm as u8;

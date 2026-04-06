@@ -2562,7 +2562,9 @@ pub fn silk_quant_ltp_gains(
     let gain_safety = (0.4 * 128.0 + 0.5) as i32; // SILK_FIX_CONST(0.4, 7)
     let mut min_rate_dist_q7 = i32::MAX;
     let mut best_sum_log_gain_q7 = 0i32;
-    let mut best_res_nrg_q15 = 0i32;
+    // NOTE: C uses res_nrg_Q15 from the LAST codebook iteration (k=2), not
+    // the best one. This variable tracks the last iteration's value to match.
+    let mut last_res_nrg_q15 = 0i32;
 
     for cbk in 0..NB_LTP_CBKS {
         let cl_ptr_q5 = SILK_LTP_GAIN_BITS_Q5_PTRS[cbk];
@@ -2608,12 +2610,14 @@ pub fn silk_quant_ltp_gains(
             );
         }
 
+        // C keeps res_nrg_Q15 from last iteration in scope after loop
+        last_res_nrg_q15 = res_nrg_q15;
+
         if rate_dist_q7 <= min_rate_dist_q7 {
             min_rate_dist_q7 = rate_dist_q7;
             *per_index = cbk as i8;
             cbk_index[..nb_subfr].copy_from_slice(&temp_idx[..nb_subfr]);
             best_sum_log_gain_q7 = sum_log_gain_tmp_q7;
-            best_res_nrg_q15 = res_nrg_q15;
         }
     }
 
@@ -2626,10 +2630,11 @@ pub fn silk_quant_ltp_gains(
         }
     }
 
+    // C uses res_nrg_Q15 from last loop iteration (k=2), not from best codebook
     let res_nrg_q15_scaled = if nb_subfr == 2 {
-        best_res_nrg_q15 >> 1
+        last_res_nrg_q15 >> 1
     } else {
-        best_res_nrg_q15 >> 2
+        last_res_nrg_q15 >> 2
     };
 
     *sum_log_gain_q7 = best_sum_log_gain_q7;
