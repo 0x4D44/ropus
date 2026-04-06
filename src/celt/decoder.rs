@@ -191,13 +191,13 @@ fn comb_filter(
     let t0 = imax(t0, COMBFILTER_MINPERIOD) as usize;
     let t1 = imax(t1, COMBFILTER_MINPERIOD) as usize;
 
-    // Compute gain × tap products
-    let g00 = mult16_16_q15(g0, COMB_GAINS[tapset0 as usize][0]);
-    let g01 = mult16_16_q15(g0, COMB_GAINS[tapset0 as usize][1]);
-    let g02 = mult16_16_q15(g0, COMB_GAINS[tapset0 as usize][2]);
-    let g10 = mult16_16_q15(g1, COMB_GAINS[tapset1 as usize][0]);
-    let g11 = mult16_16_q15(g1, COMB_GAINS[tapset1 as usize][1]);
-    let g12 = mult16_16_q15(g1, COMB_GAINS[tapset1 as usize][2]);
+    // Compute gain × tap products (rounded multiply, matching C MULT_COEF_TAPS)
+    let g00 = mult16_16_p15(g0, COMB_GAINS[tapset0 as usize][0]);
+    let g01 = mult16_16_p15(g0, COMB_GAINS[tapset0 as usize][1]);
+    let g02 = mult16_16_p15(g0, COMB_GAINS[tapset0 as usize][2]);
+    let g10 = mult16_16_p15(g1, COMB_GAINS[tapset1 as usize][0]);
+    let g11 = mult16_16_p15(g1, COMB_GAINS[tapset1 as usize][1]);
+    let g12 = mult16_16_p15(g1, COMB_GAINS[tapset1 as usize][2]);
 
     let overlap = overlap as usize;
 
@@ -205,42 +205,38 @@ fn comb_filter(
     let params_changed = g0 != g1 || t0 != t1 || tapset0 != tapset1;
 
     // Overlap region: crossfade from old to new parameters
+    // Matches C: per-tap windowed gains, then applied to signal
     if params_changed {
         // Preload x values for new filter (T1)
-        let mut x1 = buf[buf_off.wrapping_sub(t1) + 1]; // x[i-T1+1] at i=0, but we need i=-1 start
+        let mut x1 = buf[buf_off.wrapping_sub(t1) + 1];
         let mut x2 = buf[buf_off.wrapping_sub(t1)];
         let mut x3 = buf[buf_off.wrapping_sub(t1).wrapping_sub(1)];
         let mut x4 = buf[buf_off.wrapping_sub(t1).wrapping_sub(2)];
 
         for i in 0..overlap {
-            // Squared window for smooth crossfade
-            let f = mult16_16(window[i] as i32, window[i] as i32);
-            let _one_minus_f = Q15ONE - shr32(f, 15); // approximate (COEF_ONE - f) scaled
+            // Squared window: f = MULT_COEF(window[i], window[i]) = MULT16_16_Q15
+            let f = mult16_16_q15(window[i] as i32, window[i] as i32);
+            let one_minus_f = Q15ONE - f;
 
-            // Old filter contribution (1-f) * old_comb
-            let old_comb = mult16_32_q15(g00, buf[buf_off + i - t0])
+            let x0 = buf[buf_off + i + 2 - t1];
+
+            // Per-tap windowed gains applied to signal (matching C structure)
+            let mut val = buf[buf_off + i]
+                + mult16_32_q15(mult16_16_q15(one_minus_f, g00), buf[buf_off + i - t0])
                 + mult16_32_q15(
-                    g01,
+                    mult16_16_q15(one_minus_f, g01),
                     add32(buf[buf_off + i - t0 + 1], buf[buf_off + i - t0 - 1]),
                 )
                 + mult16_32_q15(
-                    g02,
+                    mult16_16_q15(one_minus_f, g02),
                     add32(buf[buf_off + i - t0 + 2], buf[buf_off + i - t0 - 2]),
-                );
-
-            // New filter contribution: update sliding window
-            let x0 = buf[buf_off + i + 2 - t1];
-            let new_comb = mult16_32_q15(g10, x2)
-                + mult16_32_q15(g11, add32(x1, x3))
-                + mult16_32_q15(g12, add32(x0, x4));
-
-            // Crossfade: input + (1-f²)*old + f²*new, where f = window²/Q15ONE
-            let f_q15 = shr32(f, 15);
-            let one_f = Q15ONE - f_q15;
-            buf[buf_off + i] = saturate(
-                buf[buf_off + i] + mult16_32_q15(one_f, old_comb) + mult16_32_q15(f_q15, new_comb),
-                SIG_SAT,
-            );
+                )
+                + mult16_32_q15(mult16_16_q15(f, g10), x2)
+                + mult16_32_q15(mult16_16_q15(f, g11), add32(x1, x3))
+                + mult16_32_q15(mult16_16_q15(f, g12), add32(x0, x4));
+            // Fixed-point bias (matching C: SUB32(y[i], 3))
+            val -= 3;
+            buf[buf_off + i] = saturate(val, SIG_SAT);
 
             x4 = x3;
             x3 = x2;
@@ -575,12 +571,12 @@ fn prefilter_and_fold(
             let neg_g1 = -postfilter_gain;
 
             if neg_g0 != 0 || neg_g1 != 0 {
-                let _g00 = mult16_16_q15(neg_g0, COMB_GAINS[postfilter_tapset_old as usize][0]);
-                let _g01 = mult16_16_q15(neg_g0, COMB_GAINS[postfilter_tapset_old as usize][1]);
-                let _g02 = mult16_16_q15(neg_g0, COMB_GAINS[postfilter_tapset_old as usize][2]);
-                let g10 = mult16_16_q15(neg_g1, COMB_GAINS[postfilter_tapset as usize][0]);
-                let g11 = mult16_16_q15(neg_g1, COMB_GAINS[postfilter_tapset as usize][1]);
-                let g12 = mult16_16_q15(neg_g1, COMB_GAINS[postfilter_tapset as usize][2]);
+                let _g00 = mult16_16_p15(neg_g0, COMB_GAINS[postfilter_tapset_old as usize][0]);
+                let _g01 = mult16_16_p15(neg_g0, COMB_GAINS[postfilter_tapset_old as usize][1]);
+                let _g02 = mult16_16_p15(neg_g0, COMB_GAINS[postfilter_tapset_old as usize][2]);
+                let g10 = mult16_16_p15(neg_g1, COMB_GAINS[postfilter_tapset as usize][0]);
+                let g11 = mult16_16_p15(neg_g1, COMB_GAINS[postfilter_tapset as usize][1]);
+                let g12 = mult16_16_p15(neg_g1, COMB_GAINS[postfilter_tapset as usize][2]);
 
                 // No window crossfade for prefilter_and_fold (window=NULL, overlap=0 in C call)
                 // Just apply the new filter directly
@@ -660,7 +656,7 @@ impl CeltDecoder {
             old_band_e: vec![0i32; 2 * nb_ebands],
             old_log_e: vec![-gconst(28.0); 2 * nb_ebands],
             old_log_e2: vec![-gconst(28.0); 2 * nb_ebands],
-            background_log_e: vec![-gconst(28.0); 2 * nb_ebands],
+            background_log_e: vec![0i32; 2 * nb_ebands],
             lpc_coef: vec![0i32; channels as usize * CELT_LPC_ORDER],
         };
 
@@ -688,7 +684,7 @@ impl CeltDecoder {
         self.old_band_e.fill(0);
         self.old_log_e.fill(-gconst(28.0));
         self.old_log_e2.fill(-gconst(28.0));
-        self.background_log_e.fill(-gconst(28.0));
+        self.background_log_e.fill(0);
         self.lpc_coef.fill(0);
     }
 
