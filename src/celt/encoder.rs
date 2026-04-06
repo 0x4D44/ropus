@@ -754,7 +754,8 @@ fn transient_analysis(
     is_transient = mask_metric > 200;
 
     // Tone protection (C: celt_encoder.c:448-452)
-    if toneishness > qconst32(0.98, 29) && tone_freq < qconst16(0.026, 13) {
+    // C: QCONST32(.98f, 29) = 526133504 (f32 precision; f64 gives 526133494)
+    if toneishness > 526133504 && tone_freq < qconst16(0.026, 13) {
         is_transient = false;
         mask_metric = 0;
     }
@@ -1338,8 +1339,8 @@ fn dynalloc_analysis(
     toneishness: i32,
 ) -> i32 {
     let nbu = nb_ebands as usize;
-    // C: maxDepth=-GCONST(31.9f)
-    let mut max_depth: i32 = -gconst(31.9);
+    // C: maxDepth=-GCONST(31.9f) = -535193184 (f32 precision; f64 gives -535193190)
+    let mut max_depth: i32 = -535193184;
     *tot_boost = 0;
     for i in 0..nbu {
         offsets[i] = 0;
@@ -1499,7 +1500,8 @@ fn dynalloc_analysis(
         }
 
         // Tone compensation (C: lines 1212-1229)
-        if toneishness > qconst32(0.98, 29) {
+        // C: QCONST32(.98f, 29) = 526133504 (f32 precision; f64 gives 526133494)
+        if toneishness > 526133504 {
             let freq_bin = pshr32(
                 (tone_freq as i64 * qconst16(120.0 / std::f64::consts::PI, 9) as i64) as i32,
                 13 + 9,
@@ -1661,9 +1663,10 @@ fn tone_lpc(x: &[i16], len: usize, delay: usize, lpc: &mut [i32; 2]) -> bool {
     }
     let num0 = mult32_32_q31(r00, r12) - mult32_32_q31(r02, r01);
     if half32(num0) >= den {
-        lpc[0] = qconst32(1.999999, 29);
+        // C: QCONST32(1.999999f, 29) = 1073741312 (f32 precision; f64 gives 1073741287)
+        lpc[0] = 1073741312;
     } else if half32(num0) <= -den {
-        lpc[0] = -qconst32(1.999999, 29);
+        lpc[0] = -1073741312;
     } else {
         lpc[0] = frac_div32_q29(num0, den);
     }
@@ -1767,7 +1770,8 @@ fn run_prefilter(
     let mut qg: i32;
 
     // Path 1: Tone detection (toneishness > 0.99)
-    if enabled && toneishness > qconst32(0.99, 29) {
+    // C: QCONST32(.99f, 29) = 531502208 (f32 precision; f64 gives 531502203)
+    if enabled && toneishness > 531502208 {
         let mut tf = tone_freq;
         // Alias correction: mirror frequencies above pi
         if tf >= qconst16(3.1416, 13) {
@@ -2552,7 +2556,8 @@ fn celt_encode_core(
         && !hybrid
         && st.complexity >= 2
         && st.lfe == 0
-        && toneishness < qconst32(0.98, 29);
+        // C: QCONST32(.98f, 29) = 526133504 (f32 precision; f64 gives 526133494)
+        && toneishness < 526133504;
 
     let mut offsets = vec![0i32; nb_ebands as usize];
     let mut importance = vec![13i32; nb_ebands as usize];
