@@ -8,7 +8,8 @@ use super::lpc::{celt_autocorr, celt_fir, celt_iir, celt_lpc};
 use super::math_ops::{celt_maxabs16, celt_sqrt, celt_zlog2, frac_div32};
 use super::mdct::{MDCT_48000_960, clt_mdct_backward};
 use super::modes::{
-    CELTMode, DEC_PITCH_BUF_SIZE, MAX_PERIOD, MODE_48000_960_120, init_caps, resampling_factor,
+    CELTMode, DEC_PITCH_BUF_SIZE, MAX_PERIOD, MODE_48000_960_120, NB_EBANDS, init_caps,
+    resampling_factor,
 };
 use super::pitch::{pitch_downsample, pitch_search};
 use super::quant_bands::{unquant_coarse_energy, unquant_energy_finalise, unquant_fine_energy};
@@ -425,7 +426,7 @@ fn celt_synthesis(
         (1, mode.short_mdct_size << lm, mode.max_lm - lm)
     };
 
-    let mut freq = vec![0i32; n as usize];
+    let mut freq = [0i32; 960]; // max N = short_mdct_size * nb_short_mdcts = 120 * 8
 
     if cc == 2 && c == 1 {
         // Mono stream → stereo output: decode once, IMDCT to both channels
@@ -436,11 +437,9 @@ fn celt_synthesis(
         // IMDCT for channel 0
         for b_idx in 0..b {
             let out_off = out_syn_offsets[0] + (nb * b_idx) as usize;
-            // Copy strided input to temp to avoid aliasing
-            let input_copy: Vec<i32> = freq[b_idx as usize..].to_vec();
             clt_mdct_backward(
                 &MDCT_48000_960,
-                &input_copy,
+                &freq[b_idx as usize..],
                 &mut out_syn[out_off..],
                 mode.window,
                 overlap,
@@ -451,10 +450,9 @@ fn celt_synthesis(
         // IMDCT for channel 1 (same freq data)
         for b_idx in 0..b {
             let out_off = out_syn_offsets[1] + (nb * b_idx) as usize;
-            let input_copy: Vec<i32> = freq[b_idx as usize..].to_vec();
             clt_mdct_backward(
                 &MDCT_48000_960,
-                &input_copy,
+                &freq[b_idx as usize..],
                 &mut out_syn[out_off..],
                 mode.window,
                 overlap,
@@ -467,7 +465,7 @@ fn celt_synthesis(
         denormalise_bands(
             mode, x, &mut freq, old_band_e, start, eff_end, big_m, downsample, silence,
         );
-        let mut freq2 = vec![0i32; n as usize];
+        let mut freq2 = [0i32; 960];
         denormalise_bands(
             mode,
             &x[n as usize..],
@@ -558,7 +556,7 @@ fn prefilter_and_fold(
 
     for c in 0..cc as usize {
         let off = buf_offsets[c];
-        let mut etmp = vec![0i32; overlap];
+        let mut etmp = [0i32; 120]; // max overlap = 120
 
         // Apply inverse comb filter (negative gains!) to overlap region
         // Copy the overlap samples from decode_mem
@@ -1165,9 +1163,11 @@ impl CeltDecoder {
         let big_m = 1 << lm;
         let n = big_m * mode.short_mdct_size;
 
-        // Prepare per-channel output offsets
-        let out_syn_offsets: Vec<usize> =
-            (0..cc as usize).map(|c| self.out_syn_off(c, n)).collect();
+        // Prepare per-channel output offsets (max 2 channels)
+        let out_syn_offsets: [usize; 2] = [
+            self.out_syn_off(0, n),
+            if cc >= 2 { self.out_syn_off(1, n) } else { 0 },
+        ];
 
         // --- Packet loss detection ---
         let data_len = data.map_or(0, |d| d.len());
@@ -1175,14 +1175,14 @@ impl CeltDecoder {
             self.decode_lost(n, lm);
 
             // Apply de-emphasis and return
-            let offsets: Vec<usize> = (0..cc as usize).map(|c| self.out_syn_off(c, n)).collect();
             let ds = self.downsample;
-            let inp: Vec<&[i32]> = offsets
-                .iter()
-                .map(|&off| &self.decode_mem[off..off + n as usize])
-                .collect();
+            let off0 = self.out_syn_off(0, n);
+            let off1 = if cc >= 2 { self.out_syn_off(1, n) } else { 0 };
+            let inp0 = &self.decode_mem[off0..off0 + n as usize];
+            let inp1 = &self.decode_mem[off1..off1 + n as usize];
+            let inp: [&[i32]; 2] = [inp0, inp1];
             deemphasis(
-                &inp,
+                &inp[..cc as usize],
                 pcm,
                 n,
                 cc,
@@ -1312,7 +1312,7 @@ impl CeltDecoder {
         );
 
         // --- TF resolution ---
-        let mut tf_res = vec![0i32; nb_ebands as usize];
+        let mut tf_res = [0i32; NB_EBANDS];
         tf_decode(start, end, is_transient, &mut tf_res, lm, dec);
 
         tell = dec.tell();
@@ -1325,10 +1325,10 @@ impl CeltDecoder {
         };
 
         // --- Dynamic bit allocation ---
-        let mut cap = vec![0i32; nb_ebands as usize];
+        let mut cap = [0i32; NB_EBANDS];
         init_caps(mode, &mut cap, lm, c_stream);
 
-        let mut offsets = vec![0i32; nb_ebands as usize];
+        let mut offsets = [0i32; NB_EBANDS];
         let mut dynalloc_logp = 6i32;
         total_bits <<= BITRES;
         tell = dec.tell_frac() as i32;
@@ -1374,9 +1374,9 @@ impl CeltDecoder {
 
         // Compute allocation
         let eff_end = imax(start, imin(end, mode.eff_ebands));
-        let mut pulses = vec![0i32; nb_ebands as usize];
-        let mut fine_quant = vec![0i32; nb_ebands as usize];
-        let mut fine_priority = vec![0i32; nb_ebands as usize];
+        let mut pulses = [0i32; NB_EBANDS];
+        let mut fine_quant = [0i32; NB_EBANDS];
+        let mut fine_priority = [0i32; NB_EBANDS];
         let mut intensity = 0i32;
         let mut dual_stereo = 0i32;
         let mut balance = 0i32;
@@ -1423,15 +1423,19 @@ impl CeltDecoder {
                 .copy_within(off + n as usize..off + n as usize + copy_len, off);
         }
 
-        // Decode PVQ coefficients
-        let mut x = vec![0i32; c_stream as usize * n as usize];
-        let mut collapse_masks = vec![0u8; c_stream as usize * nb_ebands as usize];
+        // Decode PVQ coefficients — stack arrays (max 2*960=1920 for x, 2*21=42 for masks)
+        const MAX_X: usize = 2 * 960;
+        const MAX_COLLAPSE: usize = 2 * NB_EBANDS;
+        let x_len = c_stream as usize * n as usize;
+        let cm_len = c_stream as usize * nb_ebands as usize;
+        let mut x = [0i32; MAX_X];
+        let mut collapse_masks = [0u8; MAX_COLLAPSE];
         let total_bits_alloc = (data_len as i32) * (8 << BITRES) - anti_collapse_rsv;
 
         // For stereo, quant_all_bands needs X and Y as separate mutable slices.
         // We use split_at_mut to avoid double-borrow, and pass the parts directly.
         if c_stream == 2 {
-            let (x_part, y_part) = x.split_at_mut(n as usize);
+            let (x_part, y_part) = x[..x_len].split_at_mut(n as usize);
             quant_all_bands(
                 false, // decode
                 mode,
@@ -1439,7 +1443,7 @@ impl CeltDecoder {
                 end,
                 x_part,
                 Some(y_part),
-                &mut collapse_masks,
+                &mut collapse_masks[..cm_len],
                 &self.old_band_e,
                 &mut pulses,
                 short_blocks != 0,
@@ -1462,9 +1466,9 @@ impl CeltDecoder {
                 mode,
                 start,
                 end,
-                &mut x,
+                &mut x[..x_len],
                 None,
-                &mut collapse_masks,
+                &mut collapse_masks[..cm_len],
                 &self.old_band_e,
                 &mut pulses,
                 short_blocks != 0,
@@ -1506,8 +1510,8 @@ impl CeltDecoder {
         if anti_collapse_on != 0 {
             anti_collapse(
                 mode,
-                &mut x,
-                &mut collapse_masks,
+                &mut x[..x_len],
+                &mut collapse_masks[..cm_len],
                 lm,
                 c_stream,
                 n,
@@ -1531,10 +1535,13 @@ impl CeltDecoder {
 
         // Prefilter and fold if needed
         if self.prefilter_and_fold {
-            let offsets: Vec<usize> = (0..cc as usize).map(|c| self.ch_off(c)).collect();
+            let pf_offsets: [usize; 2] = [
+                self.ch_off(0),
+                if cc >= 2 { self.ch_off(1) } else { 0 },
+            ];
             prefilter_and_fold(
                 &mut self.decode_mem,
-                &offsets,
+                &pf_offsets[..cc as usize],
                 cc,
                 overlap,
                 n,
@@ -1551,7 +1558,7 @@ impl CeltDecoder {
         // --- Synthesis ---
         celt_synthesis(
             mode,
-            &mut x,
+            &mut x[..x_len],
             &mut self.decode_mem,
             &out_syn_offsets,
             &self.old_band_e,
@@ -1660,14 +1667,14 @@ impl CeltDecoder {
         self.rng = dec.get_rng();
 
         // --- De-emphasis ---
-        let de_offsets: Vec<usize> = (0..cc as usize).map(|c| self.out_syn_off(c, n)).collect();
         let ds = self.downsample;
-        let inp: Vec<&[i32]> = de_offsets
-            .iter()
-            .map(|&off| &self.decode_mem[off..off + n as usize])
-            .collect();
+        let de0 = self.out_syn_off(0, n);
+        let de1 = if cc >= 2 { self.out_syn_off(1, n) } else { 0 };
+        let di0 = &self.decode_mem[de0..de0 + n as usize];
+        let di1 = &self.decode_mem[de1..de1 + n as usize];
+        let de_inp: [&[i32]; 2] = [di0, di1];
         deemphasis(
-            &inp,
+            &de_inp[..cc as usize],
             pcm,
             n,
             cc,

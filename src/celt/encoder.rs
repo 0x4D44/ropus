@@ -16,7 +16,7 @@ use super::bands::{
 use super::fft;
 use super::fft::{KissFftCpx, KissFftState, opus_fft_impl};
 use super::math_ops::*;
-use super::modes::{CELTMode, MODE_48000_960_120, bitrate_to_bits, init_caps, resampling_factor};
+use super::modes::{CELTMode, MODE_48000_960_120, NB_EBANDS, bitrate_to_bits, init_caps, resampling_factor};
 use super::pitch::{pitch_downsample, pitch_search, remove_doubling};
 use super::quant_bands::EMEANS;
 use super::quant_bands::{amp2log2, quant_coarse_energy, quant_energy_finalise, quant_fine_energy};
@@ -540,22 +540,6 @@ fn compute_mdcts(
                 fft_st,
                 trig,
             );
-            if short_blocks != 0 && ch == 0 {
-                let o0 = output[out_base];
-                let o1 = if out_base + 2 * stride as usize <= output.len() {
-                    output[out_base + 2 * stride as usize]
-                } else {
-                    0
-                };
-                // Also trace input values at key positions
-                let i0 = input.get(in_start + 60).copied().unwrap_or(0);
-                let i1 = input.get(in_start + 119).copied().unwrap_or(0);
-                let i2 = input.get(in_start + 120).copied().unwrap_or(0);
-                eprintln!(
-                    "[RS MDCT_BLK] blk={} out[0]={} out[2s]={} in[60]={} in[119]={} in[120]={}",
-                    blk, o0, o1, i0, i1, i2
-                );
-            }
         }
     }
 
@@ -2203,11 +2187,6 @@ fn celt_encode_core(
     let end = st.end;
     let hybrid = start != 0;
 
-    // Debug frame counter
-    static CELT_FRAME_CTR: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
-    let celt_frame = CELT_FRAME_CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let trace_frame = celt_frame == 7; // 0-indexed
-
     // Validate inputs
     if nb_compressed_bytes < 2 || pcm.is_empty() {
         return OPUS_BAD_ARG;
@@ -2286,9 +2265,9 @@ fn celt_encode_core(
         enc_ref.add_nbits_total(tell - enc_ref.tell());
     }
 
-    // Pre-emphasis
-    let inp_size = cc as usize * (n as usize + overlap as usize);
-    let mut input = vec![0i32; inp_size];
+    // Pre-emphasis — max: 2 * (960 + 120) = 2160
+    const MAX_INP: usize = 2 * (960 + 120);
+    let mut input = [0i32; MAX_INP];
     for ch in 0..cc as usize {
         let inp_start = ch * (n as usize + overlap as usize) + overlap as usize;
         celt_preemphasis(
@@ -2309,31 +2288,6 @@ fn celt_encode_core(
         let in_start = ch * (n as usize + overlap as usize);
         for i in 0..overlap as usize {
             input[in_start + i] = st.prefilter_mem[ov_start + i];
-        }
-    }
-
-    // Trace pre-emphasis output before run_prefilter (matches C _pfc2 checkpoint)
-    {
-        static FC2: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
-        let fc = FC2.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        if fc <= 2 {
-            let ov = overlap as usize;
-            eprintln!(
-                "[RS PREEMPH] frame={} input[0..4]=[{},{},{},{}] input[ov-2..ov+2]=[{},{},{},{}] input[ov+118..ov+122]=[{},{},{},{}]",
-                fc,
-                input[0],
-                input[1],
-                input[2],
-                input[3],
-                input[ov - 2],
-                input[ov - 1],
-                input[ov],
-                input[ov + 1],
-                input.get(ov + 118).copied().unwrap_or(0),
-                input.get(ov + 119).copied().unwrap_or(0),
-                input.get(ov + 120).copied().unwrap_or(0),
-                input.get(ov + 121).copied().unwrap_or(0),
-            );
         }
     }
 
@@ -2436,12 +2390,12 @@ fn celt_encode_core(
         transient_got_disabled = true;
     }
 
-    // MDCT computation
-    let freq_size = cc as usize * n as usize;
-    let mut freq = vec![0i32; freq_size];
-    let mut band_e = vec![0i32; nb_ebands as usize * cc as usize];
-    let mut band_log_e = vec![0i32; nb_ebands as usize * cc as usize];
-    let mut band_log_e2 = vec![0i32; c as usize * nb_ebands as usize];
+    // MDCT computation — stack arrays with known max sizes
+    let _freq_size = cc as usize * n as usize;
+    let mut freq = [0i32; 2 * 960]; // max 2 channels * 960 samples
+    let mut band_e = [0i32; 2 * NB_EBANDS]; // max 2 channels * 21 bands
+    let mut band_log_e = [0i32; 2 * NB_EBANDS];
+    let mut band_log_e2 = [0i32; 2 * NB_EBANDS];
 
     // Secondary MDCT for bandLogE2 (long block when transient)
     let second_mdct = short_blocks != 0 && st.complexity >= 8;
@@ -2454,31 +2408,6 @@ fn celt_encode_core(
             for i in 0..nb_ebands as usize {
                 band_log_e2[ch * nb_ebands as usize + i] += half32(shl32(lm, DB_SHIFT));
             }
-        }
-    }
-
-    // Trace pre-emphasis output before main MDCT
-    {
-        static FC: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
-        let fc = FC.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        if fc <= 2 {
-            let ov = overlap as usize;
-            eprintln!(
-                "[RS PREEMPH] frame={} input[0..4]=[{},{},{},{}] input[ov-2..ov+2]=[{},{},{},{}] input[ov+118..ov+122]=[{},{},{},{}]",
-                fc,
-                input[0],
-                input[1],
-                input[2],
-                input[3],
-                input[ov - 2],
-                input[ov - 1],
-                input[ov],
-                input[ov + 1],
-                input.get(ov + 118).copied().unwrap_or(0),
-                input.get(ov + 119).copied().unwrap_or(0),
-                input.get(ov + 120).copied().unwrap_or(0),
-                input.get(ov + 121).copied().unwrap_or(0),
-            );
         }
     }
 
@@ -2579,23 +2508,9 @@ fn celt_encode_core(
     }
 
     // Band normalization
-    let x_size = c as usize * n as usize;
-    let mut x_norm = vec![0i32; x_size];
+    let _x_size = c as usize * n as usize;
+    let mut x_norm = [0i32; 2 * 960];
     normalise_bands(mode, &freq, &mut x_norm, &band_e, eff_end, c, m);
-
-    if trace_frame {
-        eprintln!("[CELT F7] band_e={:?}", &band_e[..nb_ebands as usize]);
-        // band 13 spans ebands[13]..ebands[14], each scaled by m (1<<lm)
-        let b13_start = (m * mode.ebands[13] as i32) as usize;
-        let b13_end = (m * mode.ebands[14] as i32) as usize;
-        eprintln!(
-            "[CELT F7] freq band13 [{},{}): {:?}",
-            b13_start,
-            b13_end,
-            &freq[b13_start..b13_end]
-        );
-        eprintln!("[CELT F7] x_norm band13: {:?}", &x_norm[b13_start..b13_end]);
-    }
 
     // TF analysis
     let enable_tf_analysis = effective_bytes >= 15 * c
@@ -2605,12 +2520,12 @@ fn celt_encode_core(
         // C: QCONST32(.98f, 29) = 526133504 (f32 precision; f64 gives 526133494)
         && toneishness < 526133504;
 
-    let mut offsets = vec![0i32; nb_ebands as usize];
-    let mut importance = vec![13i32; nb_ebands as usize];
-    let mut spread_weight = vec![1i32; nb_ebands as usize];
+    let mut offsets = [0i32; NB_EBANDS];
+    let mut importance = [13i32; NB_EBANDS];
+    let mut spread_weight = [1i32; NB_EBANDS];
     let mut tot_boost = 0i32;
 
-    let surround_dynalloc = vec![0i32; c as usize * nb_ebands as usize];
+    let surround_dynalloc = [0i32; 2 * NB_EBANDS];
 
     let max_depth = dynalloc_analysis(
         &band_log_e,
@@ -2639,7 +2554,7 @@ fn celt_encode_core(
         toneishness,
     );
 
-    let mut tf_res = vec![0i32; nb_ebands as usize];
+    let mut tf_res = [0i32; NB_EBANDS];
     let tf_select;
     if enable_tf_analysis {
         let lambda = 80i32.max(20480 / effective_bytes.max(1) + 2);
@@ -2682,7 +2597,7 @@ fn celt_encode_core(
     }
 
     // Energy quantization: error biasing (C: celt_encoder.c:2289-2292)
-    let mut error = vec![0i32; c as usize * nb_ebands as usize];
+    let mut error = [0i32; 2 * NB_EBANDS];
     for ch in 0..c as usize {
         for i in start as usize..end as usize {
             let idx = i + ch * nb_ebands as usize;
@@ -2713,29 +2628,6 @@ fn celt_encode_core(
         st.lfe,
     );
 
-    // --- DEBUG: trace range coder state at key checkpoints ---
-    // (frame counter moved to top of function)
-    if trace_frame {
-        let (offs, eoffs, _storage, rng, val, rem, ext) = enc_ref.enc_debug_state();
-        eprintln!(
-            "[CELT F7] after coarse_energy: offs={} eoffs={} tell={} rng=0x{:08x} val=0x{:08x} rem={} ext={} byte261=0x{:02x}",
-            offs,
-            eoffs,
-            enc_ref.tell(),
-            rng,
-            val,
-            rem,
-            ext,
-            enc_ref.enc_debug_byte(261)
-        );
-        eprintln!("[CELT F7] band_log_e={:?}", &band_log_e);
-        eprintln!(
-            "[CELT F7] old_band_e={:?}",
-            &st.old_band_e[..nb_ebands as usize]
-        );
-        eprintln!("[CELT F7] error={:?}", &error);
-    }
-
     // TF encoding
     tf_encode(
         start,
@@ -2747,17 +2639,6 @@ fn celt_encode_core(
         enc_ref,
     );
     tell = enc_ref.tell() as i32;
-
-    if trace_frame {
-        let (offs, eoffs, ..) = enc_ref.enc_debug_state();
-        eprintln!(
-            "[CELT F7] after tf_encode: offs={} eoffs={} tell={} byte261=0x{:02x}",
-            offs,
-            eoffs,
-            enc_ref.tell(),
-            enc_ref.enc_debug_byte(261)
-        );
-    }
 
     // Spread decision
     if tell + 4 <= total_bits {
@@ -2798,20 +2679,8 @@ fn celt_encode_core(
         st.spread_decision = SPREAD_NORMAL;
     }
 
-    if trace_frame {
-        let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
-        eprintln!(
-            "[CELT F7] after spread: offs={} eoffs={} tell={} rng=0x{:08x} byte261=0x{:02x}",
-            offs,
-            eoffs,
-            enc_ref.tell(),
-            rng,
-            enc_ref.enc_debug_byte(261)
-        );
-    }
-
     // Caps initialization
-    let mut cap = vec![0i32; nb_ebands as usize];
+    let mut cap = [0i32; NB_EBANDS];
     init_caps(mode, &mut cap, lm, c);
 
     // Dynamic allocation encoding
@@ -2887,18 +2756,6 @@ fn celt_encode_core(
             );
         }
         enc_ref.encode_icdf(alloc_trim as u32, &TRIM_ICDF, 7);
-    }
-
-    if trace_frame {
-        let (offs, eoffs, _storage, _rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
-        eprintln!(
-            "[CELT F7] after dynalloc+trim: offs={} eoffs={} tell={} alloc_trim={} byte261=0x{:02x}",
-            offs,
-            eoffs,
-            enc_ref.tell(),
-            alloc_trim,
-            enc_ref.enc_debug_byte(261)
-        );
     }
 
     // Minimum allowed bytes
@@ -2983,9 +2840,9 @@ fn celt_encode_core(
     }
 
     // Bit allocation
-    let mut fine_quant = vec![0i32; nb_ebands as usize];
-    let mut pulses = vec![0i32; nb_ebands as usize];
-    let mut fine_priority = vec![0i32; nb_ebands as usize];
+    let mut fine_quant = [0i32; NB_EBANDS];
+    let mut pulses = [0i32; NB_EBANDS];
+    let mut fine_priority = [0i32; NB_EBANDS];
     let mut balance = 0i32;
 
     let bits = ((nb_compressed_bytes as i64 * 8) << BITRES) as i32 - enc_ref.tell_frac() as i32 - 1;
@@ -3021,20 +2878,6 @@ fn celt_encode_core(
         signal_bandwidth,
     );
 
-    if trace_frame {
-        let (offs, eoffs, _storage, _rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
-        eprintln!(
-            "[CELT F7] after clt_compute_allocation: offs={} eoffs={} tell={} coded_bands={} byte261=0x{:02x}",
-            offs,
-            eoffs,
-            enc_ref.tell(),
-            coded_bands,
-            enc_ref.enc_debug_byte(261)
-        );
-        eprintln!("[CELT F7]   pulses={:?}", &pulses);
-        eprintln!("[CELT F7]   fine_quant={:?}", &fine_quant);
-    }
-
     // Update lastCodedBands with hysteresis (C: celt_encoder.c ~2631-2634)
     if st.last_coded_bands != 0 {
         st.last_coded_bands =
@@ -3056,29 +2899,13 @@ fn celt_encode_core(
         c,
     );
 
-    if trace_frame {
-        let (offs, eoffs, _storage, _rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
-        eprintln!(
-            "[CELT F7] after quant_fine_energy: offs={} eoffs={} tell={} byte261=0x{:02x}",
-            offs,
-            eoffs,
-            enc_ref.tell(),
-            enc_ref.enc_debug_byte(261)
-        );
-    }
-
     // Clear energy error
     for i in 0..nb_ebands as usize * cc as usize {
         st.energy_error[i] = 0;
     }
 
-    // Enable raw-bit tracing for frame 7's quant_all_bands
-    if trace_frame {
-        RangeEncoder::set_trace_bits(true);
-    }
-
     // Residual quantization
-    let mut collapse_masks = vec![0u8; c as usize * nb_ebands as usize];
+    let mut collapse_masks = [0u8; 2 * NB_EBANDS];
     let (x_norm_x, x_norm_y) = x_norm.split_at_mut(n as usize);
     let y_norm_opt = if c == 2 {
         Some(&mut x_norm_y[..])
@@ -3110,22 +2937,6 @@ fn celt_encode_core(
         st.disable_inv != 0,
     );
 
-    // Disable raw-bit tracing
-    if trace_frame {
-        RangeEncoder::set_trace_bits(false);
-    }
-
-    if trace_frame {
-        let (offs, eoffs, _storage, _rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
-        eprintln!(
-            "[CELT F7] after quant_all_bands: offs={} eoffs={} tell={} byte261=0x{:02x}",
-            offs,
-            eoffs,
-            enc_ref.tell(),
-            enc_ref.enc_debug_byte(261)
-        );
-    }
-
     // Anti-collapse
     let anti_collapse_on;
     if anti_collapse_rsv > 0 {
@@ -3146,17 +2957,6 @@ fn celt_encode_core(
         enc_ref,
         c,
     );
-
-    if trace_frame {
-        let (offs, eoffs, _storage, _rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
-        eprintln!(
-            "[CELT F7] after energy_finalise: offs={} eoffs={} tell={} byte261=0x{:02x}",
-            offs,
-            eoffs,
-            enc_ref.tell(),
-            enc_ref.enc_debug_byte(261)
-        );
-    }
 
     // Store energy error for next frame
     for i in 0..nb_ebands as usize * cc as usize {
@@ -3228,35 +3028,7 @@ fn celt_encode_core(
     st.rng = enc_ref.get_rng();
 
     // Finalize bitstream
-    if trace_frame {
-        let (offs, eoffs, _storage, rng, val, rem, ext) = enc_ref.enc_debug_state();
-        eprintln!(
-            "[CELT F7] BEFORE done(): offs={} eoffs={} rng=0x{:08x} val=0x{:08x} rem={} ext={} byte261=0x{:02x}",
-            offs,
-            eoffs,
-            rng,
-            val,
-            rem,
-            ext,
-            enc_ref.enc_debug_byte(261)
-        );
-    }
     enc_ref.done();
-    if trace_frame {
-        let (offs, eoffs, _storage, _rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
-        eprintln!(
-            "[CELT F7] AFTER done(): offs={} eoffs={} byte261=0x{:02x}",
-            offs,
-            eoffs,
-            enc_ref.enc_debug_byte(261)
-        );
-        // Also dump bytes around byte 261
-        let mut hex = String::new();
-        for i in 255..270 {
-            hex.push_str(&format!("{:02x} ", enc_ref.enc_debug_byte(i)));
-        }
-        eprintln!("[CELT F7] bytes[255..270]: {}", hex);
-    }
     if enc_ref.error() {
         return OPUS_INTERNAL_ERROR;
     }

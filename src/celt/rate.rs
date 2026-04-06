@@ -4,7 +4,7 @@
 //! and bit costs. Matches `rate.h` / `rate.c` in the C reference.
 
 use super::ec_ctx::EcCoder;
-use super::modes::CELTMode;
+use super::modes::{CELTMode, NB_EBANDS};
 
 /// Bit resolution: all bit counts are in 1/8-bit units.
 pub const BITRES: i32 = 3;
@@ -502,10 +502,10 @@ pub fn clt_compute_allocation<EC: EcCoder>(
         }
     }
 
-    let mut bits1 = vec![0i32; len as usize];
-    let mut bits2 = vec![0i32; len as usize];
-    let mut thresh = vec![0i32; len as usize];
-    let mut trim_offset = vec![0i32; len as usize];
+    let mut bits1 = [0i32; NB_EBANDS];
+    let mut bits2 = [0i32; NB_EBANDS];
+    let mut thresh = [0i32; NB_EBANDS];
+    let mut trim_offset = [0i32; NB_EBANDS];
 
     for j in start..end {
         let ju = j as usize;

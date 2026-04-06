@@ -24,6 +24,9 @@ pub const SPREAD_LIGHT: i32 = 1;
 pub const SPREAD_NORMAL: i32 = 2;
 pub const SPREAD_AGGRESSIVE: i32 = 3;
 
+/// Max samples in a single band: widest band (22 bins) × max big_m (8).
+const MAX_BAND_N: usize = 176;
+
 /// Minimum stereo energy threshold (fixed-point).
 const MIN_STEREO_ENERGY: i32 = 2;
 
@@ -570,7 +573,7 @@ pub fn haar1(x: &mut [i32], n0: i32, stride: i32) {
 /// Matches C `deinterleave_hadamard()`.
 fn deinterleave_hadamard(x: &mut [i32], n0: i32, stride: i32, hadamard: bool) {
     let n = n0 * stride;
-    let mut tmp = vec![0i32; n as usize];
+    let mut tmp = [0i32; MAX_BAND_N];
     if hadamard {
         let ordery_off = (stride - 2) as usize;
         for i in 0..stride {
@@ -593,7 +596,7 @@ fn deinterleave_hadamard(x: &mut [i32], n0: i32, stride: i32, hadamard: bool) {
 /// Matches C `interleave_hadamard()`.
 fn interleave_hadamard(x: &mut [i32], n0: i32, stride: i32, hadamard: bool) {
     let n = n0 * stride;
-    let mut tmp = vec![0i32; n as usize];
+    let mut tmp = [0i32; MAX_BAND_N];
     if hadamard {
         let ordery_off = (stride - 2) as usize;
         for i in 0..stride {
@@ -712,17 +715,6 @@ fn compute_theta<EC: EcCoder>(
     if encode {
         let itheta_q30 = stereo_itheta(&x[..nu], &y[..nu], stereo, nu);
         itheta = itheta_q30 >> 16;
-
-        // Debug: trace theta for band 13
-        if i == 13 {
-            let (_, eoffs, _, _) = ctx.ec.ec_debug_state();
-            if eoffs >= 50 && eoffs <= 65 {
-                eprintln!(
-                    "[R CT] band={} n={} qn={} itheta_q30={} itheta_q14={} eoffs={}",
-                    i, n, qn, itheta_q30, itheta, eoffs
-                );
-            }
-        }
     }
 
     let tell = ctx.ec.ec_tell_frac();
@@ -732,16 +724,6 @@ fn compute_theta<EC: EcCoder>(
         if encode {
             if !stereo || ctx.theta_round == 0 {
                 itheta = ((itheta as i64 * qn as i64 + 8192) >> 14) as i32;
-                // Debug: trace quantized theta for band 13
-                if i == 13 {
-                    let (_, eoffs, _, _) = ctx.ec.ec_debug_state();
-                    if eoffs >= 50 && eoffs <= 65 {
-                        eprintln!(
-                            "[R CT quant] band={} qn={} itheta_quant={} eoffs={}",
-                            i, qn, itheta, eoffs
-                        );
-                    }
-                }
                 if !stereo && ctx.avoid_split_noise && itheta > 0 && itheta < qn {
                     // Check if theta will cause noise injection on one side
                     let unquantized = celt_udiv(itheta as u32 * 16384, qn as u32) as i32;
@@ -1218,14 +1200,14 @@ fn quant_band<EC: EcCoder>(
     }
 
     // Copy lowband to scratch if we'll be modifying it via Haar transforms
-    let mut scratch_buf: Option<Vec<i32>> = None;
+    let mut scratch_arr = [0i32; MAX_BAND_N];
+    let mut scratch_buf_active = false;
     let mut use_scratch_as_lowband = false;
     if lowband.is_some() && (recombine != 0 || ((n_b & 1) == 0 && tf_change < 0) || b0 > 1) {
         if let Some(lb) = lowband {
-            let mut sb = vec![0i32; n as usize];
             let copy_len = n as usize;
-            sb[..copy_len].copy_from_slice(&lb[..copy_len]);
-            scratch_buf = Some(sb);
+            scratch_arr[..copy_len].copy_from_slice(&lb[..copy_len]);
+            scratch_buf_active = true;
             use_scratch_as_lowband = true;
         }
     }
@@ -1236,10 +1218,8 @@ fn quant_band<EC: EcCoder>(
         if encode {
             haar1(x, n >> k, 1 << k);
         }
-        if let Some(ref mut sb) = scratch_buf {
-            if use_scratch_as_lowband {
-                haar1(sb, n >> k, 1 << k);
-            }
+        if scratch_buf_active && use_scratch_as_lowband {
+            haar1(&mut scratch_arr, n >> k, 1 << k);
         }
         fill = (BIT_INTERLEAVE_TABLE[(fill & 0xF) as usize] as i32)
             | ((BIT_INTERLEAVE_TABLE[(fill >> 4) as usize] as i32) << 2);
@@ -1252,10 +1232,8 @@ fn quant_band<EC: EcCoder>(
         if encode {
             haar1(x, n_b, big_b);
         }
-        if let Some(ref mut sb) = scratch_buf {
-            if use_scratch_as_lowband {
-                haar1(sb, n_b, big_b);
-            }
+        if scratch_buf_active && use_scratch_as_lowband {
+            haar1(&mut scratch_arr, n_b, big_b);
         }
         fill |= fill << big_b;
         big_b <<= 1;
@@ -1270,16 +1248,14 @@ fn quant_band<EC: EcCoder>(
         if encode {
             deinterleave_hadamard(x, n_b >> recombine, b0_new << recombine, long_blocks);
         }
-        if let Some(ref mut sb) = scratch_buf {
-            if use_scratch_as_lowband {
-                deinterleave_hadamard(sb, n_b >> recombine, b0_new << recombine, long_blocks);
-            }
+        if scratch_buf_active && use_scratch_as_lowband {
+            deinterleave_hadamard(&mut scratch_arr, n_b >> recombine, b0_new << recombine, long_blocks);
         }
     }
 
     // Quantize
     let lowband_ref: Option<&[i32]> = if use_scratch_as_lowband {
-        scratch_buf.as_deref()
+        Some(&scratch_arr[..n as usize])
     } else {
         lowband
     };
@@ -1632,29 +1608,35 @@ pub fn quant_all_bands<EC: EcCoder>(
 
     let norm_offset = (big_m * m.ebands[start as usize] as i32) as usize;
     let norm_size = (big_m * m.ebands[(m.nb_ebands - 1) as usize] as i32) as usize - norm_offset;
-    let mut _norm = vec![0i32; c_channels as usize * norm_size];
+    // Max norm_size: 2 channels * 8 * 78 = 1248 i32s
+    const MAX_NORM: usize = 2 * 8 * 78;
+    let mut _norm = [0i32; MAX_NORM];
 
     // For the decoder, the last band can be used as scratch space
-    let scratch_size = if encode && resynth {
+    let _scratch_size = if encode && resynth {
         (big_m * (m.ebands[m.nb_ebands as usize] - m.ebands[(m.nb_ebands - 1) as usize]) as i32)
             as usize
     } else {
         0
     };
-    let mut _lowband_scratch = vec![0i32; scratch_size];
+    // Max scratch: 8 * (100-78) = 176
+    const MAX_SCRATCH: usize = 8 * 22;
+    let mut _lowband_scratch = [0i32; MAX_SCRATCH];
 
     // theta_rdo save buffers (for two-pass stereo encoding)
-    let resynth_alloc = if theta_rdo {
+    let _resynth_alloc = if theta_rdo {
         ((m.ebands[m.nb_ebands as usize] - m.ebands[m.nb_ebands as usize - 1]) as i32) << lm
     } else {
         0
     } as usize;
-    let mut x_save = vec![0i32; resynth_alloc];
-    let mut y_save = vec![0i32; resynth_alloc];
-    let mut x_save2 = vec![0i32; resynth_alloc];
-    let mut y_save2 = vec![0i32; resynth_alloc];
-    let mut norm_save2 = vec![0i32; resynth_alloc];
-    let mut bytes_save = vec![0u8; if theta_rdo { 1275 } else { 0 }];
+    // Max resynth_alloc: (100-78) << 3 = 176
+    const MAX_RESYNTH: usize = 176;
+    let mut x_save = [0i32; MAX_RESYNTH];
+    let mut y_save = [0i32; MAX_RESYNTH];
+    let mut x_save2 = [0i32; MAX_RESYNTH];
+    let mut y_save2 = [0i32; MAX_RESYNTH];
+    let mut norm_save2 = [0i32; MAX_RESYNTH];
+    let mut bytes_save = [0u8; 1275];
 
     // Norm buffer accessors: norm = _norm[0..norm_size], norm2 = _norm[norm_size..]
     let mut lowband_offset: i32 = 0;
@@ -1674,14 +1656,9 @@ pub fn quant_all_bands<EC: EcCoder>(
     // We need separate norm buffers for dual stereo
     // norm = _norm[..norm_size], norm2 = _norm[norm_size..] (only if stereo)
 
-    // Debug: frame counter for quant_all_bands calls (encoder-only)
-    static QAB_FRAME_CTR: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
-    let _qab_frame = if encode {
-        QAB_FRAME_CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    } else {
-        -1
-    };
-    let trace_qab = false;
+    // Shared per-band lowband output buffer (reused each iteration, max band width = 176)
+    let mut lbo_buf = [0i32; MAX_BAND_N];
+    let mut lbo_buf2 = [0i32; MAX_BAND_N];
 
     for i_band in start..end {
         let iu = i_band as usize;
@@ -1840,7 +1817,7 @@ pub fn quant_all_bands<EC: EcCoder>(
                 };
 
                 let x_slice = &mut x_[band_start..band_end_bin];
-                let mut lbo_buf = vec![0i32; n as usize];
+                lbo_buf[..n as usize].fill(0);
                 x_cm = quant_band(
                     &mut ctx,
                     x_slice,
@@ -1849,14 +1826,14 @@ pub fn quant_all_bands<EC: EcCoder>(
                     big_b,
                     lb,
                     lm,
-                    if !last { Some(&mut lbo_buf) } else { None },
+                    if !last { Some(&mut lbo_buf[..n as usize]) } else { None },
                     Q31ONE,
                     None,
                     x_cm as i32,
                 );
                 if !last {
                     let out_off = norm_out_offset.unwrap();
-                    _norm[out_off..out_off + n as usize].copy_from_slice(&lbo_buf);
+                    _norm[out_off..out_off + n as usize].copy_from_slice(&lbo_buf[..n as usize]);
                 }
                 ctx_seed = ctx.seed;
                 // Propagate remaining_bits from X quantization (C shares ctx)
@@ -1884,7 +1861,7 @@ pub fn quant_all_bands<EC: EcCoder>(
                 };
 
                 let y_slice = &mut y_buf[band_start..band_end_bin];
-                let mut lbo_buf = vec![0i32; n as usize];
+                lbo_buf[..n as usize].fill(0);
                 y_cm = quant_band(
                     &mut ctx,
                     y_slice,
@@ -1893,14 +1870,14 @@ pub fn quant_all_bands<EC: EcCoder>(
                     big_b,
                     lb2.as_deref(),
                     lm,
-                    if !last { Some(&mut lbo_buf) } else { None },
+                    if !last { Some(&mut lbo_buf[..n as usize]) } else { None },
                     Q31ONE,
                     None,
                     y_cm as i32,
                 );
                 if !last {
                     let out_off = norm_size + norm_out_offset.unwrap();
-                    _norm[out_off..out_off + n as usize].copy_from_slice(&lbo_buf);
+                    _norm[out_off..out_off + n as usize].copy_from_slice(&lbo_buf[..n as usize]);
                 }
                 ctx_seed = ctx.seed;
             }
@@ -1949,7 +1926,7 @@ pub fn quant_all_bands<EC: EcCoder>(
                         disable_inv,
                         avoid_split_noise: ctx_avoid_split_noise,
                     };
-                    let mut lbo_buf = vec![0i32; nu];
+                    lbo_buf[..nu].fill(0);
                     x_cm = quant_band_stereo(
                         &mut ctx,
                         x_slice,
@@ -1959,7 +1936,7 @@ pub fn quant_all_bands<EC: EcCoder>(
                         big_b,
                         lb,
                         lm,
-                        if !last { Some(&mut lbo_buf) } else { None },
+                        if !last { Some(&mut lbo_buf[..nu]) } else { None },
                         None,
                         cm as i32,
                     );
@@ -2025,7 +2002,7 @@ pub fn quant_all_bands<EC: EcCoder>(
                         disable_inv,
                         avoid_split_noise: ctx_avoid_split_noise,
                     };
-                    let mut lbo_buf2 = vec![0i32; nu];
+                    lbo_buf2[..nu].fill(0);
                     x_cm = quant_band_stereo(
                         &mut ctx,
                         x_slice,
@@ -2035,7 +2012,7 @@ pub fn quant_all_bands<EC: EcCoder>(
                         big_b,
                         lb,
                         lm,
-                        if !last { Some(&mut lbo_buf2) } else { None },
+                        if !last { Some(&mut lbo_buf2[..nu]) } else { None },
                         None,
                         cm as i32,
                     );
@@ -2051,19 +2028,6 @@ pub fn quant_all_bands<EC: EcCoder>(
                     let ec = ctx.ec;
 
                     // Pick the pass with higher correlation (lower distortion)
-                    if trace_qab {
-                        eprintln!(
-                            "[RS THETA_RDO] band={} dist0={} dist1={} pick={}",
-                            i_band,
-                            dist0,
-                            dist1,
-                            if dist0 >= dist1 {
-                                "pass1(-1)"
-                            } else {
-                                "pass2(+1)"
-                            }
-                        );
-                    }
                     if dist0 >= dist1 {
                         // Pass 1 won — restore its state
                         x_cm = cm2;
@@ -2103,7 +2067,7 @@ pub fn quant_all_bands<EC: EcCoder>(
                         avoid_split_noise: ctx_avoid_split_noise,
                     };
 
-                    let mut lbo_buf = vec![0i32; n as usize];
+                    lbo_buf[..n as usize].fill(0);
                     x_cm = quant_band_stereo(
                         &mut ctx,
                         x_slice,
@@ -2113,13 +2077,13 @@ pub fn quant_all_bands<EC: EcCoder>(
                         big_b,
                         lb,
                         lm,
-                        if !last { Some(&mut lbo_buf) } else { None },
+                        if !last { Some(&mut lbo_buf[..n as usize]) } else { None },
                         None,
                         (x_cm | y_cm) as i32,
                     );
                     if !last {
                         let out_off = norm_out_offset.unwrap();
-                        _norm[out_off..out_off + n as usize].copy_from_slice(&lbo_buf);
+                        _norm[out_off..out_off + n as usize].copy_from_slice(&lbo_buf[..n as usize]);
                     }
                     ctx_seed = ctx.seed;
                 }
@@ -2146,24 +2110,7 @@ pub fn quant_all_bands<EC: EcCoder>(
                 };
 
                 let x_slice = &mut x_[band_start..band_end_bin];
-                // Debug: dump input spectrum for band 13 in frame 7
-                if trace_qab && i_band == 13 {
-                    eprintln!(
-                        "[QAB F7] band 13 INPUT x[0..min(32,n)]={:?}",
-                        &x_slice[..n.min(32) as usize]
-                    );
-                    if let Some(lbr) = &lb {
-                        eprintln!(
-                            "[QAB F7] band 13 LOWBAND[0..min(16,n)]={:?}",
-                            &lbr[..n.min(16) as usize]
-                        );
-                    }
-                    eprintln!(
-                        "[QAB F7] band 13 params: n={} b={} bigB={} lm={} seed={}",
-                        n, b, big_b, lm, ctx_seed
-                    );
-                }
-                let mut lbo_buf = vec![0i32; n as usize];
+                lbo_buf[..n as usize].fill(0);
                 x_cm = quant_band(
                     &mut ctx,
                     x_slice,
@@ -2172,7 +2119,7 @@ pub fn quant_all_bands<EC: EcCoder>(
                     big_b,
                     lb,
                     lm,
-                    if !last { Some(&mut lbo_buf) } else { None },
+                    if !last { Some(&mut lbo_buf[..n as usize]) } else { None },
                     Q31ONE,
                     None,
                     (x_cm | y_cm) as i32,
@@ -2180,24 +2127,10 @@ pub fn quant_all_bands<EC: EcCoder>(
                 y_cm = x_cm;
                 if !last {
                     let out_off = norm_out_offset.unwrap();
-                    _norm[out_off..out_off + n as usize].copy_from_slice(&lbo_buf);
+                    _norm[out_off..out_off + n as usize].copy_from_slice(&lbo_buf[..n as usize]);
                 }
                 ctx_seed = ctx.seed;
             }
-        }
-
-        // Debug: trace per-band state
-        if trace_qab {
-            let (offs, eoffs, _storage, _rem) = ec.ec_debug_state();
-            eprintln!(
-                "[RS QAB] band {:2}: tell={:5} offs={:3} eoffs={:3} b={:6} n={:4}",
-                i_band,
-                ec.ec_tell(),
-                offs,
-                eoffs,
-                b,
-                n
-            );
         }
 
         collapse_masks[iu * c_channels as usize] = x_cm as u8;

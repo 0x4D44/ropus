@@ -2139,6 +2139,322 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
 }
 
 // ---------------------------------------------------------------------------
+// Benchmark: C vs Rust performance comparison
+// ---------------------------------------------------------------------------
+
+struct BenchResult {
+    label: String,
+    iters: u32,
+    total_secs: f64,
+    frames: usize,
+}
+
+impl BenchResult {
+    fn per_iter_ms(&self) -> f64 {
+        (self.total_secs * 1000.0) / self.iters as f64
+    }
+    fn frames_per_sec(&self) -> f64 {
+        (self.frames as f64 * self.iters as f64) / self.total_secs
+    }
+}
+
+fn bench_encode_c(
+    pcm: &[i16],
+    sample_rate: i32,
+    channels: i32,
+    bitrate: i32,
+    complexity: i32,
+    iters: u32,
+) -> BenchResult {
+    let frame_size = (sample_rate / 50) as usize;
+    let samples_per_frame = frame_size * channels as usize;
+    let max_packet = 4000;
+    let mut packet = vec![0u8; max_packet];
+    let num_frames = pcm.len() / samples_per_frame;
+
+    let start = std::time::Instant::now();
+    for _ in 0..iters {
+        unsafe {
+            let mut error: i32 = 0;
+            let enc = bindings::opus_encoder_create(
+                sample_rate,
+                channels,
+                bindings::OPUS_APPLICATION_AUDIO,
+                &mut error,
+            );
+            bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
+            bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, complexity);
+            bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_VBR_REQUEST, 0i32);
+
+            let mut pos = 0;
+            while pos + samples_per_frame <= pcm.len() {
+                let ret = bindings::opus_encode(
+                    enc,
+                    pcm[pos..].as_ptr(),
+                    frame_size as i32,
+                    packet.as_mut_ptr(),
+                    max_packet as i32,
+                );
+                let _ = std::hint::black_box(ret);
+                pos += samples_per_frame;
+            }
+            bindings::opus_encoder_destroy(enc);
+        }
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    BenchResult {
+        label: "C encode".to_string(),
+        iters,
+        total_secs: elapsed,
+        frames: num_frames,
+    }
+}
+
+fn bench_encode_rust(
+    pcm: &[i16],
+    sample_rate: i32,
+    channels: i32,
+    bitrate: i32,
+    complexity: i32,
+    iters: u32,
+) -> BenchResult {
+    use mdopus::opus::encoder::{OPUS_APPLICATION_AUDIO, OpusEncoder};
+
+    let frame_size = (sample_rate / 50) as usize;
+    let samples_per_frame = frame_size * channels as usize;
+    let max_packet = 4000;
+    let mut packet = vec![0u8; max_packet];
+    let num_frames = pcm.len() / samples_per_frame;
+
+    let start = std::time::Instant::now();
+    for _ in 0..iters {
+        let mut enc = OpusEncoder::new(sample_rate, channels, OPUS_APPLICATION_AUDIO).unwrap();
+        enc.set_bitrate(bitrate);
+        enc.set_complexity(complexity);
+        enc.set_vbr(0);
+
+        let mut pos = 0;
+        while pos + samples_per_frame <= pcm.len() {
+            let ret = enc.encode(
+                &pcm[pos..pos + samples_per_frame],
+                frame_size as i32,
+                &mut packet,
+                max_packet as i32,
+            );
+            let _ = std::hint::black_box(ret);
+            pos += samples_per_frame;
+        }
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    BenchResult {
+        label: "Rust encode".to_string(),
+        iters,
+        total_secs: elapsed,
+        frames: num_frames,
+    }
+}
+
+fn bench_decode_c(
+    encoded: &[u8],
+    sample_rate: i32,
+    channels: i32,
+    iters: u32,
+) -> BenchResult {
+    let frame_size = (sample_rate / 50) as usize;
+    let mut pcm = vec![0i16; frame_size * channels as usize];
+
+    // Count frames in encoded stream
+    let mut num_frames = 0;
+    {
+        let mut pos = 0;
+        while pos + 2 <= encoded.len() {
+            let pkt_len = u16::from_le_bytes([encoded[pos], encoded[pos + 1]]) as usize;
+            pos += 2 + pkt_len;
+            num_frames += 1;
+        }
+    }
+
+    let start = std::time::Instant::now();
+    for _ in 0..iters {
+        unsafe {
+            let mut error: i32 = 0;
+            let dec = bindings::opus_decoder_create(sample_rate, channels, &mut error);
+
+            let mut pos = 0;
+            while pos + 2 <= encoded.len() {
+                let pkt_len = u16::from_le_bytes([encoded[pos], encoded[pos + 1]]) as usize;
+                pos += 2;
+                if pos + pkt_len > encoded.len() {
+                    break;
+                }
+                let ret = bindings::opus_decode(
+                    dec,
+                    encoded[pos..].as_ptr(),
+                    pkt_len as i32,
+                    pcm.as_mut_ptr(),
+                    frame_size as i32,
+                    0,
+                );
+                let _ = std::hint::black_box(ret);
+                pos += pkt_len;
+            }
+            bindings::opus_decoder_destroy(dec);
+        }
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    BenchResult {
+        label: "C decode".to_string(),
+        iters,
+        total_secs: elapsed,
+        frames: num_frames,
+    }
+}
+
+fn bench_decode_rust(
+    encoded: &[u8],
+    sample_rate: i32,
+    channels: i32,
+    iters: u32,
+) -> BenchResult {
+    use mdopus::opus::decoder::OpusDecoder;
+
+    let frame_size = (sample_rate / 50) as usize;
+    let mut pcm = vec![0i16; frame_size * channels as usize];
+
+    let mut num_frames = 0;
+    {
+        let mut pos = 0;
+        while pos + 2 <= encoded.len() {
+            let pkt_len = u16::from_le_bytes([encoded[pos], encoded[pos + 1]]) as usize;
+            pos += 2 + pkt_len;
+            num_frames += 1;
+        }
+    }
+
+    let start = std::time::Instant::now();
+    for _ in 0..iters {
+        let mut dec = OpusDecoder::new(sample_rate, channels).unwrap();
+
+        let mut pos = 0;
+        while pos + 2 <= encoded.len() {
+            let pkt_len = u16::from_le_bytes([encoded[pos], encoded[pos + 1]]) as usize;
+            pos += 2;
+            if pos + pkt_len > encoded.len() {
+                break;
+            }
+            let ret = dec.decode(
+                Some(&encoded[pos..pos + pkt_len]),
+                &mut pcm,
+                frame_size as i32,
+                false,
+            );
+            let _ = std::hint::black_box(ret);
+            pos += pkt_len;
+        }
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    BenchResult {
+        label: "Rust decode".to_string(),
+        iters,
+        total_secs: elapsed,
+        frames: num_frames,
+    }
+}
+
+fn print_bench_report(results: &[BenchResult]) {
+    println!("┌──────────────┬────────┬──────────────┬───────────────┐");
+    println!("│ Operation    │  Iters │  ms/iter     │  frames/sec   │");
+    println!("├──────────────┼────────┼──────────────┼───────────────┤");
+    for r in results {
+        println!(
+            "│ {:<12} │ {:>6} │ {:>10.3}ms │ {:>11.0}   │",
+            r.label,
+            r.iters,
+            r.per_iter_ms(),
+            r.frames_per_sec(),
+        );
+    }
+    println!("└──────────────┴────────┴──────────────┴───────────────┘");
+
+    // Print ratios
+    println!();
+    // Pair up C vs Rust for each operation
+    let mut i = 0;
+    while i + 1 < results.len() {
+        let c_res = &results[i];
+        let r_res = &results[i + 1];
+        let ratio = r_res.total_secs / c_res.total_secs;
+        let op = if c_res.label.contains("encode") {
+            "encode"
+        } else {
+            "decode"
+        };
+        if ratio > 1.0 {
+            println!(
+                "  {} : Rust is {:.2}x SLOWER than C ({:.3}ms vs {:.3}ms per iter)",
+                op,
+                ratio,
+                r_res.per_iter_ms(),
+                c_res.per_iter_ms(),
+            );
+        } else {
+            println!(
+                "  {} : Rust is {:.2}x FASTER than C ({:.3}ms vs {:.3}ms per iter)",
+                op,
+                1.0 / ratio,
+                r_res.per_iter_ms(),
+                c_res.per_iter_ms(),
+            );
+        }
+        i += 2;
+    }
+}
+
+fn cmd_bench(wav_path: &str, bitrate: i32, complexity: i32, iters: u32) {
+    let wav = read_wav(Path::new(wav_path));
+    let sr = wav.sample_rate as i32;
+    let ch = wav.channels as i32;
+    let frame_size = (sr / 50) as usize;
+    let samples_per_frame = frame_size * ch as usize;
+    let num_frames = wav.samples.len() / samples_per_frame;
+    let duration_sec = wav.samples.len() as f64 / (sr as f64 * ch as f64);
+
+    println!("=== mdopus benchmark ===");
+    println!(
+        "Input : {} ({} Hz, {} ch, {:.2}s, {} frames @ 20ms)",
+        wav_path, sr, ch, duration_sec, num_frames,
+    );
+    println!("Config: bitrate={}, complexity={}, CBR", bitrate, complexity);
+    println!("Iters : {} (each iter encodes/decodes ALL frames)", iters);
+    println!();
+
+    // --- Warmup ---
+    println!("Warming up (1 iter each)...");
+    let _ = bench_encode_c(&wav.samples, sr, ch, bitrate, complexity, 1);
+    let _ = bench_encode_rust(&wav.samples, sr, ch, bitrate, complexity, 1);
+    println!();
+
+    // --- Encode benchmark ---
+    println!("Benchmarking encode...");
+    let c_enc = bench_encode_c(&wav.samples, sr, ch, bitrate, complexity, iters);
+    let r_enc = bench_encode_rust(&wav.samples, sr, ch, bitrate, complexity, iters);
+
+    // Generate encoded data for decode benchmark (use C encoder output)
+    let encoded = c_encode(&wav.samples, sr, ch, bitrate, complexity);
+
+    // --- Decode benchmark ---
+    println!("Benchmarking decode...");
+    let _ = bench_decode_c(&encoded, sr, ch, 1); // warmup
+    let _ = bench_decode_rust(&encoded, sr, ch, 1);
+
+    let c_dec = bench_decode_c(&encoded, sr, ch, iters);
+    let r_dec = bench_decode_rust(&encoded, sr, ch, iters);
+
+    println!();
+    print_bench_report(&[c_enc, r_enc, c_dec, r_dec]);
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -2149,6 +2465,7 @@ fn usage() {
     eprintln!("  mdopus-compare encode <input.wav> [--bitrate N] [--complexity N]");
     eprintln!("  mdopus-compare decode <input.opus>");
     eprintln!("  mdopus-compare roundtrip <input.wav> [--bitrate N]");
+    eprintln!("  mdopus-compare bench <input.wav> [--bitrate N] [--complexity N] [--iters N]");
     eprintln!("  mdopus-compare unit <module_name>");
     eprintln!();
     eprintln!("MODULES for 'unit':");
@@ -2158,6 +2475,7 @@ fn usage() {
     eprintln!("OPTIONS:");
     eprintln!("  --bitrate N      Target bitrate in bps (default: 64000)");
     eprintln!("  --complexity N   Encoder complexity 0-10 (default: 10)");
+    eprintln!("  --iters N        Benchmark iterations (default: 10)");
 }
 
 fn parse_option(args: &[String], flag: &str, default: i32) -> i32 {
@@ -2233,6 +2551,16 @@ fn main() {
         }
         "rngtest" => {
             cmd_rng_test();
+        }
+        "bench" => {
+            if args.len() < 3 {
+                eprintln!("ERROR: bench requires an input WAV file");
+                process::exit(1);
+            }
+            let bitrate = parse_option(&args, "--bitrate", 64000);
+            let complexity = parse_option(&args, "--complexity", 10);
+            let iters = parse_option(&args, "--iters", 10) as u32;
+            cmd_bench(&args[2], bitrate, complexity, iters);
         }
         "decodecompare" => {
             if args.len() < 3 {

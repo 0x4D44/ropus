@@ -74,10 +74,6 @@ pub trait EcCoder {
     fn ec_buffer_mut(&mut self) -> &mut [u8] {
         unreachable!("encoder-only")
     }
-    /// Debug: return (offs, end_offs, storage, rem) for tracing.
-    fn ec_debug_state(&self) -> (u32, u32, u32, i32) {
-        (0, 0, 0, 0) // default for decoder
-    }
 }
 
 impl<'a> EcCoder for RangeEncoder<'a> {
@@ -119,10 +115,6 @@ impl<'a> EcCoder for RangeEncoder<'a> {
     }
     fn ec_buffer_mut(&mut self) -> &mut [u8] {
         self.buffer_mut()
-    }
-    fn ec_debug_state(&self) -> (u32, u32, u32, i32) {
-        let (offs, eoffs, storage, _, _, rem, _) = self.enc_debug_state();
-        (offs, eoffs, storage, rem)
     }
 }
 

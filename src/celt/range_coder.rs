@@ -56,9 +56,6 @@ const EC_WINDOW_SIZE: u32 = 32;
 /// at each 1/8-bit boundary: `correction[k] ≈ floor(2^16 · 2^(-(k+1)/8))`.
 const TELL_FRAC_CORRECTION: [u32; 8] = [35733, 38967, 42495, 46340, 50535, 55109, 60097, 65535];
 
-/// Debug flag for tracing raw-bit writes.
-static TRACE_ENCODE_BITS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
 /// Computes bits used scaled by `2^BITRES` (1/8-bit units).
 ///
 /// Uses a lookup-table-accelerated linear approximation with one correction
@@ -161,33 +158,6 @@ impl<'a> RangeEncoder<'a> {
     #[inline(always)]
     pub fn range_bytes(&self) -> u32 {
         self.offs
-    }
-
-    /// Debug: enable/disable raw-bit write tracing.
-    pub fn set_trace_bits(enable: bool) {
-        TRACE_ENCODE_BITS.store(enable, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    /// Debug: return (offs, end_offs, storage, rng, val, rem, ext) for tracing.
-    pub fn enc_debug_state(&self) -> (u32, u32, u32, u32, u32, i32, u32) {
-        (
-            self.offs,
-            self.end_offs,
-            self.storage,
-            self.rng,
-            self.val,
-            self.rem,
-            self.ext,
-        )
-    }
-
-    /// Debug: return the buffer byte at the given absolute offset.
-    pub fn enc_debug_byte(&self, idx: usize) -> u8 {
-        if idx < self.buf.len() {
-            self.buf[idx]
-        } else {
-            0
-        }
     }
 
     /// Save a snapshot of the encoder state (scalars + front buffer).
@@ -437,17 +407,6 @@ impl<'a> RangeEncoder<'a> {
             let ftb = ftb - EC_UINT_BITS;
             let ft_upper = (ft_dec >> ftb) + 1;
             let fl_upper = fl >> ftb;
-            // Debug: trace encode_uint when near byte 261
-            if TRACE_ENCODE_BITS.load(std::sync::atomic::Ordering::Relaxed)
-                && self.end_offs >= 50
-                && self.end_offs <= 62
-            {
-                let raw_bits = fl & ((1u32 << ftb) - 1);
-                eprintln!(
-                    "[R EU] fl={} ft={} ftb={} fl_upper={} ft_upper={} raw_bits={} eoffs={}",
-                    fl, ft, ftb, fl_upper, ft_upper, raw_bits, self.end_offs
-                );
-            }
             self.encode(fl_upper, fl_upper + 1, ft_upper);
             self.encode_bits(fl & ((1u32 << ftb) - 1), ftb);
         } else {
@@ -460,21 +419,6 @@ impl<'a> RangeEncoder<'a> {
     /// Corresponds to `ec_enc_bits`.
     pub fn encode_bits(&mut self, fl: u32, bits: u32) {
         debug_assert!(bits > 0);
-        // Debug: trace raw-bit writes near byte 261 (eoffs 55-62)
-        {
-            if TRACE_ENCODE_BITS.load(std::sync::atomic::Ordering::Relaxed) {
-                let new_eoffs_approx = self.end_offs + (self.nend_bits as u32 + bits).div_ceil(8);
-                if self.end_offs <= 62 && new_eoffs_approx >= 56 {
-                    static EB_CTR: std::sync::atomic::AtomicI32 =
-                        std::sync::atomic::AtomicI32::new(0);
-                    let ctr = EB_CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    eprintln!(
-                        "[R EB#{}] fl=0x{:x} bits={} eoffs={} nend_bits={} end_window=0x{:08x}",
-                        ctr, fl, bits, self.end_offs, self.nend_bits, self.end_window
-                    );
-                }
-            }
-        }
         let mut window = self.end_window;
         let mut used = self.nend_bits;
         if used + bits as i32 > EC_WINDOW_SIZE as i32 {

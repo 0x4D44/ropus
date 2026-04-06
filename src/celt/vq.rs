@@ -229,8 +229,8 @@ fn extract_collapse_mask(iy: &[i32], n: i32, b: i32) -> u32 {
 ///
 /// Matches C `op_pvq_search_c()`.
 fn op_pvq_search(x: &mut [i32], iy: &mut [i32], k: i32, n: usize) -> i32 {
-    let mut y: Vec<i32> = vec![0i32; n];
-    let mut signx: Vec<i32> = vec![0i32; n];
+    let mut y = [0i32; 176];
+    let mut signx = [0i32; 176];
 
     // Fixed-point prescaling: compute shift so X values fit in Q14 for
     // safe 16x16 multiply-accumulate in the greedy loop
@@ -377,44 +377,24 @@ pub fn alg_quant<EC: EcCoder>(
 
     let nu = n as usize;
     // Extra 3 elements for SIMD headroom (matching C: ALLOC(iy, N+3, int))
-    let mut iy = vec![0i32; nu + 3];
+    let mut iy = [0i32; 176 + 3];
 
     // Apply forward spreading rotation
     exp_rotation(x, n, 1, b, k, spread);
 
     // Find the best K-pulse approximation
-    let yy = op_pvq_search(&mut x[..nu], &mut iy, k, nu);
-    let collapse_mask = extract_collapse_mask(&iy, n, b);
+    let yy = op_pvq_search(&mut x[..nu], &mut iy[..nu], k, nu);
+    let collapse_mask = extract_collapse_mask(&iy[..nu], n, b);
 
     // Encode pulse vector via CWRS combinatorial coding
     let index = icwrs(n, &iy[..nu]);
     let total = celt_pvq_v(n, k);
 
-    // Debug trace: match C side tracing for PVQ calls near byte 261
-    {
-        let (_, eoffs, _, _) = ec.ec_debug_state();
-        if eoffs >= 50 && eoffs <= 62 {
-            static R_AQ_CTR: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
-            let ctr = R_AQ_CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            eprintln!(
-                "[R AQ#{}] N={} K={} B={} eoffs={} idx={} total={} iy={:?}",
-                ctr,
-                n,
-                k,
-                b,
-                eoffs,
-                index,
-                total,
-                &iy[..nu]
-            );
-        }
-    }
-
     ec.ec_enc_uint(index, total);
 
     if resynth {
         // Reconstruct the quantized signal from the pulse vector
-        normalise_residual(&iy, x, nu, yy, gain);
+        normalise_residual(&iy[..nu], x, nu, yy, gain);
     }
 
     if resynth {
@@ -443,17 +423,17 @@ pub fn alg_unquant<EC: EcCoder>(
     debug_assert!(n > 1, "alg_unquant() needs at least two dimensions");
 
     let nu = n as usize;
-    let mut iy = vec![0i32; nu];
+    let mut iy = [0i32; 176]; // max band width = 176
 
     // Decode pulse vector via CWRS combinatorial coding
     let total = celt_pvq_v(n, k);
     let index = ec.ec_dec_uint(total);
-    let ryy = cwrsi(n, k, index, &mut iy);
+    let ryy = cwrsi(n, k, index, &mut iy[..nu]);
 
     // Reconstruct signal from pulse vector and apply inverse rotation
-    normalise_residual(&iy, x, nu, ryy, gain);
+    normalise_residual(&iy[..nu], x, nu, ryy, gain);
     exp_rotation(x, n, -1, b, k, spread);
-    let collapse_mask = extract_collapse_mask(&iy, n, b);
+    let collapse_mask = extract_collapse_mask(&iy[..nu], n, b);
 
     collapse_mask
 }
