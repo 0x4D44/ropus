@@ -2054,46 +2054,100 @@ fn run_prefilter(
 ///
 /// Matches C `compute_vbr()` from `celt_encoder.c`.
 fn compute_vbr(
-    _mode: &CELTMode,
+    mode: &CELTMode,
     _analysis: &AnalysisInfo,
     base_target: i32,
-    _lm: i32,
-    _equiv_rate: i32,
-    _last_coded_bands: i32,
-    _c: i32,
-    _intensity: i32,
+    lm: i32,
+    bitrate: i32,
+    last_coded_bands: i32,
+    c: i32,
+    intensity: i32,
     constrained_vbr: i32,
-    _stereo_saving: i32,
+    stereo_saving: i32,
     tot_boost: i32,
     tf_estimate: i32,
     _pitch_change: i32,
-    _max_depth: i32,
-    _lfe: i32,
-    _has_surround: bool,
+    max_depth: i32,
+    lfe: i32,
+    has_surround_mask: bool,
     _surround_masking: i32,
-    _temporal_vbr: i32,
+    temporal_vbr: i32,
 ) -> i32 {
-    let mut target = base_target;
+    let nb_ebands = mode.nb_ebands;
+    let e_bands = mode.ebands;
 
-    // Dynalloc boost adjustment
-    target += tot_boost - (19 << _lm);
-
-    // Transient boost
-    let tf_calibration = qconst16(0.044, 14);
-    if tf_estimate > tf_calibration {
-        target += shl32(mult16_32_q15(tf_estimate - tf_calibration, target), 1);
+    let coded_bands = if last_coded_bands != 0 {
+        last_coded_bands
+    } else {
+        nb_ebands
+    };
+    let mut coded_bins = (e_bands[coded_bands as usize] as i32) << lm;
+    if c == 2 {
+        coded_bins += (e_bands[imin(intensity, coded_bands) as usize] as i32) << lm;
     }
 
-    // Floor depth
-    target = target.max(base_target / 4);
+    let mut target = base_target;
 
-    // CVBR damping
-    if constrained_vbr != 0 {
+    // DISABLE_FLOAT_API: skip analysis-based activity reduction
+
+    // Stereo savings
+    if c == 2 {
+        let coded_stereo_bands = imin(intensity, coded_bands);
+        let coded_stereo_dof =
+            ((e_bands[coded_stereo_bands as usize] as i32) << lm) - coded_stereo_bands;
+        // Maximum fraction of the bits we can save if the signal is mono.
+        let max_frac =
+            div32_16(mult16_16(qconst16(0.8, 15), coded_stereo_dof), coded_bins);
+        let stereo_saving = min16(stereo_saving, qconst16(1.0, 8));
+        target -= min32(
+            mult16_32_q15(max_frac, target),
+            shr32(
+                mult16_16(
+                    stereo_saving - qconst16(0.1, 8),
+                    coded_stereo_dof << BITRES,
+                ),
+                8,
+            ),
+        );
+    }
+
+    // Boost the rate according to dynalloc (minus the dynalloc average for calibration).
+    target += tot_boost - (19 << lm);
+
+    // Apply transient boost, compensating for average boost.
+    let tf_calibration = qconst16(0.044, 14);
+    target += shl32(mult16_32_q15(tf_estimate - tf_calibration, target), 1);
+
+    // DISABLE_FLOAT_API: skip tonality boost
+
+    // Surround masking (not applicable for non-surround, but keep structure)
+    // (skipped: has_surround_mask is false for standard encoding)
+
+    // Floor depth: cap target based on signal energy
+    {
+        let bins = (e_bands[(nb_ebands - 2) as usize] as i32) << lm;
+        let floor_depth = shr32(mult16_32_q15((c * bins) << BITRES, max_depth), DB_SHIFT - 15);
+        let floor_depth = imax(floor_depth, target >> 2);
+        target = imin(target, floor_depth);
+    }
+
+    // Make VBR less aggressive for constrained VBR
+    if (!has_surround_mask || lfe != 0) && constrained_vbr != 0 {
         target = base_target + mult16_32_q15(qconst16(0.67, 15), target - base_target);
     }
 
-    // Maximum: 2× base target
-    target = target.min(2 * base_target);
+    // Temporal VBR adjustment
+    if !has_surround_mask && tf_estimate < qconst16(0.2, 14) {
+        let amount = mult16_16_q15(
+            qconst16(0.0000031, 30),
+            imax(0, imin(32000, 96000 - bitrate)),
+        );
+        let tvbr_factor = shr32(mult16_16(shr32(temporal_vbr, DB_SHIFT - 10), amount), 10);
+        target += mult16_32_q15(tvbr_factor, target);
+    }
+
+    // Don't allow more than doubling the rate
+    target = imin(2 * base_target, target);
 
     target
 }
@@ -2593,6 +2647,7 @@ fn celt_encode_core(
         toneishness,
     );
 
+
     let mut tf_res = vec![0i32; nb_ebands as usize];
     let tf_select;
     if enable_tf_analysis {
@@ -2838,11 +2893,16 @@ fn celt_encode_core(
     // VBR rate control
     if vbr_rate > 0 {
         let lm_diff = mode.max_lm - lm;
-        let base_target = if !hybrid {
+        let mut base_target = if !hybrid {
             vbr_rate - ((40 * c + 20) << BITRES)
         } else {
             (vbr_rate - ((9 * c + 4) << BITRES)).max(0)
         };
+
+        // C: if (st->constrained_vbr) base_target += (st->vbr_offset>>lm_diff);
+        if st.constrained_vbr != 0 {
+            base_target += st.vbr_offset >> lm_diff;
+        }
 
         let mut target = compute_vbr(
             mode,

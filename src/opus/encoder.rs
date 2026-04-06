@@ -1478,6 +1478,13 @@ impl OpusEncoder {
         );
         self.bandwidth = fec_bandwidth;
 
+        // Set CELT lsb_depth (C: opus_encoder.c:1677-1678)
+        if self.application != OPUS_APPLICATION_RESTRICTED_SILK {
+            if let Some(ref mut celt) = self.celt_enc {
+                celt.ctl(CeltEncoderCtl::SetLsbDepth(lsb_depth));
+            }
+        }
+
         // CELT mediumband → wideband
         if mode == MODE_CELT_ONLY && self.bandwidth == OPUS_BANDWIDTH_MEDIUMBAND {
             self.bandwidth = OPUS_BANDWIDTH_WIDEBAND;

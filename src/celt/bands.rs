@@ -715,7 +715,7 @@ fn compute_theta<EC: EcCoder>(
 
         // Debug: trace theta for band 13
         if i == 13 {
-            let (_, eoffs, _) = ctx.ec.ec_debug_state();
+            let (_, eoffs, _, _) = ctx.ec.ec_debug_state();
             if eoffs >= 50 && eoffs <= 65 {
                 eprintln!("[R CT] band={} n={} qn={} itheta_q30={} itheta_q14={} eoffs={}",
                     i, n, qn, itheta_q30, itheta, eoffs);
@@ -732,7 +732,7 @@ fn compute_theta<EC: EcCoder>(
                 itheta = ((itheta as i64 * qn as i64 + 8192) >> 14) as i32;
                 // Debug: trace quantized theta for band 13
                 if i == 13 {
-                    let (_, eoffs, _) = ctx.ec.ec_debug_state();
+                    let (_, eoffs, _, _) = ctx.ec.ec_debug_state();
                     if eoffs >= 50 && eoffs <= 65 {
                         eprintln!("[R CT quant] band={} qn={} itheta_quant={} eoffs={}", i, qn, itheta, eoffs);
                     }
@@ -1675,7 +1675,7 @@ pub fn quant_all_bands<EC: EcCoder>(
     } else {
         -1
     };
-    let trace_qab = qab_frame == 7; // 0-indexed, frame 7
+    let trace_qab = false; // disabled
 
     for i_band in start..end {
         let iu = i_band as usize;
@@ -2045,6 +2045,10 @@ pub fn quant_all_bands<EC: EcCoder>(
                     let ec = ctx.ec;
 
                     // Pick the pass with higher correlation (lower distortion)
+                    if trace_qab {
+                        eprintln!("[RS THETA_RDO] band={} dist0={} dist1={} pick={}", i_band, dist0, dist1,
+                            if dist0 >= dist1 { "pass1(-1)" } else { "pass2(+1)" });
+                    }
                     if dist0 >= dist1 {
                         // Pass 1 won — restore its state
                         x_cm = cm2;
@@ -2161,12 +2165,11 @@ pub fn quant_all_bands<EC: EcCoder>(
             }
         }
 
-        // Debug: trace per-band state in frame 7
+        // Debug: trace per-band state
         if trace_qab {
-            let (offs, eoffs, storage) = ec.ec_debug_state();
-            let byte261 = if 261 < ec.ec_buffer().len() { ec.ec_buffer()[261] } else { 0 };
-            eprintln!("[QAB F7] band {:2}: offs={:3} eoffs={:3} tell={:5} b={:5} n={:3} tf={} byte261=0x{:02x}",
-                i_band, offs, eoffs, ec.ec_tell(), b, n, tf_change, byte261);
+            let (offs, eoffs, _storage, rem) = ec.ec_debug_state();
+            eprintln!("[RS QAB F13] band {:2}: tell={:5} offs={:3} eoffs={:3} rem={:4}",
+                i_band, ec.ec_tell(), offs, eoffs, rem);
         }
 
         collapse_masks[iu * c_channels as usize] = x_cm as u8;

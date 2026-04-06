@@ -392,7 +392,7 @@ pub fn alg_quant<EC: EcCoder>(
 
     // Debug trace: match C side tracing for PVQ calls near byte 261
     {
-        let (_, eoffs, _) = ec.ec_debug_state();
+        let (_, eoffs, _, _) = ec.ec_debug_state();
         if eoffs >= 50 && eoffs <= 62 {
             static R_AQ_CTR: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
             let ctr = R_AQ_CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
