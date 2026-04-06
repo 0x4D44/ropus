@@ -5799,7 +5799,7 @@ pub fn silk_noise_shape_analysis_fix(
             snr_adj_db_q7,
             silk_smlawb_i32(
                 (6.0 * 512.0) as i32,             // 6.0 in Q9
-                (-0.4 * (1 << 18) as f64) as i32, // -0.4 in Q18
+                -(((0.4 * (1 << 18) as f64) + 0.5) as i32), // -SILK_FIX_CONST(0.4, 18)
                 ps_enc.s_cmn.snr_db_q7,
             ),
             (1 << 14) - input_quality_q14,
@@ -5978,12 +5978,12 @@ pub fn silk_noise_shape_analysis_fix(
                 shaping_lpc_order,
             );
             for i in 0..shaping_lpc_order {
-                ps_enc_ctrl.ar_q13[k * shaping_lpc_order + i] =
+                ps_enc_ctrl.ar_q13[k * MAX_SHAPE_LPC_ORDER + i] =
                     sat16(silk_rshift_round(ar_q24[i], 11));
             }
         } else {
             silk_lpc_fit(
-                &mut ps_enc_ctrl.ar_q13[k * shaping_lpc_order..],
+                &mut ps_enc_ctrl.ar_q13[k * MAX_SHAPE_LPC_ORDER..],
                 &mut ar_q24,
                 13,
                 24,
@@ -6029,7 +6029,6 @@ pub fn silk_noise_shape_analysis_fix(
         for k in 0..nb_subfr {
             let b_q14 = silk_div32_16((0.2 * 16384.0 + 0.5) as i32, fs_khz)
                 + silk_div32_16((3.0 * 16384.0 + 0.5) as i32, ps_enc_ctrl.pitch_l[k]);
-            let b_q14 = imin(b_q14, (1 << 14) - 1);
             ps_enc_ctrl.lf_shp_q14[k] =
                 shl32((1 << 14) - b_q14 - silk_smulwb_i32(strength_q16, b_q14), 16)
                     | ((b_q14 - (1 << 14)) as u16 as i32);
