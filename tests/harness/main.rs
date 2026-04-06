@@ -1213,6 +1213,544 @@ fn cmd_mathcompare() {
 }
 
 // ---------------------------------------------------------------------------
+// Range decoder nbits comparison
+// ---------------------------------------------------------------------------
+
+fn cmd_rng_test() {
+    use mdopus::celt::range_coder::RangeDecoder;
+
+    // Extract the frame 4 payload from the 48k square wave at 128kbps
+    // First, encode it with C
+    let wav = read_wav(Path::new("tests/vectors/48k_square1k.wav"));
+    let c_encoded = c_encode(&wav.samples, 48000, 1, 128000, 10);
+
+    // Extract frame 4's Opus packet
+    let mut pos = 0;
+    let mut pkt_data: &[u8] = &[];
+    for i in 0..5 {
+        let pkt_len = u16::from_le_bytes([c_encoded[pos], c_encoded[pos+1]]) as usize;
+        pos += 2;
+        println!("Packet {}: len={} TOC=0x{:02x} (config={} s={} code={})",
+            i, pkt_len, c_encoded[pos],
+            c_encoded[pos] >> 3, (c_encoded[pos] >> 2) & 1, c_encoded[pos] & 3);
+        if i == 4 {
+            pkt_data = &c_encoded[pos..pos+pkt_len];
+        }
+        pos += pkt_len;
+    }
+
+    // The CELT payload is after the TOC byte
+    let celt_payload = &pkt_data[1..];
+    println!("Frame 4 CELT payload: {} bytes", celt_payload.len());
+
+    // Create a Rust range decoder from this payload
+    let mut dec = RangeDecoder::new(celt_payload);
+    println!("After init: tell={} nbits={} rng={:08x}",
+        dec.tell(), dec.debug_nbits_total(), dec.get_rng());
+
+    // Read the same header as the CELT decoder would:
+    // 1. Silence check (tell == 1)
+    let tell0 = dec.tell();
+    let silence = if tell0 >= celt_payload.len() as i32 * 8 {
+        true
+    } else if tell0 == 1 {
+        dec.decode_bit_logp(15)
+    } else {
+        false
+    };
+    println!("After silence: tell={} nbits={} silence={}", dec.tell(), dec.debug_nbits_total(), silence);
+
+    // 2. Postfilter
+    let tell1 = dec.tell();
+    let total_bits = celt_payload.len() as i32 * 8;
+    let mut pf_pitch = 0;
+    let mut pf_gain = 0;
+    let mut pf_tapset = 0;
+    if tell1 + 16 <= total_bits {
+        let has_pf = dec.decode_bit_logp(1);
+        if has_pf {
+            let octave = dec.decode_uint(6);
+            pf_pitch = (16 << octave) as i32 + dec.decode_bits(4 + octave) as i32 - 1;
+            let qg = dec.decode_bits(3) as i32;
+            pf_gain = 3072 * (qg + 1);
+            let tell2 = dec.tell();
+            if tell2 + 2 <= total_bits {
+                let tapset_icdf: [u8; 3] = [2, 1, 0];
+                pf_tapset = dec.decode_icdf(&tapset_icdf, 2);
+            }
+        }
+    }
+    println!("After PF: tell={} nbits={} pitch={} gain={} tapset={}",
+        dec.tell(), dec.debug_nbits_total(), pf_pitch, pf_gain, pf_tapset);
+
+    // 3. Transient (LM=3 > 0)
+    let tell3 = dec.tell();
+    let mut is_trans = false;
+    if tell3 + 3 <= total_bits {
+        is_trans = dec.decode_bit_logp(3);
+    }
+    println!("After transient: tell={} nbits={} is_trans={}", dec.tell(), dec.debug_nbits_total(), is_trans);
+
+    // 4. Intra energy
+    let tell4 = dec.tell();
+    let intra = if tell4 + 3 <= total_bits {
+        if dec.decode_bit_logp(3) { 1 } else { 0 }
+    } else {
+        0
+    };
+    println!("After intra: tell={} nbits={} intra={}", dec.tell(), dec.debug_nbits_total(), intra);
+
+    // Coarse energy decode with Rust
+    {
+        use mdopus::celt::quant_bands::unquant_coarse_energy;
+        use mdopus::celt::modes::MODE_48000_960_120;
+        let mode = &MODE_48000_960_120;
+        let mut old_e = vec![0i32; 42]; // 2*21
+        // Set old_e to the known state from frame 3
+        // (We'll skip this since we want to test the range decoder itself, not the energy values)
+        // Just use zeros for now -- the key is comparing nbits_total
+
+        let before_coarse_nbits = dec.debug_nbits_total();
+        let before_coarse_rng = dec.get_rng();
+        unquant_coarse_energy(mode, 0, 21, &mut old_e, intra, &mut dec, 1, 3);
+        println!("After Rust coarse: tell={} nbits={} rng={:08x} band0={}",
+            dec.tell(), dec.debug_nbits_total(), dec.get_rng(), old_e[0]);
+        println!("  nbits consumed in coarse: {}", dec.debug_nbits_total() - before_coarse_nbits);
+    }
+
+    // Now create a C range decoder from the same payload and compare
+    println!("\nC equivalent:");
+    unsafe {
+        let mut c_dec: bindings::ec_dec = std::mem::zeroed();
+        bindings::ec_dec_init(&mut c_dec, celt_payload.as_ptr() as *mut _, celt_payload.len() as u32);
+        println!("After init: nbits={} rng={:08x} tell={}",
+            c_dec.nbits_total, c_dec.rng, c_dec.nbits_total - 32i32.wrapping_sub(c_dec.rng.leading_zeros() as i32));
+
+        // Silence
+        let c_silence = bindings::ec_dec_bit_logp(&mut c_dec, 15);
+        println!("After silence: nbits={} silence={}", c_dec.nbits_total, c_silence);
+
+        // Postfilter
+        let c_has_pf = bindings::ec_dec_bit_logp(&mut c_dec, 1);
+        println!("After PF flag: nbits={} has_pf={}", c_dec.nbits_total, c_has_pf);
+        if c_has_pf != 0 {
+            let c_octave = bindings::ec_dec_uint(&mut c_dec, 6);
+            let c_pf_pitch = (16 << c_octave) as i32 + bindings::ec_dec_bits(&mut c_dec, 4 + c_octave) as i32 - 1;
+            let c_qg = bindings::ec_dec_bits(&mut c_dec, 3);
+            let tapset_icdf: [u8; 3] = [2, 1, 0];
+            let c_tapset = bindings::ec_dec_icdf(&mut c_dec, tapset_icdf.as_ptr(), 2);
+            println!("After PF decode: nbits={} pitch={} gain={} tapset={}",
+                c_dec.nbits_total, c_pf_pitch, 3072*(c_qg as i32+1), c_tapset);
+        }
+
+        // Transient
+        let c_trans = bindings::ec_dec_bit_logp(&mut c_dec, 3);
+        println!("After transient: nbits={} is_trans={}", c_dec.nbits_total, c_trans);
+
+        // Intra
+        let c_intra = bindings::ec_dec_bit_logp(&mut c_dec, 3);
+        println!("After intra: nbits={} intra={}", c_dec.nbits_total, c_intra);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-frame decode comparison (diagnostic)
+// ---------------------------------------------------------------------------
+
+fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
+    let wav = read_wav(Path::new(wav_path));
+    println!(
+        "Input: {} ({} Hz, {} ch, {} samples)",
+        wav_path, wav.sample_rate, wav.channels,
+        wav.samples.len() / wav.channels as usize
+    );
+
+    let sr = wav.sample_rate as i32;
+    let ch = wav.channels as i32;
+    let complexity = 10;
+
+    // Encode with C reference
+    let c_encoded = c_encode(&wav.samples, sr, ch, bitrate, complexity);
+    println!("C encoded: {} bytes", c_encoded.len());
+
+    // Now decode frame-by-frame with both C and Rust, comparing each frame
+    let frame_size = (sr / 50) as usize; // 20ms
+    let frame_samples = frame_size * ch as usize;
+
+    // C decoder
+    let c_dec;
+    unsafe {
+        let mut error: i32 = 0;
+        c_dec = bindings::opus_decoder_create(sr, ch, &mut error);
+        assert!(!c_dec.is_null() && error == bindings::OPUS_OK);
+    }
+
+    // Rust decoder
+    use mdopus::opus::decoder::OpusDecoder;
+    let mut rust_dec = OpusDecoder::new(sr, ch).expect("Rust decoder init");
+
+    let mut c_pcm = vec![0i16; frame_samples];
+    let mut rust_pcm = vec![0i16; frame_samples];
+    let mut pos = 0;
+    let mut frame_idx = 0;
+    let mut first_fail_frame = -1i32;
+
+    while pos + 2 <= c_encoded.len() {
+        let pkt_len = u16::from_le_bytes([c_encoded[pos], c_encoded[pos + 1]]) as usize;
+        pos += 2;
+        if pos + pkt_len > c_encoded.len() {
+            break;
+        }
+        let pkt = &c_encoded[pos..pos + pkt_len];
+
+        // C decode
+        let c_ret = unsafe {
+            bindings::opus_decode(
+                c_dec,
+                pkt.as_ptr(),
+                pkt_len as i32,
+                c_pcm.as_mut_ptr(),
+                frame_size as i32,
+                0,
+            )
+        };
+        assert!(c_ret >= 0);
+
+        // Rust decode
+        let rust_ret = rust_dec
+            .decode(Some(pkt), &mut rust_pcm, frame_size as i32, false)
+            .expect("Rust decode");
+
+        // Get final range from C decoder (CTL 4031 = OPUS_GET_FINAL_RANGE)
+        let mut c_range: u32 = 0;
+        unsafe {
+            bindings::opus_decoder_ctl(c_dec, 4031i32, &mut c_range as *mut u32);
+        }
+        let rust_range = rust_dec.get_final_range();
+
+        // Compare
+        let c_count = c_ret as usize * ch as usize;
+        let r_count = rust_ret as usize * ch as usize;
+        let mut max_diff = 0i32;
+        let mut first_diff: Option<usize> = None;
+        let len = c_count.min(r_count);
+        for i in 0..len {
+            let d = (c_pcm[i] as i32 - rust_pcm[i] as i32).abs();
+            if d > max_diff {
+                max_diff = d;
+            }
+            if d > 0 && first_diff.is_none() {
+                first_diff = Some(i);
+            }
+        }
+
+        let range_match = c_range == rust_range;
+        if let Some(fd) = first_diff {
+            println!(
+                "Frame {:3}: pkt_len={:5} FAIL max_diff={:6} first_diff_at={} (sample {} overall) range: C={:08x} R={:08x} {}",
+                frame_idx, pkt_len, max_diff, fd, frame_idx * frame_samples + fd,
+                c_range, rust_range, if range_match { "MATCH" } else { "MISMATCH" }
+            );
+            if first_fail_frame < 0 {
+                first_fail_frame = frame_idx as i32;
+                // Print first few samples around divergence
+                let start = if fd >= 4 { fd - 4 } else { 0 };
+                let end = (fd + 12).min(len);
+                print!("  C:    ");
+                for i in start..end {
+                    if i == fd { print!("[{:6}]", c_pcm[i]); }
+                    else { print!(" {:6} ", c_pcm[i]); }
+                }
+                println!();
+                print!("  Rust: ");
+                for i in start..end {
+                    if i == fd { print!("[{:6}]", rust_pcm[i]); }
+                    else { print!(" {:6} ", rust_pcm[i]); }
+                }
+                println!();
+            }
+        } else if !range_match {
+            println!(
+                "Frame {:3}: pkt_len={:5} PCM match but RANGE MISMATCH: C={:08x} R={:08x}",
+                frame_idx, pkt_len, c_range, rust_range
+            );
+        } else {
+            println!("Frame {:3}: pkt_len={:5} PASS ({} samples) range={:08x}", frame_idx, pkt_len, len, c_range);
+        }
+
+        // Compare old_band_e arrays
+        let mut c_old_band_e = vec![0i32; 42]; // max 21 bands * 2
+        let nb_ebands = unsafe {
+            bindings::debug_get_celt_old_band_e(c_dec, c_old_band_e.as_mut_ptr(), 42)
+        } as usize;
+        let r_old_band_e = rust_dec.debug_get_old_band_e();
+        let total_bands = 2 * nb_ebands;
+
+        let mut band_diff = false;
+        let mut first_band_mismatch = -1i32;
+        for i in 0..total_bands.min(r_old_band_e.len()) {
+            if c_old_band_e[i] != r_old_band_e[i] {
+                if !band_diff {
+                    first_band_mismatch = i as i32;
+                    println!(
+                        "  oldBandE MISMATCH at band {} (of {}): C={} R={} diff={}",
+                        i, total_bands, c_old_band_e[i], r_old_band_e[i],
+                        c_old_band_e[i] - r_old_band_e[i]
+                    );
+                }
+                band_diff = true;
+            }
+        }
+        // For the last passing frame and first failing frames, dump all bands
+        if frame_idx <= 5 {
+            // Print first few bands for C and Rust
+            let show = total_bands.min(r_old_band_e.len()).min(10);
+            print!("  C  bands[0..{}]:", show);
+            for i in 0..show { print!(" {}", c_old_band_e[i]); }
+            println!();
+            print!("  R  bands[0..{}]:", show);
+            for i in 0..show { print!(" {}", r_old_band_e[i]); }
+            println!();
+            // Show second half (ch1 for mono copy)
+            print!("  C  bands[21..{}]:", 21 + show.min(5));
+            for i in 21..21+show.min(5) { if i < total_bands { print!(" {}", c_old_band_e[i]); } }
+            println!();
+            print!("  R  bands[21..{}]:", 21 + show.min(5));
+            for i in 21..21+show.min(5) { if i < total_bands { print!(" {}", r_old_band_e[i]); } }
+            println!();
+        }
+
+        // Compare old_log_e arrays
+        let mut c_old_log_e = vec![0i32; 42];
+        let mut c_old_log_e2 = vec![0i32; 42];
+        unsafe {
+            bindings::debug_get_celt_old_log_e(
+                c_dec,
+                c_old_log_e.as_mut_ptr(),
+                c_old_log_e2.as_mut_ptr(),
+                42,
+            );
+        }
+        let r_old_log_e = rust_dec.debug_get_old_log_e();
+        let r_old_log_e2 = rust_dec.debug_get_old_log_e2();
+        let mut log_e_diff = false;
+        for i in 0..total_bands.min(r_old_log_e.len()) {
+            if c_old_log_e[i] != r_old_log_e[i] {
+                if !log_e_diff {
+                    println!(
+                        "  oldLogE MISMATCH at band {} (of {}): C={} R={} diff={}",
+                        i, total_bands, c_old_log_e[i], r_old_log_e[i],
+                        c_old_log_e[i] - r_old_log_e[i]
+                    );
+                }
+                log_e_diff = true;
+            }
+            if c_old_log_e2[i] != r_old_log_e2[i] {
+                if !log_e_diff {
+                    println!(
+                        "  oldLogE2 MISMATCH at band {} (of {}): C={} R={} diff={}",
+                        i, total_bands, c_old_log_e2[i], r_old_log_e2[i],
+                        c_old_log_e2[i] - r_old_log_e2[i]
+                    );
+                }
+                log_e_diff = true;
+            }
+        }
+
+        // Compare postfilter state
+        let (r_pf_period, r_pf_period_old, r_pf_gain, r_pf_gain_old, r_pf_tapset, r_pf_tapset_old) =
+            rust_dec.debug_get_postfilter();
+        let (mut c_pf_period, mut c_pf_period_old, mut c_pf_gain, mut c_pf_gain_old, mut c_pf_tapset, mut c_pf_tapset_old) =
+            (0i32, 0i32, 0i32, 0i32, 0i32, 0i32);
+        unsafe {
+            bindings::debug_get_celt_postfilter(
+                c_dec,
+                &mut c_pf_period, &mut c_pf_period_old,
+                &mut c_pf_gain, &mut c_pf_gain_old,
+                &mut c_pf_tapset, &mut c_pf_tapset_old,
+            );
+        }
+        if c_pf_period != r_pf_period || c_pf_period_old != r_pf_period_old
+            || c_pf_gain != r_pf_gain || c_pf_gain_old != r_pf_gain_old
+            || c_pf_tapset != r_pf_tapset || c_pf_tapset_old != r_pf_tapset_old
+        {
+            println!(
+                "  postfilter MISMATCH: C=({},{},{},{},{},{}) R=({},{},{},{},{},{})",
+                c_pf_period, c_pf_period_old, c_pf_gain, c_pf_gain_old, c_pf_tapset, c_pf_tapset_old,
+                r_pf_period, r_pf_period_old, r_pf_gain, r_pf_gain_old, r_pf_tapset, r_pf_tapset_old,
+            );
+        }
+
+        pos += pkt_len;
+        frame_idx += 1;
+    }
+
+    // --- Single-frame isolation test ---
+    // Decode frame at first_fail_frame from fresh decoders
+    if first_fail_frame >= 0 {
+        let ff = first_fail_frame as usize;
+        println!("\n=== Isolating frame {} for fresh-decoder test ===", ff);
+
+        // Extract the packet for the failing frame
+        let mut p = 0usize;
+        let mut target_pkt: Option<&[u8]> = None;
+        for fidx in 0..=ff {
+            if p + 2 > c_encoded.len() { break; }
+            let pl = u16::from_le_bytes([c_encoded[p], c_encoded[p+1]]) as usize;
+            p += 2;
+            if fidx == ff {
+                target_pkt = Some(&c_encoded[p..p+pl]);
+            }
+            p += pl;
+        }
+
+        if let Some(pkt) = target_pkt {
+            // Create fresh decoders
+            let fresh_c;
+            unsafe {
+                let mut error: i32 = 0;
+                fresh_c = bindings::opus_decoder_create(sr, ch, &mut error);
+                assert!(!fresh_c.is_null() && error == bindings::OPUS_OK);
+            }
+            let mut fresh_rust = OpusDecoder::new(sr, ch).expect("Rust decoder");
+
+            // Decode all frames up to (but not including) the failing frame
+            let mut p2 = 0usize;
+            for fidx in 0..ff {
+                if p2 + 2 > c_encoded.len() { break; }
+                let pl = u16::from_le_bytes([c_encoded[p2], c_encoded[p2+1]]) as usize;
+                p2 += 2;
+                let pk = &c_encoded[p2..p2+pl];
+                // C decode
+                unsafe {
+                    bindings::opus_decode(fresh_c, pk.as_ptr(), pl as i32, c_pcm.as_mut_ptr(), frame_size as i32, 0);
+                }
+                // Rust decode
+                let _ = fresh_rust.decode(Some(pk), &mut rust_pcm, frame_size as i32, false);
+                p2 += pl;
+            }
+
+            // Compare state before decoding the failing frame
+            let mut c_be = vec![0i32; 42];
+            let c_nb = unsafe { bindings::debug_get_celt_old_band_e(fresh_c, c_be.as_mut_ptr(), 42) } as usize;
+            let r_be = fresh_rust.debug_get_old_band_e();
+
+            println!("State before frame {}:", ff);
+            let mut state_match = true;
+            for i in 0..(2*c_nb).min(r_be.len()) {
+                if c_be[i] != r_be[i] {
+                    println!("  band[{}]: C={} R={} diff={}", i, c_be[i], r_be[i], c_be[i]-r_be[i]);
+                    state_match = false;
+                }
+            }
+            if state_match {
+                println!("  All bands match before frame {}", ff);
+            }
+
+            // Before decoding frame, get tell from Rust decoder
+            // (We can't easily get tell from C mid-decode, so we compare tells post-decode)
+
+            // Now decode the failing frame
+            unsafe {
+                let ret = bindings::opus_decode(fresh_c, pkt.as_ptr(), pkt.len() as i32, c_pcm.as_mut_ptr(), frame_size as i32, 0);
+                assert!(ret >= 0);
+            }
+            let _ = fresh_rust.decode(Some(pkt), &mut rust_pcm, frame_size as i32, false);
+
+            // Compare state after
+            let c_nb = unsafe { bindings::debug_get_celt_old_band_e(fresh_c, c_be.as_mut_ptr(), 42) } as usize;
+            let r_be = fresh_rust.debug_get_old_band_e();
+            println!("State after frame {}:", ff);
+            for i in 0..(2*c_nb).min(r_be.len()).min(5) {
+                println!("  band[{}]: C={} R={} diff={}", i, c_be[i], r_be[i], c_be[i]-r_be[i]);
+            }
+
+            // Test C-side energy decode with the same state
+            let mut c_test_bands = vec![0i32; 42];
+            let r_be_slice = fresh_rust.debug_get_old_band_e();
+            // Re-fetch the matching pre-decode state (decode the first ff frames again)
+            {
+                let fresh_c2;
+                unsafe {
+                    let mut error: i32 = 0;
+                    fresh_c2 = bindings::opus_decoder_create(sr, ch, &mut error);
+                    assert!(!fresh_c2.is_null() && error == bindings::OPUS_OK);
+                }
+                let mut p3 = 0usize;
+                for fidx in 0..ff {
+                    if p3 + 2 > c_encoded.len() { break; }
+                    let pl = u16::from_le_bytes([c_encoded[p3], c_encoded[p3+1]]) as usize;
+                    p3 += 2;
+                    let pk = &c_encoded[p3..p3+pl];
+                    unsafe {
+                        bindings::opus_decode(fresh_c2, pk.as_ptr(), pl as i32, c_pcm.as_mut_ptr(), frame_size as i32, 0);
+                    }
+                    p3 += pl;
+                }
+                let pre_nb = unsafe { bindings::debug_get_celt_old_band_e(fresh_c2, c_test_bands.as_mut_ptr(), 42) };
+                unsafe { bindings::opus_decoder_destroy(fresh_c2); }
+            }
+
+            // Now test: call C energy decode with the pre-decode state
+            // The pkt is the Opus packet (with TOC). We need the CELT payload.
+            // For CELT-only mode, TOC is 1 byte, then the rest is payload.
+            // Actually, opus_packet_parse strips the TOC. The data passed to
+            // decode_frame is already the payload. In our case, the Opus packet
+            // has TOC byte 0xFC (CELT-only 20ms), so payload = pkt[1..].
+            // But our extract already strips TOC via opus_packet_parse... no,
+            // actually the c_encoded format uses our custom framing (len+data).
+            // The data IS the full Opus packet including TOC.
+            // The decode_frame receives frame_data = payload after TOC.
+            // For code 0 (single frame), payload starts at byte 1.
+            let celt_payload = &pkt[1..]; // Skip TOC byte
+            println!("CELT payload: {} bytes, first bytes: {:02x} {:02x} {:02x} {:02x}",
+                celt_payload.len(),
+                celt_payload.get(0).unwrap_or(&0),
+                celt_payload.get(1).unwrap_or(&0),
+                celt_payload.get(2).unwrap_or(&0),
+                celt_payload.get(3).unwrap_or(&0));
+
+            // Call C energy decode
+            let mut c_fine = vec![0i32; 21];
+            unsafe {
+                bindings::debug_c_decode_energy(
+                    celt_payload.as_ptr(),
+                    celt_payload.len() as i32,
+                    c_test_bands.as_mut_ptr(),
+                    c_fine.as_mut_ptr(),
+                    ch,
+                    3, // LM=3 for 960 samples at 48kHz
+                );
+            }
+            println!("C energy-test after coarse:");
+            for i in 0..5 {
+                println!("  band[{}]: C_test={}", i, c_test_bands[i]);
+            }
+
+            // Compare PCM
+            let mut pcm_diff = 0i32;
+            let mut first_pcm_diff: Option<usize> = None;
+            for i in 0..frame_samples {
+                let d = (c_pcm[i] as i32 - rust_pcm[i] as i32).abs();
+                if d > pcm_diff { pcm_diff = d; }
+                if d > 0 && first_pcm_diff.is_none() { first_pcm_diff = Some(i); }
+            }
+            println!("PCM: max_diff={} first_diff={:?}", pcm_diff, first_pcm_diff);
+
+            // Get final ranges
+            let mut c_r: u32 = 0;
+            unsafe { bindings::opus_decoder_ctl(fresh_c, 4031i32, &mut c_r as *mut u32); }
+            let r_r = fresh_rust.get_final_range();
+            println!("Range: C={:08x} R={:08x} {}", c_r, r_r, if c_r == r_r { "MATCH" } else { "MISMATCH" });
+
+            unsafe { bindings::opus_decoder_destroy(fresh_c); }
+        }
+    }
+
+    unsafe { bindings::opus_decoder_destroy(c_dec); }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -1304,6 +1842,17 @@ fn main() {
         }
         "mathcompare" => {
             cmd_mathcompare();
+        }
+        "rngtest" => {
+            cmd_rng_test();
+        }
+        "decodecompare" => {
+            if args.len() < 3 {
+                eprintln!("ERROR: decodecompare requires an input WAV file");
+                process::exit(1);
+            }
+            let bitrate = parse_option(&args, "--bitrate", 64000);
+            cmd_decode_framecompare(&args[2], bitrate);
         }
         "--help" | "-h" | "help" => {
             usage();

@@ -203,3 +203,337 @@ void debug_c_normalise_band(opus_int32 *X_out, const opus_int32 *freq,
 int debug_c_opus_fast_int64(void) {
     return OPUS_FAST_INT64;
 }
+
+/* Call unquant_coarse_energy + unquant_fine_energy on given data,
+ * with the provided old_e_bands state, and return the result.
+ * This allows comparing C and Rust decode of a specific packet. */
+extern void unquant_coarse_energy(const CELTMode *m, int start, int end,
+    opus_int32 *oldEBands, int intra, ec_dec *dec, int C, int LM);
+extern void unquant_fine_energy(const CELTMode *m, int start, int end,
+    opus_int32 *oldEBands, int *prev_quant, int *extra_quant, ec_dec *dec, int C);
+extern void unquant_energy_finalise(const CELTMode *m, int start, int end,
+    opus_int32 *oldEBands, int *extra_quant, int *fine_priority,
+    int bits_left, ec_dec *dec, int C);
+
+/* Trace version of ec_laplace_decode for debugging */
+extern int ec_laplace_decode(ec_dec *dec, unsigned fs, int decay);
+
+static int traced_ec_laplace_decode(ec_dec *dec, unsigned fs, int decay, int band) {
+    int tell_before = ec_tell(dec);
+    if (band < 3) {
+        fprintf(stderr, "[C lap-detail] rng=%08x val=%08x ext=%08x fs=%u\n",
+            dec->rng, dec->val, dec->ext, fs);
+    }
+    int val = ec_laplace_decode(dec, fs, decay);
+    int tell_after = ec_tell(dec);
+    if (band < 3) {
+        fprintf(stderr, "[C laplace] band=%d fs=%u decay=%d -> val=%d tell=%d->%d (consumed %d) post_rng=%08x\n",
+            band, fs, decay, val, tell_before, tell_after, tell_after - tell_before, dec->rng);
+    }
+    return val;
+}
+
+void debug_c_decode_energy(
+    const unsigned char *data, int len,
+    opus_int32 *old_bands_inout, /* 2*21 = 42 i32 values, modified in place */
+    int *fine_quant_out,         /* 21 i32 values output */
+    int cc, int lm
+) {
+    const CELTMode *mode = opus_custom_mode_create(48000, 960, NULL);
+    int start = 0;
+    int end = 21;
+    int nb_ebands = 21;
+
+    ec_dec dec;
+    ec_dec_init(&dec, (unsigned char *)data, len);
+
+    /* Skip silence bit (tell starts at 1 for Opus CELT-only) */
+    /* Actually, the dec starts at tell=0, the Opus layer reads 1 bit before */
+    /* For this test, we need to read the same bits as the decoder would */
+
+    int total_bits = len * 8;
+    int tell = ec_tell(&dec);
+
+    /* Mono consistency */
+    if (cc == 1) {
+        int i;
+        for (i = 0; i < nb_ebands; i++) {
+            if (old_bands_inout[i] < old_bands_inout[nb_ebands + i])
+                old_bands_inout[i] = old_bands_inout[nb_ebands + i];
+        }
+    }
+
+    /* Silence */
+    int silence = 0;
+    if (tell >= total_bits) {
+        silence = 1;
+    } else if (tell == 1) {
+        silence = ec_dec_bit_logp(&dec, 15);
+    }
+    if (silence) tell = total_bits;
+
+    /* Postfilter */
+    int pf_pitch = 0, pf_gain = 0, pf_tapset = 0;
+    if (start == 0 && tell + 16 <= total_bits) {
+        int has_pf = ec_dec_bit_logp(&dec, 1);
+        if (has_pf) {
+            int octave = ec_dec_uint(&dec, 6);
+            pf_pitch = (16 << octave) + ec_dec_bits(&dec, 4+octave) - 1;
+            int qg = ec_dec_bits(&dec, 3);
+            pf_gain = (3072) * (qg+1); /* QCONST16(0.09375, 15) = 3072 */
+            tell = ec_tell(&dec);
+            if (tell + 2 <= total_bits) {
+                unsigned char tapset_icdf[3] = {2, 1, 0};
+                pf_tapset = ec_dec_icdf(&dec, tapset_icdf, 2);
+            }
+        }
+        tell = ec_tell(&dec);
+    }
+
+    /* Transient */
+    int is_transient = 0;
+    if (lm > 0 && tell + 3 <= total_bits) {
+        is_transient = ec_dec_bit_logp(&dec, 3);
+        tell = ec_tell(&dec);
+    }
+
+    /* Intra energy */
+    int intra = 0;
+    if (tell + 3 <= total_bits) {
+        intra = ec_dec_bit_logp(&dec, 3);
+    }
+
+    fprintf(stderr, "[C energy-test] silence=%d pf_pitch=%d pf_gain=%d is_trans=%d intra=%d tell=%d\n",
+        silence, pf_pitch, pf_gain, is_transient, intra, ec_tell(&dec));
+
+    /* Call unquant_coarse_energy from the actual C reference */
+    unquant_coarse_energy(mode, start, end, old_bands_inout, intra, &dec, cc, lm);
+    fprintf(stderr, "[C energy-test] after REAL coarse: band0=%d tell=%d nbits=%d rng=%08x\n",
+        old_bands_inout[0], ec_tell(&dec), dec.nbits_total, dec.rng);
+
+    /* SKIP the replication below since we used the real function */
+    if (0) {
+    /* Coarse energy - use traced laplace decode */
+    {
+        /* Replicate unquant_coarse_energy with tracing */
+        /* Use actual e_prob_model from quant_bands.c */
+        static const unsigned char e_prob_model_all[4][2][42] = {
+            {{72,127,65,129,66,128,65,128,64,128,62,128,64,128,64,128,92,78,92,79,92,78,90,79,116,41,115,40,114,40,132,26,132,26,145,17,161,12,176,10,177,11},
+             {24,179,48,138,54,135,54,132,53,134,56,133,55,132,55,132,61,114,70,96,74,88,75,88,87,74,89,66,91,67,100,59,108,50,120,40,122,37,97,43,78,50}},
+            {{83,78,84,81,88,75,86,74,87,71,90,73,93,74,93,74,109,40,114,36,117,34,117,34,143,17,145,18,146,19,162,12,165,10,178,7,189,6,190,8,177,9},
+             {23,178,54,115,63,102,66,98,69,99,74,89,71,91,73,91,78,89,86,80,92,66,93,64,102,59,103,60,104,60,117,52,123,44,138,35,133,31,97,38,77,45}},
+            {{61,90,93,60,105,42,107,41,110,45,116,38,113,38,112,38,124,26,132,27,136,19,140,20,155,14,159,16,158,18,170,13,177,10,187,8,192,6,175,9,159,10},
+             {21,178,59,110,71,86,75,85,84,83,91,66,88,73,87,72,92,75,98,72,105,58,107,54,115,52,114,55,112,56,129,51,132,40,150,33,140,29,98,35,77,42}},
+            {{42,121,96,66,108,43,111,40,117,44,123,32,120,36,119,33,127,33,134,34,139,21,147,23,152,20,158,25,154,26,166,21,173,16,184,13,184,10,150,13,139,15},
+             {22,178,63,114,74,82,84,83,92,82,103,62,96,72,96,67,101,73,107,72,113,55,118,52,125,52,118,52,117,55,135,49,137,39,157,32,145,29,97,33,77,40}}
+        };
+        const unsigned char *prob_model = e_prob_model_all[lm][intra ? 1 : 0];
+        static const opus_int16 pred_coef_arr[4] = {29440, 26112, 21248, 16384};
+        static const opus_int16 beta_coef_arr[4] = {22528, 12288, 6144, 4915};
+        opus_int16 coef = intra ? 0 : pred_coef_arr[lm];
+        opus_int16 beta = intra ? 15360 : beta_coef_arr[lm];
+        opus_val64 prev[2] = {0, 0};
+        int budget = len * 8;
+        int i, c2;
+
+        if (intra) { coef = 0; beta = 15360; /* beta_intra */ }
+
+        for (i = start; i < end; i++) {
+            c2 = 0;
+            do {
+                int qi;
+                opus_int32 q, tmp;
+                int tell2 = ec_tell(&dec);
+                if (budget - tell2 >= 15) {
+                    int pi = 2 * (i < 20 ? i : 20);
+                    qi = traced_ec_laplace_decode(&dec,
+                        prob_model[pi] << 7, prob_model[pi+1] << 6, i);
+                } else if (budget - tell2 >= 2) {
+                    unsigned char small_icdf[] = {2, 1, 0};
+                    qi = ec_dec_icdf(&dec, small_icdf, 2);
+                    qi = (qi>>1) ^ -(qi&1);
+                } else if (budget - tell2 >= 1) {
+                    qi = -ec_dec_bit_logp(&dec, 1);
+                } else {
+                    qi = -1;
+                }
+                q = SHL32(EXTEND32(qi), 24);
+                old_bands_inout[i + c2*21] = MAX32(-GCONST(9.0), old_bands_inout[i + c2*21]);
+                tmp = MULT16_32_Q15(coef, old_bands_inout[i + c2*21]) + prev[c2] + q;
+                tmp = MIN32(GCONST(28.0), MAX32(-GCONST(28.0), tmp));
+                old_bands_inout[i + c2*21] = tmp;
+                prev[c2] = prev[c2] + q - MULT16_32_Q15(beta, q);
+            } while (++c2 < cc);
+        }
+        fprintf(stderr, "[C energy-test] after coarse: band0=%d tell=%d nbits=%d\n", old_bands_inout[0], ec_tell(&dec), dec.nbits_total);
+    } } /* end if(0) */
+
+    /* Now do fine energy too */
+    {
+        /* Run allocation */
+        int cap_arr[21];
+        extern void init_caps(const CELTMode *mode, int *cap, int LM, int C);
+        init_caps(mode, cap_arr, lm, cc);
+
+        int offsets_arr[21] = {0};
+        int dynalloc_logp = 6;
+        int total_bits_local = len * 8;
+        total_bits_local <<= 3; /* BITRES */
+        int tell_frac = ec_tell_frac(&dec);
+
+        int i;
+        for (i = start; i < end; i++) {
+            int width = cc * ((mode->eBands[i+1] - mode->eBands[i])) << lm;
+            int quanta = width << 3;
+            if (6 << 3 > quanta) quanta = 6 << 3;
+            if (width < quanta) quanta = width;
+            int dynalloc_loop_logp = dynalloc_logp;
+            int boost = 0;
+            while (tell_frac + (dynalloc_loop_logp << 3) < total_bits_local && boost < cap_arr[i]) {
+                int flag = ec_dec_bit_logp(&dec, dynalloc_loop_logp);
+                tell_frac = ec_tell_frac(&dec);
+                if (!flag) break;
+                boost += quanta;
+                total_bits_local -= quanta;
+                dynalloc_loop_logp = 1;
+            }
+            offsets_arr[i] = boost;
+            if (boost > 0) {
+                dynalloc_logp = dynalloc_logp > 2 ? dynalloc_logp - 1 : 2;
+            }
+        }
+
+        /* Alloc trim */
+        unsigned char trim_icdf[11] = {126, 124, 119, 109, 87, 41, 19, 9, 4, 2, 0};
+        int alloc_trim;
+        if (ec_tell_frac(&dec) + (6<<3) <= (len*8)<<3) {
+            alloc_trim = ec_dec_icdf(&dec, trim_icdf, 7);
+        } else {
+            alloc_trim = 5;
+        }
+
+        /* Anti-collapse reservation */
+        int anti_collapse_rsv = 0;
+        int bits_pre = ((len*8)<<3) - ec_tell_frac(&dec) - 1;
+        if (0 /* is_transient */ && lm >= 2 && bits_pre >= (lm+2) << 3) {
+            anti_collapse_rsv = 1 << 3;
+        }
+        int bits = bits_pre - anti_collapse_rsv;
+
+        extern int clt_compute_allocation(const CELTMode *m, int start, int end,
+            const int *offsets, const int *cap, int alloc_trim,
+            int *intensity, int *dual_stereo, opus_int32 total,
+            opus_int32 *balance, int *pulses, int *ebits, int *fine_priority,
+            int C, int LM, ec_dec *ec, int encode, int prev, int signalBandwidth);
+
+        int pulses_arr[21], fine_quant_arr[21], fine_prio_arr[21];
+        int intensity_out = 0, dual_out = 0;
+        opus_int32 balance_out = 0;
+        int coded_bands = clt_compute_allocation(mode, start, end,
+            offsets_arr, cap_arr, alloc_trim,
+            &intensity_out, &dual_out, bits, &balance_out,
+            pulses_arr, fine_quant_arr, fine_prio_arr,
+            cc, lm, &dec, 0, 0, -1);
+
+        fprintf(stderr, "[C energy-test] allocation: fine_quant[0..5]=%d %d %d %d %d coded_bands=%d\n",
+            fine_quant_arr[0], fine_quant_arr[1], fine_quant_arr[2], fine_quant_arr[3], fine_quant_arr[4], coded_bands);
+
+        /* Fine energy */
+        unquant_fine_energy(mode, start, end, old_bands_inout, NULL, fine_quant_arr, &dec, cc);
+        fprintf(stderr, "[C energy-test] after fine: band0=%d tell=%d\n", old_bands_inout[0], ec_tell(&dec));
+
+        /* Finalise */
+        unquant_energy_finalise(mode, start, end, old_bands_inout, fine_quant_arr, fine_prio_arr,
+            len*8 - ec_tell(&dec), &dec, cc);
+        fprintf(stderr, "[C energy-test] after finalise: band0=%d tell=%d\n", old_bands_inout[0], ec_tell(&dec));
+
+        /* Output fine_quant for comparison */
+        {
+            int j;
+            for (j = 0; j < 21 && j < 5; j++) {
+                fine_quant_out[j] = fine_quant_arr[j];
+            }
+        }
+    }
+
+    /* For fine energy, we'd need the allocation -- skip for now, just compare coarse */
+}
+
+/* Return the full oldBandE array from the CELT decoder.
+ * out_buf must have room for 2*nbEBands i32 values.
+ * Returns nbEBands (caller knows total length = 2*nbEBands). */
+int debug_get_celt_old_band_e(OpusDecoder *opus_dec, opus_int32 *out_buf, int max_len) {
+    OpusDecoderOffsets *hdr = (OpusDecoderOffsets *)opus_dec;
+    struct CELTDecoder_trace *celt =
+        (struct CELTDecoder_trace *)((char *)opus_dec + hdr->celt_dec_offset);
+
+    int nbEBands = celt->mode->nbEBands;
+    int overlap = celt->overlap;
+    int CC = hdr->channels;
+    int decode_buffer_size = 2048;
+
+    /* Sanity check: verify known field values */
+    if (overlap != 120) {
+        fprintf(stderr, "[C BUG] overlap=%d (expected 120), struct offset may be wrong!\n", overlap);
+    }
+    if (nbEBands != 21) {
+        fprintf(stderr, "[C BUG] nbEBands=%d (expected 21), mode pointer may be wrong!\n", nbEBands);
+    }
+
+    opus_int32 *oldBandE = celt->decode_mem + (decode_buffer_size + overlap) * CC;
+    fprintf(stderr, "[C DEC] rng=%08x overlap=%d ch=%d nbEBands=%d oldBandE[0]=%d\n",
+        celt->rng, overlap, CC, nbEBands, oldBandE[0]);
+    int total = 2 * nbEBands;
+    if (total > max_len) total = max_len;
+
+    int i;
+    for (i = 0; i < total; i++) {
+        out_buf[i] = oldBandE[i];
+    }
+    return nbEBands;
+}
+
+/* Return the postfilter state from the CELT decoder */
+void debug_get_celt_postfilter(OpusDecoder *opus_dec,
+                                opus_int32 *period, opus_int32 *period_old,
+                                opus_int32 *gain, opus_int32 *gain_old,
+                                opus_int32 *tapset, opus_int32 *tapset_old) {
+    OpusDecoderOffsets *hdr = (OpusDecoderOffsets *)opus_dec;
+    struct CELTDecoder_trace *celt =
+        (struct CELTDecoder_trace *)((char *)opus_dec + hdr->celt_dec_offset);
+
+    *period = celt->postfilter_period;
+    *period_old = celt->postfilter_period_old;
+    *gain = celt->postfilter_gain;
+    *gain_old = celt->postfilter_gain_old;
+    *tapset = celt->postfilter_tapset;
+    *tapset_old = celt->postfilter_tapset_old;
+}
+
+/* Return the oldLogE / oldLogE2 arrays from the CELT decoder.
+ * Each is 2*nbEBands long. */
+int debug_get_celt_old_log_e(OpusDecoder *opus_dec, opus_int32 *out_log_e, opus_int32 *out_log_e2, int max_len) {
+    OpusDecoderOffsets *hdr = (OpusDecoderOffsets *)opus_dec;
+    struct CELTDecoder_trace *celt =
+        (struct CELTDecoder_trace *)((char *)opus_dec + hdr->celt_dec_offset);
+
+    int nbEBands = celt->mode->nbEBands;
+    int overlap = celt->overlap;
+    int CC = hdr->channels;
+    int decode_buffer_size = 2048;
+
+    /* Layout: decode_mem | oldBandE | oldLogE | oldLogE2 | backgroundLogE */
+    opus_int32 *oldBandE  = celt->decode_mem + (decode_buffer_size + overlap) * CC;
+    opus_int32 *oldLogE   = oldBandE + 2 * nbEBands;
+    opus_int32 *oldLogE2  = oldLogE + 2 * nbEBands;
+
+    int total = 2 * nbEBands;
+    if (total > max_len) total = max_len;
+
+    int i;
+    for (i = 0; i < total; i++) {
+        out_log_e[i] = oldLogE[i];
+        out_log_e2[i] = oldLogE2[i];
+    }
+    return nbEBands;
+}

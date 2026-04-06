@@ -127,6 +127,7 @@ unsafe extern "C" {
     pub fn ec_dec_uint(this: *mut ec_dec, ft: opus_uint32) -> opus_uint32;
     pub fn ec_dec_bit_logp(this: *mut ec_dec, logp: c_uint) -> c_int;
     pub fn ec_dec_bits(this: *mut ec_dec, ftb: c_uint) -> opus_uint32;
+    pub fn ec_dec_icdf(this: *mut ec_dec, icdf: *const c_uchar, ftb: c_uint) -> c_int;
 
     // Debug math comparison helpers
     pub fn debug_c_celt_sqrt32(x: opus_int32) -> opus_int32;
@@ -148,6 +149,34 @@ unsafe extern "C" {
     pub fn debug_c_celt_rsqrt_norm32(x: opus_int32) -> opus_int32;
     pub fn debug_c_normalise_residual_g(ryy: opus_int32, gain: opus_int32) -> opus_int32;
     pub fn debug_c_opus_fast_int64() -> c_int;
+    pub fn debug_get_celt_old_band_e(
+        dec: *mut OpusDecoder,
+        out_buf: *mut opus_int32,
+        max_len: c_int,
+    ) -> c_int;
+    pub fn debug_get_celt_postfilter(
+        dec: *mut OpusDecoder,
+        period: *mut opus_int32,
+        period_old: *mut opus_int32,
+        gain: *mut opus_int32,
+        gain_old: *mut opus_int32,
+        tapset: *mut opus_int32,
+        tapset_old: *mut opus_int32,
+    );
+    pub fn debug_get_celt_old_log_e(
+        dec: *mut OpusDecoder,
+        out_log_e: *mut opus_int32,
+        out_log_e2: *mut opus_int32,
+        max_len: c_int,
+    ) -> c_int;
+    pub fn debug_c_decode_energy(
+        data: *const c_uchar,
+        len: c_int,
+        old_bands_inout: *mut opus_int32,
+        fine_quant_out: *mut opus_int32,
+        cc: c_int,
+        lm: c_int,
+    );
 }
 
 // ---------------------------------------------------------------------------
