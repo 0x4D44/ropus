@@ -423,12 +423,15 @@ fn stereo_merge(x: &mut [i32], y: &mut [i32], mid: i32, n: i32) {
         return;
     }
 
-    let kl = imax(7, celt_ilog2(el) >> 1);
-    let kr = imax(7, celt_ilog2(er) >> 1);
+    // C computes rsqrt with UNCLAMPED kl/kr, then clamps to min 7 afterwards
+    let kl = celt_ilog2(el) >> 1;
+    let kr = celt_ilog2(er) >> 1;
     let t = vshr32(el, (kl << 1) - 29);
     let lgain = celt_rsqrt_norm32(t);
     let t = vshr32(er, (kr << 1) - 29);
     let rgain = celt_rsqrt_norm32(t);
+    let kl = imax(7, kl);
+    let kr = imax(7, kr);
 
     for j in 0..nu {
         let l = mult32_32_q31(mid, x[j]);
@@ -1146,7 +1149,7 @@ fn quant_partition<EC: EcCoder>(
                     // Noise
                     for j in 0..n as usize {
                         ctx.seed = celt_lcg_rand(ctx.seed);
-                        x[j] = shl32((ctx.seed >> 20) as i32, NORM_SHIFT - 14);
+                        x[j] = shl32((ctx.seed as i32) >> 20, NORM_SHIFT - 14);
                     }
                     renormalise_vector(x, n as usize, gain);
                     cm_mask

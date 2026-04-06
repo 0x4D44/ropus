@@ -1363,75 +1363,77 @@ pub fn silk_stereo_decode_mid_only(rc: &mut RangeDecoder) -> bool {
 }
 
 /// Convert mid/side to left/right.
+/// `x1` and `x2` are buffers of size frame_length+2, with decoded data at
+/// indices [2..frame_length+2]. Indices [0..2] are overwritten with sMid/sSide
+/// history. Output is written in-place at [n+1] for n=0..frame_length.
+/// Matches C `silk_stereo_MS_to_LR`.
 pub fn silk_stereo_ms_to_lr(
     state: &mut StereoDecState,
-    x1: &mut [i16], // mid → left
-    x2: &mut [i16], // side → right
+    x1: &mut [i16], // mid → left (size frame_length+2)
+    x2: &mut [i16], // side → right (size frame_length+2)
     pred_q13: &[i16; 2],
     fs_khz: i32,
     frame_length: usize,
 ) {
-    // Save end of buffer for next frame's state
-    let new_s_mid = [x1[frame_length - 2], x1[frame_length - 1]];
-    let new_s_side = [x2[frame_length - 2], x2[frame_length - 1]];
-
-    // Prepend previous samples
-    // We work in-place: shift data right by 2 and insert history
-    // Actually the C reference works on [n+1] offset with history at [0], [1]
-    // For simplicity, work with temporary buffers
-    let mut mid = vec![0i16; frame_length + 2];
-    let mut side = vec![0i16; frame_length + 2];
-    mid[0] = state.s_mid[0];
-    mid[1] = state.s_mid[1];
-    mid[2..frame_length + 2].copy_from_slice(&x1[..frame_length]);
-    side[0] = state.s_side[0];
-    side[1] = state.s_side[1];
-    side[2..frame_length + 2].copy_from_slice(&x2[..frame_length]);
+    // Buffering: prepend sMid/sSide history, save tail for next frame
+    // Matches C: silk_memcpy(x1, state->sMid, 2); silk_memcpy(state->sMid, &x1[frame_length], 2)
+    let new_s_mid = [x1[frame_length], x1[frame_length + 1]];
+    let new_s_side = [x2[frame_length], x2[frame_length + 1]];
+    x1[0] = state.s_mid[0];
+    x1[1] = state.s_mid[1];
+    x2[0] = state.s_side[0];
+    x2[1] = state.s_side[1];
 
     // Interpolation period
     let interp_len = (STEREO_INTERP_LEN_MS as i32 * fs_khz) as usize;
     let mut pred0_q13 = state.pred_prev_q13[0] as i32;
     let mut pred1_q13 = state.pred_prev_q13[1] as i32;
 
-    if interp_len > 0 {
-        let denom_q16 = (1 << 16) / interp_len as i32;
-        let delta0 = ((pred_q13[0] as i32 - pred0_q13) * denom_q16) >> 16;
-        let delta1 = ((pred_q13[1] as i32 - pred1_q13) * denom_q16) >> 16;
+    // C: denom_Q16 = silk_DIV32_16(1 << 16, STEREO_INTERP_LEN_MS * fs_kHz)
+    let denom_q16 = (1i32 << 16) / interp_len as i32;
+    // C: delta0_Q13 = silk_RSHIFT_ROUND(silk_SMULBB(pred_Q13[0] - pred_prev_Q13[0], denom_Q16), 16)
+    let delta0 = ((pred_q13[0] as i32 - pred0_q13).wrapping_mul(denom_q16) + (1 << 15)) >> 16;
+    let delta1 = ((pred_q13[1] as i32 - pred1_q13).wrapping_mul(denom_q16) + (1 << 15)) >> 16;
 
-        for n in 0..interp_len.min(frame_length) {
-            pred0_q13 += delta0;
-            pred1_q13 += delta1;
+    // Interpolation region: predictors ramp from prev to current
+    // C uses silk_SMLAWB(a, b, c) = a + ((b * (i64)(i16)c) >> 16)
+    for n in 0..interp_len.min(frame_length) {
+        pred0_q13 += delta0;
+        pred1_q13 += delta1;
 
-            // Apply prediction: side'[n+1] = side[n+1] + pred0*lowpass(mid) + pred1*mid[n+1]
-            let sum_mid = (mid[n] as i32 + 2 * mid[n + 1] as i32 + mid[n + 2] as i32) << 9;
-            let pred_side = ((side[n + 1] as i32) << 8)
-                .wrapping_add((sum_mid as i64 * pred0_q13 as i64 >> 7) as i32)
-                .wrapping_add((((mid[n + 1] as i32) << 11) as i64 * pred1_q13 as i64 >> 7) as i32);
-            side[n + 1] = sat16(pred_side >> 8);
-        }
+        // sum = silk_LSHIFT(silk_ADD_LSHIFT32(x1[n] + x1[n+2], x1[n+1], 1), 9)  -- Q11
+        let sum = ((x1[n] as i32 + x1[n + 2] as i32 + ((x1[n + 1] as i32) << 1)) << 9) as i32;
+        // acc = silk_SMLAWB(x2[n+1] << 8, sum, pred0_Q13)  -- Q8
+        let mut acc = (x2[n + 1] as i32) << 8;
+        acc = acc.wrapping_add(((sum as i64 * pred0_q13 as i64) >> 16) as i32);
+        // acc = silk_SMLAWB(acc, x1[n+1] << 11, pred1_Q13)  -- Q8
+        acc = acc.wrapping_add(((((x1[n + 1] as i32) << 11) as i64 * pred1_q13 as i64) >> 16) as i32);
+        // x2[n+1] = silk_SAT16(silk_RSHIFT_ROUND(acc, 8))
+        x2[n + 1] = sat16((acc + (1 << 7)) >> 8);
     }
 
-    // Steady state
+    // Steady state: predictors are final values
     pred0_q13 = pred_q13[0] as i32;
     pred1_q13 = pred_q13[1] as i32;
     for n in interp_len..frame_length {
-        let sum_mid = (mid[n] as i32 + 2 * mid[n + 1] as i32 + mid[n + 2] as i32) << 9;
-        let pred_side = ((side[n + 1] as i32) << 8)
-            .wrapping_add((sum_mid as i64 * pred0_q13 as i64 >> 7) as i32)
-            .wrapping_add((((mid[n + 1] as i32) << 11) as i64 * pred1_q13 as i64 >> 7) as i32);
-        side[n + 1] = sat16(pred_side >> 8);
+        let sum = ((x1[n] as i32 + x1[n + 2] as i32 + ((x1[n + 1] as i32) << 1)) << 9) as i32;
+        let mut acc = (x2[n + 1] as i32) << 8;
+        acc = acc.wrapping_add(((sum as i64 * pred0_q13 as i64) >> 16) as i32);
+        acc = acc.wrapping_add(((((x1[n + 1] as i32) << 11) as i64 * pred1_q13 as i64) >> 16) as i32);
+        x2[n + 1] = sat16((acc + (1 << 7)) >> 8);
     }
+    state.pred_prev_q13 = *pred_q13;
 
-    // Convert M/S → L/R
+    // Convert M/S to L/R in-place at [n+1] positions
+    // C: x1[n+1] = SAT16(x1[n+1] + x2[n+1]); x2[n+1] = SAT16(x1[n+1] - x2[n+1])
     for n in 0..frame_length {
-        let m = mid[n + 1] as i32;
-        let s = side[n + 1] as i32;
-        x1[n] = sat16(m + s); // Left = mid + side
-        x2[n] = sat16(m - s); // Right = mid - side
+        let m = x1[n + 1] as i32;
+        let s = x2[n + 1] as i32;
+        x1[n + 1] = sat16(m + s);
+        x2[n + 1] = sat16(m - s);
     }
 
     // Update state
-    state.pred_prev_q13 = *pred_q13;
     state.s_mid = new_s_mid;
     state.s_side = new_s_side;
 }
@@ -2246,22 +2248,24 @@ pub fn silk_decode(
             };
 
             let mut n_out = 0;
+            // C reference decodes into &samplesOut1_tmp[n][2] — offset by 2
+            // to leave room for the sMid history buffer at [0..2].
             silk_decode_frame(
                 &mut decoder.channel_state[n],
                 rc,
-                &mut samples_out1_tmp[n][..frame_length],
+                &mut samples_out1_tmp[n][2..frame_length + 2],
                 &mut n_out,
                 lost_flag,
                 cond,
             );
             decoder.channel_state[n].n_frames_decoded += 1;
         } else {
-            samples_out1_tmp[n][..frame_length].fill(0);
+            samples_out1_tmp[n][2..frame_length + 2].fill(0);
             decoder.channel_state[n].n_frames_decoded += 1;
         }
     }
 
-    // Stereo M/S → L/R
+    // Stereo M/S → L/R, or mono buffering
     if n_channels_internal == 2 && dec_control.n_channels_api == 2 {
         let (left, right) = samples_out1_tmp.split_at_mut(1);
         silk_stereo_ms_to_lr(
@@ -2272,6 +2276,17 @@ pub fn silk_decode(
             decoder.channel_state[0].fs_khz,
             frame_length,
         );
+    } else {
+        // Mono buffering: prepend sMid history, save tail for next frame.
+        // Matches C: silk_memcpy(samplesOut1_tmp[0], psDec->sStereo.sMid, 2)
+        //            silk_memcpy(psDec->sStereo.sMid, &samplesOut1_tmp[0][nSamplesOutDec], 2)
+        let new_s_mid = [
+            samples_out1_tmp[0][frame_length],
+            samples_out1_tmp[0][frame_length + 1],
+        ];
+        samples_out1_tmp[0][0] = decoder.s_stereo.s_mid[0];
+        samples_out1_tmp[0][1] = decoder.s_stereo.s_mid[1];
+        decoder.s_stereo.s_mid = new_s_mid;
     }
 
     // Compute output length
@@ -2280,13 +2295,15 @@ pub fn silk_decode(
     *n_samples_out = out_samples;
 
     // Resample and interleave output
+    // C reference passes &samplesOut1_tmp[n][1] with length nSamplesOutDec.
+    // The [1] offset gives the resampler 1 sample of sMid history as lookback.
     let n_api_ch = dec_control.n_channels_api.min(n_channels_internal);
     for n in 0..n_api_ch {
         let mut resampled = vec![0i16; out_samples];
         silk_resampler(
             &mut decoder.channel_state[n].resampler_state,
             &mut resampled,
-            &samples_out1_tmp[n][..frame_length],
+            &samples_out1_tmp[n][1..frame_length + 1],
             frame_length,
         );
 
