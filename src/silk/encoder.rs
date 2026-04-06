@@ -3922,6 +3922,7 @@ fn silk_noise_shape_quantizer_del_dec(
     offset_q10: i32,
     length: usize,
     subfr: usize,
+    pulse_base_offset: usize, // absolute offset in pulse array for this subframe
     shaping_lpc_order: usize,
     predict_lpc_order: usize,
     warping_q16: i32,
@@ -3933,7 +3934,6 @@ fn silk_noise_shape_quantizer_del_dec(
         (nsq.s_ltp_shp_buf_idx - lag + (HARM_SHAPE_FIR_TAPS / 2) as i32) as usize;
     let pred_lag_ptr_base = (nsq.s_ltp_buf_idx - lag + (LTP_ORDER / 2) as i32) as usize;
     let gain_q10 = gain_q16 >> 6;
-
     let mut sample_state = [[NsqSampleStruct::default(); 2]; MAX_DEL_DEC_STATES];
 
     for i in 0..length {
@@ -4179,7 +4179,7 @@ fn silk_noise_shape_quantizer_del_dec(
         // Write samples from winner to output
         let dd = &ps_del_dec[winner_ind];
         if subfr > 0 || i >= decision_delay as usize {
-            let out_idx = (subfr * length + i).wrapping_sub(decision_delay as usize);
+            let out_idx = pulse_base_offset + i - decision_delay as usize;
             pulses[out_idx] = silk_rshift_round(dd.q_q10[last_smple_idx], 10) as i8;
             nsq.xq[pxq_offset + i - decision_delay as usize] = sat16(silk_rshift_round(
                 silk_smulww(dd.xq_q14[last_smple_idx], delayed_gain_q10[last_smple_idx]),
@@ -4406,6 +4406,7 @@ pub fn silk_nsq_del_dec(
             offset_q10,
             subfr_length,
             subfr_counter,
+            k * subfr_length, // pulse_base_offset: absolute position in pulse array
             shaping_lpc_order,
             predict_lpc_order,
             warping_q16,
