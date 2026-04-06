@@ -1305,7 +1305,10 @@ fn quant_band<EC: EcCoder>(
             cm = BIT_DEINTERLEAVE_TABLE[cm as usize] as u32;
             haar1(x, n0 >> k, 1 << k);
         }
-        big_b <<= recombine;
+        // Compute final B from the undo path (matches C: B goes through
+        // time_divide undo and recombine restore, ending at the original B0).
+        // big_b_r was b0_new >> time_divide_steps; now shift back by recombine.
+        big_b = big_b_r << recombine;
 
         // Scale output for later folding
         if let Some(lbo) = lowband_out {

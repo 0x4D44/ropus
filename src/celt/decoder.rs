@@ -350,10 +350,10 @@ fn tf_decode(
     lm: i32,
     dec: &mut RangeDecoder,
 ) -> i32 {
-    let budget = dec.range_bytes() * 8;
+    let budget = dec.storage() * 8;
     let mut tell = dec.tell() as u32;
     let logp: u32 = if is_transient { 2 } else { 4 };
-    let tf_select_rsv = if lm > 0 && tell + 2 <= budget { 1 } else { 0 };
+    let tf_select_rsv = if lm > 0 && tell + logp + 1 <= budget { 1 } else { 0 };
     let effective_budget = budget - tf_select_rsv;
     let mut tf_changed: i32 = 0;
     let mut curr: i32 = 0;
@@ -1657,6 +1657,7 @@ impl CeltDecoder {
         // Store range coder state
         self.rng = dec.get_rng();
 
+
         // --- De-emphasis ---
         let de_offsets: Vec<usize> = (0..cc as usize).map(|c| self.out_syn_off(c, n)).collect();
         let ds = self.downsample;
@@ -1770,6 +1771,21 @@ impl CeltDecoder {
     /// Get phase inversion disabled flag.
     pub fn get_phase_inversion_disabled(&self) -> bool {
         self.disable_inv
+    }
+
+    /// Get old_band_e (debug accessor).
+    pub fn debug_old_band_e(&self) -> &[i32] {
+        &self.old_band_e
+    }
+
+    /// Get old_log_e (debug accessor).
+    pub fn debug_old_log_e(&self) -> &[i32] {
+        &self.old_log_e
+    }
+
+    /// Get old_log_e2 (debug accessor).
+    pub fn debug_old_log_e2(&self) -> &[i32] {
+        &self.old_log_e2
     }
 }
 

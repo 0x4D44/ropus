@@ -678,6 +678,13 @@ impl<'a> RangeDecoder<'a> {
         self.rng
     }
 
+    /// Debug: get val
+    pub fn debug_val(&self) -> u32 { self.val }
+    /// Debug: get ext
+    pub fn debug_ext(&self) -> u32 { self.ext }
+    /// Debug: get nbits_total
+    pub fn debug_nbits_total(&self) -> i32 { self.nbits_total }
+
     /// Returns the internal error flag as raw integer.
     #[inline(always)]
     pub fn get_error(&self) -> i32 {

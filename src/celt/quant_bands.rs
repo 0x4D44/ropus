@@ -217,7 +217,8 @@ fn ec_laplace_decode(dec: &mut RangeDecoder, mut fs: u32, decay: i32) -> i32 {
     debug_assert!(fs > 0);
     debug_assert!(fl <= fm);
     debug_assert!(fm < core::cmp::min(fl + fs, 32768));
-    dec.update(fl, core::cmp::min(fl + fs, 32768), 32768);
+    let fh_final = core::cmp::min(fl + fs, 32768);
+    dec.update(fl, fh_final, 32768);
     val
 }
 

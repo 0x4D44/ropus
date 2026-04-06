@@ -1245,6 +1245,33 @@ impl OpusDecoder {
         self.range_final
     }
 
+    /// Get the CELT decoder's old_band_e (for debug comparison).
+    pub fn debug_get_old_band_e(&self) -> &[i32] {
+        self.celt_dec.debug_old_band_e()
+    }
+
+    /// Get the CELT decoder's old_log_e (for debug comparison).
+    pub fn debug_get_old_log_e(&self) -> &[i32] {
+        self.celt_dec.debug_old_log_e()
+    }
+
+    /// Get the CELT decoder's old_log_e2 (for debug comparison).
+    pub fn debug_get_old_log_e2(&self) -> &[i32] {
+        self.celt_dec.debug_old_log_e2()
+    }
+
+    /// Get the CELT decoder's postfilter state (for debug comparison).
+    pub fn debug_get_postfilter(&self) -> (i32, i32, i32, i32, i32, i32) {
+        (
+            self.celt_dec.postfilter_period,
+            self.celt_dec.postfilter_period_old,
+            self.celt_dec.postfilter_gain,
+            self.celt_dec.postfilter_gain_old,
+            self.celt_dec.postfilter_tapset,
+            self.celt_dec.postfilter_tapset_old,
+        )
+    }
+
     /// Get the pitch period of the last decoded frame (samples at 48 kHz).
     pub fn get_pitch(&self) -> i32 {
         if self.prev_mode == MODE_CELT_ONLY {
