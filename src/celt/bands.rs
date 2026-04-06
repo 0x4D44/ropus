@@ -397,7 +397,7 @@ fn intensity_stereo(m: &CELTMode, x: &mut [i32], y: &[i32], band_e: &[i32], band
 
 /// Split into mid/side for stereo coding. Matches C `stereo_split()`.
 fn stereo_split(x: &mut [i32], y: &mut [i32], n: i32) {
-    let sqrt_half = qconst32(0.70710678, 31);
+    let sqrt_half = 1518500224;
     for j in 0..n as usize {
         let l = mult32_32_q31(sqrt_half, x[j]);
         let r = mult32_32_q31(sqrt_half, y[j]);
@@ -546,7 +546,7 @@ pub fn spreading_decision(
 /// Matches C `haar1()`.
 pub fn haar1(x: &mut [i32], n0: i32, stride: i32) {
     let n0 = n0 >> 1;
-    let sqrt_half = qconst32(0.70710678, 31);
+    let sqrt_half = 1518500224;
     for i in 0..stride {
         for j in 0..n0 {
             let idx0 = (stride * 2 * j + i) as usize;
@@ -2264,7 +2264,7 @@ mod tests {
 
     #[test]
     fn test_haar1() {
-        let sqrt_half = qconst32(0.70710678, 31);
+        let sqrt_half = 1518500224;
         let mut x = [1 << 24, 1 << 24, 0, 0]; // Two pairs
         haar1(&mut x, 4, 1);
         // First pair: (a+b)/sqrt(2), (a-b)/sqrt(2)
