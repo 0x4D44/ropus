@@ -5803,7 +5803,7 @@ pub fn silk_noise_shape_analysis_fix(
         snr_adj_db_q7 = silk_smlawb_i32(
             snr_adj_db_q7,
             silk_smlawb_i32(
-                (6.0 * 512.0) as i32,             // 6.0 in Q9
+                (6.0 * 512.0) as i32,                       // 6.0 in Q9
                 -(((0.4 * (1 << 18) as f64) + 0.5) as i32), // -SILK_FIX_CONST(0.4, 18)
                 ps_enc.s_cmn.snr_db_q7,
             ),
@@ -7755,9 +7755,7 @@ pub fn silk_encode(
             );
             // On the first mono frame after stereo, average with second resampler
             // C: enc_API.c lines 323-331
-            if enc.n_prev_channels_internal == 2
-                && enc.state_fxx[0].s_cmn.n_frames_encoded == 0
-            {
+            if enc.n_prev_channels_internal == 2 && enc.state_fxx[0].s_cmn.n_frames_encoded == 0 {
                 let mut buf2 = vec![0i16; n_samples_to_buffer];
                 silk_resampler_run(
                     &mut enc.state_fxx[1].s_cmn.resampler_state,
@@ -7985,7 +7983,9 @@ pub fn silk_encode(
 
     // Total bits for packet
     let mut n_bits_target = silk_div32_16(
-        silk_mul(enc_control.bit_rate, enc_control.payload_size_ms), 1000);
+        silk_mul(enc_control.bit_rate, enc_control.payload_size_ms),
+        1000,
+    );
 
     // Subtract LBRR bits (if not prefill)
     if prefill_flag == 0 {
@@ -8004,15 +8004,16 @@ pub fn silk_encode(
 
     // Subtract bit reservoir decay
     target_rate -= silk_div32_16(
-        silk_mul(enc.n_bits_exceeded, 1000), BITRESERVOIR_DECAY_TIME_MS);
+        silk_mul(enc.n_bits_exceeded, 1000),
+        BITRESERVOIR_DECAY_TIME_MS,
+    );
 
     // Intra-packet balance for frame 2+
     if prefill_flag == 0 && enc.state_fxx[0].s_cmn.n_frames_encoded > 0 {
         let bits_balance = range_enc.tell()
             - enc.n_bits_used_lbrr
             - n_bits_target * enc.state_fxx[0].s_cmn.n_frames_encoded;
-        target_rate -= silk_div32_16(
-            silk_mul(bits_balance, 1000), BITRESERVOIR_DECAY_TIME_MS);
+        target_rate -= silk_div32_16(silk_mul(bits_balance, 1000), BITRESERVOIR_DECAY_TIME_MS);
     }
 
     // Clamp to [5000, bitRate]
@@ -8206,7 +8207,9 @@ pub fn silk_encode(
         // Update bit reservoir (C enc_API.c:566-568)
         enc.n_bits_exceeded += (*n_bytes_out as i32) * 8;
         enc.n_bits_exceeded -= silk_div32_16(
-            silk_mul(enc_control.bit_rate, enc_control.payload_size_ms), 1000);
+            silk_mul(enc_control.bit_rate, enc_control.payload_size_ms),
+            1000,
+        );
         enc.n_bits_exceeded = enc.n_bits_exceeded.max(0).min(10000);
 
         // Reset frame counter for next packet

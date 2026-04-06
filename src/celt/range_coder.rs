@@ -170,7 +170,15 @@ impl<'a> RangeEncoder<'a> {
 
     /// Debug: return (offs, end_offs, storage, rng, val, rem, ext) for tracing.
     pub fn enc_debug_state(&self) -> (u32, u32, u32, u32, u32, i32, u32) {
-        (self.offs, self.end_offs, self.storage, self.rng, self.val, self.rem, self.ext)
+        (
+            self.offs,
+            self.end_offs,
+            self.storage,
+            self.rng,
+            self.val,
+            self.rem,
+            self.ext,
+        )
     }
 
     /// Debug: return the buffer byte at the given absolute offset.
@@ -431,10 +439,14 @@ impl<'a> RangeEncoder<'a> {
             let fl_upper = fl >> ftb;
             // Debug: trace encode_uint when near byte 261
             if TRACE_ENCODE_BITS.load(std::sync::atomic::Ordering::Relaxed)
-                && self.end_offs >= 50 && self.end_offs <= 62 {
+                && self.end_offs >= 50
+                && self.end_offs <= 62
+            {
                 let raw_bits = fl & ((1u32 << ftb) - 1);
-                eprintln!("[R EU] fl={} ft={} ftb={} fl_upper={} ft_upper={} raw_bits={} eoffs={}",
-                    fl, ft, ftb, fl_upper, ft_upper, raw_bits, self.end_offs);
+                eprintln!(
+                    "[R EU] fl={} ft={} ftb={} fl_upper={} ft_upper={} raw_bits={} eoffs={}",
+                    fl, ft, ftb, fl_upper, ft_upper, raw_bits, self.end_offs
+                );
             }
             self.encode(fl_upper, fl_upper + 1, ft_upper);
             self.encode_bits(fl & ((1u32 << ftb) - 1), ftb);
@@ -453,10 +465,13 @@ impl<'a> RangeEncoder<'a> {
             if TRACE_ENCODE_BITS.load(std::sync::atomic::Ordering::Relaxed) {
                 let new_eoffs_approx = self.end_offs + ((self.nend_bits as u32 + bits + 7) / 8);
                 if self.end_offs <= 62 && new_eoffs_approx >= 56 {
-                    static EB_CTR: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+                    static EB_CTR: std::sync::atomic::AtomicI32 =
+                        std::sync::atomic::AtomicI32::new(0);
                     let ctr = EB_CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    eprintln!("[R EB#{}] fl=0x{:x} bits={} eoffs={} nend_bits={} end_window=0x{:08x}",
-                        ctr, fl, bits, self.end_offs, self.nend_bits, self.end_window);
+                    eprintln!(
+                        "[R EB#{}] fl=0x{:x} bits={} eoffs={} nend_bits={} end_window=0x{:08x}",
+                        ctr, fl, bits, self.end_offs, self.nend_bits, self.end_window
+                    );
                 }
             }
         }
@@ -679,11 +694,17 @@ impl<'a> RangeDecoder<'a> {
     }
 
     /// Debug: get val
-    pub fn debug_val(&self) -> u32 { self.val }
+    pub fn debug_val(&self) -> u32 {
+        self.val
+    }
     /// Debug: get ext
-    pub fn debug_ext(&self) -> u32 { self.ext }
+    pub fn debug_ext(&self) -> u32 {
+        self.ext
+    }
     /// Debug: get nbits_total
-    pub fn debug_nbits_total(&self) -> i32 { self.nbits_total }
+    pub fn debug_nbits_total(&self) -> i32 {
+        self.nbits_total
+    }
 
     /// Returns the internal error flag as raw integer.
     #[inline(always)]

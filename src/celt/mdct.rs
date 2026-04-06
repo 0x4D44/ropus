@@ -777,11 +777,28 @@ mod tests {
         let fft_st = get_fft_state(shift);
         let trig = &l.trig[..];
         let mut freq = vec![0i32; n2];
-        clt_mdct_forward(&input, &mut freq, mode.window, overlap, shift, stride, fft_st, trig);
+        clt_mdct_forward(
+            &input,
+            &mut freq,
+            mode.window,
+            overlap,
+            shift,
+            stride,
+            fft_st,
+            trig,
+        );
 
         // Backward transform (no previous frame OLA -- zeros)
         let mut roundtrip = vec![0i32; n];
-        clt_mdct_backward(l, &freq, &mut roundtrip, mode.window, overlap, shift, stride);
+        clt_mdct_backward(
+            l,
+            &freq,
+            &mut roundtrip,
+            mode.window,
+            overlap,
+            shift,
+            stride,
+        );
 
         // The backward fills output[0..N/2+overlap/2] = [0..1020].
         // output[0..overlap] is windowed (TDAC synthesis window).
@@ -797,13 +814,17 @@ mod tests {
         assert!(
             last_nonzero < active_end + 2,
             "backward wrote beyond expected range: last_nonzero={}, expected<{}",
-            last_nonzero, active_end
+            last_nonzero,
+            active_end
         );
 
         // Cross-correlation in the active region to find best alignment & scale
         let check_start = overlap as usize + 10; // skip first few overlap-boundary samples
         let check_end = active_end - 10;
-        println!("\nCross-correlating roundtrip[{}..{}] vs input[offset+i]...", check_start, check_end);
+        println!(
+            "\nCross-correlating roundtrip[{}..{}] vs input[offset+i]...",
+            check_start, check_end
+        );
 
         let mut best_corr = f64::NEG_INFINITY;
         let mut best_offset: i32 = 0;
@@ -829,7 +850,10 @@ mod tests {
                 }
             }
         }
-        println!("  Best correlation: {:.8} at offset {}", best_corr, best_offset);
+        println!(
+            "  Best correlation: {:.8} at offset {}",
+            best_corr, best_offset
+        );
 
         // Compute least-squares scale at best offset
         let mut sxy = 0.0f64;
@@ -848,37 +872,64 @@ mod tests {
 
         // Print first 20 samples in the check region
         println!("\nFirst 20 roundtrip values in active region:");
-        println!("{:>5} {:>12} {:>12} {:>10}", "idx", "original", "roundtrip", "ratio");
+        println!(
+            "{:>5} {:>12} {:>12} {:>10}",
+            "idx", "original", "roundtrip", "ratio"
+        );
         for i in 0..20 {
             let idx = check_start + i;
             let orig = input[(idx as i32 + best_offset) as usize];
             let rt = roundtrip[idx];
-            let ratio = if orig != 0 { rt as f64 / orig as f64 } else { f64::NAN };
+            let ratio = if orig != 0 {
+                rt as f64 / orig as f64
+            } else {
+                f64::NAN
+            };
             println!("{:5} {:12} {:12} {:10.4}", idx, orig, rt, ratio);
         }
 
         // Report findings
-        println!("\nSingle-frame roundtrip: corr={:.6}, scale={:.6}, offset={}", best_corr, scale_factor, best_offset);
+        println!(
+            "\nSingle-frame roundtrip: corr={:.6}, scale={:.6}, offset={}",
+            best_corr, scale_factor, best_offset
+        );
 
         // Also test with a DC signal for clean ratio measurement
         let dc_input = vec![1000i32; input_len];
         // Apply the standard window at the edges so the forward doesn't see a discontinuity
         let mut dc_freq = vec![0i32; n2];
-        clt_mdct_forward(&dc_input, &mut dc_freq, mode.window, overlap, shift, stride, fft_st, trig);
+        clt_mdct_forward(
+            &dc_input,
+            &mut dc_freq,
+            mode.window,
+            overlap,
+            shift,
+            stride,
+            fft_st,
+            trig,
+        );
         let mut dc_rt = vec![0i32; n];
         clt_mdct_backward(l, &dc_freq, &mut dc_rt, mode.window, overlap, shift, stride);
         println!("\nDC roundtrip (input=1000 everywhere):");
         println!("  Middle region samples (output[120..140]):");
         for i in 120..140 {
-            println!("    output[{}] = {} (ratio={:.4})", i, dc_rt[i], dc_rt[i] as f64 / 1000.0);
+            println!(
+                "    output[{}] = {} (ratio={:.4})",
+                i,
+                dc_rt[i],
+                dc_rt[i] as f64 / 1000.0
+            );
         }
         // The DC signal's middle region should give a consistent ratio
-        let dc_ratios: Vec<f64> = (200..900)
-            .map(|i| dc_rt[i] as f64 / 1000.0)
-            .collect();
+        let dc_ratios: Vec<f64> = (200..900).map(|i| dc_rt[i] as f64 / 1000.0).collect();
         let dc_mean = dc_ratios.iter().sum::<f64>() / dc_ratios.len() as f64;
-        let dc_var = dc_ratios.iter().map(|r| (r - dc_mean).powi(2)).sum::<f64>() / dc_ratios.len() as f64;
-        println!("  DC middle ratio: mean={:.6}, stddev={:.6}", dc_mean, dc_var.sqrt());
+        let dc_var =
+            dc_ratios.iter().map(|r| (r - dc_mean).powi(2)).sum::<f64>() / dc_ratios.len() as f64;
+        println!(
+            "  DC middle ratio: mean={:.6}, stddev={:.6}",
+            dc_mean,
+            dc_var.sqrt()
+        );
 
         assert!(
             best_corr > 0.95,
@@ -939,7 +990,10 @@ mod tests {
         let trig = &l.trig[..];
 
         println!("=== Two-frame MDCT Roundtrip (decode_mem simulation) ===");
-        println!("N_frame={}, N_mdct={}, overlap={}, decode_buffer_size={}", n_frame, n_mdct, ov, decode_buffer_size);
+        println!(
+            "N_frame={}, N_mdct={}, overlap={}, decode_buffer_size={}",
+            n_frame, n_mdct, ov, decode_buffer_size
+        );
         println!("out_syn offset in decode_mem: {}", out_syn_off);
         println!("Backward active range: [0..{}]", n2 + half_ov);
 
@@ -1001,7 +1055,9 @@ mod tests {
                     let orig = input[input_offset + i];
                     let recon = decode_mem[out_syn_off + i];
                     let err = (recon as i64 - orig as i64).abs();
-                    if err > max_err { max_err = err; }
+                    if err > max_err {
+                        max_err = err;
+                    }
                     sum_err2 += (err as f64).powi(2);
                     sum_orig2 += (orig as f64).powi(2);
                 }
@@ -1013,10 +1069,16 @@ mod tests {
                     f64::INFINITY
                 };
                 last_ola_snr = snr;
-                println!("Frame {} OLA[0..{}]: max_err={}, SNR={:.1} dB", frame, ov, max_err, snr);
+                println!(
+                    "Frame {} OLA[0..{}]: max_err={}, SNR={:.1} dB",
+                    frame, ov, max_err, snr
+                );
 
                 if frame == 2 {
-                    println!("{:>5} {:>12} {:>12} {:>10}", "idx", "original", "recon", "error");
+                    println!(
+                        "{:>5} {:>12} {:>12} {:>10}",
+                        "idx", "original", "recon", "error"
+                    );
                     for i in 0..20.min(ov) {
                         let orig = input[input_offset + i];
                         let recon = decode_mem[out_syn_off + i];
@@ -1032,16 +1094,25 @@ mod tests {
             let mut sx2 = 0.0f64;
             let mut sy2 = 0.0f64;
             for i in check_start..check_end {
-                if input_offset + i >= total_len { break; }
+                if input_offset + i >= total_len {
+                    break;
+                }
                 let x = input[input_offset + i] as f64;
                 let y = decode_mem[out_syn_off + i] as f64;
                 sxy += x * y;
                 sx2 += x * x;
                 sy2 += y * y;
             }
-            let corr = if sx2 > 0.0 && sy2 > 0.0 { sxy / (sx2.sqrt() * sy2.sqrt()) } else { 0.0 };
+            let corr = if sx2 > 0.0 && sy2 > 0.0 {
+                sxy / (sx2.sqrt() * sy2.sqrt())
+            } else {
+                0.0
+            };
             let scale = if sx2 > 0.0 { sxy / sx2 } else { 0.0 };
-            println!("Frame {} middle[{}..{}]: corr={:.6}, scale={:.6}", frame, check_start, check_end, corr, scale);
+            println!(
+                "Frame {} middle[{}..{}]: corr={:.6}, scale={:.6}",
+                frame, check_start, check_end, corr, scale
+            );
         }
 
         println!("\nFinal OLA SNR: {:.1} dB", last_ola_snr);

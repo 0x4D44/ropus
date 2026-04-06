@@ -396,8 +396,17 @@ pub fn alg_quant<EC: EcCoder>(
         if eoffs >= 50 && eoffs <= 62 {
             static R_AQ_CTR: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
             let ctr = R_AQ_CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            eprintln!("[R AQ#{}] N={} K={} B={} eoffs={} idx={} total={} iy={:?}",
-                ctr, n, k, b, eoffs, index, total, &iy[..nu]);
+            eprintln!(
+                "[R AQ#{}] N={} K={} B={} eoffs={} idx={} total={} iy={:?}",
+                ctr,
+                n,
+                k,
+                b,
+                eoffs,
+                index,
+                total,
+                &iy[..nu]
+            );
         }
     }
 

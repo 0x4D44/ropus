@@ -689,15 +689,15 @@ fn stereo_fade(
         let w = window[i * inc] as i32;
         let w = mult16_16_q15(w, w);
         let g = shr32(mac16_16(mult16_16(w, g2), Q15ONE - w, g1), 15);
-        let diff = half32(pcm[i * channels as usize] as i32
-            - pcm[i * channels as usize + 1] as i32);
+        let diff =
+            half32(pcm[i * channels as usize] as i32 - pcm[i * channels as usize + 1] as i32);
         let diff = mult16_16_q15(g, diff);
         pcm[i * channels as usize] = sat16(pcm[i * channels as usize] as i32 - diff);
         pcm[i * channels as usize + 1] = sat16(pcm[i * channels as usize + 1] as i32 + diff);
     }
     for i in overlap..frame_size as usize {
-        let diff = half32(pcm[i * channels as usize] as i32
-            - pcm[i * channels as usize + 1] as i32);
+        let diff =
+            half32(pcm[i * channels as usize] as i32 - pcm[i * channels as usize + 1] as i32);
         let diff = mult16_16_q15(g2, diff);
         pcm[i * channels as usize] = sat16(pcm[i * channels as usize] as i32 - diff);
         pcm[i * channels as usize + 1] = sat16(pcm[i * channels as usize + 1] as i32 + diff);
@@ -1395,16 +1395,23 @@ impl OpusEncoder {
         if mode == MODE_CELT_ONLY || self.first != 0 || self.silk_mode.allow_bandwidth_switch != 0 {
             let (voice_bw_thresholds, music_bw_thresholds) =
                 if self.channels == 2 && self.force_channels != 1 {
-                    (&STEREO_VOICE_BANDWIDTH_THRESHOLDS, &STEREO_MUSIC_BANDWIDTH_THRESHOLDS)
+                    (
+                        &STEREO_VOICE_BANDWIDTH_THRESHOLDS,
+                        &STEREO_MUSIC_BANDWIDTH_THRESHOLDS,
+                    )
                 } else {
-                    (&MONO_VOICE_BANDWIDTH_THRESHOLDS, &MONO_MUSIC_BANDWIDTH_THRESHOLDS)
+                    (
+                        &MONO_VOICE_BANDWIDTH_THRESHOLDS,
+                        &MONO_MUSIC_BANDWIDTH_THRESHOLDS,
+                    )
                 };
 
             // Interpolate bandwidth thresholds depending on voice estimation
             let mut bandwidth_thresholds = [0i32; 8];
             for i in 0..8 {
                 bandwidth_thresholds[i] = music_bw_thresholds[i]
-                    + ((voice_est * voice_est * (voice_bw_thresholds[i] - music_bw_thresholds[i])) >> 14);
+                    + ((voice_est * voice_est * (voice_bw_thresholds[i] - music_bw_thresholds[i]))
+                        >> 14);
             }
 
             let mut bw = OPUS_BANDWIDTH_FULLBAND;
@@ -2142,8 +2149,22 @@ impl OpusEncoder {
                             eprintln!(
                                 "[RS CELT_IN] frame={} pcm_buf[0..8]=[{},{},{},{},{},{},{},{}] pcm_buf[190..198]=[{},{},{},{},{},{},{},{}]",
                                 fc,
-                                g(0), g(1), g(2), g(3), g(4), g(5), g(6), g(7),
-                                g(190), g(191), g(192), g(193), g(194), g(195), g(196), g(197)
+                                g(0),
+                                g(1),
+                                g(2),
+                                g(3),
+                                g(4),
+                                g(5),
+                                g(6),
+                                g(7),
+                                g(190),
+                                g(191),
+                                g(192),
+                                g(193),
+                                g(194),
+                                g(195),
+                                g(196),
+                                g(197)
                             );
                         }
                     }

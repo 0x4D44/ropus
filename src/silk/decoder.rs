@@ -889,8 +889,10 @@ fn silk_decode_core(
         // Avoid abrupt transition from voiced PLC to unvoiced normal decoding
         // Matches C: decode_core.c lines 131-140
         let mut local_signal_type = signal_type;
-        if dec.loss_cnt > 0 && dec.prev_signal_type == TYPE_VOICED
-            && signal_type != TYPE_VOICED && k < MAX_NB_SUBFR / 2
+        if dec.loss_cnt > 0
+            && dec.prev_signal_type == TYPE_VOICED
+            && signal_type != TYPE_VOICED
+            && k < MAX_NB_SUBFR / 2
         {
             for i in 0..LTP_ORDER {
                 dec_ctrl_mut.ltp_coef_q14[k * LTP_ORDER + i] = 0;
@@ -945,7 +947,7 @@ fn silk_decode_core(
                         if in_idx >= 0 && (in_idx as usize) < dec.out_buf.len() {
                             // silk_SMLABB_ovflw: wrapping multiply-add of two i16 values
                             out32_q12 = out32_q12.wrapping_add(
-                                dec.out_buf[in_idx as usize] as i32 * a_q12[j] as i32
+                                dec.out_buf[in_idx as usize] as i32 * a_q12[j] as i32,
                             );
                         }
                     }
@@ -964,7 +966,8 @@ fn silk_decode_core(
                 if k == 0 {
                     // Apply LTP scale for first subframe
                     // C: inv_gain_Q31 = silk_LSHIFT(silk_SMULWB(inv_gain_Q31, LTP_scale_Q14), 2)
-                    inv_gain_q31 = silk_smulwb(inv_gain_q31, dec_ctrl_mut.ltp_scale_q14 as i16) << 2;
+                    inv_gain_q31 =
+                        silk_smulwb(inv_gain_q31, dec_ctrl_mut.ltp_scale_q14 as i16) << 2;
                 }
                 let n_samples = lag as usize + LTP_ORDER / 2;
                 for i in 0..n_samples {
@@ -1462,7 +1465,9 @@ pub fn silk_stereo_ms_to_lr(
         let mut acc = (x2[n + 1] as i32) << 8;
         acc = acc.wrapping_add(((sum as i64 * (pred0_q13 as i16 as i64)) >> 16) as i32);
         // acc = silk_SMLAWB(acc, x1[n+1] << 11, pred1_Q13)  -- Q8
-        acc = acc.wrapping_add(((((x1[n + 1] as i32) << 11) as i64 * (pred1_q13 as i16 as i64)) >> 16) as i32);
+        acc = acc.wrapping_add(
+            ((((x1[n + 1] as i32) << 11) as i64 * (pred1_q13 as i16 as i64)) >> 16) as i32,
+        );
         // x2[n+1] = silk_SAT16(silk_RSHIFT_ROUND(acc, 8))
         x2[n + 1] = sat16((acc + (1 << 7)) >> 8);
     }
@@ -1474,7 +1479,9 @@ pub fn silk_stereo_ms_to_lr(
         let sum = ((x1[n] as i32 + x1[n + 2] as i32 + ((x1[n + 1] as i32) << 1)) << 9) as i32;
         let mut acc = (x2[n + 1] as i32) << 8;
         acc = acc.wrapping_add(((sum as i64 * (pred0_q13 as i16 as i64)) >> 16) as i32);
-        acc = acc.wrapping_add(((((x1[n + 1] as i32) << 11) as i64 * (pred1_q13 as i16 as i64)) >> 16) as i32);
+        acc = acc.wrapping_add(
+            ((((x1[n + 1] as i32) << 11) as i64 * (pred1_q13 as i16 as i64)) >> 16) as i32,
+        );
         x2[n + 1] = sat16((acc + (1 << 7)) >> 8);
     }
     state.pred_prev_q13 = *pred_q13;

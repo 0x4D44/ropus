@@ -8,8 +8,8 @@
 use super::ec_ctx::EcCoder;
 use super::math_ops::*;
 use super::modes::CELTMode;
-use super::rate::*;
 use super::quant_bands::EMEANS;
+use super::rate::*;
 use super::vq::{
     alg_quant, alg_unquant, celt_inner_prod_norm_shift, renormalise_vector, stereo_itheta,
 };
@@ -717,8 +717,10 @@ fn compute_theta<EC: EcCoder>(
         if i == 13 {
             let (_, eoffs, _, _) = ctx.ec.ec_debug_state();
             if eoffs >= 50 && eoffs <= 65 {
-                eprintln!("[R CT] band={} n={} qn={} itheta_q30={} itheta_q14={} eoffs={}",
-                    i, n, qn, itheta_q30, itheta, eoffs);
+                eprintln!(
+                    "[R CT] band={} n={} qn={} itheta_q30={} itheta_q14={} eoffs={}",
+                    i, n, qn, itheta_q30, itheta, eoffs
+                );
             }
         }
     }
@@ -734,7 +736,10 @@ fn compute_theta<EC: EcCoder>(
                 if i == 13 {
                     let (_, eoffs, _, _) = ctx.ec.ec_debug_state();
                     if eoffs >= 50 && eoffs <= 65 {
-                        eprintln!("[R CT quant] band={} qn={} itheta_quant={} eoffs={}", i, qn, itheta, eoffs);
+                        eprintln!(
+                            "[R CT quant] band={} qn={} itheta_quant={} eoffs={}",
+                            i, qn, itheta, eoffs
+                        );
                     }
                 }
                 if !stereo && ctx.avoid_split_noise && itheta > 0 && itheta < qn {
@@ -1215,9 +1220,7 @@ fn quant_band<EC: EcCoder>(
     // Copy lowband to scratch if we'll be modifying it via Haar transforms
     let mut scratch_buf: Option<Vec<i32>> = None;
     let mut use_scratch_as_lowband = false;
-    if lowband.is_some()
-        && (recombine != 0 || ((n_b & 1) == 0 && tf_change < 0) || b0 > 1)
-    {
+    if lowband.is_some() && (recombine != 0 || ((n_b & 1) == 0 && tf_change < 0) || b0 > 1) {
         if let Some(lb) = lowband {
             let mut sb = vec![0i32; n as usize];
             let copy_len = n as usize;
@@ -1984,8 +1987,7 @@ pub fn quant_all_bands<EC: EcCoder>(
                     // Save buffer bytes AFTER pass 1 (buffer is shared, so this
                     // captures the post-pass-1 content at the pre-pass byte offsets).
                     // Matches C: bytes_buf = ec_save.buf + nstart_bytes; OPUS_COPY(bytes_save, bytes_buf, save_bytes);
-                    bytes_save[..save_bytes_len]
-                        .copy_from_slice(&ec.ec_buffer()[nstart..nend]);
+                    bytes_save[..save_bytes_len].copy_from_slice(&ec.ec_buffer()[nstart..nend]);
 
                     // Restore pre-pass-1 state for pass 2
                     // ec_restore only restores scalar state; we must also restore buffer bytes
@@ -2050,8 +2052,17 @@ pub fn quant_all_bands<EC: EcCoder>(
 
                     // Pick the pass with higher correlation (lower distortion)
                     if trace_qab {
-                        eprintln!("[RS THETA_RDO] band={} dist0={} dist1={} pick={}", i_band, dist0, dist1,
-                            if dist0 >= dist1 { "pass1(-1)" } else { "pass2(+1)" });
+                        eprintln!(
+                            "[RS THETA_RDO] band={} dist0={} dist1={} pick={}",
+                            i_band,
+                            dist0,
+                            dist1,
+                            if dist0 >= dist1 {
+                                "pass1(-1)"
+                            } else {
+                                "pass2(+1)"
+                            }
+                        );
                     }
                     if dist0 >= dist1 {
                         // Pass 1 won — restore its state
@@ -2137,14 +2148,20 @@ pub fn quant_all_bands<EC: EcCoder>(
                 let x_slice = &mut x_[band_start..band_end_bin];
                 // Debug: dump input spectrum for band 13 in frame 7
                 if trace_qab && i_band == 13 {
-                    eprintln!("[QAB F7] band 13 INPUT x[0..min(32,n)]={:?}",
-                        &x_slice[..n.min(32) as usize]);
+                    eprintln!(
+                        "[QAB F7] band 13 INPUT x[0..min(32,n)]={:?}",
+                        &x_slice[..n.min(32) as usize]
+                    );
                     if let Some(ref lbr) = lb {
-                        eprintln!("[QAB F7] band 13 LOWBAND[0..min(16,n)]={:?}",
-                            &lbr[..n.min(16) as usize]);
+                        eprintln!(
+                            "[QAB F7] band 13 LOWBAND[0..min(16,n)]={:?}",
+                            &lbr[..n.min(16) as usize]
+                        );
                     }
-                    eprintln!("[QAB F7] band 13 params: n={} b={} bigB={} lm={} seed={}",
-                        n, b, big_b, lm, ctx_seed);
+                    eprintln!(
+                        "[QAB F7] band 13 params: n={} b={} bigB={} lm={} seed={}",
+                        n, b, big_b, lm, ctx_seed
+                    );
                 }
                 let mut lbo_buf = vec![0i32; n as usize];
                 x_cm = quant_band(
@@ -2172,8 +2189,15 @@ pub fn quant_all_bands<EC: EcCoder>(
         // Debug: trace per-band state
         if trace_qab {
             let (offs, eoffs, _storage, rem) = ec.ec_debug_state();
-            eprintln!("[RS QAB] band {:2}: tell={:5} offs={:3} eoffs={:3} b={:6} n={:4}",
-                i_band, ec.ec_tell(), offs, eoffs, b, n);
+            eprintln!(
+                "[RS QAB] band {:2}: tell={:5} offs={:3} eoffs={:3} b={:6} n={:4}",
+                i_band,
+                ec.ec_tell(),
+                offs,
+                eoffs,
+                b,
+                n
+            );
         }
 
         collapse_masks[iu * c_channels as usize] = x_cm as u8;

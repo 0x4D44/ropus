@@ -18,12 +18,12 @@ use super::fft::{KissFftCpx, KissFftState, opus_fft_impl};
 use super::math_ops::*;
 use super::modes::{CELTMode, MODE_48000_960_120, bitrate_to_bits, init_caps, resampling_factor};
 use super::pitch::{pitch_downsample, pitch_search, remove_doubling};
+use super::quant_bands::EMEANS;
 use super::quant_bands::{amp2log2, quant_coarse_energy, quant_energy_finalise, quant_fine_energy};
 use super::range_coder::RangeEncoder;
 use super::rate::{
     BITRES, SPREAD_ICDF, TAPSET_ICDF, TF_SELECT_TABLE, TRIM_ICDF, clt_compute_allocation,
 };
-use super::quant_bands::EMEANS;
 use super::vq::celt_inner_prod_norm_shift;
 use crate::types::*;
 
@@ -805,7 +805,9 @@ fn patch_transient_decision(
         spread_old[s] = old_band_e[s];
         // Bug 2 fix: forward loop starts from start+1, not 1.
         for i in (s + 1)..e {
-            spread_old[i] = spread_old[i - 1].wrapping_sub(gconst(1.0)).max(old_band_e[i]);
+            spread_old[i] = spread_old[i - 1]
+                .wrapping_sub(gconst(1.0))
+                .max(old_band_e[i]);
         }
     } else {
         spread_old[s] = old_band_e[s].max(old_band_e[s + nb]);
@@ -1185,8 +1187,7 @@ fn alloc_trim_analysis(
     let mut ch = 0;
     loop {
         for i in 0..(end - 1) as usize {
-            diff += shr32(band_log_e[i + ch * nb_ebands as usize], 5)
-                * (2 + 2 * i as i32 - end);
+            diff += shr32(band_log_e[i + ch * nb_ebands as usize], 5) * (2 + 2 * i as i32 - end);
         }
         ch += 1;
         if ch >= c as usize {
@@ -1353,11 +1354,10 @@ fn dynalloc_analysis(
     // noise_floor[i] = GCONST(0.0625)*logN[i] + GCONST(0.5) + SHL32(9-lsb_depth,DB_SHIFT)
     //                - SHL32(eMeans[i],DB_SHIFT-4) + GCONST(0.0062)*(i+5)*(i+5)
     for i in 0..end as usize {
-        noise_floor[i] = gconst(0.0625) * (log_n[i] as i32)
-            + gconst(0.5)
-            + shl32(9 - lsb_depth, DB_SHIFT)
-            - shl32(EMEANS[i] as i32, DB_SHIFT - 4)
-            + gconst(0.0062) * ((i as i32 + 5) * (i as i32 + 5));
+        noise_floor[i] =
+            gconst(0.0625) * (log_n[i] as i32) + gconst(0.5) + shl32(9 - lsb_depth, DB_SHIFT)
+                - shl32(EMEANS[i] as i32, DB_SHIFT - 4)
+                + gconst(0.0062) * ((i as i32 + 5) * (i as i32 + 5));
     }
 
     // Compute maxDepth from bandLogE (C: lines 1084-1088)
@@ -1410,8 +1410,7 @@ fn dynalloc_analysis(
             // For LM==0, take max with oldBandE (C: lines 1137-1142)
             if lm == 0 {
                 for i in 0..8.min(end as usize) {
-                    band_log_e3[i] =
-                        band_log_e3[i].max(old_band_e[ch * nbu + i]);
+                    band_log_e3[i] = band_log_e3[i].max(old_band_e[ch * nbu + i]);
                 }
             }
 
@@ -1597,11 +1596,7 @@ fn acos_approx(x: i32) -> i32 {
     let mut tmp: i32 = (762i32 * x14 >> 14) - 3308;
     tmp = (tmp * x14 >> 14) + 25726;
     tmp = tmp * celt_sqrt(imax(0, (1 << 30) - (x << 1))) >> 16;
-    if flip {
-        25736 - tmp
-    } else {
-        tmp
-    }
+    if flip { 25736 - tmp } else { tmp }
 }
 
 /// Compute 2nd-order LPC via forward+backward covariance method.
@@ -1704,9 +1699,7 @@ fn tone_detect(input: &[i32], cc: i32, n: i32, toneishness: &mut i32, fs: i32) -
     }
 
     // Check for complex roots
-    if !fail
-        && mult32_32_q31(lpc[0], lpc[0]) + mult32_32_q31(qconst32(3.999999, 29), lpc[1]) < 0
-    {
+    if !fail && mult32_32_q31(lpc[0], lpc[0]) + mult32_32_q31(qconst32(3.999999, 29), lpc[1]) < 0 {
         *toneishness = -lpc[1];
         (acos_approx(lpc[0] >> 1) + delay as i32 / 2) / delay as i32
     } else {
@@ -2096,16 +2089,12 @@ fn compute_vbr(
         let coded_stereo_dof =
             ((e_bands[coded_stereo_bands as usize] as i32) << lm) - coded_stereo_bands;
         // Maximum fraction of the bits we can save if the signal is mono.
-        let max_frac =
-            div32_16(mult16_16(qconst16(0.8, 15), coded_stereo_dof), coded_bins);
+        let max_frac = div32_16(mult16_16(qconst16(0.8, 15), coded_stereo_dof), coded_bins);
         let stereo_saving = min16(stereo_saving, qconst16(1.0, 8));
         target -= min32(
             mult16_32_q15(max_frac, target),
             shr32(
-                mult16_16(
-                    stereo_saving - qconst16(0.1, 8),
-                    coded_stereo_dof << BITRES,
-                ),
+                mult16_16(stereo_saving - qconst16(0.1, 8), coded_stereo_dof << BITRES),
                 8,
             ),
         );
@@ -2126,7 +2115,10 @@ fn compute_vbr(
     // Floor depth: cap target based on signal energy
     {
         let bins = (e_bands[(nb_ebands - 2) as usize] as i32) << lm;
-        let floor_depth = shr32(mult16_32_q15((c * bins) << BITRES, max_depth), DB_SHIFT - 15);
+        let floor_depth = shr32(
+            mult16_32_q15((c * bins) << BITRES, max_depth),
+            DB_SHIFT - 15,
+        );
         let floor_depth = imax(floor_depth, target >> 2);
         target = imin(target, floor_depth);
     }
@@ -2433,7 +2425,6 @@ fn celt_encode_core(
         enc_ref.encode_icdf(prefilter_tapset as u32, &TAPSET_ICDF, 2);
     }
 
-
     // Transient flag
     let mut transient_got_disabled = false;
     if lm > 0 && enc_ref.tell() as i32 + 3 <= total_bits {
@@ -2575,8 +2566,7 @@ fn celt_encode_core(
             amp2log2(mode, eff_end, end, &band_e, &mut band_log_e, c);
             for ch in 0..c as usize {
                 for i in 0..end as usize {
-                    band_log_e2[nb_ebands as usize * ch + i] +=
-                        half32(shl32(lm, DB_SHIFT));
+                    band_log_e2[nb_ebands as usize * ch + i] += half32(shl32(lm, DB_SHIFT));
                 }
             }
             tf_estimate = qconst16(0.2, 14);
@@ -2588,7 +2578,6 @@ fn celt_encode_core(
         enc_ref.encode_bit_logp(is_transient, 3);
     }
 
-
     // Band normalization
     let x_size = c as usize * n as usize;
     let mut x_norm = vec![0i32; x_size];
@@ -2599,10 +2588,13 @@ fn celt_encode_core(
         // band 13 spans ebands[13]..ebands[14], each scaled by m (1<<lm)
         let b13_start = (m * mode.ebands[13] as i32) as usize;
         let b13_end = (m * mode.ebands[14] as i32) as usize;
-        eprintln!("[CELT F7] freq band13 [{},{}): {:?}", b13_start, b13_end,
-            &freq[b13_start..b13_end]);
-        eprintln!("[CELT F7] x_norm band13: {:?}",
-            &x_norm[b13_start..b13_end]);
+        eprintln!(
+            "[CELT F7] freq band13 [{},{}): {:?}",
+            b13_start,
+            b13_end,
+            &freq[b13_start..b13_end]
+        );
+        eprintln!("[CELT F7] x_norm band13: {:?}", &x_norm[b13_start..b13_end]);
     }
 
     // TF analysis
@@ -2646,7 +2638,6 @@ fn celt_encode_core(
         tone_freq,
         toneishness,
     );
-
 
     let mut tf_res = vec![0i32; nb_ebands as usize];
     let tf_select;
@@ -2726,14 +2717,24 @@ fn celt_encode_core(
     // (frame counter moved to top of function)
     if trace_frame {
         let (offs, eoffs, storage, rng, val, rem, ext) = enc_ref.enc_debug_state();
-        eprintln!("[CELT F7] after coarse_energy: offs={} eoffs={} tell={} rng=0x{:08x} val=0x{:08x} rem={} ext={} byte261=0x{:02x}",
-            offs, eoffs, enc_ref.tell(), rng, val, rem, ext, enc_ref.enc_debug_byte(261));
+        eprintln!(
+            "[CELT F7] after coarse_energy: offs={} eoffs={} tell={} rng=0x{:08x} val=0x{:08x} rem={} ext={} byte261=0x{:02x}",
+            offs,
+            eoffs,
+            enc_ref.tell(),
+            rng,
+            val,
+            rem,
+            ext,
+            enc_ref.enc_debug_byte(261)
+        );
         eprintln!("[CELT F7] band_log_e={:?}", &band_log_e);
-        eprintln!("[CELT F7] old_band_e={:?}", &st.old_band_e[..nb_ebands as usize]);
+        eprintln!(
+            "[CELT F7] old_band_e={:?}",
+            &st.old_band_e[..nb_ebands as usize]
+        );
         eprintln!("[CELT F7] error={:?}", &error);
     }
-
-
 
     // TF encoding
     tf_encode(
@@ -2749,8 +2750,14 @@ fn celt_encode_core(
 
     if trace_frame {
         let (offs, eoffs, _storage, rng, val, rem, ext) = enc_ref.enc_debug_state();
-        eprintln!("[CELT F7] after tf_encode: offs={} eoffs={} tell={} rng=0x{:08x} byte261=0x{:02x}",
-            offs, eoffs, enc_ref.tell(), rng, enc_ref.enc_debug_byte(261));
+        eprintln!(
+            "[CELT F7] after tf_encode: offs={} eoffs={} tell={} rng=0x{:08x} byte261=0x{:02x}",
+            offs,
+            eoffs,
+            enc_ref.tell(),
+            rng,
+            enc_ref.enc_debug_byte(261)
+        );
     }
 
     // Spread decision
@@ -2792,11 +2799,16 @@ fn celt_encode_core(
         st.spread_decision = SPREAD_NORMAL;
     }
 
-
     if trace_frame {
         let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
-        eprintln!("[CELT F7] after spread: offs={} eoffs={} tell={} rng=0x{:08x} byte261=0x{:02x}",
-            offs, eoffs, enc_ref.tell(), rng, enc_ref.enc_debug_byte(261));
+        eprintln!(
+            "[CELT F7] after spread: offs={} eoffs={} tell={} rng=0x{:08x} byte261=0x{:02x}",
+            offs,
+            eoffs,
+            enc_ref.tell(),
+            rng,
+            enc_ref.enc_debug_byte(261)
+        );
     }
 
     // Caps initialization
@@ -2878,11 +2890,16 @@ fn celt_encode_core(
         enc_ref.encode_icdf(alloc_trim as u32, &TRIM_ICDF, 7);
     }
 
-
     if trace_frame {
         let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
-        eprintln!("[CELT F7] after dynalloc+trim: offs={} eoffs={} tell={} alloc_trim={} byte261=0x{:02x}",
-            offs, eoffs, enc_ref.tell(), alloc_trim, enc_ref.enc_debug_byte(261));
+        eprintln!(
+            "[CELT F7] after dynalloc+trim: offs={} eoffs={} tell={} alloc_trim={} byte261=0x{:02x}",
+            offs,
+            eoffs,
+            enc_ref.tell(),
+            alloc_trim,
+            enc_ref.enc_debug_byte(261)
+        );
     }
 
     // Minimum allowed bytes
@@ -3007,8 +3024,14 @@ fn celt_encode_core(
 
     if trace_frame {
         let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
-        eprintln!("[CELT F7] after clt_compute_allocation: offs={} eoffs={} tell={} coded_bands={} byte261=0x{:02x}",
-            offs, eoffs, enc_ref.tell(), coded_bands, enc_ref.enc_debug_byte(261));
+        eprintln!(
+            "[CELT F7] after clt_compute_allocation: offs={} eoffs={} tell={} coded_bands={} byte261=0x{:02x}",
+            offs,
+            eoffs,
+            enc_ref.tell(),
+            coded_bands,
+            enc_ref.enc_debug_byte(261)
+        );
         eprintln!("[CELT F7]   pulses={:?}", &pulses);
         eprintln!("[CELT F7]   fine_quant={:?}", &fine_quant);
     }
@@ -3036,8 +3059,13 @@ fn celt_encode_core(
 
     if trace_frame {
         let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
-        eprintln!("[CELT F7] after quant_fine_energy: offs={} eoffs={} tell={} byte261=0x{:02x}",
-            offs, eoffs, enc_ref.tell(), enc_ref.enc_debug_byte(261));
+        eprintln!(
+            "[CELT F7] after quant_fine_energy: offs={} eoffs={} tell={} byte261=0x{:02x}",
+            offs,
+            eoffs,
+            enc_ref.tell(),
+            enc_ref.enc_debug_byte(261)
+        );
     }
 
     // Clear energy error
@@ -3090,8 +3118,13 @@ fn celt_encode_core(
 
     if trace_frame {
         let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
-        eprintln!("[CELT F7] after quant_all_bands: offs={} eoffs={} tell={} byte261=0x{:02x}",
-            offs, eoffs, enc_ref.tell(), enc_ref.enc_debug_byte(261));
+        eprintln!(
+            "[CELT F7] after quant_all_bands: offs={} eoffs={} tell={} byte261=0x{:02x}",
+            offs,
+            eoffs,
+            enc_ref.tell(),
+            enc_ref.enc_debug_byte(261)
+        );
     }
 
     // Anti-collapse
@@ -3117,8 +3150,13 @@ fn celt_encode_core(
 
     if trace_frame {
         let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
-        eprintln!("[CELT F7] after energy_finalise: offs={} eoffs={} tell={} byte261=0x{:02x}",
-            offs, eoffs, enc_ref.tell(), enc_ref.enc_debug_byte(261));
+        eprintln!(
+            "[CELT F7] after energy_finalise: offs={} eoffs={} tell={} byte261=0x{:02x}",
+            offs,
+            eoffs,
+            enc_ref.tell(),
+            enc_ref.enc_debug_byte(261)
+        );
     }
 
     // Store energy error for next frame
@@ -3193,14 +3231,26 @@ fn celt_encode_core(
     // Finalize bitstream
     if trace_frame {
         let (offs, eoffs, _storage, rng, val, rem, ext) = enc_ref.enc_debug_state();
-        eprintln!("[CELT F7] BEFORE done(): offs={} eoffs={} rng=0x{:08x} val=0x{:08x} rem={} ext={} byte261=0x{:02x}",
-            offs, eoffs, rng, val, rem, ext, enc_ref.enc_debug_byte(261));
+        eprintln!(
+            "[CELT F7] BEFORE done(): offs={} eoffs={} rng=0x{:08x} val=0x{:08x} rem={} ext={} byte261=0x{:02x}",
+            offs,
+            eoffs,
+            rng,
+            val,
+            rem,
+            ext,
+            enc_ref.enc_debug_byte(261)
+        );
     }
     enc_ref.done();
     if trace_frame {
         let (offs, eoffs, _storage, _rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
-        eprintln!("[CELT F7] AFTER done(): offs={} eoffs={} byte261=0x{:02x}",
-            offs, eoffs, enc_ref.enc_debug_byte(261));
+        eprintln!(
+            "[CELT F7] AFTER done(): offs={} eoffs={} byte261=0x{:02x}",
+            offs,
+            eoffs,
+            enc_ref.enc_debug_byte(261)
+        );
         // Also dump bytes around byte 261
         let mut hex = String::new();
         for i in 255..270 {

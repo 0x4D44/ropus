@@ -353,7 +353,11 @@ fn tf_decode(
     let budget = dec.storage() * 8;
     let mut tell = dec.tell() as u32;
     let logp: u32 = if is_transient { 2 } else { 4 };
-    let tf_select_rsv = if lm > 0 && tell + logp + 1 <= budget { 1 } else { 0 };
+    let tf_select_rsv = if lm > 0 && tell + logp + 1 <= budget {
+        1
+    } else {
+        0
+    };
     let effective_budget = budget - tf_select_rsv;
     let mut tf_changed: i32 = 0;
     let mut curr: i32 = 0;
@@ -1334,9 +1338,7 @@ impl CeltDecoder {
             let quanta = imin(width << BITRES, imax(6 << BITRES, width));
             let mut dynalloc_loop_logp = dynalloc_logp;
             let mut boost = 0i32;
-            while tell + (dynalloc_loop_logp << BITRES) < total_bits
-                && boost < cap[i]
-            {
+            while tell + (dynalloc_loop_logp << BITRES) < total_bits && boost < cap[i] {
                 let flag = dec.decode_bit_logp(dynalloc_loop_logp as u32);
                 tell = dec.tell_frac() as i32;
                 if !flag {
@@ -1656,7 +1658,6 @@ impl CeltDecoder {
 
         // Store range coder state
         self.rng = dec.get_rng();
-
 
         // --- De-emphasis ---
         let de_offsets: Vec<usize> = (0..cc as usize).map(|c| self.out_syn_off(c, n)).collect();

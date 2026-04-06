@@ -608,7 +608,11 @@ fn cmd_encode(wav_path: &str, bitrate: i32, complexity: i32) {
     println!("=== Per-frame packet comparison ===");
     let c_packets = parse_packets(&c_encoded);
     let r_packets = parse_packets(&rust_encoded);
-    println!("  C packets: {}, Rust packets: {}", c_packets.len(), r_packets.len());
+    println!(
+        "  C packets: {}, Rust packets: {}",
+        c_packets.len(),
+        r_packets.len()
+    );
 
     let n = c_packets.len().min(r_packets.len());
     let mut first_diff_frame = None;
@@ -634,11 +638,7 @@ fn cmd_encode(wav_path: &str, bitrate: i32, complexity: i32) {
                     let end = (off + 24).min(cp.len().max(rp.len()));
                     println!("    C pkt:  {}", hex_line(cp, start, end));
                     println!("    R pkt:  {}", hex_line(rp, start, end));
-                    println!(
-                        "    {}^ byte {}",
-                        " ".repeat(12 + (off - start) * 3),
-                        off
-                    );
+                    println!("    {}^ byte {}", " ".repeat(12 + (off - start) * 3), off);
                     // Dump first 4 bytes (TOC + possibly SILK/CELT headers)
                     println!("    TOC byte: C=0x{:02x} R=0x{:02x}", cp[0], rp[0]);
                     // Count total differing bytes in this packet
@@ -675,9 +675,8 @@ fn cmd_encode_framecompare(wav_path: &str, bitrate: i32, complexity: i32) {
     // C encoder
     let c_enc = unsafe {
         let mut error: i32 = 0;
-        let enc = bindings::opus_encoder_create(
-            sr, ch, bindings::OPUS_APPLICATION_AUDIO, &mut error,
-        );
+        let enc =
+            bindings::opus_encoder_create(sr, ch, bindings::OPUS_APPLICATION_AUDIO, &mut error);
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, complexity);
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_VBR_REQUEST, 0i32);
@@ -711,7 +710,8 @@ fn cmd_encode_framecompare(wav_path: &str, bitrate: i32, complexity: i32) {
         };
 
         // Rust encode
-        let r_len = r_enc.encode(pcm, frame_size as i32, &mut r_pkt, max_packet as i32)
+        let r_len = r_enc
+            .encode(pcm, frame_size as i32, &mut r_pkt, max_packet as i32)
             .unwrap_or(-1);
 
         let cl = c_len as usize;
@@ -720,7 +720,10 @@ fn cmd_encode_framecompare(wav_path: &str, bitrate: i32, complexity: i32) {
         if &c_pkt[..cl] == &r_pkt[..rl] {
             println!("Frame {:3}: {} bytes - MATCH", frame_idx, cl);
         } else {
-            println!("Frame {:3}: C={} bytes, R={} bytes - DIFFER", frame_idx, cl, rl);
+            println!(
+                "Frame {:3}: C={} bytes, R={} bytes - DIFFER",
+                frame_idx, cl, rl
+            );
             let min_len = cl.min(rl);
             let mut ndiff = 0;
             for j in 0..min_len {
@@ -729,7 +732,9 @@ fn cmd_encode_framecompare(wav_path: &str, bitrate: i32, complexity: i32) {
                     if ndiff <= 5 {
                         println!(
                             "  byte {:3}: C=0x{:02x} R=0x{:02x} diff={}",
-                            j, c_pkt[j], r_pkt[j],
+                            j,
+                            c_pkt[j],
+                            r_pkt[j],
                             (c_pkt[j] as i32 - r_pkt[j] as i32).abs()
                         );
                     }
@@ -876,16 +881,36 @@ fn cmd_mathcompare() {
     // Test celt_sqrt32
     println!("--- celt_sqrt32 comparison ---");
     let test_vals: Vec<i32> = vec![
-        0, 1, 100, 10000, 1_000_000, 100_000_000, 1_000_000_000,
-        1_073_741_823, 536_870_912, 268_435_456, 16_777_216,
-        42, 12345, 999_999_999, 7, 255, 65535,
+        0,
+        1,
+        100,
+        10000,
+        1_000_000,
+        100_000_000,
+        1_000_000_000,
+        1_073_741_823,
+        536_870_912,
+        268_435_456,
+        16_777_216,
+        42,
+        12345,
+        999_999_999,
+        7,
+        255,
+        65535,
     ];
     let mut sqrt_pass = true;
     for &x in &test_vals {
         let c_val = unsafe { bindings::debug_c_celt_sqrt32(x) };
         let r_val = math_ops::celt_sqrt32(x);
         if c_val != r_val {
-            println!("  MISMATCH: celt_sqrt32({}) C={} R={} diff={}", x, c_val, r_val, c_val - r_val);
+            println!(
+                "  MISMATCH: celt_sqrt32({}) C={} R={} diff={}",
+                x,
+                c_val,
+                r_val,
+                c_val - r_val
+            );
             sqrt_pass = false;
         }
     }
@@ -896,16 +921,28 @@ fn cmd_mathcompare() {
     // Test frac_div32
     println!("--- frac_div32 comparison ---");
     let div_tests: Vec<(i32, i32)> = vec![
-        (1000, 2000), (100, 300), (12345, 67890), (1, 2),
-        (1_000_000, 2_000_000), (536_870_912, 1_073_741_824),
-        (100_000_000, 200_000_001), (999_999, 1_000_001),
+        (1000, 2000),
+        (100, 300),
+        (12345, 67890),
+        (1, 2),
+        (1_000_000, 2_000_000),
+        (536_870_912, 1_073_741_824),
+        (100_000_000, 200_000_001),
+        (999_999, 1_000_001),
     ];
     let mut div_pass = true;
     for &(a, b) in &div_tests {
         let c_val = unsafe { bindings::debug_c_frac_div32(a, b) };
         let r_val = math_ops::frac_div32(a, b);
         if c_val != r_val {
-            println!("  MISMATCH: frac_div32({}, {}) C={} R={} diff={}", a, b, c_val, r_val, c_val - r_val);
+            println!(
+                "  MISMATCH: frac_div32({}, {}) C={} R={} diff={}",
+                a,
+                b,
+                c_val,
+                r_val,
+                c_val - r_val
+            );
             div_pass = false;
         }
     }
@@ -916,17 +953,32 @@ fn cmd_mathcompare() {
     // Test celt_atan_norm
     println!("--- celt_atan_norm comparison ---");
     let atan_tests: Vec<i32> = vec![
-        0, 1, -1, 536_870_912, -536_870_912,
-        1_073_741_824, -1_073_741_824, // exact +-1.0
-        268_435_456, 805_306_368, 100_000_000,
-        -100_000_000, 1_000_000, -1_000_000,
+        0,
+        1,
+        -1,
+        536_870_912,
+        -536_870_912,
+        1_073_741_824,
+        -1_073_741_824, // exact +-1.0
+        268_435_456,
+        805_306_368,
+        100_000_000,
+        -100_000_000,
+        1_000_000,
+        -1_000_000,
     ];
     let mut atan_pass = true;
     for &x in &atan_tests {
         let c_val = unsafe { bindings::debug_c_celt_atan_norm(x) };
         let r_val = math_ops::celt_atan_norm(x);
         if c_val != r_val {
-            println!("  MISMATCH: celt_atan_norm({}) C={} R={} diff={}", x, c_val, r_val, c_val - r_val);
+            println!(
+                "  MISMATCH: celt_atan_norm({}) C={} R={} diff={}",
+                x,
+                c_val,
+                r_val,
+                c_val - r_val
+            );
             atan_pass = false;
         }
     }
@@ -937,16 +989,28 @@ fn cmd_mathcompare() {
     // Test celt_atan2p_norm
     println!("--- celt_atan2p_norm comparison ---");
     let atan2_tests: Vec<(i32, i32)> = vec![
-        (0, 0), (0, 100), (100, 0), (100, 100),
-        (1_000_000, 2_000_000), (2_000_000, 1_000_000),
-        (536_870_912, 1_073_741_824), (1_073_741_824, 536_870_912),
+        (0, 0),
+        (0, 100),
+        (100, 0),
+        (100, 100),
+        (1_000_000, 2_000_000),
+        (2_000_000, 1_000_000),
+        (536_870_912, 1_073_741_824),
+        (1_073_741_824, 536_870_912),
     ];
     let mut atan2_pass = true;
     for &(y, x) in &atan2_tests {
         let c_val = unsafe { bindings::debug_c_celt_atan2p_norm(y, x) };
         let r_val = math_ops::celt_atan2p_norm(y, x);
         if c_val != r_val {
-            println!("  MISMATCH: celt_atan2p_norm({}, {}) C={} R={} diff={}", y, x, c_val, r_val, c_val - r_val);
+            println!(
+                "  MISMATCH: celt_atan2p_norm({}, {}) C={} R={} diff={}",
+                y,
+                x,
+                c_val,
+                r_val,
+                c_val - r_val
+            );
             atan2_pass = false;
         }
     }
@@ -962,21 +1026,40 @@ fn cmd_mathcompare() {
         // Equal energy
         (vec![1 << 24; 8], vec![1 << 24; 8]),
         // Unequal energy
-        (vec![1 << 23, 1 << 22, 1 << 21, 1 << 20, 0, 0, 0, 0],
-         vec![1 << 21, 1 << 20, 1 << 19, 1 << 18, 0, 0, 0, 0]),
+        (
+            vec![1 << 23, 1 << 22, 1 << 21, 1 << 20, 0, 0, 0, 0],
+            vec![1 << 21, 1 << 20, 1 << 19, 1 << 18, 0, 0, 0, 0],
+        ),
         // Sine-like
-        (vec![0, 5_930_000, 11_180_000, 14_900_000, 16_777_216, 14_900_000, 11_180_000, 5_930_000],
-         vec![16_777_216, 14_900_000, 11_180_000, 5_930_000, 0, -5_930_000, -11_180_000, -14_900_000]),
+        (
+            vec![
+                0, 5_930_000, 11_180_000, 14_900_000, 16_777_216, 14_900_000, 11_180_000, 5_930_000,
+            ],
+            vec![
+                16_777_216,
+                14_900_000,
+                11_180_000,
+                5_930_000,
+                0,
+                -5_930_000,
+                -11_180_000,
+                -14_900_000,
+            ],
+        ),
     ];
     let mut sitheta_pass = true;
     for (i, (xv, yv)) in test_vectors.iter().enumerate() {
         // Non-stereo path
-        let c_val = unsafe {
-            bindings::debug_c_stereo_itheta(xv.as_ptr(), yv.as_ptr(), 0, n)
-        };
+        let c_val = unsafe { bindings::debug_c_stereo_itheta(xv.as_ptr(), yv.as_ptr(), 0, n) };
         let r_val = vq::stereo_itheta(xv, yv, false, n as usize);
         if c_val != r_val {
-            println!("  MISMATCH: stereo_itheta (non-stereo, vec #{}) C={} R={} diff={}", i, c_val, r_val, c_val - r_val);
+            println!(
+                "  MISMATCH: stereo_itheta (non-stereo, vec #{}) C={} R={} diff={}",
+                i,
+                c_val,
+                r_val,
+                c_val - r_val
+            );
             sitheta_pass = false;
         }
     }
@@ -987,17 +1070,31 @@ fn cmd_mathcompare() {
     // Test celt_cos_norm32
     println!("--- celt_cos_norm32 comparison ---");
     let cos_tests: Vec<i32> = vec![
-        0, 1, -1, 1_073_741_824, -1_073_741_824, // boundaries
-        536_870_912, -536_870_912,    // pi/4
-        268_435_456, 805_306_368,     // pi/8, 3*pi/8
-        100_000_000, 500_000_000, 900_000_000,
+        0,
+        1,
+        -1,
+        1_073_741_824,
+        -1_073_741_824, // boundaries
+        536_870_912,
+        -536_870_912, // pi/4
+        268_435_456,
+        805_306_368, // pi/8, 3*pi/8
+        100_000_000,
+        500_000_000,
+        900_000_000,
     ];
     let mut cos_pass = true;
     for &x in &cos_tests {
         let c_val = unsafe { bindings::debug_c_celt_cos_norm32(x) };
         let r_val = math_ops::celt_cos_norm32(x);
         if c_val != r_val {
-            println!("  MISMATCH: celt_cos_norm32({}) C={} R={} diff={}", x, c_val, r_val, c_val - r_val);
+            println!(
+                "  MISMATCH: celt_cos_norm32({}) C={} R={} diff={}",
+                x,
+                c_val,
+                r_val,
+                c_val - r_val
+            );
             cos_pass = false;
         }
     }
@@ -1008,20 +1105,29 @@ fn cmd_mathcompare() {
     // Test celt_rsqrt_norm32
     println!("--- celt_rsqrt_norm32 comparison ---");
     let rsqrt_tests: Vec<i32> = vec![
-        536_870_912,    // 0.25 Q31
-        1_073_741_824,  // 0.5 Q31
-        1_610_612_736,  // 0.75 Q31
-        2_000_000_000,  // ~0.93 Q31
-        2_147_483_646,  // ~1.0 Q31
-        600_000_000, 800_000_000, 1_200_000_000,
-        1_500_000_000, 1_900_000_000,
+        536_870_912,   // 0.25 Q31
+        1_073_741_824, // 0.5 Q31
+        1_610_612_736, // 0.75 Q31
+        2_000_000_000, // ~0.93 Q31
+        2_147_483_646, // ~1.0 Q31
+        600_000_000,
+        800_000_000,
+        1_200_000_000,
+        1_500_000_000,
+        1_900_000_000,
     ];
     let mut rsqrt_pass = true;
     for &x in &rsqrt_tests {
         let c_val = unsafe { bindings::debug_c_celt_rsqrt_norm32(x) };
         let r_val = math_ops::celt_rsqrt_norm32(x);
         if c_val != r_val {
-            println!("  MISMATCH: celt_rsqrt_norm32({}) C={} R={} diff={}", x, c_val, r_val, c_val - r_val);
+            println!(
+                "  MISMATCH: celt_rsqrt_norm32({}) C={} R={} diff={}",
+                x,
+                c_val,
+                r_val,
+                c_val - r_val
+            );
             rsqrt_pass = false;
         }
     }
@@ -1031,15 +1137,15 @@ fn cmd_mathcompare() {
 
     // Test normalise_residual gain computation
     println!("--- normalise_residual gain comparison ---");
-    use mdopus::types::{vshr32, mult32_32_q31};
+    use mdopus::types::{mult32_32_q31, vshr32};
     let gain_tests: Vec<(i32, i32)> = vec![
-        (1, 2_147_483_647),      // typical ryy, Q31ONE gain
+        (1, 2_147_483_647), // typical ryy, Q31ONE gain
         (4, 2_147_483_647),
         (16, 2_147_483_647),
         (100, 2_147_483_647),
-        (1000, 1_500_000_000),   // moderate gain
+        (1000, 1_500_000_000), // moderate gain
         (10000, 1_000_000_000),
-        (1, 536_870_912),        // small gain
+        (1, 536_870_912), // small gain
     ];
     let mut gain_pass = true;
     for &(ryy, gain) in &gain_tests {
@@ -1049,21 +1155,43 @@ fn cmd_mathcompare() {
         let t = vshr32(ryy, 2 * (k - 7) - 15);
         let r_val = mult32_32_q31(math_ops::celt_rsqrt_norm32(t), gain);
         if c_val != r_val {
-            println!("  MISMATCH: normalise_residual_g(ryy={}, gain={}) C={} R={} diff={}", ryy, gain, c_val, r_val, c_val - r_val);
+            println!(
+                "  MISMATCH: normalise_residual_g(ryy={}, gain={}) C={} R={} diff={}",
+                ryy,
+                gain,
+                c_val,
+                r_val,
+                c_val - r_val
+            );
             gain_pass = false;
         }
     }
     if gain_pass {
-        println!("  normalise_residual gain: {} values PASS", gain_tests.len());
+        println!(
+            "  normalise_residual gain: {} values PASS",
+            gain_tests.len()
+        );
     }
 
     // Test stereo_itheta with actual encoder data (from traces)
     println!("--- stereo_itheta with actual encoder vectors ---");
     // First divergent vectors (from eoffs=57, n=16, band=13)
-    let x_c: Vec<i32> = vec![4594765, 42154, -2191998, -7903840, -8283225, -948462, 3372303, 2950766, 927383, -1686152, 1011692, 400460, -1243537, -1201384, -126461, -252922];
-    let x_r: Vec<i32> = vec![4594765, 42154, -2191998, -7903841, -8283225, -948462, 3372303, 2950766, 927383, -1686152, 1011692, 400461, -1243537, -1201384, -126461, -252922];
-    let y_c: Vec<i32> = vec![843076, 2950768, 1517537, -1032768, 2086613, -2465998, 505847, -2992920, 5184916, -210772, -2782153, 358306, -2002309, -4742306, -885233, -1053848];
-    let y_r: Vec<i32> = vec![843076, 2950768, 1517538, -1032768, 2086613, -2465998, 505847, -2992920, 5184916, -210772, -2782154, 358306, -2002309, -4742306, -885233, -1053848];
+    let x_c: Vec<i32> = vec![
+        4594765, 42154, -2191998, -7903840, -8283225, -948462, 3372303, 2950766, 927383, -1686152,
+        1011692, 400460, -1243537, -1201384, -126461, -252922,
+    ];
+    let x_r: Vec<i32> = vec![
+        4594765, 42154, -2191998, -7903841, -8283225, -948462, 3372303, 2950766, 927383, -1686152,
+        1011692, 400461, -1243537, -1201384, -126461, -252922,
+    ];
+    let y_c: Vec<i32> = vec![
+        843076, 2950768, 1517537, -1032768, 2086613, -2465998, 505847, -2992920, 5184916, -210772,
+        -2782153, 358306, -2002309, -4742306, -885233, -1053848,
+    ];
+    let y_r: Vec<i32> = vec![
+        843076, 2950768, 1517538, -1032768, 2086613, -2465998, 505847, -2992920, 5184916, -210772,
+        -2782154, 358306, -2002309, -4742306, -885233, -1053848,
+    ];
 
     // C with C-vectors
     let c_with_c = unsafe { bindings::debug_c_stereo_itheta(x_c.as_ptr(), y_c.as_ptr(), 0, 16) };
@@ -1075,25 +1203,54 @@ fn cmd_mathcompare() {
     let r_with_r = vq::stereo_itheta(&x_r, &y_r, false, 16);
 
     println!("  C(C-vectors):  {}", c_with_c);
-    println!("  C(R-vectors):  {} (diff from C-input: {})", c_with_r, c_with_r - c_with_c);
-    println!("  R(C-vectors):  {} (diff from C: {})", r_with_c, r_with_c - c_with_c);
-    println!("  R(R-vectors):  {} (diff from C(C): {})", r_with_r, r_with_r - c_with_c);
+    println!(
+        "  C(R-vectors):  {} (diff from C-input: {})",
+        c_with_r,
+        c_with_r - c_with_c
+    );
+    println!(
+        "  R(C-vectors):  {} (diff from C: {})",
+        r_with_c,
+        r_with_c - c_with_c
+    );
+    println!(
+        "  R(R-vectors):  {} (diff from C(C): {})",
+        r_with_r,
+        r_with_r - c_with_c
+    );
 
     // Exhaustive sweep: celt_sqrt32 on values that produce results near
     // the itheta range used in encoding
     println!("--- Exhaustive celt_sqrt32 sweep near typical values ---");
     let mut sqrt_mismatches = 0;
     // Sweep around powers of 2 (common norm energy values)
-    for base in [1 << 14, 1 << 16, 1 << 18, 1 << 20, 1 << 22, 1 << 24, 1 << 26, 1 << 28] {
+    for base in [
+        1 << 14,
+        1 << 16,
+        1 << 18,
+        1 << 20,
+        1 << 22,
+        1 << 24,
+        1 << 26,
+        1 << 28,
+    ] {
         for delta in -1000..=1000 {
             let x = base + delta;
-            if x <= 0 || x >= 1_073_741_824 { continue; }
+            if x <= 0 || x >= 1_073_741_824 {
+                continue;
+            }
             let c_val = unsafe { bindings::debug_c_celt_sqrt32(x) };
             let r_val = math_ops::celt_sqrt32(x);
             if c_val != r_val {
                 sqrt_mismatches += 1;
                 if sqrt_mismatches <= 5 {
-                    println!("  MISMATCH: celt_sqrt32({}) C={} R={} diff={}", x, c_val, r_val, c_val - r_val);
+                    println!(
+                        "  MISMATCH: celt_sqrt32({}) C={} R={} diff={}",
+                        x,
+                        c_val,
+                        r_val,
+                        c_val - r_val
+                    );
                 }
             }
         }
@@ -1116,12 +1273,21 @@ fn cmd_mathcompare() {
         if c_val != r_val {
             rsqrt32_mismatches += 1;
             if rsqrt32_mismatches <= 5 {
-                println!("  MISMATCH: celt_rsqrt_norm32({}) C={} R={} diff={}", x, c_val, r_val, c_val - r_val);
+                println!(
+                    "  MISMATCH: celt_rsqrt_norm32({}) C={} R={} diff={}",
+                    x,
+                    c_val,
+                    r_val,
+                    c_val - r_val
+                );
             }
         }
     }
     if rsqrt32_mismatches > 0 {
-        println!("  celt_rsqrt_norm32 sweep: {} mismatches out of 20000!", rsqrt32_mismatches);
+        println!(
+            "  celt_rsqrt_norm32 sweep: {} mismatches out of 20000!",
+            rsqrt32_mismatches
+        );
     } else {
         println!("  celt_rsqrt_norm32 sweep: 20000 values PASS");
     }
@@ -1139,7 +1305,13 @@ fn cmd_mathcompare() {
         if c_val != r_val {
             gain_mismatches += 1;
             if gain_mismatches <= 5 {
-                println!("  MISMATCH: normalise_g(ryy={}, gain=Q31ONE) C={} R={} diff={}", ryy, c_val, r_val, c_val - r_val);
+                println!(
+                    "  MISMATCH: normalise_g(ryy={}, gain=Q31ONE) C={} R={} diff={}",
+                    ryy,
+                    c_val,
+                    r_val,
+                    c_val - r_val
+                );
             }
         }
     }
@@ -1154,7 +1326,14 @@ fn cmd_mathcompare() {
             if c_val != r_val {
                 gain_mismatches += 1;
                 if gain_mismatches <= 5 {
-                    println!("  MISMATCH: normalise_g(ryy={}, gain={}) C={} R={} diff={}", ryy, gi, c_val, r_val, c_val - r_val);
+                    println!(
+                        "  MISMATCH: normalise_g(ryy={}, gain={}) C={} R={} diff={}",
+                        ryy,
+                        gi,
+                        c_val,
+                        r_val,
+                        c_val - r_val
+                    );
                 }
             }
         }
@@ -1175,12 +1354,21 @@ fn cmd_mathcompare() {
         if c_val != r_val {
             cos_mismatches += 1;
             if cos_mismatches <= 5 {
-                println!("  MISMATCH: celt_cos_norm32({}) C={} R={} diff={}", x, c_val, r_val, c_val - r_val);
+                println!(
+                    "  MISMATCH: celt_cos_norm32({}) C={} R={} diff={}",
+                    x,
+                    c_val,
+                    r_val,
+                    c_val - r_val
+                );
             }
         }
     }
     if cos_mismatches > 0 {
-        println!("  celt_cos_norm32 sweep: {} mismatches found!", cos_mismatches);
+        println!(
+            "  celt_cos_norm32 sweep: {} mismatches found!",
+            cos_mismatches
+        );
     } else {
         println!("  celt_cos_norm32 sweep: 20000 values PASS");
     }
@@ -1201,7 +1389,13 @@ fn cmd_mathcompare() {
         if c_val_rsq != r_val_rsq {
             rcp_mismatches += 1;
             if rcp_mismatches <= 5 {
-                println!("  MISMATCH: rsqrt_norm32({}) C={} R={} diff={}", x, c_val_rsq, r_val_rsq, c_val_rsq - r_val_rsq);
+                println!(
+                    "  MISMATCH: rsqrt_norm32({}) C={} R={} diff={}",
+                    x,
+                    c_val_rsq,
+                    r_val_rsq,
+                    c_val_rsq - r_val_rsq
+                );
             }
         }
     }
@@ -1228,13 +1422,19 @@ fn cmd_rng_test() {
     let mut pos = 0;
     let mut pkt_data: &[u8] = &[];
     for i in 0..5 {
-        let pkt_len = u16::from_le_bytes([c_encoded[pos], c_encoded[pos+1]]) as usize;
+        let pkt_len = u16::from_le_bytes([c_encoded[pos], c_encoded[pos + 1]]) as usize;
         pos += 2;
-        println!("Packet {}: len={} TOC=0x{:02x} (config={} s={} code={})",
-            i, pkt_len, c_encoded[pos],
-            c_encoded[pos] >> 3, (c_encoded[pos] >> 2) & 1, c_encoded[pos] & 3);
+        println!(
+            "Packet {}: len={} TOC=0x{:02x} (config={} s={} code={})",
+            i,
+            pkt_len,
+            c_encoded[pos],
+            c_encoded[pos] >> 3,
+            (c_encoded[pos] >> 2) & 1,
+            c_encoded[pos] & 3
+        );
         if i == 4 {
-            pkt_data = &c_encoded[pos..pos+pkt_len];
+            pkt_data = &c_encoded[pos..pos + pkt_len];
         }
         pos += pkt_len;
     }
@@ -1245,8 +1445,12 @@ fn cmd_rng_test() {
 
     // Create a Rust range decoder from this payload
     let mut dec = RangeDecoder::new(celt_payload);
-    println!("After init: tell={} nbits={} rng={:08x}",
-        dec.tell(), dec.debug_nbits_total(), dec.get_rng());
+    println!(
+        "After init: tell={} nbits={} rng={:08x}",
+        dec.tell(),
+        dec.debug_nbits_total(),
+        dec.get_rng()
+    );
 
     // Read the same header as the CELT decoder would:
     // 1. Silence check (tell == 1)
@@ -1258,7 +1462,12 @@ fn cmd_rng_test() {
     } else {
         false
     };
-    println!("After silence: tell={} nbits={} silence={}", dec.tell(), dec.debug_nbits_total(), silence);
+    println!(
+        "After silence: tell={} nbits={} silence={}",
+        dec.tell(),
+        dec.debug_nbits_total(),
+        silence
+    );
 
     // 2. Postfilter
     let tell1 = dec.tell();
@@ -1280,8 +1489,14 @@ fn cmd_rng_test() {
             }
         }
     }
-    println!("After PF: tell={} nbits={} pitch={} gain={} tapset={}",
-        dec.tell(), dec.debug_nbits_total(), pf_pitch, pf_gain, pf_tapset);
+    println!(
+        "After PF: tell={} nbits={} pitch={} gain={} tapset={}",
+        dec.tell(),
+        dec.debug_nbits_total(),
+        pf_pitch,
+        pf_gain,
+        pf_tapset
+    );
 
     // 3. Transient (LM=3 > 0)
     let tell3 = dec.tell();
@@ -1289,7 +1504,12 @@ fn cmd_rng_test() {
     if tell3 + 3 <= total_bits {
         is_trans = dec.decode_bit_logp(3);
     }
-    println!("After transient: tell={} nbits={} is_trans={}", dec.tell(), dec.debug_nbits_total(), is_trans);
+    println!(
+        "After transient: tell={} nbits={} is_trans={}",
+        dec.tell(),
+        dec.debug_nbits_total(),
+        is_trans
+    );
 
     // 4. Intra energy
     let tell4 = dec.tell();
@@ -1298,12 +1518,17 @@ fn cmd_rng_test() {
     } else {
         0
     };
-    println!("After intra: tell={} nbits={} intra={}", dec.tell(), dec.debug_nbits_total(), intra);
+    println!(
+        "After intra: tell={} nbits={} intra={}",
+        dec.tell(),
+        dec.debug_nbits_total(),
+        intra
+    );
 
     // Coarse energy decode with Rust
     {
-        use mdopus::celt::quant_bands::unquant_coarse_energy;
         use mdopus::celt::modes::MODE_48000_960_120;
+        use mdopus::celt::quant_bands::unquant_coarse_energy;
         let mode = &MODE_48000_960_120;
         let mut old_e = vec![0i32; 42]; // 2*21
         // Set old_e to the known state from frame 3
@@ -1313,39 +1538,71 @@ fn cmd_rng_test() {
         let before_coarse_nbits = dec.debug_nbits_total();
         let before_coarse_rng = dec.get_rng();
         unquant_coarse_energy(mode, 0, 21, &mut old_e, intra, &mut dec, 1, 3);
-        println!("After Rust coarse: tell={} nbits={} rng={:08x} band0={}",
-            dec.tell(), dec.debug_nbits_total(), dec.get_rng(), old_e[0]);
-        println!("  nbits consumed in coarse: {}", dec.debug_nbits_total() - before_coarse_nbits);
+        println!(
+            "After Rust coarse: tell={} nbits={} rng={:08x} band0={}",
+            dec.tell(),
+            dec.debug_nbits_total(),
+            dec.get_rng(),
+            old_e[0]
+        );
+        println!(
+            "  nbits consumed in coarse: {}",
+            dec.debug_nbits_total() - before_coarse_nbits
+        );
     }
 
     // Now create a C range decoder from the same payload and compare
     println!("\nC equivalent:");
     unsafe {
         let mut c_dec: bindings::ec_dec = std::mem::zeroed();
-        bindings::ec_dec_init(&mut c_dec, celt_payload.as_ptr() as *mut _, celt_payload.len() as u32);
-        println!("After init: nbits={} rng={:08x} tell={}",
-            c_dec.nbits_total, c_dec.rng, c_dec.nbits_total - 32i32.wrapping_sub(c_dec.rng.leading_zeros() as i32));
+        bindings::ec_dec_init(
+            &mut c_dec,
+            celt_payload.as_ptr() as *mut _,
+            celt_payload.len() as u32,
+        );
+        println!(
+            "After init: nbits={} rng={:08x} tell={}",
+            c_dec.nbits_total,
+            c_dec.rng,
+            c_dec.nbits_total - 32i32.wrapping_sub(c_dec.rng.leading_zeros() as i32)
+        );
 
         // Silence
         let c_silence = bindings::ec_dec_bit_logp(&mut c_dec, 15);
-        println!("After silence: nbits={} silence={}", c_dec.nbits_total, c_silence);
+        println!(
+            "After silence: nbits={} silence={}",
+            c_dec.nbits_total, c_silence
+        );
 
         // Postfilter
         let c_has_pf = bindings::ec_dec_bit_logp(&mut c_dec, 1);
-        println!("After PF flag: nbits={} has_pf={}", c_dec.nbits_total, c_has_pf);
+        println!(
+            "After PF flag: nbits={} has_pf={}",
+            c_dec.nbits_total, c_has_pf
+        );
         if c_has_pf != 0 {
             let c_octave = bindings::ec_dec_uint(&mut c_dec, 6);
-            let c_pf_pitch = (16 << c_octave) as i32 + bindings::ec_dec_bits(&mut c_dec, 4 + c_octave) as i32 - 1;
+            let c_pf_pitch = (16 << c_octave) as i32
+                + bindings::ec_dec_bits(&mut c_dec, 4 + c_octave) as i32
+                - 1;
             let c_qg = bindings::ec_dec_bits(&mut c_dec, 3);
             let tapset_icdf: [u8; 3] = [2, 1, 0];
             let c_tapset = bindings::ec_dec_icdf(&mut c_dec, tapset_icdf.as_ptr(), 2);
-            println!("After PF decode: nbits={} pitch={} gain={} tapset={}",
-                c_dec.nbits_total, c_pf_pitch, 3072*(c_qg as i32+1), c_tapset);
+            println!(
+                "After PF decode: nbits={} pitch={} gain={} tapset={}",
+                c_dec.nbits_total,
+                c_pf_pitch,
+                3072 * (c_qg as i32 + 1),
+                c_tapset
+            );
         }
 
         // Transient
         let c_trans = bindings::ec_dec_bit_logp(&mut c_dec, 3);
-        println!("After transient: nbits={} is_trans={}", c_dec.nbits_total, c_trans);
+        println!(
+            "After transient: nbits={} is_trans={}",
+            c_dec.nbits_total, c_trans
+        );
 
         // Intra
         let c_intra = bindings::ec_dec_bit_logp(&mut c_dec, 3);
@@ -1361,7 +1618,9 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
     let wav = read_wav(Path::new(wav_path));
     println!(
         "Input: {} ({} Hz, {} ch, {} samples)",
-        wav_path, wav.sample_rate, wav.channels,
+        wav_path,
+        wav.sample_rate,
+        wav.channels,
         wav.samples.len() / wav.channels as usize
     );
 
@@ -1448,8 +1707,14 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
         if let Some(fd) = first_diff {
             println!(
                 "Frame {:3}: pkt_len={:5} FAIL max_diff={:6} first_diff_at={} (sample {} overall) range: C={:08x} R={:08x} {}",
-                frame_idx, pkt_len, max_diff, fd, frame_idx * frame_samples + fd,
-                c_range, rust_range, if range_match { "MATCH" } else { "MISMATCH" }
+                frame_idx,
+                pkt_len,
+                max_diff,
+                fd,
+                frame_idx * frame_samples + fd,
+                c_range,
+                rust_range,
+                if range_match { "MATCH" } else { "MISMATCH" }
             );
             if first_fail_frame < 0 {
                 first_fail_frame = frame_idx as i32;
@@ -1458,14 +1723,20 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
                 let end = (fd + 12).min(len);
                 print!("  C:    ");
                 for i in start..end {
-                    if i == fd { print!("[{:6}]", c_pcm[i]); }
-                    else { print!(" {:6} ", c_pcm[i]); }
+                    if i == fd {
+                        print!("[{:6}]", c_pcm[i]);
+                    } else {
+                        print!(" {:6} ", c_pcm[i]);
+                    }
                 }
                 println!();
                 print!("  Rust: ");
                 for i in start..end {
-                    if i == fd { print!("[{:6}]", rust_pcm[i]); }
-                    else { print!(" {:6} ", rust_pcm[i]); }
+                    if i == fd {
+                        print!("[{:6}]", rust_pcm[i]);
+                    } else {
+                        print!(" {:6} ", rust_pcm[i]);
+                    }
                 }
                 println!();
             }
@@ -1475,14 +1746,17 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
                 frame_idx, pkt_len, c_range, rust_range
             );
         } else {
-            println!("Frame {:3}: pkt_len={:5} PASS ({} samples) range={:08x}", frame_idx, pkt_len, len, c_range);
+            println!(
+                "Frame {:3}: pkt_len={:5} PASS ({} samples) range={:08x}",
+                frame_idx, pkt_len, len, c_range
+            );
         }
 
         // Compare old_band_e arrays
         let mut c_old_band_e = vec![0i32; 42]; // max 21 bands * 2
-        let nb_ebands = unsafe {
-            bindings::debug_get_celt_old_band_e(c_dec, c_old_band_e.as_mut_ptr(), 42)
-        } as usize;
+        let nb_ebands =
+            unsafe { bindings::debug_get_celt_old_band_e(c_dec, c_old_band_e.as_mut_ptr(), 42) }
+                as usize;
         let r_old_band_e = rust_dec.debug_get_old_band_e();
         let total_bands = 2 * nb_ebands;
 
@@ -1494,7 +1768,10 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
                     first_band_mismatch = i as i32;
                     println!(
                         "  oldBandE MISMATCH at band {} (of {}): C={} R={} diff={}",
-                        i, total_bands, c_old_band_e[i], r_old_band_e[i],
+                        i,
+                        total_bands,
+                        c_old_band_e[i],
+                        r_old_band_e[i],
                         c_old_band_e[i] - r_old_band_e[i]
                     );
                 }
@@ -1506,17 +1783,29 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
             // Print first few bands for C and Rust
             let show = total_bands.min(r_old_band_e.len()).min(10);
             print!("  C  bands[0..{}]:", show);
-            for i in 0..show { print!(" {}", c_old_band_e[i]); }
+            for i in 0..show {
+                print!(" {}", c_old_band_e[i]);
+            }
             println!();
             print!("  R  bands[0..{}]:", show);
-            for i in 0..show { print!(" {}", r_old_band_e[i]); }
+            for i in 0..show {
+                print!(" {}", r_old_band_e[i]);
+            }
             println!();
             // Show second half (ch1 for mono copy)
             print!("  C  bands[21..{}]:", 21 + show.min(5));
-            for i in 21..21+show.min(5) { if i < total_bands { print!(" {}", c_old_band_e[i]); } }
+            for i in 21..21 + show.min(5) {
+                if i < total_bands {
+                    print!(" {}", c_old_band_e[i]);
+                }
+            }
             println!();
             print!("  R  bands[21..{}]:", 21 + show.min(5));
-            for i in 21..21+show.min(5) { if i < total_bands { print!(" {}", r_old_band_e[i]); } }
+            for i in 21..21 + show.min(5) {
+                if i < total_bands {
+                    print!(" {}", r_old_band_e[i]);
+                }
+            }
             println!();
         }
 
@@ -1539,7 +1828,10 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
                 if !log_e_diff {
                     println!(
                         "  oldLogE MISMATCH at band {} (of {}): C={} R={} diff={}",
-                        i, total_bands, c_old_log_e[i], r_old_log_e[i],
+                        i,
+                        total_bands,
+                        c_old_log_e[i],
+                        r_old_log_e[i],
                         c_old_log_e[i] - r_old_log_e[i]
                     );
                 }
@@ -1549,7 +1841,10 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
                 if !log_e_diff {
                     println!(
                         "  oldLogE2 MISMATCH at band {} (of {}): C={} R={} diff={}",
-                        i, total_bands, c_old_log_e2[i], r_old_log_e2[i],
+                        i,
+                        total_bands,
+                        c_old_log_e2[i],
+                        r_old_log_e2[i],
                         c_old_log_e2[i] - r_old_log_e2[i]
                     );
                 }
@@ -1560,24 +1855,46 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
         // Compare postfilter state
         let (r_pf_period, r_pf_period_old, r_pf_gain, r_pf_gain_old, r_pf_tapset, r_pf_tapset_old) =
             rust_dec.debug_get_postfilter();
-        let (mut c_pf_period, mut c_pf_period_old, mut c_pf_gain, mut c_pf_gain_old, mut c_pf_tapset, mut c_pf_tapset_old) =
-            (0i32, 0i32, 0i32, 0i32, 0i32, 0i32);
+        let (
+            mut c_pf_period,
+            mut c_pf_period_old,
+            mut c_pf_gain,
+            mut c_pf_gain_old,
+            mut c_pf_tapset,
+            mut c_pf_tapset_old,
+        ) = (0i32, 0i32, 0i32, 0i32, 0i32, 0i32);
         unsafe {
             bindings::debug_get_celt_postfilter(
                 c_dec,
-                &mut c_pf_period, &mut c_pf_period_old,
-                &mut c_pf_gain, &mut c_pf_gain_old,
-                &mut c_pf_tapset, &mut c_pf_tapset_old,
+                &mut c_pf_period,
+                &mut c_pf_period_old,
+                &mut c_pf_gain,
+                &mut c_pf_gain_old,
+                &mut c_pf_tapset,
+                &mut c_pf_tapset_old,
             );
         }
-        if c_pf_period != r_pf_period || c_pf_period_old != r_pf_period_old
-            || c_pf_gain != r_pf_gain || c_pf_gain_old != r_pf_gain_old
-            || c_pf_tapset != r_pf_tapset || c_pf_tapset_old != r_pf_tapset_old
+        if c_pf_period != r_pf_period
+            || c_pf_period_old != r_pf_period_old
+            || c_pf_gain != r_pf_gain
+            || c_pf_gain_old != r_pf_gain_old
+            || c_pf_tapset != r_pf_tapset
+            || c_pf_tapset_old != r_pf_tapset_old
         {
             println!(
                 "  postfilter MISMATCH: C=({},{},{},{},{},{}) R=({},{},{},{},{},{})",
-                c_pf_period, c_pf_period_old, c_pf_gain, c_pf_gain_old, c_pf_tapset, c_pf_tapset_old,
-                r_pf_period, r_pf_period_old, r_pf_gain, r_pf_gain_old, r_pf_tapset, r_pf_tapset_old,
+                c_pf_period,
+                c_pf_period_old,
+                c_pf_gain,
+                c_pf_gain_old,
+                c_pf_tapset,
+                c_pf_tapset_old,
+                r_pf_period,
+                r_pf_period_old,
+                r_pf_gain,
+                r_pf_gain_old,
+                r_pf_tapset,
+                r_pf_tapset_old,
             );
         }
 
@@ -1595,11 +1912,13 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
         let mut p = 0usize;
         let mut target_pkt: Option<&[u8]> = None;
         for fidx in 0..=ff {
-            if p + 2 > c_encoded.len() { break; }
-            let pl = u16::from_le_bytes([c_encoded[p], c_encoded[p+1]]) as usize;
+            if p + 2 > c_encoded.len() {
+                break;
+            }
+            let pl = u16::from_le_bytes([c_encoded[p], c_encoded[p + 1]]) as usize;
             p += 2;
             if fidx == ff {
-                target_pkt = Some(&c_encoded[p..p+pl]);
+                target_pkt = Some(&c_encoded[p..p + pl]);
             }
             p += pl;
         }
@@ -1617,13 +1936,22 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
             // Decode all frames up to (but not including) the failing frame
             let mut p2 = 0usize;
             for fidx in 0..ff {
-                if p2 + 2 > c_encoded.len() { break; }
-                let pl = u16::from_le_bytes([c_encoded[p2], c_encoded[p2+1]]) as usize;
+                if p2 + 2 > c_encoded.len() {
+                    break;
+                }
+                let pl = u16::from_le_bytes([c_encoded[p2], c_encoded[p2 + 1]]) as usize;
                 p2 += 2;
-                let pk = &c_encoded[p2..p2+pl];
+                let pk = &c_encoded[p2..p2 + pl];
                 // C decode
                 unsafe {
-                    bindings::opus_decode(fresh_c, pk.as_ptr(), pl as i32, c_pcm.as_mut_ptr(), frame_size as i32, 0);
+                    bindings::opus_decode(
+                        fresh_c,
+                        pk.as_ptr(),
+                        pl as i32,
+                        c_pcm.as_mut_ptr(),
+                        frame_size as i32,
+                        0,
+                    );
                 }
                 // Rust decode
                 let _ = fresh_rust.decode(Some(pk), &mut rust_pcm, frame_size as i32, false);
@@ -1632,14 +1960,22 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
 
             // Compare state before decoding the failing frame
             let mut c_be = vec![0i32; 42];
-            let c_nb = unsafe { bindings::debug_get_celt_old_band_e(fresh_c, c_be.as_mut_ptr(), 42) } as usize;
+            let c_nb =
+                unsafe { bindings::debug_get_celt_old_band_e(fresh_c, c_be.as_mut_ptr(), 42) }
+                    as usize;
             let r_be = fresh_rust.debug_get_old_band_e();
 
             println!("State before frame {}:", ff);
             let mut state_match = true;
-            for i in 0..(2*c_nb).min(r_be.len()) {
+            for i in 0..(2 * c_nb).min(r_be.len()) {
                 if c_be[i] != r_be[i] {
-                    println!("  band[{}]: C={} R={} diff={}", i, c_be[i], r_be[i], c_be[i]-r_be[i]);
+                    println!(
+                        "  band[{}]: C={} R={} diff={}",
+                        i,
+                        c_be[i],
+                        r_be[i],
+                        c_be[i] - r_be[i]
+                    );
                     state_match = false;
                 }
             }
@@ -1652,17 +1988,32 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
 
             // Now decode the failing frame
             unsafe {
-                let ret = bindings::opus_decode(fresh_c, pkt.as_ptr(), pkt.len() as i32, c_pcm.as_mut_ptr(), frame_size as i32, 0);
+                let ret = bindings::opus_decode(
+                    fresh_c,
+                    pkt.as_ptr(),
+                    pkt.len() as i32,
+                    c_pcm.as_mut_ptr(),
+                    frame_size as i32,
+                    0,
+                );
                 assert!(ret >= 0);
             }
             let _ = fresh_rust.decode(Some(pkt), &mut rust_pcm, frame_size as i32, false);
 
             // Compare state after
-            let c_nb = unsafe { bindings::debug_get_celt_old_band_e(fresh_c, c_be.as_mut_ptr(), 42) } as usize;
+            let c_nb =
+                unsafe { bindings::debug_get_celt_old_band_e(fresh_c, c_be.as_mut_ptr(), 42) }
+                    as usize;
             let r_be = fresh_rust.debug_get_old_band_e();
             println!("State after frame {}:", ff);
-            for i in 0..(2*c_nb).min(r_be.len()).min(5) {
-                println!("  band[{}]: C={} R={} diff={}", i, c_be[i], r_be[i], c_be[i]-r_be[i]);
+            for i in 0..(2 * c_nb).min(r_be.len()).min(5) {
+                println!(
+                    "  band[{}]: C={} R={} diff={}",
+                    i,
+                    c_be[i],
+                    r_be[i],
+                    c_be[i] - r_be[i]
+                );
             }
 
             // Test C-side energy decode with the same state
@@ -1678,17 +2029,30 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
                 }
                 let mut p3 = 0usize;
                 for fidx in 0..ff {
-                    if p3 + 2 > c_encoded.len() { break; }
-                    let pl = u16::from_le_bytes([c_encoded[p3], c_encoded[p3+1]]) as usize;
+                    if p3 + 2 > c_encoded.len() {
+                        break;
+                    }
+                    let pl = u16::from_le_bytes([c_encoded[p3], c_encoded[p3 + 1]]) as usize;
                     p3 += 2;
-                    let pk = &c_encoded[p3..p3+pl];
+                    let pk = &c_encoded[p3..p3 + pl];
                     unsafe {
-                        bindings::opus_decode(fresh_c2, pk.as_ptr(), pl as i32, c_pcm.as_mut_ptr(), frame_size as i32, 0);
+                        bindings::opus_decode(
+                            fresh_c2,
+                            pk.as_ptr(),
+                            pl as i32,
+                            c_pcm.as_mut_ptr(),
+                            frame_size as i32,
+                            0,
+                        );
                     }
                     p3 += pl;
                 }
-                let pre_nb = unsafe { bindings::debug_get_celt_old_band_e(fresh_c2, c_test_bands.as_mut_ptr(), 42) };
-                unsafe { bindings::opus_decoder_destroy(fresh_c2); }
+                let pre_nb = unsafe {
+                    bindings::debug_get_celt_old_band_e(fresh_c2, c_test_bands.as_mut_ptr(), 42)
+                };
+                unsafe {
+                    bindings::opus_decoder_destroy(fresh_c2);
+                }
             }
 
             // Now test: call C energy decode with the pre-decode state
@@ -1703,12 +2067,14 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
             // The decode_frame receives frame_data = payload after TOC.
             // For code 0 (single frame), payload starts at byte 1.
             let celt_payload = &pkt[1..]; // Skip TOC byte
-            println!("CELT payload: {} bytes, first bytes: {:02x} {:02x} {:02x} {:02x}",
+            println!(
+                "CELT payload: {} bytes, first bytes: {:02x} {:02x} {:02x} {:02x}",
                 celt_payload.len(),
                 celt_payload.get(0).unwrap_or(&0),
                 celt_payload.get(1).unwrap_or(&0),
                 celt_payload.get(2).unwrap_or(&0),
-                celt_payload.get(3).unwrap_or(&0));
+                celt_payload.get(3).unwrap_or(&0)
+            );
 
             // Call C energy decode
             let mut c_fine = vec![0i32; 21];
@@ -1732,22 +2098,37 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
             let mut first_pcm_diff: Option<usize> = None;
             for i in 0..frame_samples {
                 let d = (c_pcm[i] as i32 - rust_pcm[i] as i32).abs();
-                if d > pcm_diff { pcm_diff = d; }
-                if d > 0 && first_pcm_diff.is_none() { first_pcm_diff = Some(i); }
+                if d > pcm_diff {
+                    pcm_diff = d;
+                }
+                if d > 0 && first_pcm_diff.is_none() {
+                    first_pcm_diff = Some(i);
+                }
             }
             println!("PCM: max_diff={} first_diff={:?}", pcm_diff, first_pcm_diff);
 
             // Get final ranges
             let mut c_r: u32 = 0;
-            unsafe { bindings::opus_decoder_ctl(fresh_c, 4031i32, &mut c_r as *mut u32); }
+            unsafe {
+                bindings::opus_decoder_ctl(fresh_c, 4031i32, &mut c_r as *mut u32);
+            }
             let r_r = fresh_rust.get_final_range();
-            println!("Range: C={:08x} R={:08x} {}", c_r, r_r, if c_r == r_r { "MATCH" } else { "MISMATCH" });
+            println!(
+                "Range: C={:08x} R={:08x} {}",
+                c_r,
+                r_r,
+                if c_r == r_r { "MATCH" } else { "MISMATCH" }
+            );
 
-            unsafe { bindings::opus_decoder_destroy(fresh_c); }
+            unsafe {
+                bindings::opus_decoder_destroy(fresh_c);
+            }
         }
     }
 
-    unsafe { bindings::opus_decoder_destroy(c_dec); }
+    unsafe {
+        bindings::opus_decoder_destroy(c_dec);
+    }
 }
 
 // ---------------------------------------------------------------------------
