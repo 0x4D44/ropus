@@ -1405,9 +1405,9 @@ pub fn silk_stereo_ms_to_lr(
         let sum = ((x1[n] as i32 + x1[n + 2] as i32 + ((x1[n + 1] as i32) << 1)) << 9) as i32;
         // acc = silk_SMLAWB(x2[n+1] << 8, sum, pred0_Q13)  -- Q8
         let mut acc = (x2[n + 1] as i32) << 8;
-        acc = acc.wrapping_add(((sum as i64 * pred0_q13 as i64) >> 16) as i32);
+        acc = acc.wrapping_add(((sum as i64 * (pred0_q13 as i16 as i64)) >> 16) as i32);
         // acc = silk_SMLAWB(acc, x1[n+1] << 11, pred1_Q13)  -- Q8
-        acc = acc.wrapping_add(((((x1[n + 1] as i32) << 11) as i64 * pred1_q13 as i64) >> 16) as i32);
+        acc = acc.wrapping_add(((((x1[n + 1] as i32) << 11) as i64 * (pred1_q13 as i16 as i64)) >> 16) as i32);
         // x2[n+1] = silk_SAT16(silk_RSHIFT_ROUND(acc, 8))
         x2[n + 1] = sat16((acc + (1 << 7)) >> 8);
     }
@@ -1418,8 +1418,8 @@ pub fn silk_stereo_ms_to_lr(
     for n in interp_len..frame_length {
         let sum = ((x1[n] as i32 + x1[n + 2] as i32 + ((x1[n + 1] as i32) << 1)) << 9) as i32;
         let mut acc = (x2[n + 1] as i32) << 8;
-        acc = acc.wrapping_add(((sum as i64 * pred0_q13 as i64) >> 16) as i32);
-        acc = acc.wrapping_add(((((x1[n + 1] as i32) << 11) as i64 * pred1_q13 as i64) >> 16) as i32);
+        acc = acc.wrapping_add(((sum as i64 * (pred0_q13 as i16 as i64)) >> 16) as i32);
+        acc = acc.wrapping_add(((((x1[n + 1] as i32) << 11) as i64 * (pred1_q13 as i16 as i64)) >> 16) as i32);
         x2[n + 1] = sat16((acc + (1 << 7)) >> 8);
     }
     state.pred_prev_q13 = *pred_q13;
