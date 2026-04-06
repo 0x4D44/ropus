@@ -59,23 +59,12 @@ const FIND_LPC_COND_FAC: f64 = 1e-5;
 // ===========================================================================
 
 /// KISS99 PRNG state. Suitable for simulations, not cryptographic use.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Kiss99Ctx {
     pub z: u32,
     pub w: u32,
     pub jsr: u32,
     pub jcong: u32,
-}
-
-impl Default for Kiss99Ctx {
-    fn default() -> Self {
-        Self {
-            z: 0,
-            w: 0,
-            jsr: 0,
-            jcong: 0,
-        }
-    }
 }
 
 impl Kiss99Ctx {
@@ -1128,23 +1117,12 @@ pub struct LPCNetModel {
 }
 
 /// Runtime neural network state (conv + GRU layers).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct NNetState {
     pub feature_conv1_state: Vec<f32>,
     pub feature_conv2_state: Vec<f32>,
     pub gru_a_state: Vec<f32>,
     pub gru_b_state: Vec<f32>,
-}
-
-impl Default for NNetState {
-    fn default() -> Self {
-        Self {
-            feature_conv1_state: Vec::new(),
-            feature_conv2_state: Vec::new(),
-            gru_a_state: Vec::new(),
-            gru_b_state: Vec::new(),
-        }
-    }
 }
 
 /// PLC prediction model weights.
@@ -1569,6 +1547,7 @@ impl LPCNetEncState {
         x: &mut [f32],
         features: &mut [f32; NB_TOTAL_FEATURES],
     ) -> i32 {
+        #[allow(clippy::unnecessary_to_owned)] // x is both output and input; copy required
         preemphasis(
             x,
             &mut self.mem_preemph,

@@ -651,7 +651,7 @@ fn silk_decode_pulses(
         rc.decode_icdf(&SILK_RATE_LEVELS_ICDF[(signal_type >> 1) as usize], 8) as usize;
 
     // 2. Shell blocks
-    let iter = (frame_length + SHELL_CODEC_FRAME_LENGTH - 1) / SHELL_CODEC_FRAME_LENGTH;
+    let iter = frame_length.div_ceil(SHELL_CODEC_FRAME_LENGTH);
     let mut sum_pulses = [0i32; MAX_NB_SHELL_BLOCKS];
     let mut n_lshifts = [0i32; MAX_NB_SHELL_BLOCKS];
 

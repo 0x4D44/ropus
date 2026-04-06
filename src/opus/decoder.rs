@@ -1013,7 +1013,7 @@ impl OpusDecoder {
             return Err(OPUS_BAD_ARG);
         }
         // For FEC/PLC, frame_size must be a multiple of 2.5 ms
-        let is_plc_or_fec = decode_fec || data.is_none() || data.map_or(true, |d| d.is_empty());
+        let is_plc_or_fec = decode_fec || data.is_none() || data.is_none_or(|d| d.is_empty());
         if is_plc_or_fec && frame_size % (self.fs / 400) != 0 {
             return Err(OPUS_BAD_ARG);
         }

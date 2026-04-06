@@ -463,7 +463,7 @@ impl<'a> RangeEncoder<'a> {
         // Debug: trace raw-bit writes near byte 261 (eoffs 55-62)
         {
             if TRACE_ENCODE_BITS.load(std::sync::atomic::Ordering::Relaxed) {
-                let new_eoffs_approx = self.end_offs + ((self.nend_bits as u32 + bits + 7) / 8);
+                let new_eoffs_approx = self.end_offs + (self.nend_bits as u32 + bits).div_ceil(8);
                 if self.end_offs <= 62 && new_eoffs_approx >= 56 {
                     static EB_CTR: std::sync::atomic::AtomicI32 =
                         std::sync::atomic::AtomicI32::new(0);

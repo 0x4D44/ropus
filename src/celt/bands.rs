@@ -2152,7 +2152,7 @@ pub fn quant_all_bands<EC: EcCoder>(
                         "[QAB F7] band 13 INPUT x[0..min(32,n)]={:?}",
                         &x_slice[..n.min(32) as usize]
                     );
-                    if let Some(ref lbr) = lb {
+                    if let Some(lbr) = &lb {
                         eprintln!(
                             "[QAB F7] band 13 LOWBAND[0..min(16,n)]={:?}",
                             &lbr[..n.min(16) as usize]

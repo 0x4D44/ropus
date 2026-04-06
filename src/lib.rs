@@ -36,6 +36,10 @@
     clippy::nonminimal_bool,
     // C-style let-then-return for clarity in complex expressions.
     clippy::let_and_return,
+    // Codec types have complex initialization; new() is preferred over Default.
+    clippy::new_without_default,
+    // C-style manual loop counters preserved for reference correspondence.
+    clippy::explicit_counter_loop,
 )]
 
 pub mod celt;

@@ -224,23 +224,12 @@ impl Default for SilkVadState {
 }
 
 /// LP variable cutoff state (bandwidth transition filter).
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct SilkLpState {
     pub in_lp_state: [i32; 2],
     pub transition_frame_no: i32,
     pub mode: i32,
     pub saved_fs_khz: i32,
-}
-
-impl Default for SilkLpState {
-    fn default() -> Self {
-        Self {
-            in_lp_state: [0; 2],
-            transition_frame_no: 0,
-            mode: 0,
-            saved_fs_khz: 0,
-        }
-    }
 }
 
 /// Noise shaping quantizer state.
@@ -2108,9 +2097,7 @@ pub fn silk_nlsf_del_dec_quant(
                     rd_min_q25[j] = rd_q25[j + NLSF_QUANT_DEL_DEC_STATES];
                     rd_q25[j] = rd_min_q25[j];
                     rd_q25[j + NLSF_QUANT_DEL_DEC_STATES] = rd_max_q25[j];
-                    let tmp = prev_out_q10[j];
-                    prev_out_q10[j] = prev_out_q10[j + NLSF_QUANT_DEL_DEC_STATES];
-                    prev_out_q10[j + NLSF_QUANT_DEL_DEC_STATES] = tmp;
+                    prev_out_q10.swap(j, j + NLSF_QUANT_DEL_DEC_STATES);
                     ind_sort[j] = j + NLSF_QUANT_DEL_DEC_STATES;
                 } else {
                     rd_min_q25[j] = rd_q25[j];
@@ -4849,8 +4836,8 @@ pub fn silk_warped_autocorrelation(
     length: usize,
     order: usize,
 ) {
-    let mut state_qs = vec![0i32; MAX_SHAPE_LPC_ORDER + 1];
-    let mut corr_qc = vec![0i64; MAX_SHAPE_LPC_ORDER + 1];
+    let mut state_qs = [0i32; MAX_SHAPE_LPC_ORDER + 1];
+    let mut corr_qc = [0i64; MAX_SHAPE_LPC_ORDER + 1];
 
     for n in 0..length {
         let mut tmp1_qs = shl32(input[n] as i32, QS);
@@ -6666,7 +6653,7 @@ fn silk_p_ana_calc_corr_st3(
             xcorr_len,
         );
 
-        let mut scratch_mem = vec![0i32; PA_SCRATCH_SIZE];
+        let mut scratch_mem = [0i32; PA_SCRATCH_SIZE];
         let mut lag_counter = 0;
         for j in lag_low..=lag_high {
             scratch_mem[lag_counter] = xcorr32[(lag_high - j) as usize];
@@ -6723,7 +6710,7 @@ fn silk_p_ana_calc_energy_st3(
         let basis_off = (target_off as i32 - start_lag - lag_low) as usize;
         let mut energy = silk_inner_prod16(&frame[basis_off..], &frame[basis_off..], sf_length);
 
-        let mut scratch_mem = vec![0i32; PA_SCRATCH_SIZE];
+        let mut scratch_mem = [0i32; PA_SCRATCH_SIZE];
         scratch_mem[0] = energy;
         let mut lag_counter = 1usize;
 
@@ -7049,9 +7036,8 @@ pub fn silk_encode_frame_fix(
                 }
 
                 // NSQ: dispatch del_dec vs standard (matches C encode_frame_FIX.c:210)
-                let mut nsq = std::mem::replace(&mut ps_enc.s_cmn.s_nsq, NsqState::default());
-                let mut indices =
-                    std::mem::replace(&mut ps_enc.s_cmn.indices, SideInfoIndices::default());
+                let mut nsq = std::mem::take(&mut ps_enc.s_cmn.s_nsq);
+                let mut indices = std::mem::take(&mut ps_enc.s_cmn.indices);
                 let mut pulses =
                     std::mem::replace(&mut ps_enc.s_cmn.pulses, [0i8; MAX_FRAME_LENGTH]);
                 if ps_enc.s_cmn.n_states_delayed_decision > 1 || ps_enc.s_cmn.warping_q16 > 0 {

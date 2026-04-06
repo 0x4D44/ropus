@@ -527,7 +527,7 @@ impl<'a> OpusExtensionIterator<'a> {
     /// Returns `(status, extension)` where status is 1 if found, 0 if done,
     /// or negative on error.
     /// Matches C `opus_extension_iterator_next`.
-    pub fn next(&mut self) -> (i32, OpusExtensionData<'a>) {
+    pub fn next_ext(&mut self) -> (i32, OpusExtensionData<'a>) {
         let mut ext = OpusExtensionData::EMPTY;
 
         if self.curr_len < 0 {
@@ -614,7 +614,7 @@ impl<'a> OpusExtensionIterator<'a> {
     /// Matches C `opus_extension_iterator_find`.
     pub fn find(&mut self, id: i32) -> (i32, OpusExtensionData<'a>) {
         loop {
-            let (ret, ext) = self.next();
+            let (ret, ext) = self.next_ext();
             if ret <= 0 {
                 return (ret, ext);
             }
@@ -638,7 +638,7 @@ pub(crate) fn opus_packet_extensions_count(data: &[u8], len: i32, nb_frames: i32
     let mut iter = OpusExtensionIterator::new(data, len, nb_frames);
     let mut count = 0;
     loop {
-        let (ret, _) = iter.next();
+        let (ret, _) = iter.next_ext();
         if ret <= 0 {
             break;
         }
@@ -664,7 +664,7 @@ pub(crate) fn opus_packet_extensions_parse<'a>(
     let max_ext = *nb_extensions;
     let mut count: i32 = 0;
     loop {
-        let (ret, ext) = iter.next();
+        let (ret, ext) = iter.next_ext();
         if ret <= 0 {
             *nb_extensions = count;
             return ret;
@@ -1757,7 +1757,7 @@ mod tests {
     fn test_extension_iterator_empty() {
         let data: &[u8] = &[];
         let mut iter = OpusExtensionIterator::new(data, 0, 1);
-        let (ret, _) = iter.next();
+        let (ret, _) = iter.next_ext();
         assert_eq!(ret, 0);
     }
 

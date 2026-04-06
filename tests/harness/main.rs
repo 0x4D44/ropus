@@ -7,7 +7,7 @@
     clippy::unnecessary_cast,
     clippy::collapsible_if,
     clippy::identity_op,
-    clippy::manual_is_variant_and,
+    clippy::manual_is_variant_and
 )]
 
 #[path = "bindings.rs"]
@@ -98,7 +98,7 @@ fn read_wav(path: &Path) -> WavData {
         }
         pos += 8 + chunk_size;
         // WAV chunks are word-aligned
-        if chunk_size % 2 != 0 {
+        if !chunk_size.is_multiple_of(2) {
             pos += 1;
         }
     }
@@ -184,8 +184,8 @@ fn print_result(label: &str, stats: &CompareStats, a: &[u8], b: &[u8]) {
             // Hex dump around first difference
             let start = offset.saturating_sub(16);
             let end = (offset + 48).min(a.len().max(b.len()));
-            println!("  C ref:  {}", hex_line(&a, start, end));
-            println!("  Rust:   {}", hex_line(&b, start, end));
+            println!("  C ref:  {}", hex_line(a, start, end));
+            println!("  Rust:   {}", hex_line(b, start, end));
             println!(
                 "  {}^ offset {}",
                 " ".repeat(10 + (offset - start) * 3),
@@ -726,7 +726,7 @@ fn cmd_encode_framecompare(wav_path: &str, bitrate: i32, complexity: i32) {
         let cl = c_len as usize;
         let rl = r_len as usize;
 
-        if &c_pkt[..cl] == &r_pkt[..rl] {
+        if c_pkt[..cl] == r_pkt[..rl] {
             println!("Frame {:3}: {} bytes - MATCH", frame_idx, cl);
         } else {
             println!(
@@ -2077,7 +2077,7 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
             println!(
                 "CELT payload: {} bytes, first bytes: {:02x} {:02x} {:02x} {:02x}",
                 celt_payload.len(),
-                celt_payload.get(0).unwrap_or(&0),
+                celt_payload.first().unwrap_or(&0),
                 celt_payload.get(1).unwrap_or(&0),
                 celt_payload.get(2).unwrap_or(&0),
                 celt_payload.get(3).unwrap_or(&0)

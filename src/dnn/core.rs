@@ -1422,7 +1422,7 @@ pub fn adacomb_process_frame(
 ) {
     let mut output_buffer = vec![0.0f32; ADACOMB_MAX_FRAME_SIZE];
     let mut output_buffer_last = vec![0.0f32; ADACOMB_MAX_FRAME_SIZE];
-    let mut kernel_buffer = vec![0.0f32; ADACOMB_MAX_KERNEL_SIZE];
+    let mut kernel_buffer = [0.0f32; ADACOMB_MAX_KERNEL_SIZE];
     let hist_len = kernel_size + ADACOMB_MAX_LAG;
     let input_len = ADACOMB_MAX_FRAME_SIZE + ADACOMB_MAX_LAG + ADACOMB_MAX_KERNEL_SIZE;
     let mut input_buffer = vec![0.0f32; input_len];
