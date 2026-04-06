@@ -858,14 +858,18 @@ pub fn silk_sub_sat32(a: i32, b: i32) -> i32 {
 /// Saturating i32 left shift.
 #[inline(always)]
 pub fn silk_lshift_sat32(a: i32, shift: i32) -> i32 {
-    let result = (a as i64) << shift;
-    if result > i32::MAX as i64 {
-        i32::MAX
-    } else if result < i32::MIN as i64 {
-        i32::MIN
+    // Matches C: silk_LSHIFT32( silk_LIMIT( a, INT32_MIN >> shift, INT32_MAX >> shift ), shift )
+    // Clamp the input to [INT32_MIN >> shift, INT32_MAX >> shift], THEN shift.
+    let upper = i32::MAX >> shift;
+    let lower = i32::MIN >> shift;
+    let clamped = if a > upper {
+        upper
+    } else if a < lower {
+        lower
     } else {
-        result as i32
-    }
+        a
+    };
+    clamped << shift
 }
 
 /// Saturating i16 addition (returns i16).
