@@ -863,53 +863,108 @@ fn silk_decode_core(
     let mut exc_offset = 0;
     let mut xq_offset = 0;
 
+    // Mutable copy of dec_ctrl for PLC transition handling
+    let mut dec_ctrl_mut = dec_ctrl.clone();
+
     for k in 0..nb_subfr {
-        let a_q12 = &dec_ctrl.pred_coef_q12[k >> 1];
-        let b_q14 = &dec_ctrl.ltp_coef_q14[k * LTP_ORDER..(k + 1) * LTP_ORDER];
-        let gain_q10 = dec_ctrl.gains_q16[k] >> 6;
+        let a_q12 = &dec_ctrl_mut.pred_coef_q12[k >> 1];
+        let gain_q10 = dec_ctrl_mut.gains_q16[k] >> 6;
 
         // Compute inverse gain
-        let inv_gain_q31 = silk_inverse32_var_q(dec_ctrl.gains_q16[k], 47);
+        let mut inv_gain_q31 = silk_inverse32_var_q(dec_ctrl_mut.gains_q16[k], 47);
 
         // Gain adjustment if gain changed
-        if dec_ctrl.gains_q16[k] != prev_gain_q16 {
-            let gain_adj_q16 = silk_div32_var_q(prev_gain_q16, dec_ctrl.gains_q16[k], 16);
+        let gain_adj_q16 = if dec_ctrl_mut.gains_q16[k] != prev_gain_q16 {
+            let adj = silk_div32_var_q(prev_gain_q16, dec_ctrl_mut.gains_q16[k], 16);
             // Scale sLPC_Q14 state
             for i in 0..MAX_LPC_ORDER {
-                s_lpc_q14[i] = silk_smulww(gain_adj_q16, s_lpc_q14[i]);
+                s_lpc_q14[i] = silk_smulww(adj, s_lpc_q14[i]);
             }
+            adj
+        } else {
+            1 << 16
+        };
+        prev_gain_q16 = dec_ctrl_mut.gains_q16[k];
+
+        // Avoid abrupt transition from voiced PLC to unvoiced normal decoding
+        // Matches C: decode_core.c lines 131-140
+        let mut local_signal_type = signal_type;
+        if dec.loss_cnt > 0 && dec.prev_signal_type == TYPE_VOICED
+            && signal_type != TYPE_VOICED && k < MAX_NB_SUBFR / 2
+        {
+            for i in 0..LTP_ORDER {
+                dec_ctrl_mut.ltp_coef_q14[k * LTP_ORDER + i] = 0;
+            }
+            dec_ctrl_mut.ltp_coef_q14[k * LTP_ORDER + LTP_ORDER / 2] = (0.25f64 * 16384.0) as i16;
+            local_signal_type = TYPE_VOICED;
+            dec_ctrl_mut.pitch_l[k] = dec.lag_prev;
         }
-        prev_gain_q16 = dec_ctrl.gains_q16[k];
+
+        let b_q14 = &dec_ctrl_mut.ltp_coef_q14[k * LTP_ORDER..(k + 1) * LTP_ORDER];
 
         // Allocate residual buffer
         let mut res_q14 = vec![0i32; subfr_length];
 
-        if signal_type == TYPE_VOICED {
-            let lag = dec_ctrl.pitch_l[k];
+        if local_signal_type == TYPE_VOICED {
+            let lag = dec_ctrl_mut.pitch_l[k];
 
             // Re-whitening at subframe 0 or 2 (if interpolated)
             if k == 0 || (k == 2 && nlsf_interp) {
+                // At k==2, copy decoded xq into outBuf before re-whitening
+                // Matches C: decode_core.c line 153
+                if k == 2 {
+                    let dst_start = ltp_mem_length;
+                    for i in 0..(2 * subfr_length) {
+                        if dst_start + i < dec.out_buf.len() && i < xq.len() {
+                            dec.out_buf[dst_start + i] = xq[i];
+                        }
+                    }
+                }
+
                 // LPC analysis filter on outBuf to produce sLTP
+                // Input is offset by k * subfr_length (C: &psDec->outBuf[start_idx + k * subfr_length])
                 let start_idx =
                     ltp_mem_length as i32 - lag - lpc_order as i32 - LTP_ORDER as i32 / 2;
                 let start_idx = imax(start_idx, 0) as usize;
+                let in_offset = k * subfr_length;
 
-                for i in start_idx..ltp_mem_length {
-                    let mut sum: i64 = 0;
+                // C: silk_LPC_analysis_filter(&sLTP[start_idx], &outBuf[start_idx + k*subfr], A_Q12, ltp_mem_length - start_idx, lpc_order)
+                // The function sets output[0..d-1] = 0 and for ix in d..len: out[ix] = in[ix] - sum(B[j]*in[ix-1-j])
+                // Here d = lpc_order, len = ltp_mem_length - start_idx
+                let filter_len = ltp_mem_length - start_idx;
+                // First d samples are zero
+                for i in start_idx..start_idx + lpc_order.min(filter_len) {
+                    s_ltp[i] = 0;
+                }
+                for ix in lpc_order..filter_len {
+                    let i = start_idx + ix;
+                    let in_i = i + in_offset;
+                    let mut out32_q12: i32 = 0;
                     for j in 0..lpc_order {
-                        if i >= j + 1 {
-                            sum += a_q12[j] as i64 * dec.out_buf[i - j - 1] as i64;
+                        let in_idx = in_i as i64 - 1 - j as i64;
+                        if in_idx >= 0 && (in_idx as usize) < dec.out_buf.len() {
+                            // silk_SMLABB_ovflw: wrapping multiply-add of two i16 values
+                            out32_q12 = out32_q12.wrapping_add(
+                                dec.out_buf[in_idx as usize] as i32 * a_q12[j] as i32
+                            );
                         }
                     }
-                    s_ltp[i] = (dec.out_buf[i] as i32 - (sum >> 12) as i32) as i16;
+                    let in_val = if in_i < dec.out_buf.len() {
+                        dec.out_buf[in_i] as i32
+                    } else {
+                        0
+                    };
+                    // out = in[ix] * (1<<12) - prediction, then >> 12 with rounding, then sat16
+                    let out32_q12 = (in_val << 12).wrapping_sub(out32_q12);
+                    let out32 = silk_rshift_round(out32_q12, 12);
+                    s_ltp[i] = sat16(out32);
                 }
 
                 // Scale sLTP → sLTP_Q15 using inv_gain
-                let mut inv_gain_for_ltp = inv_gain_q31;
                 if k == 0 {
                     // Apply LTP scale for first subframe
-                    inv_gain_for_ltp =
-                        ((inv_gain_for_ltp as i64 * dec_ctrl.ltp_scale_q14 as i64) >> 14) as i32;
+                    // C: inv_gain_Q31 = silk_LSHIFT(silk_SMULWB(inv_gain_Q31, LTP_scale_Q14), 2)
+                    inv_gain_q31 = silk_smulwb(inv_gain_q31, dec_ctrl_mut.ltp_scale_q14 as i16) << 2;
                 }
                 let n_samples = lag as usize + LTP_ORDER / 2;
                 for i in 0..n_samples {
@@ -918,14 +973,14 @@ fn silk_decode_core(
                         let s_idx = ltp_mem_length as i64 - i as i64 - 1;
                         if s_idx >= 0 {
                             s_ltp_q15[idx as usize] =
-                                silk_smulwb(inv_gain_for_ltp, s_ltp[s_idx as usize] as i16);
+                                silk_smulwb(inv_gain_q31, s_ltp[s_idx as usize] as i16);
                         }
                     }
                 }
-            } else if dec_ctrl.gains_q16[k] != dec_ctrl.gains_q16[k - 1] {
+            } else if gain_adj_q16 != (1 << 16) {
                 // Scale existing LTP state when gain changes
                 let gain_adj_q16 =
-                    silk_div32_var_q(dec_ctrl.gains_q16[k - 1], dec_ctrl.gains_q16[k], 16);
+                    silk_div32_var_q(dec_ctrl_mut.gains_q16[k - 1], dec_ctrl_mut.gains_q16[k], 16);
                 let n_start = s_ltp_buf_idx as i64 - lag as i64 - LTP_ORDER as i64 / 2;
                 let n_start = imax(n_start as i32, 0) as usize;
                 for i in n_start..s_ltp_buf_idx {

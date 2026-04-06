@@ -7718,32 +7718,76 @@ pub fn silk_encode(
         }
 
         // Resample and buffer input per channel
-        for n in 0..n_channels_internal {
-            let api_in = &samples_in[samples_offset..];
-
-            // De-interleave if stereo, else copy
-            let input: Vec<i16> = if enc_control.n_channels_api == 2 {
-                (0..n_samples_from_input)
+        // Matches C: enc_API.c lines 291-341 (three cases)
+        let api_in = &samples_in[samples_offset..];
+        if enc_control.n_channels_api == 2 && n_channels_internal == 2 {
+            // Case 1: stereo API, stereo internal — de-interleave each channel
+            for n in 0..2 {
+                let input: Vec<i16> = (0..n_samples_from_input)
                     .map(|i| api_in[i * 2 + n])
-                    .collect()
-            } else {
-                api_in[..n_samples_from_input].to_vec()
-            };
-
-            // Resample from API rate to internal rate
+                    .collect();
+                let mut buf = vec![0i16; n_samples_to_buffer];
+                silk_resampler_run(
+                    &mut enc.state_fxx[n].s_cmn.resampler_state,
+                    &mut buf,
+                    &input,
+                );
+                let buf_ix = enc.state_fxx[n].s_cmn.input_buf_ix as usize;
+                let copy_len = n_samples_to_buffer.min(MAX_FRAME_LENGTH + 2 - buf_ix);
+                enc.state_fxx[n].s_cmn.input_buf[buf_ix + 2..buf_ix + 2 + copy_len]
+                    .copy_from_slice(&buf[..copy_len]);
+                enc.state_fxx[n].s_cmn.input_buf_ix += n_samples_to_buffer as i32;
+            }
+        } else if enc_control.n_channels_api == 2 && n_channels_internal == 1 {
+            // Case 2: stereo API, mono internal — downmix L+R to mono
+            // C: buf[n] = silk_RSHIFT_ROUND(samplesIn[2*n] + samplesIn[2*n+1], 1)
+            let input: Vec<i16> = (0..n_samples_from_input)
+                .map(|i| {
+                    let sum = api_in[i * 2] as i32 + api_in[i * 2 + 1] as i32;
+                    silk_rshift_round(sum, 1) as i16
+                })
+                .collect();
             let mut buf = vec![0i16; n_samples_to_buffer];
             silk_resampler_run(
-                &mut enc.state_fxx[n].s_cmn.resampler_state,
+                &mut enc.state_fxx[0].s_cmn.resampler_state,
                 &mut buf,
                 &input,
             );
-
-            // Buffer the resampled input
-            let buf_ix = enc.state_fxx[n].s_cmn.input_buf_ix as usize;
+            // On the first mono frame after stereo, average with second resampler
+            // C: enc_API.c lines 323-331
+            if enc.n_prev_channels_internal == 2
+                && enc.state_fxx[0].s_cmn.n_frames_encoded == 0
+            {
+                let mut buf2 = vec![0i16; n_samples_to_buffer];
+                silk_resampler_run(
+                    &mut enc.state_fxx[1].s_cmn.resampler_state,
+                    &mut buf2,
+                    &input,
+                );
+                let buf_ix = enc.state_fxx[0].s_cmn.input_buf_ix as usize;
+                for i in 0..n_samples_to_buffer.min(MAX_FRAME_LENGTH + 2 - buf_ix) {
+                    buf[i] = ((buf[i] as i32 + buf2[i] as i32) >> 1) as i16;
+                }
+            }
+            let buf_ix = enc.state_fxx[0].s_cmn.input_buf_ix as usize;
             let copy_len = n_samples_to_buffer.min(MAX_FRAME_LENGTH + 2 - buf_ix);
-            enc.state_fxx[n].s_cmn.input_buf[buf_ix + 2..buf_ix + 2 + copy_len]
+            enc.state_fxx[0].s_cmn.input_buf[buf_ix + 2..buf_ix + 2 + copy_len]
                 .copy_from_slice(&buf[..copy_len]);
-            enc.state_fxx[n].s_cmn.input_buf_ix += n_samples_to_buffer as i32;
+            enc.state_fxx[0].s_cmn.input_buf_ix += n_samples_to_buffer as i32;
+        } else {
+            // Case 3: mono API, mono internal
+            let input = api_in[..n_samples_from_input].to_vec();
+            let mut buf = vec![0i16; n_samples_to_buffer];
+            silk_resampler_run(
+                &mut enc.state_fxx[0].s_cmn.resampler_state,
+                &mut buf,
+                &input,
+            );
+            let buf_ix = enc.state_fxx[0].s_cmn.input_buf_ix as usize;
+            let copy_len = n_samples_to_buffer.min(MAX_FRAME_LENGTH + 2 - buf_ix);
+            enc.state_fxx[0].s_cmn.input_buf[buf_ix + 2..buf_ix + 2 + copy_len]
+                .copy_from_slice(&buf[..copy_len]);
+            enc.state_fxx[0].s_cmn.input_buf_ix += n_samples_to_buffer as i32;
         }
 
         samples_offset += n_samples_from_input * enc_control.n_channels_api as usize;
@@ -7804,24 +7848,54 @@ pub fn silk_encode(
                 break;
             }
 
-            for n in 0..n_channels_internal {
-                let api_in = &samples_in[samples_offset..];
-                let input: Vec<i16> = if enc_control.n_channels_api == 2 {
-                    (0..n_sfi).map(|i| api_in[i * 2 + n]).collect()
-                } else {
-                    api_in[..n_sfi].to_vec()
-                };
+            // Buffer input with same 3-case logic as main loop
+            let api_in = &samples_in[samples_offset..];
+            if enc_control.n_channels_api == 2 && n_channels_internal == 2 {
+                for n in 0..2 {
+                    let input: Vec<i16> = (0..n_sfi).map(|i| api_in[i * 2 + n]).collect();
+                    let mut buf = vec![0i16; n_stb];
+                    silk_resampler_run(
+                        &mut enc.state_fxx[n].s_cmn.resampler_state,
+                        &mut buf,
+                        &input,
+                    );
+                    let buf_ix = enc.state_fxx[n].s_cmn.input_buf_ix as usize;
+                    let copy_len = n_stb.min(MAX_FRAME_LENGTH + 2 - buf_ix);
+                    enc.state_fxx[n].s_cmn.input_buf[buf_ix + 2..buf_ix + 2 + copy_len]
+                        .copy_from_slice(&buf[..copy_len]);
+                    enc.state_fxx[n].s_cmn.input_buf_ix += n_stb as i32;
+                }
+            } else if enc_control.n_channels_api == 2 && n_channels_internal == 1 {
+                let input: Vec<i16> = (0..n_sfi)
+                    .map(|i| {
+                        let sum = api_in[i * 2] as i32 + api_in[i * 2 + 1] as i32;
+                        silk_rshift_round(sum, 1) as i16
+                    })
+                    .collect();
                 let mut buf = vec![0i16; n_stb];
                 silk_resampler_run(
-                    &mut enc.state_fxx[n].s_cmn.resampler_state,
+                    &mut enc.state_fxx[0].s_cmn.resampler_state,
                     &mut buf,
                     &input,
                 );
-                let buf_ix = enc.state_fxx[n].s_cmn.input_buf_ix as usize;
+                let buf_ix = enc.state_fxx[0].s_cmn.input_buf_ix as usize;
                 let copy_len = n_stb.min(MAX_FRAME_LENGTH + 2 - buf_ix);
-                enc.state_fxx[n].s_cmn.input_buf[buf_ix + 2..buf_ix + 2 + copy_len]
+                enc.state_fxx[0].s_cmn.input_buf[buf_ix + 2..buf_ix + 2 + copy_len]
                     .copy_from_slice(&buf[..copy_len]);
-                enc.state_fxx[n].s_cmn.input_buf_ix += n_stb as i32;
+                enc.state_fxx[0].s_cmn.input_buf_ix += n_stb as i32;
+            } else {
+                let input = api_in[..n_sfi].to_vec();
+                let mut buf = vec![0i16; n_stb];
+                silk_resampler_run(
+                    &mut enc.state_fxx[0].s_cmn.resampler_state,
+                    &mut buf,
+                    &input,
+                );
+                let buf_ix = enc.state_fxx[0].s_cmn.input_buf_ix as usize;
+                let copy_len = n_stb.min(MAX_FRAME_LENGTH + 2 - buf_ix);
+                enc.state_fxx[0].s_cmn.input_buf[buf_ix + 2..buf_ix + 2 + copy_len]
+                    .copy_from_slice(&buf[..copy_len]);
+                enc.state_fxx[0].s_cmn.input_buf_ix += n_stb as i32;
             }
 
             samples_offset += n_sfi * enc_control.n_channels_api as usize;
@@ -7944,10 +8018,89 @@ pub fn silk_encode(
     // Clamp to [5000, bitRate]
     let target_rate = target_rate.max(5000).min(enc_control.bit_rate);
 
-    // Copy sMid lookback into inputBuf[0:2] and save tail for next frame
-    // Matches C: silk_memcpy(inputBuf, sStereo.sMid, 2) + save back
-    {
-        let fl = enc.state_fxx[0].s_cmn.frame_length as usize;
+    // Convert Left/Right to Mid/Side (stereo) or just buffer (mono)
+    // Matches C: enc_API.c lines 445-479
+    let mut ms_target_rates_bps = [0i32; 2];
+    if n_channels_internal == 2 {
+        let n_frames_enc = enc.state_fxx[0].s_cmn.n_frames_encoded as usize;
+        let speech_act_q8 = enc.state_fxx[0].s_cmn.speech_activity_q8;
+        let to_mono = enc_control.to_mono != 0;
+
+        // silk_stereo_LR_to_MS operates on inputBuf[2..] (x1/x2 pointers)
+        // We need to pass mutable slices starting at index 2
+        let fl = frame_length as usize;
+
+        // Extract the two input buffers into temporary vectors for the conversion
+        let mut x1_buf = enc.state_fxx[0].s_cmn.input_buf[2..2 + fl].to_vec();
+        let mut x2_buf = enc.state_fxx[1].s_cmn.input_buf[2..2 + fl].to_vec();
+
+        // The C function reads x1[-2], x1[-1] from the overlap region.
+        // silk_stereo_lr_to_ms handles this internally using state.s_mid/s_side.
+
+        let mut pred_ix = enc.s_stereo.pred_ix[n_frames_enc];
+        let mut mid_only_flag = enc.s_stereo.mid_only_flags[n_frames_enc];
+
+        silk_stereo_lr_to_ms(
+            &mut enc.s_stereo,
+            &mut x1_buf,
+            &mut x2_buf,
+            &mut pred_ix,
+            &mut mid_only_flag,
+            &mut ms_target_rates_bps,
+            target_rate,
+            speech_act_q8,
+            to_mono,
+            fs_khz,
+            fl,
+        );
+
+        // Write back results
+        enc.s_stereo.pred_ix[n_frames_enc] = pred_ix;
+        enc.s_stereo.mid_only_flags[n_frames_enc] = mid_only_flag;
+
+        // Copy converted M/S back into inputBuf[2..]
+        enc.state_fxx[0].s_cmn.input_buf[2..2 + fl].copy_from_slice(&x1_buf);
+        enc.state_fxx[1].s_cmn.input_buf[2..2 + fl].copy_from_slice(&x2_buf);
+
+        // Copy the overlap from s_stereo.s_mid into inputBuf[0..2] for channel 0
+        enc.state_fxx[0].s_cmn.input_buf[0] = enc.s_stereo.s_mid[0];
+        enc.state_fxx[0].s_cmn.input_buf[1] = enc.s_stereo.s_mid[1];
+        // Note: s_mid was already updated inside silk_stereo_lr_to_ms
+
+        if mid_only_flag == 0 {
+            // Side channel is active
+            if enc.prev_decode_only_middle == 1 {
+                // Reset side channel encoder state (C: enc_API.c lines 454-463)
+                enc.state_fxx[1].s_shape = SilkShapeStateFix::default();
+                enc.state_fxx[1].s_cmn.s_nsq = NsqState::default();
+                enc.state_fxx[1].s_cmn.prev_nlsfq_q15 = [0; MAX_LPC_ORDER];
+                enc.state_fxx[1].s_cmn.s_lp.in_lp_state = [0; 2];
+                enc.state_fxx[1].s_cmn.prev_lag = 100;
+                enc.state_fxx[1].s_cmn.s_nsq.lag_prev = 100;
+                enc.state_fxx[1].s_shape.last_gain_index = 10;
+                enc.state_fxx[1].s_cmn.prev_signal_type = TYPE_NO_VOICE_ACTIVITY;
+                enc.state_fxx[1].s_cmn.s_nsq.prev_gain_q16 = 65536;
+                enc.state_fxx[1].s_cmn.first_frame_after_reset = 1;
+            }
+            // VAD on side channel
+            let input_copy = enc.state_fxx[1].s_cmn.input_buf[1..1 + fl].to_vec();
+            silk_vad_get_sa_q8(&mut enc.state_fxx[1].s_cmn, &input_copy);
+            silk_encode_do_vad_fix(&mut enc.state_fxx[1], activity);
+        } else {
+            // Mid-only: set side VAD flag to 0
+            enc.state_fxx[1].s_cmn.vad_flags[n_frames_enc] = 0;
+        }
+
+        // Encode stereo prediction parameters (C: enc_API.c lines 469-474)
+        if prefill_flag == 0 {
+            silk_stereo_encode_pred(range_enc, &enc.s_stereo.pred_ix[n_frames_enc]);
+            if enc.state_fxx[1].s_cmn.vad_flags[n_frames_enc] == 0 {
+                silk_stereo_encode_mid_only(range_enc, enc.s_stereo.mid_only_flags[n_frames_enc]);
+            }
+        }
+    } else {
+        // Mono: buffer sMid overlap (C: enc_API.c lines 476-478)
+        let fl = frame_length as usize;
         enc.state_fxx[0].s_cmn.input_buf[0] = enc.s_stereo.s_mid[0];
         enc.state_fxx[0].s_cmn.input_buf[1] = enc.s_stereo.s_mid[1];
         if fl + 2 <= enc.state_fxx[0].s_cmn.input_buf.len() {
@@ -7956,16 +8109,16 @@ pub fn silk_encode(
         }
     }
 
-    // VAD per channel
-    for n in 0..n_channels_internal {
-        let input_copy = enc.state_fxx[n].s_cmn.input_buf[1..1 + frame_length as usize].to_vec();
-        silk_vad_get_sa_q8(&mut enc.state_fxx[n].s_cmn, &input_copy);
-        silk_encode_do_vad_fix(&mut enc.state_fxx[n], activity);
+    // VAD on channel 0 (C: enc_API.c line 480)
+    {
+        let fl = frame_length as usize;
+        let input_copy = enc.state_fxx[0].s_cmn.input_buf[1..1 + fl].to_vec();
+        silk_vad_get_sa_q8(&mut enc.state_fxx[0].s_cmn, &input_copy);
+        silk_encode_do_vad_fix(&mut enc.state_fxx[0], activity);
     }
 
-    // Encode frame per channel
+    // Encode frame per channel (C: enc_API.c lines 482-530)
     for n in 0..n_channels_internal {
-        let n_frames_encoded = enc.state_fxx[n].s_cmn.n_frames_encoded;
         let cond_coding = if enc.state_fxx[0]
             .s_cmn
             .n_frames_encoded
@@ -7973,19 +8126,35 @@ pub fn silk_encode(
             <= 0
         {
             CODE_INDEPENDENTLY
+        } else if n > 0 && enc.prev_decode_only_middle != 0 {
+            // If we skipped a side frame in this packet, we don't
+            // need LTP scaling; the LTP state is well-defined.
+            CODE_INDEPENDENTLY_NO_LTP_SCALING
         } else {
             CODE_CONDITIONALLY
         };
 
-        // C: channelRate_bps = TargetRate_bps (mono) — use the adjusted
-        // rate that accounts for LBRR bits, bit reservoir, and balance.
-        let channel_rate = target_rate;
+        // Channel rate: mono uses target_rate, stereo uses MS rates
+        let channel_rate = if n_channels_internal == 1 {
+            target_rate
+        } else {
+            ms_target_rates_bps[n]
+        };
+
         if channel_rate > 0 {
             silk_control_snr(&mut enc.state_fxx[n].s_cmn, channel_rate);
         }
 
-        let max_bits = enc_control.max_bits;
-        let use_cbr = enc_control.use_cbr;
+        let mut max_bits = enc_control.max_bits;
+        let mut use_cbr = enc_control.use_cbr;
+
+        // For stereo mid channel when side is active, adjust maxBits and disable CBR
+        if n_channels_internal == 2 {
+            if n == 0 && ms_target_rates_bps[1] > 0 {
+                use_cbr = 0;
+                max_bits -= enc_control.max_bits / 2;
+            }
+        }
 
         let mut frame_n_bytes = 0i32;
         ret = silk_encode_frame_fix(
@@ -8000,6 +8169,12 @@ pub fn silk_encode(
         enc.state_fxx[n].s_cmn.controlled_since_last_payload = 0;
         enc.state_fxx[n].s_cmn.input_buf_ix = 0;
         enc.state_fxx[n].s_cmn.n_frames_encoded += 1;
+    }
+
+    // Update prev_decode_only_middle (C: enc_API.c line 533)
+    let n_enc = enc.state_fxx[0].s_cmn.n_frames_encoded;
+    if n_enc > 0 {
+        enc.prev_decode_only_middle = enc.s_stereo.mid_only_flags[(n_enc - 1) as usize] as i32;
     }
 
     // Check if packet is complete — patch VAD/LBRR flags
