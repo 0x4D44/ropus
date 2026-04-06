@@ -1,6 +1,15 @@
 //! mdopus-compare: CLI tool that compares C reference opus output against
 //! the Rust implementation, byte-for-byte / sample-for-sample.
 
+#![allow(
+    clippy::needless_range_loop,
+    clippy::manual_range_contains,
+    clippy::unnecessary_cast,
+    clippy::collapsible_if,
+    clippy::identity_op,
+    clippy::manual_is_variant_and,
+)]
+
 #[path = "bindings.rs"]
 mod bindings;
 
@@ -173,7 +182,7 @@ fn print_result(label: &str, stats: &CompareStats, a: &[u8], b: &[u8]) {
                 label, offset, stats.total, stats.matching, stats.max_diff
             );
             // Hex dump around first difference
-            let start = if offset >= 16 { offset - 16 } else { 0 };
+            let start = offset.saturating_sub(16);
             let end = (offset + 48).min(a.len().max(b.len()));
             println!("  C ref:  {}", hex_line(&a, start, end));
             println!("  Rust:   {}", hex_line(&b, start, end));
@@ -209,7 +218,7 @@ fn print_sample_result(label: &str, stats: &CompareStats, a: &[i16], b: &[i16]) 
                 "{}: FAIL at sample {} (total: {}, matching: {}, max_diff: {})",
                 label, offset, stats.total, stats.matching, stats.max_diff
             );
-            let start = if offset >= 4 { offset - 4 } else { 0 };
+            let start = offset.saturating_sub(4);
             let end = (offset + 12).min(a.len().max(b.len()));
             print!("  C ref: ");
             for i in start..end {
@@ -634,7 +643,7 @@ fn cmd_encode(wav_path: &str, bitrate: i32, complexity: i32) {
                 first_diff_frame = Some(i);
                 // Dump hex around the difference
                 if let Some(off) = pkt_stats.first_diff_offset {
-                    let start = if off >= 8 { off - 8 } else { 0 };
+                    let start = off.saturating_sub(8);
                     let end = (off + 24).min(cp.len().max(rp.len()));
                     println!("    C pkt:  {}", hex_line(cp, start, end));
                     println!("    R pkt:  {}", hex_line(rp, start, end));
@@ -749,7 +758,7 @@ fn cmd_encode_framecompare(wav_path: &str, bitrate: i32, complexity: i32) {
             // around the difference region
             let stats = compare_bytes(&c_pkt[..cl], &r_pkt[..rl]);
             if let Some(off) = stats.first_diff_offset {
-                let start = if off >= 16 { off - 16 } else { 0 };
+                let start = off.saturating_sub(16);
                 let end = (off + 32).min(cl.max(rl));
                 println!("  C pkt:  {}", hex_line(&c_pkt[..cl], start, end));
                 println!("  R pkt:  {}", hex_line(&r_pkt[..rl], start, end));
@@ -1536,7 +1545,7 @@ fn cmd_rng_test() {
         // Just use zeros for now -- the key is comparing nbits_total
 
         let before_coarse_nbits = dec.debug_nbits_total();
-        let before_coarse_rng = dec.get_rng();
+        let _before_coarse_rng = dec.get_rng();
         unquant_coarse_energy(mode, 0, 21, &mut old_e, intra, &mut dec, 1, 3);
         println!(
             "After Rust coarse: tell={} nbits={} rng={:08x} band0={}",
@@ -1719,7 +1728,7 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
             if first_fail_frame < 0 {
                 first_fail_frame = frame_idx as i32;
                 // Print first few samples around divergence
-                let start = if fd >= 4 { fd - 4 } else { 0 };
+                let start = fd.saturating_sub(4);
                 let end = (fd + 12).min(len);
                 print!("  C:    ");
                 for i in start..end {
@@ -1761,11 +1770,9 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
         let total_bands = 2 * nb_ebands;
 
         let mut band_diff = false;
-        let mut first_band_mismatch = -1i32;
         for i in 0..total_bands.min(r_old_band_e.len()) {
             if c_old_band_e[i] != r_old_band_e[i] {
                 if !band_diff {
-                    first_band_mismatch = i as i32;
                     println!(
                         "  oldBandE MISMATCH at band {} (of {}): C={} R={} diff={}",
                         i,
@@ -1935,7 +1942,7 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
 
             // Decode all frames up to (but not including) the failing frame
             let mut p2 = 0usize;
-            for fidx in 0..ff {
+            for _fidx in 0..ff {
                 if p2 + 2 > c_encoded.len() {
                     break;
                 }
@@ -2018,7 +2025,7 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
 
             // Test C-side energy decode with the same state
             let mut c_test_bands = vec![0i32; 42];
-            let r_be_slice = fresh_rust.debug_get_old_band_e();
+            let _r_be_slice = fresh_rust.debug_get_old_band_e();
             // Re-fetch the matching pre-decode state (decode the first ff frames again)
             {
                 let fresh_c2;
@@ -2028,7 +2035,7 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
                     assert!(!fresh_c2.is_null() && error == bindings::OPUS_OK);
                 }
                 let mut p3 = 0usize;
-                for fidx in 0..ff {
+                for _fidx in 0..ff {
                     if p3 + 2 > c_encoded.len() {
                         break;
                     }
@@ -2047,7 +2054,7 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
                     }
                     p3 += pl;
                 }
-                let pre_nb = unsafe {
+                let _pre_nb = unsafe {
                     bindings::debug_get_celt_old_band_e(fresh_c2, c_test_bands.as_mut_ptr(), 42)
                 };
                 unsafe {

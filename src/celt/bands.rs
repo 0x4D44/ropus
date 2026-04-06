@@ -1194,7 +1194,7 @@ fn quant_band<EC: EcCoder>(
     lm: i32,
     lowband_out: Option<&mut [i32]>,
     gain: i32,
-    lowband_scratch: Option<&mut [i32]>,
+    _lowband_scratch: Option<&mut [i32]>,
     mut fill: i32,
 ) -> u32 {
     let n0 = n;
@@ -1676,7 +1676,7 @@ pub fn quant_all_bands<EC: EcCoder>(
 
     // Debug: frame counter for quant_all_bands calls (encoder-only)
     static QAB_FRAME_CTR: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
-    let qab_frame = if encode {
+    let _qab_frame = if encode {
         QAB_FRAME_CTR.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     } else {
         -1
@@ -2047,7 +2047,7 @@ pub fn quant_all_bands<EC: EcCoder>(
                         celt_inner_prod_norm_shift(&y_save[..nu], &y_slice[..nu], nu),
                     );
                     ctx_seed = ctx.seed;
-                    ctx_avoid_split_noise = ctx.avoid_split_noise;
+                    let _ = ctx.avoid_split_noise; // mirrors C state flow; overwritten at loop end
                     let ec = ctx.ec;
 
                     // Pick the pass with higher correlation (lower distortion)
@@ -2069,7 +2069,7 @@ pub fn quant_all_bands<EC: EcCoder>(
                         x_cm = cm2;
                         ec.ec_restore(&ec_snap2);
                         ctx_seed = save_seed2;
-                        ctx_avoid_split_noise = save_avoid2;
+                        let _ = save_avoid2; // mirrors C state flow; overwritten at loop end
                         x_slice[..nu].copy_from_slice(&x_save2[..nu]);
                         y_slice[..nu].copy_from_slice(&y_save2[..nu]);
                         if !last {
@@ -2188,7 +2188,7 @@ pub fn quant_all_bands<EC: EcCoder>(
 
         // Debug: trace per-band state
         if trace_qab {
-            let (offs, eoffs, _storage, rem) = ec.ec_debug_state();
+            let (offs, eoffs, _storage, _rem) = ec.ec_debug_state();
             eprintln!(
                 "[RS QAB] band {:2}: tell={:5} offs={:3} eoffs={:3} b={:6} n={:4}",
                 i_band,

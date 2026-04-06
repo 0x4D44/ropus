@@ -2716,7 +2716,7 @@ fn celt_encode_core(
     // --- DEBUG: trace range coder state at key checkpoints ---
     // (frame counter moved to top of function)
     if trace_frame {
-        let (offs, eoffs, storage, rng, val, rem, ext) = enc_ref.enc_debug_state();
+        let (offs, eoffs, _storage, rng, val, rem, ext) = enc_ref.enc_debug_state();
         eprintln!(
             "[CELT F7] after coarse_energy: offs={} eoffs={} tell={} rng=0x{:08x} val=0x{:08x} rem={} ext={} byte261=0x{:02x}",
             offs,
@@ -2749,13 +2749,12 @@ fn celt_encode_core(
     tell = enc_ref.tell() as i32;
 
     if trace_frame {
-        let (offs, eoffs, _storage, rng, val, rem, ext) = enc_ref.enc_debug_state();
+        let (offs, eoffs, ..) = enc_ref.enc_debug_state();
         eprintln!(
-            "[CELT F7] after tf_encode: offs={} eoffs={} tell={} rng=0x{:08x} byte261=0x{:02x}",
+            "[CELT F7] after tf_encode: offs={} eoffs={} tell={} byte261=0x{:02x}",
             offs,
             eoffs,
             enc_ref.tell(),
-            rng,
             enc_ref.enc_debug_byte(261)
         );
     }
@@ -2891,7 +2890,7 @@ fn celt_encode_core(
     }
 
     if trace_frame {
-        let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
+        let (offs, eoffs, _storage, _rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
         eprintln!(
             "[CELT F7] after dynalloc+trim: offs={} eoffs={} tell={} alloc_trim={} byte261=0x{:02x}",
             offs,
@@ -3023,7 +3022,7 @@ fn celt_encode_core(
     );
 
     if trace_frame {
-        let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
+        let (offs, eoffs, _storage, _rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
         eprintln!(
             "[CELT F7] after clt_compute_allocation: offs={} eoffs={} tell={} coded_bands={} byte261=0x{:02x}",
             offs,
@@ -3058,7 +3057,7 @@ fn celt_encode_core(
     );
 
     if trace_frame {
-        let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
+        let (offs, eoffs, _storage, _rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
         eprintln!(
             "[CELT F7] after quant_fine_energy: offs={} eoffs={} tell={} byte261=0x{:02x}",
             offs,
@@ -3117,7 +3116,7 @@ fn celt_encode_core(
     }
 
     if trace_frame {
-        let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
+        let (offs, eoffs, _storage, _rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
         eprintln!(
             "[CELT F7] after quant_all_bands: offs={} eoffs={} tell={} byte261=0x{:02x}",
             offs,
@@ -3149,7 +3148,7 @@ fn celt_encode_core(
     );
 
     if trace_frame {
-        let (offs, eoffs, _storage, rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
+        let (offs, eoffs, _storage, _rng, _val, _rem, _ext) = enc_ref.enc_debug_state();
         eprintln!(
             "[CELT F7] after energy_finalise: offs={} eoffs={} tell={} byte261=0x{:02x}",
             offs,

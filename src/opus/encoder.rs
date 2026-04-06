@@ -2258,11 +2258,7 @@ impl OpusEncoder {
         }
 
         // --- Compute total output bytes ---
-        ret = if self.mode == MODE_SILK_ONLY {
-            nb_compr_bytes
-        } else {
-            nb_compr_bytes
-        };
+        ret = nb_compr_bytes;
         ret += 1; // TOC byte
         if redundancy {
             ret += redundancy_bytes;

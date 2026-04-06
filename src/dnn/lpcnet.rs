@@ -1774,7 +1774,7 @@ impl LPCNetState {
 
     pub fn run_frame_network_deferred(&mut self, features: &[f32]) {
         let max_buf = self.model.feature_conv1.kernel_size + self.model.feature_conv2.kernel_size;
-        let max_buf = if max_buf >= 2 { max_buf - 2 } else { 0 };
+        let max_buf = max_buf.saturating_sub(2);
         let max_buf = max_buf.min(MAX_FEATURE_BUFFER_SIZE);
         if self.feature_buffer_fill == max_buf as i32 {
             let src = NB_FEATURES;
