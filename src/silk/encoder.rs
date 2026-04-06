@@ -5469,7 +5469,7 @@ pub fn silk_find_lpc_fix(
 
             let (res_nrg0, rshift0) = silk_sum_sqr_shift(&lpc_res[d..d + subfr_length - d]);
             let (res_nrg1, rshift1) =
-                silk_sum_sqr_shift(&lpc_res[d + subfr_length..d + 2 * (subfr_length - d)]);
+                silk_sum_sqr_shift(&lpc_res[d + subfr_length..2 * subfr_length]);
 
             let (res_nrg0, res_nrg1, res_nrg_interp_q) = {
                 let shift = rshift0 as i32 - rshift1 as i32;
