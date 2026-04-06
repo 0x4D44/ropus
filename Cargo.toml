@@ -16,6 +16,10 @@ cc = "1"
 [profile.dev]
 overflow-checks = false
 
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
 [[bin]]
 name = "mdopus-compare"
 path = "tests/harness/main.rs"
