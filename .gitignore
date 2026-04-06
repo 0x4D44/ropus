@@ -4,3 +4,7 @@
 __pycache__
 *.pyc
 .claude/
+
+# Debug trace/output artifacts
+/*.txt
+/build.rs
