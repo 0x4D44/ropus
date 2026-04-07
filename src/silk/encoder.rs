@@ -8069,6 +8069,25 @@ pub fn silk_encode(
                 );
                 enc.n_bits_exceeded = enc.n_bits_exceeded.max(0).min(10000);
 
+                // Update flag indicating if bandwidth switching is allowed
+                // Matches C enc_API.c:559-568
+                {
+                    // SILK_FIX_CONST(SPEECH_ACTIVITY_DTX_THRES, 8) = 13
+                    // SILK_FIX_CONST((1 - 0.05) / 5000, 24) = 3188
+                    const SPEECH_ACT_DTX_THRES_Q8: i32 = 13;
+                    const BW_SWITCH_COEF_Q24: i32 = 3188;
+                    // silk_SMLAWB(a, b, c) = a + ((b as i64 * c as i64) >> 16) as i32
+                    let speech_act_thr_for_switch_q8 = SPEECH_ACT_DTX_THRES_Q8
+                        + ((BW_SWITCH_COEF_Q24 as i64 * enc.time_since_switch_allowed_ms as i64) >> 16) as i32;
+                    if enc.state_fxx[0].s_cmn.speech_activity_q8 < speech_act_thr_for_switch_q8 {
+                        enc.allow_bandwidth_switch = 1;
+                        enc.time_since_switch_allowed_ms = 0;
+                    } else {
+                        enc.allow_bandwidth_switch = 0;
+                        enc.time_since_switch_allowed_ms += enc_control.payload_size_ms;
+                    }
+                }
+
                 for n in 0..n_channels_internal {
                     enc.state_fxx[n].s_cmn.n_frames_encoded = 0;
                 }

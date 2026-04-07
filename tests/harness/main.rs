@@ -830,7 +830,7 @@ fn cmd_encode(wav_path: &str, bitrate: i32, complexity: i32) {
     }
 }
 
-fn cmd_encode_framecompare(wav_path: &str, bitrate: i32, complexity: i32) {
+fn cmd_encode_framecompare(wav_path: &str, bitrate: i32, complexity: i32, application: i32, signal: i32) {
     // Do per-frame encode: each frame independently through C and Rust,
     // comparing the encoder state after each frame
     let wav = read_wav(Path::new(wav_path));
@@ -844,19 +844,25 @@ fn cmd_encode_framecompare(wav_path: &str, bitrate: i32, complexity: i32) {
     let c_enc = unsafe {
         let mut error: i32 = 0;
         let enc =
-            bindings::opus_encoder_create(sr, ch, bindings::OPUS_APPLICATION_AUDIO, &mut error);
+            bindings::opus_encoder_create(sr, ch, application, &mut error);
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, complexity);
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_VBR_REQUEST, 0i32);
+        if signal != -1000 {
+            bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_SIGNAL_REQUEST, signal);
+        }
         enc
     };
 
     // Rust encoder
-    use mdopus::opus::encoder::{OPUS_APPLICATION_AUDIO, OpusEncoder};
-    let mut r_enc = OpusEncoder::new(sr, ch, OPUS_APPLICATION_AUDIO).unwrap();
+    use mdopus::opus::encoder::OpusEncoder;
+    let mut r_enc = OpusEncoder::new(sr, ch, application).unwrap();
     r_enc.set_bitrate(bitrate);
     r_enc.set_complexity(complexity);
     r_enc.set_vbr(0);
+    if signal != -1000 {
+        r_enc.set_signal(signal);
+    }
 
     let mut pos = 0;
     let mut frame_idx = 0;
@@ -885,12 +891,20 @@ fn cmd_encode_framecompare(wav_path: &str, bitrate: i32, complexity: i32) {
         let cl = c_len as usize;
         let rl = r_len as usize;
 
+        // Query bandwidths
+        let c_bw = unsafe {
+            let mut bw: i32 = 0;
+            bindings::opus_encoder_ctl(c_enc, bindings::OPUS_GET_BANDWIDTH_REQUEST, &mut bw as *mut i32);
+            bw
+        };
+        let r_bw = r_enc.get_bandwidth();
+
         if c_pkt[..cl] == r_pkt[..rl] {
-            println!("Frame {:3}: {} bytes - MATCH", frame_idx, cl);
+            println!("Frame {:3}: {} bytes - MATCH (C_bw={} R_bw={} C_toc=0x{:02x} R_toc=0x{:02x})", frame_idx, cl, c_bw, r_bw, c_pkt[0], r_pkt[0]);
         } else {
             println!(
-                "Frame {:3}: C={} bytes, R={} bytes - DIFFER",
-                frame_idx, cl, rl
+                "Frame {:3}: C={} bytes, R={} bytes - DIFFER (C_bw={} R_bw={} C_toc=0x{:02x} R_toc=0x{:02x})",
+                frame_idx, cl, rl, c_bw, r_bw, c_pkt[0], r_pkt[0]
             );
             let min_len = cl.min(rl);
             let mut ndiff = 0;
@@ -5881,7 +5895,9 @@ fn main() {
             }
             let bitrate = parse_option(&args, "--bitrate", 64000);
             let complexity = parse_option(&args, "--complexity", 10);
-            cmd_encode_framecompare(&args[2], bitrate, complexity);
+            let application = parse_option(&args, "--application", bindings::OPUS_APPLICATION_AUDIO);
+            let signal = parse_option(&args, "--signal", -1000);
+            cmd_encode_framecompare(&args[2], bitrate, complexity, application, signal);
         }
         "unit" => {
             if args.len() < 3 {

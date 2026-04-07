@@ -1897,14 +1897,14 @@ impl OpusEncoder {
                 }
                 self.silk_mode.max_internal_sample_rate = 16000;
                 self.silk_mode.use_cbr = if self.use_vbr != 0 { 0 } else { 1 };
-                self.silk_mode.max_bits = (max_data_bytes - 1) * 8
-                    - if redundancy && redundancy_bytes >= 2 {
-                        redundancy_bytes * 8 + 1
-                    } else {
-                        0
-                    };
-                if self.mode == MODE_HYBRID {
-                    self.silk_mode.max_bits -= 20;
+                self.silk_mode.max_bits = (max_data_bytes - 1) * 8;
+                if redundancy && redundancy_bytes >= 2 {
+                    // Count 1 bit for redundancy position and 20 bits for
+                    // flag+size (only for hybrid).
+                    self.silk_mode.max_bits -= redundancy_bytes * 8 + 1;
+                    if self.mode == MODE_HYBRID {
+                        self.silk_mode.max_bits -= 20;
+                    }
                 }
 
                 if self.silk_mode.use_cbr != 0 {
@@ -1995,6 +1995,10 @@ impl OpusEncoder {
                     };
                 }
 
+                // C: st->silk_mode.opusCanSwitch = st->silk_mode.switchReady && !st->nonfinal_frame;
+                self.silk_mode.opus_can_switch =
+                    if self.silk_mode.switch_ready != 0 && self.nonfinal_frame == 0 { 1 } else { 0 };
+
                 // Get activity from SILK
                 if activity == VAD_NO_DECISION {
                     activity = if self.silk_mode.signal_type != TYPE_NO_VOICE_ACTIVITY {
@@ -2013,8 +2017,18 @@ impl OpusEncoder {
                     return Ok(1);
                 }
 
-                // Check for SILK-initiated bandwidth switch
-                if self.silk_mode.switch_ready != 0 && self.silk_mode.opus_can_switch != 0 {
+                // Check for SILK-initiated bandwidth switch (C: opus_encoder.c:2251-2260)
+                if self.silk_mode.opus_can_switch != 0 {
+                    if self.application != OPUS_APPLICATION_RESTRICTED_SILK {
+                        redundancy_bytes = compute_redundancy_bytes(
+                            max_data_bytes,
+                            self.bitrate_bps,
+                            frame_rate,
+                            self.stream_channels,
+                        );
+                        redundancy = redundancy_bytes != 0;
+                    }
+                    celt_to_silk = false;
                     self.silk_bw_switch = 1;
                 }
 
