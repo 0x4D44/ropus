@@ -33,7 +33,15 @@ pub const OPUS_APPLICATION_RESTRICTED_LOWDELAY: c_int = 2051;
 pub const OPUS_AUTO: c_int = -1000;
 
 // Bandwidth values
+pub const OPUS_BANDWIDTH_NARROWBAND: c_int = 1101;
+pub const OPUS_BANDWIDTH_MEDIUMBAND: c_int = 1102;
+pub const OPUS_BANDWIDTH_WIDEBAND: c_int = 1103;
+pub const OPUS_BANDWIDTH_SUPERWIDEBAND: c_int = 1104;
 pub const OPUS_BANDWIDTH_FULLBAND: c_int = 1105;
+
+// Signal types
+pub const OPUS_SIGNAL_VOICE: c_int = 3001;
+pub const OPUS_SIGNAL_MUSIC: c_int = 3002;
 
 // CTL request codes
 pub const OPUS_SET_BITRATE_REQUEST: c_int = 4002;

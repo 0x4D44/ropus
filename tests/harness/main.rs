@@ -318,6 +318,30 @@ fn generate_noise(sample_rate: i32, channels: i32, duration_secs: f64, seed: u64
     samples
 }
 
+/// Generate alternating noise/silence signal for DTX testing.
+/// Pattern: 200ms noise, 200ms silence, repeated for duration.
+fn generate_dtx_signal(sample_rate: i32, channels: i32, duration_secs: f64, seed: u64) -> Vec<i16> {
+    let total_samples = (sample_rate as f64 * duration_secs) as usize * channels as usize;
+    let chunk = (sample_rate as usize * channels as usize) / 5; // 200ms in samples
+    let mut rng = seed;
+    let mut samples = Vec::with_capacity(total_samples);
+    let mut noise_phase = true;
+    while samples.len() < total_samples {
+        let remaining = total_samples - samples.len();
+        let n = chunk.min(remaining);
+        for _ in 0..n {
+            if noise_phase {
+                rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                samples.push((rng >> 33) as i16);
+            } else {
+                samples.push(0);
+            }
+        }
+        noise_phase = !noise_phase;
+    }
+    samples
+}
+
 // ---------------------------------------------------------------------------
 // C reference encode/decode via FFI
 // ---------------------------------------------------------------------------
@@ -2545,6 +2569,173 @@ fn print_bench_report(results: &[BenchResult]) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PLC (Packet Loss Concealment) comparison
+// ---------------------------------------------------------------------------
+
+fn plc_decode_c(
+    sr: i32,
+    ch: i32,
+    frame_size: usize,
+    packets: &[Vec<u8>],
+    drops: &[usize],
+) -> Vec<i16> {
+    unsafe {
+        let mut error: i32 = 0;
+        let dec = bindings::opus_decoder_create(sr, ch, &mut error);
+        if dec.is_null() || error != bindings::OPUS_OK {
+            eprintln!(
+                "ERROR: C opus_decoder_create failed: {}",
+                bindings::error_string(error)
+            );
+            process::exit(1);
+        }
+
+        let samples_per_frame = frame_size * ch as usize;
+        let mut pcm = vec![0i16; samples_per_frame];
+        let mut output = Vec::new();
+
+        for (i, pkt) in packets.iter().enumerate() {
+            if drops.contains(&i) {
+                // PLC: decode with NULL data
+                let ret = bindings::opus_decode(
+                    dec,
+                    std::ptr::null(),
+                    0,
+                    pcm.as_mut_ptr(),
+                    frame_size as i32,
+                    0,
+                );
+                if ret > 0 {
+                    output.extend_from_slice(&pcm[..ret as usize * ch as usize]);
+                }
+            } else {
+                let ret = bindings::opus_decode(
+                    dec,
+                    pkt.as_ptr(),
+                    pkt.len() as i32,
+                    pcm.as_mut_ptr(),
+                    frame_size as i32,
+                    0,
+                );
+                if ret > 0 {
+                    output.extend_from_slice(&pcm[..ret as usize * ch as usize]);
+                }
+            }
+        }
+
+        bindings::opus_decoder_destroy(dec);
+        output
+    }
+}
+
+fn plc_decode_rust(
+    sr: i32,
+    ch: i32,
+    frame_size: usize,
+    packets: &[Vec<u8>],
+    drops: &[usize],
+) -> Vec<i16> {
+    use mdopus::opus::decoder::OpusDecoder;
+
+    let mut dec = match OpusDecoder::new(sr, ch) {
+        Ok(d) => d,
+        Err(code) => {
+            eprintln!("ERROR: Rust OpusDecoder::new failed: {}", code);
+            process::exit(1);
+        }
+    };
+
+    let samples_per_frame = frame_size * ch as usize;
+    let mut pcm = vec![0i16; samples_per_frame];
+    let mut output = Vec::new();
+
+    for (i, pkt) in packets.iter().enumerate() {
+        if drops.contains(&i) {
+            // PLC: decode with None
+            match dec.decode(None, &mut pcm, frame_size as i32, false) {
+                Ok(ret) => output.extend_from_slice(&pcm[..ret as usize * ch as usize]),
+                Err(_) => {} // PLC can fail on first frame etc.
+            }
+        } else {
+            match dec.decode(Some(pkt), &mut pcm, frame_size as i32, false) {
+                Ok(ret) => output.extend_from_slice(&pcm[..ret as usize * ch as usize]),
+                Err(e) => {
+                    eprintln!("PLC Rust decode error at frame {}: {}", i, e);
+                }
+            }
+        }
+    }
+
+    output
+}
+
+fn cmd_plc(wav_path: &str, bitrate: i32) {
+    let wav = read_wav(Path::new(wav_path));
+    let sr = wav.sample_rate as i32;
+    let ch = wav.channels as i32;
+    let frame_size = (sr / 50) as usize; // 20ms frames
+
+    // Encode with C encoder (deterministic baseline bitstream)
+    let mut cfg = EncodeConfig::new(sr, ch);
+    cfg.bitrate = bitrate;
+    let encoded = c_encode_cfg(&wav.samples, &cfg);
+
+    // Parse into individual packets
+    let packets = parse_packets(&encoded);
+
+    println!(
+        "PLC test: {} Hz, {} ch, {} frames, bitrate={}",
+        sr,
+        ch,
+        packets.len(),
+        bitrate
+    );
+
+    let patterns: &[(&str, Vec<usize>)] = &[
+        ("isolated", vec![5, 15, 25, 35, 45]),
+        ("burst", vec![20, 21, 22]),
+        (
+            "heavy",
+            (0..packets.len()).filter(|i| i % 3 == 2).collect(),
+        ),
+    ];
+
+    let mut all_pass = true;
+
+    for (name, drops) in patterns {
+        // Skip patterns that reference frames beyond what we have
+        let effective_drops: Vec<usize> =
+            drops.iter().copied().filter(|&d| d < packets.len()).collect();
+
+        let c_pcm = plc_decode_c(sr, ch, frame_size, &packets, &effective_drops);
+        let rust_pcm = plc_decode_rust(sr, ch, frame_size, &packets, &effective_drops);
+
+        let stats = compare_samples(&c_pcm, &rust_pcm);
+        if stats.first_diff_offset.is_none() {
+            println!(
+                "  {}: PASS ({} samples, {} drops)",
+                name,
+                stats.total,
+                effective_drops.len()
+            );
+        } else {
+            println!(
+                "  {}: FAIL at sample {} (max_diff={}, {} drops)",
+                name,
+                stats.first_diff_offset.unwrap(),
+                stats.max_diff,
+                effective_drops.len()
+            );
+            all_pass = false;
+        }
+    }
+
+    if !all_pass {
+        process::exit(1);
+    }
+}
+
 fn cmd_bench(wav_path: &str, bitrate: i32, complexity: i32, iters: u32) {
     let wav = read_wav(Path::new(wav_path));
     let sr = wav.sample_rate as i32;
@@ -2590,6 +2781,771 @@ fn cmd_bench(wav_path: &str, bitrate: i32, complexity: i32, iters: u32) {
 }
 
 // ---------------------------------------------------------------------------
+// Sweep: exhaustive parameter-space comparison
+// ---------------------------------------------------------------------------
+
+struct SweepCase {
+    cfg: EncodeConfig,
+    label: String,
+}
+
+fn resolve_wav_path(sample_rate: i32, channels: i32) -> String {
+    format!(
+        "tests/vectors/{}hz_{}_noise.wav",
+        sample_rate,
+        if channels == 1 { "mono" } else { "stereo" }
+    )
+}
+
+fn sweep_cases() -> Vec<SweepCase> {
+    let mut cases = Vec::new();
+
+    // Helper to push a case with a generated label
+    macro_rules! push {
+        ($sr:expr, $ch:expr, $br:expr, $frame_ms:expr, $vbr:expr, $cx:expr, $app:expr, $app_label:expr) => {{
+            let mut cfg = EncodeConfig::new($sr, $ch);
+            cfg.bitrate = $br;
+            cfg.frame_ms = $frame_ms;
+            cfg.vbr = $vbr;
+            cfg.complexity = $cx;
+            cfg.application = $app;
+            let mode = if $sr >= 48000 { "CELT" } else if $sr <= 12000 { "SILK" } else { "Hybrid" };
+            let vbr_s = if $vbr == 0 { "CBR" } else { "VBR" };
+            let ch_s = if $ch == 1 { "1ch" } else { "2ch" };
+            let br_k = if $br >= 1000 { format!("{}kbps", $br / 1000) } else { format!("{}bps", $br) };
+            let label = format!("{} {}k/{} {} {} {}ms cx{} {}",
+                mode, $sr / 1000, ch_s, vbr_s, br_k, $frame_ms, $cx, $app_label);
+            cases.push(SweepCase { cfg, label });
+        }};
+    }
+
+    let audio = bindings::OPUS_APPLICATION_AUDIO;
+    let voip = bindings::OPUS_APPLICATION_VOIP;
+    let lowdelay = bindings::OPUS_APPLICATION_RESTRICTED_LOWDELAY;
+
+    // ---------------------------------------------------------------
+    // CELT core (48000 Hz, mono)
+    // ---------------------------------------------------------------
+
+    // Bitrate sweep at 20ms, cx10, AUDIO, CBR
+    for &br in &[24000, 64000, 128000, 510000] {
+        push!(48000, 1, br, 20.0, 0, 10, audio, "AUDIO");
+    }
+
+    // Frame duration sweep at 64kbps, cx10, AUDIO, CBR
+    for &ms in &[2.5_f64, 5.0, 10.0, 20.0] {
+        push!(48000, 1, 64000, ms, 0, 10, audio, "AUDIO");
+    }
+
+    // VBR at key bitrates
+    for &br in &[24000, 64000, 128000] {
+        push!(48000, 1, br, 20.0, 1, 10, audio, "AUDIO");
+    }
+
+    // Application modes at 64kbps 20ms
+    push!(48000, 1, 64000, 20.0, 0, 10, voip, "VOIP");
+    push!(48000, 1, 64000, 20.0, 0, 10, lowdelay, "LOWDELAY");
+
+    // Complexity sweep at 64kbps 20ms AUDIO CBR
+    for &cx in &[0, 5] {
+        push!(48000, 1, 64000, 20.0, 0, cx, audio, "AUDIO");
+    }
+
+    // CELT VBR + different complexities
+    push!(48000, 1, 64000, 20.0, 1, 0, audio, "AUDIO");
+    push!(48000, 1, 64000, 20.0, 1, 5, audio, "AUDIO");
+
+    // CELT short frames + different bitrates
+    push!(48000, 1, 128000, 2.5, 0, 10, audio, "AUDIO");
+    push!(48000, 1, 510000, 5.0, 0, 10, audio, "AUDIO");
+    push!(48000, 1, 24000, 10.0, 0, 10, audio, "AUDIO");
+
+    // CELT LOWDELAY short frames
+    push!(48000, 1, 64000, 2.5, 0, 10, lowdelay, "LOWDELAY");
+    push!(48000, 1, 64000, 5.0, 0, 10, lowdelay, "LOWDELAY");
+    push!(48000, 1, 64000, 10.0, 0, 10, lowdelay, "LOWDELAY");
+
+    // CELT VOIP + VBR
+    push!(48000, 1, 64000, 20.0, 1, 10, voip, "VOIP");
+
+    // ---------------------------------------------------------------
+    // SILK core (8000 Hz, mono)
+    // ---------------------------------------------------------------
+
+    // Bitrate sweep at 20ms, cx10, VOIP, CBR
+    for &br in &[6000, 8000, 12000, 24000] {
+        push!(8000, 1, br, 20.0, 0, 10, voip, "VOIP");
+    }
+
+    // Frame duration sweep at 12kbps
+    for &ms in &[10.0_f64, 20.0, 40.0, 60.0] {
+        push!(8000, 1, 12000, ms, 0, 10, voip, "VOIP");
+    }
+
+    // VBR
+    for &br in &[6000, 12000, 24000] {
+        push!(8000, 1, br, 20.0, 1, 10, voip, "VOIP");
+    }
+
+    // Complexity sweep
+    for &cx in &[0, 5] {
+        push!(8000, 1, 12000, 20.0, 0, cx, voip, "VOIP");
+    }
+
+    // SILK AUDIO mode
+    push!(8000, 1, 12000, 20.0, 0, 10, audio, "AUDIO");
+    push!(8000, 1, 24000, 20.0, 0, 10, audio, "AUDIO");
+
+    // SILK long frames + VBR
+    push!(8000, 1, 12000, 40.0, 1, 10, voip, "VOIP");
+    push!(8000, 1, 12000, 60.0, 1, 10, voip, "VOIP");
+
+    // SILK min/max bitrate
+    push!(8000, 1, 6000, 60.0, 0, 0, voip, "VOIP");
+    push!(8000, 1, 24000, 10.0, 0, 10, voip, "VOIP");
+
+    // ---------------------------------------------------------------
+    // Hybrid (16000 Hz, mono)
+    // ---------------------------------------------------------------
+
+    // Bitrate sweep crosses SILK/hybrid/CELT boundaries
+    for &br in &[12000, 16000, 24000, 32000, 64000] {
+        push!(16000, 1, br, 20.0, 0, 10, audio, "AUDIO");
+    }
+
+    // Frame duration sweep
+    for &ms in &[10.0_f64, 20.0] {
+        push!(16000, 1, 32000, ms, 0, 10, audio, "AUDIO");
+    }
+
+    // 16kHz long frames (SILK multi-frame at wideband)
+    push!(16000, 1, 16000, 40.0, 0, 10, voip, "VOIP");
+    push!(16000, 1, 16000, 60.0, 0, 10, voip, "VOIP");
+
+    // VBR
+    for &br in &[16000, 32000, 64000] {
+        push!(16000, 1, br, 20.0, 1, 10, audio, "AUDIO");
+    }
+
+    // Complexity sweep
+    for &cx in &[0, 5] {
+        push!(16000, 1, 32000, 20.0, 0, cx, audio, "AUDIO");
+    }
+
+    // VOIP mode
+    push!(16000, 1, 16000, 20.0, 0, 10, voip, "VOIP");
+    push!(16000, 1, 32000, 20.0, 0, 10, voip, "VOIP");
+
+    // 24kHz hybrid
+    for &br in &[16000, 32000, 64000] {
+        push!(24000, 1, br, 20.0, 0, 10, audio, "AUDIO");
+    }
+    push!(24000, 1, 32000, 20.0, 1, 10, audio, "AUDIO");
+
+    // ---------------------------------------------------------------
+    // Stereo
+    // ---------------------------------------------------------------
+
+    // CELT stereo
+    for &br in &[64000, 128000, 510000] {
+        push!(48000, 2, br, 20.0, 0, 10, audio, "AUDIO");
+    }
+    push!(48000, 2, 128000, 10.0, 0, 10, audio, "AUDIO");
+    push!(48000, 2, 128000, 20.0, 1, 10, audio, "AUDIO");
+    push!(48000, 2, 64000, 20.0, 0, 5, audio, "AUDIO");
+
+    // SILK stereo
+    for &br in &[12000, 24000] {
+        push!(8000, 2, br, 20.0, 0, 10, voip, "VOIP");
+    }
+    push!(8000, 2, 12000, 20.0, 1, 10, voip, "VOIP");
+    push!(8000, 2, 24000, 40.0, 0, 10, voip, "VOIP");
+
+    // Hybrid stereo
+    for &br in &[24000, 64000] {
+        push!(16000, 2, br, 20.0, 0, 10, audio, "AUDIO");
+    }
+    push!(16000, 2, 32000, 20.0, 1, 10, audio, "AUDIO");
+    push!(24000, 2, 64000, 20.0, 0, 10, audio, "AUDIO");
+
+    // Stereo VOIP + LOWDELAY
+    push!(48000, 2, 64000, 20.0, 0, 10, voip, "VOIP");
+    push!(48000, 2, 64000, 20.0, 0, 10, lowdelay, "LOWDELAY");
+
+    // ---------------------------------------------------------------
+    // Application mode comparisons (same config, different app)
+    // ---------------------------------------------------------------
+
+    for &app in &[audio, voip, lowdelay] {
+        let lbl = match app {
+            x if x == audio => "AUDIO",
+            x if x == voip => "VOIP",
+            _ => "LOWDELAY",
+        };
+        push!(48000, 1, 64000, 10.0, 0, 10, app, lbl);
+    }
+
+    for &app in &[audio, voip] {
+        let lbl = if app == audio { "AUDIO" } else { "VOIP" };
+        push!(16000, 1, 24000, 20.0, 0, 10, app, lbl);
+    }
+
+    // LOWDELAY at different sample rates (2.5ms + 5ms only at 48k; 10/20ms at 16k)
+    push!(48000, 1, 128000, 2.5, 0, 10, lowdelay, "LOWDELAY");
+    push!(16000, 1, 32000, 10.0, 0, 10, lowdelay, "LOWDELAY");
+    push!(16000, 1, 32000, 20.0, 0, 10, lowdelay, "LOWDELAY");
+
+    // LOWDELAY at narrowband (forces CELT at 8kHz)
+    push!(8000, 1, 12000, 10.0, 0, 10, lowdelay, "LOWDELAY");
+    push!(8000, 1, 12000, 20.0, 0, 10, lowdelay, "LOWDELAY");
+
+    // ---------------------------------------------------------------
+    // Signal hints
+    // ---------------------------------------------------------------
+
+    // VOICE vs MUSIC at 16k
+    {
+        let mut cfg = EncodeConfig::new(16000, 1);
+        cfg.bitrate = 24000;
+        cfg.signal = bindings::OPUS_SIGNAL_VOICE;
+        cases.push(SweepCase { cfg, label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 AUDIO sig=VOICE".into() });
+    }
+    {
+        let mut cfg = EncodeConfig::new(16000, 1);
+        cfg.bitrate = 24000;
+        cfg.signal = bindings::OPUS_SIGNAL_MUSIC;
+        cases.push(SweepCase { cfg, label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 AUDIO sig=MUSIC".into() });
+    }
+    // VOICE vs MUSIC at 48k
+    {
+        let mut cfg = EncodeConfig::new(48000, 1);
+        cfg.bitrate = 64000;
+        cfg.signal = bindings::OPUS_SIGNAL_VOICE;
+        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO sig=VOICE".into() });
+    }
+    {
+        let mut cfg = EncodeConfig::new(48000, 1);
+        cfg.bitrate = 64000;
+        cfg.signal = bindings::OPUS_SIGNAL_MUSIC;
+        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO sig=MUSIC".into() });
+    }
+    // Signal hints with VOIP application
+    {
+        let mut cfg = EncodeConfig::new(16000, 1);
+        cfg.bitrate = 24000;
+        cfg.application = voip;
+        cfg.signal = bindings::OPUS_SIGNAL_VOICE;
+        cases.push(SweepCase { cfg, label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 VOIP sig=VOICE".into() });
+    }
+    {
+        let mut cfg = EncodeConfig::new(48000, 1);
+        cfg.bitrate = 64000;
+        cfg.application = voip;
+        cfg.signal = bindings::OPUS_SIGNAL_MUSIC;
+        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 VOIP sig=MUSIC".into() });
+    }
+
+    // ---------------------------------------------------------------
+    // Bandwidth forcing (48k only, mono)
+    // ---------------------------------------------------------------
+
+    for &(bw, bw_label) in &[
+        (bindings::OPUS_BANDWIDTH_NARROWBAND, "NB"),
+        (bindings::OPUS_BANDWIDTH_WIDEBAND, "WB"),
+        (bindings::OPUS_BANDWIDTH_SUPERWIDEBAND, "SWB"),
+        (bindings::OPUS_BANDWIDTH_FULLBAND, "FB"),
+    ] {
+        let mut cfg = EncodeConfig::new(48000, 1);
+        cfg.bitrate = 64000;
+        cfg.bandwidth = bw;
+        let label = format!("CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO bw={}", bw_label);
+        cases.push(SweepCase { cfg, label });
+    }
+
+    // MEDIUMBAND bandwidth forcing
+    {
+        let mut cfg = EncodeConfig::new(48000, 1);
+        cfg.bitrate = 64000;
+        cfg.bandwidth = bindings::OPUS_BANDWIDTH_MEDIUMBAND;
+        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO bw=MB".into() });
+    }
+
+    // Bandwidth forcing at lower bitrate
+    for &(bw, bw_label) in &[
+        (bindings::OPUS_BANDWIDTH_NARROWBAND, "NB"),
+        (bindings::OPUS_BANDWIDTH_WIDEBAND, "WB"),
+    ] {
+        let mut cfg = EncodeConfig::new(48000, 1);
+        cfg.bitrate = 24000;
+        cfg.bandwidth = bw;
+        let label = format!("CELT 48k/1ch CBR 24kbps 20ms cx10 AUDIO bw={}", bw_label);
+        cases.push(SweepCase { cfg, label });
+    }
+
+    // Max bandwidth limiting
+    {
+        let mut cfg = EncodeConfig::new(48000, 1);
+        cfg.bitrate = 128000;
+        cfg.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND;
+        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 128kbps 20ms cx10 AUDIO maxbw=WB".into() });
+    }
+    {
+        let mut cfg = EncodeConfig::new(48000, 1);
+        cfg.bitrate = 128000;
+        cfg.max_bandwidth = bindings::OPUS_BANDWIDTH_SUPERWIDEBAND;
+        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 128kbps 20ms cx10 AUDIO maxbw=SWB".into() });
+    }
+
+    // Bandwidth forcing at 16kHz
+    {
+        let mut cfg = EncodeConfig::new(16000, 1);
+        cfg.bitrate = 24000;
+        cfg.bandwidth = bindings::OPUS_BANDWIDTH_NARROWBAND;
+        cases.push(SweepCase { cfg, label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 AUDIO bw=NB".into() });
+    }
+    {
+        let mut cfg = EncodeConfig::new(16000, 1);
+        cfg.bitrate = 24000;
+        cfg.bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND;
+        cases.push(SweepCase { cfg, label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 AUDIO bw=WB".into() });
+    }
+
+    // ---------------------------------------------------------------
+    // Edge cases
+    // ---------------------------------------------------------------
+
+    // Minimum bitrate at all sample rates
+    for &sr in &[8000, 16000, 24000, 48000] {
+        push!(sr, 1, 6000, 20.0, 0, 10, audio, "AUDIO");
+    }
+
+    // Maximum bitrate at all sample rates
+    for &sr in &[8000, 16000, 24000, 48000] {
+        push!(sr, 1, 510000, 20.0, 0, 10, audio, "AUDIO");
+    }
+
+    // Complexity 0 at all sample rates
+    for &sr in &[8000, 16000, 24000, 48000] {
+        push!(sr, 1, 32000, 20.0, 0, 0, audio, "AUDIO");
+    }
+
+    // 2.5ms frames at 48k (CELT-only minimum)
+    push!(48000, 1, 64000, 2.5, 0, 10, audio, "AUDIO");
+
+    // 60ms frames at 8k (SILK maximum multi-frame)
+    push!(8000, 1, 12000, 60.0, 0, 10, voip, "VOIP");
+
+    // 12kHz sample rate (less common)
+    push!(12000, 1, 16000, 20.0, 0, 10, audio, "AUDIO");
+    push!(12000, 1, 32000, 20.0, 0, 10, voip, "VOIP");
+    push!(12000, 2, 32000, 20.0, 0, 10, audio, "AUDIO");
+
+    // FEC enabled (at VOIP mode which benefits from it)
+    {
+        let mut cfg = EncodeConfig::new(16000, 1);
+        cfg.bitrate = 24000;
+        cfg.application = voip;
+        cfg.fec = 1;
+        cfg.packet_loss_pct = 10;
+        cases.push(SweepCase { cfg, label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 VOIP FEC+10%loss".into() });
+    }
+    {
+        let mut cfg = EncodeConfig::new(8000, 1);
+        cfg.bitrate = 12000;
+        cfg.application = voip;
+        cfg.fec = 1;
+        cfg.packet_loss_pct = 20;
+        cases.push(SweepCase { cfg, label: "SILK 8k/1ch CBR 12kbps 20ms cx10 VOIP FEC+20%loss".into() });
+    }
+
+    // FEC + stereo
+    {
+        let mut cfg = EncodeConfig::new(48000, 2);
+        cfg.bitrate = 64000;
+        cfg.application = voip;
+        cfg.fec = 1;
+        cfg.packet_loss_pct = 20;
+        cases.push(SweepCase { cfg, label: "CELT 48k/2ch CBR 64kbps 20ms cx10 VOIP FEC+20%loss".into() });
+    }
+    {
+        let mut cfg = EncodeConfig::new(16000, 2);
+        cfg.bitrate = 24000;
+        cfg.application = voip;
+        cfg.fec = 1;
+        cfg.packet_loss_pct = 20;
+        cases.push(SweepCase { cfg, label: "Hybrid 16k/2ch CBR 24kbps 20ms cx10 VOIP FEC+20%loss".into() });
+    }
+
+    // FEC + long frames
+    {
+        let mut cfg = EncodeConfig::new(8000, 1);
+        cfg.bitrate = 12000;
+        cfg.frame_ms = 40.0;
+        cfg.application = voip;
+        cfg.fec = 1;
+        cfg.packet_loss_pct = 20;
+        cases.push(SweepCase { cfg, label: "SILK 8k/1ch CBR 12kbps 40ms cx10 VOIP FEC+20%loss".into() });
+    }
+    {
+        let mut cfg = EncodeConfig::new(8000, 1);
+        cfg.bitrate = 12000;
+        cfg.frame_ms = 60.0;
+        cfg.application = voip;
+        cfg.fec = 1;
+        cfg.packet_loss_pct = 20;
+        cases.push(SweepCase { cfg, label: "SILK 8k/1ch CBR 12kbps 60ms cx10 VOIP FEC+20%loss".into() });
+    }
+
+    // DTX enabled
+    {
+        let mut cfg = EncodeConfig::new(8000, 1);
+        cfg.bitrate = 12000;
+        cfg.application = voip;
+        cfg.dtx = 1;
+        cases.push(SweepCase { cfg, label: "SILK 8k/1ch CBR 12kbps 20ms cx10 VOIP DTX".into() });
+    }
+    {
+        let mut cfg = EncodeConfig::new(16000, 1);
+        cfg.bitrate = 24000;
+        cfg.application = voip;
+        cfg.dtx = 1;
+        cases.push(SweepCase { cfg, label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 VOIP DTX".into() });
+    }
+
+    // Prediction disabled
+    {
+        let mut cfg = EncodeConfig::new(48000, 1);
+        cfg.bitrate = 64000;
+        cfg.prediction_disabled = 1;
+        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO nopred".into() });
+    }
+
+    // Phase inversion disabled (stereo)
+    {
+        let mut cfg = EncodeConfig::new(48000, 2);
+        cfg.bitrate = 128000;
+        cfg.phase_inversion_disabled = 1;
+        cases.push(SweepCase { cfg, label: "CELT 48k/2ch CBR 128kbps 20ms cx10 AUDIO nophase".into() });
+    }
+
+    // ---------------------------------------------------------------
+    // Additional CELT coverage
+    // ---------------------------------------------------------------
+
+    // More bitrate/frame-size combos at 48k
+    push!(48000, 1, 32000, 20.0, 0, 10, audio, "AUDIO");
+    push!(48000, 1, 96000, 20.0, 0, 10, audio, "AUDIO");
+    push!(48000, 1, 256000, 20.0, 0, 10, audio, "AUDIO");
+    push!(48000, 1, 32000, 10.0, 0, 10, audio, "AUDIO");
+    push!(48000, 1, 128000, 10.0, 0, 10, audio, "AUDIO");
+    push!(48000, 1, 128000, 5.0, 0, 10, audio, "AUDIO");
+    push!(48000, 1, 256000, 2.5, 0, 10, audio, "AUDIO");
+
+    // CELT VBR + various frame sizes
+    push!(48000, 1, 64000, 10.0, 1, 10, audio, "AUDIO");
+    push!(48000, 1, 64000, 5.0, 1, 10, audio, "AUDIO");
+    push!(48000, 1, 128000, 20.0, 1, 10, audio, "AUDIO");
+
+    // CELT complexities with different bitrates
+    push!(48000, 1, 24000, 20.0, 0, 0, audio, "AUDIO");
+    push!(48000, 1, 128000, 20.0, 0, 0, audio, "AUDIO");
+    push!(48000, 1, 24000, 20.0, 0, 5, audio, "AUDIO");
+    push!(48000, 1, 128000, 20.0, 0, 5, audio, "AUDIO");
+
+    // CELT VOIP at various bitrates
+    push!(48000, 1, 24000, 20.0, 0, 10, voip, "VOIP");
+    push!(48000, 1, 128000, 20.0, 0, 10, voip, "VOIP");
+    push!(48000, 1, 128000, 10.0, 0, 10, voip, "VOIP");
+
+    // CELT LOWDELAY VBR
+    push!(48000, 1, 64000, 10.0, 1, 10, lowdelay, "LOWDELAY");
+    push!(48000, 1, 128000, 5.0, 0, 10, lowdelay, "LOWDELAY");
+
+    // ---------------------------------------------------------------
+    // Additional SILK coverage
+    // ---------------------------------------------------------------
+
+    // SILK at different complexities with different bitrates
+    push!(8000, 1, 6000, 20.0, 0, 0, voip, "VOIP");
+    push!(8000, 1, 24000, 20.0, 0, 0, voip, "VOIP");
+    push!(8000, 1, 6000, 20.0, 0, 5, voip, "VOIP");
+    push!(8000, 1, 24000, 20.0, 0, 5, voip, "VOIP");
+
+    // SILK longer frames with different bitrates
+    push!(8000, 1, 6000, 40.0, 0, 10, voip, "VOIP");
+    push!(8000, 1, 24000, 40.0, 0, 10, voip, "VOIP");
+    push!(8000, 1, 8000, 60.0, 0, 10, voip, "VOIP");
+    push!(8000, 1, 24000, 60.0, 0, 10, voip, "VOIP");
+
+    // SILK VBR longer frames
+    push!(8000, 1, 12000, 40.0, 1, 5, voip, "VOIP");
+    push!(8000, 1, 8000, 60.0, 1, 10, voip, "VOIP");
+
+    // SILK AUDIO mode at more bitrates
+    push!(8000, 1, 6000, 20.0, 0, 10, audio, "AUDIO");
+    push!(8000, 1, 8000, 20.0, 0, 10, audio, "AUDIO");
+
+    // SILK 10ms frames
+    push!(8000, 1, 8000, 10.0, 0, 10, voip, "VOIP");
+    push!(8000, 1, 24000, 10.0, 0, 5, voip, "VOIP");
+
+    // ---------------------------------------------------------------
+    // Additional Hybrid coverage
+    // ---------------------------------------------------------------
+
+    // 16k more bitrate/complexity combos
+    push!(16000, 1, 12000, 20.0, 0, 0, audio, "AUDIO");
+    push!(16000, 1, 64000, 20.0, 0, 0, audio, "AUDIO");
+    push!(16000, 1, 12000, 20.0, 0, 5, audio, "AUDIO");
+    push!(16000, 1, 64000, 20.0, 0, 5, audio, "AUDIO");
+
+    // 16k VBR + different complexities
+    push!(16000, 1, 24000, 20.0, 1, 0, audio, "AUDIO");
+    push!(16000, 1, 24000, 20.0, 1, 5, audio, "AUDIO");
+
+    // 16k 10ms more bitrates
+    push!(16000, 1, 16000, 10.0, 0, 10, audio, "AUDIO");
+    push!(16000, 1, 64000, 10.0, 0, 10, audio, "AUDIO");
+
+    // 16k VOIP more combos
+    push!(16000, 1, 12000, 20.0, 0, 10, voip, "VOIP");
+    push!(16000, 1, 64000, 20.0, 0, 10, voip, "VOIP");
+    push!(16000, 1, 16000, 20.0, 1, 10, voip, "VOIP");
+
+    // 24k more combos
+    push!(24000, 1, 12000, 20.0, 0, 10, audio, "AUDIO");
+    push!(24000, 1, 128000, 20.0, 0, 10, audio, "AUDIO");
+    push!(24000, 1, 64000, 20.0, 1, 10, audio, "AUDIO");
+    push!(24000, 1, 32000, 10.0, 0, 10, audio, "AUDIO");
+
+    // 24k VOIP
+    push!(24000, 1, 32000, 20.0, 0, 10, voip, "VOIP");
+    push!(24000, 1, 16000, 20.0, 0, 10, voip, "VOIP");
+
+    // ---------------------------------------------------------------
+    // Additional stereo coverage
+    // ---------------------------------------------------------------
+
+    // CELT stereo more bitrates/frames
+    push!(48000, 2, 32000, 20.0, 0, 10, audio, "AUDIO");
+    push!(48000, 2, 256000, 20.0, 0, 10, audio, "AUDIO");
+    push!(48000, 2, 64000, 10.0, 0, 10, audio, "AUDIO");
+    push!(48000, 2, 128000, 5.0, 0, 10, audio, "AUDIO");
+    push!(48000, 2, 64000, 20.0, 1, 10, audio, "AUDIO");
+    push!(48000, 2, 128000, 20.0, 0, 0, audio, "AUDIO");
+    push!(48000, 2, 128000, 20.0, 0, 5, audio, "AUDIO");
+
+    // SILK stereo more combos
+    push!(8000, 2, 6000, 20.0, 0, 10, voip, "VOIP");
+    push!(8000, 2, 24000, 20.0, 1, 10, voip, "VOIP");
+    push!(8000, 2, 12000, 40.0, 0, 10, voip, "VOIP");
+
+    // Hybrid stereo more combos
+    push!(16000, 2, 32000, 20.0, 0, 10, audio, "AUDIO");
+    push!(16000, 2, 64000, 20.0, 1, 10, audio, "AUDIO");
+    push!(16000, 2, 16000, 20.0, 0, 10, voip, "VOIP");
+
+    // 24k stereo
+    push!(24000, 2, 32000, 20.0, 0, 10, audio, "AUDIO");
+    push!(24000, 2, 128000, 20.0, 0, 10, audio, "AUDIO");
+
+    // 12k stereo
+    push!(12000, 2, 24000, 20.0, 0, 10, audio, "AUDIO");
+    push!(12000, 2, 64000, 20.0, 0, 10, voip, "VOIP");
+
+    // ---------------------------------------------------------------
+    // Additional FEC / DTX / special mode combos
+    // ---------------------------------------------------------------
+
+    // FEC at different rates
+    {
+        let mut cfg = EncodeConfig::new(8000, 1);
+        cfg.bitrate = 24000;
+        cfg.application = voip;
+        cfg.fec = 1;
+        cfg.packet_loss_pct = 5;
+        cases.push(SweepCase { cfg, label: "SILK 8k/1ch CBR 24kbps 20ms cx10 VOIP FEC+5%loss".into() });
+    }
+    {
+        let mut cfg = EncodeConfig::new(48000, 1);
+        cfg.bitrate = 64000;
+        cfg.application = voip;
+        cfg.fec = 1;
+        cfg.packet_loss_pct = 10;
+        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 VOIP FEC+10%loss".into() });
+    }
+
+    // DTX at CELT rate
+    {
+        let mut cfg = EncodeConfig::new(48000, 1);
+        cfg.bitrate = 64000;
+        cfg.application = voip;
+        cfg.dtx = 1;
+        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 VOIP DTX".into() });
+    }
+
+    // Force channels (force mono in stereo encoder)
+    {
+        let mut cfg = EncodeConfig::new(48000, 2);
+        cfg.bitrate = 128000;
+        cfg.force_channels = 1;
+        cases.push(SweepCase { cfg, label: "CELT 48k/2ch CBR 128kbps 20ms cx10 AUDIO forcemono".into() });
+    }
+    {
+        let mut cfg = EncodeConfig::new(48000, 2);
+        cfg.bitrate = 128000;
+        cfg.force_channels = 2;
+        cases.push(SweepCase { cfg, label: "CELT 48k/2ch CBR 128kbps 20ms cx10 AUDIO forcestereo".into() });
+    }
+
+    // LSB depth variations
+    {
+        let mut cfg = EncodeConfig::new(48000, 1);
+        cfg.bitrate = 64000;
+        cfg.lsb_depth = 16;
+        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO lsb=16".into() });
+    }
+    {
+        let mut cfg = EncodeConfig::new(48000, 1);
+        cfg.bitrate = 64000;
+        cfg.lsb_depth = 8;
+        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO lsb=8".into() });
+    }
+
+    // VBR constraint
+    {
+        let mut cfg = EncodeConfig::new(48000, 1);
+        cfg.bitrate = 64000;
+        cfg.vbr = 1;
+        cfg.vbr_constraint = 1;
+        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CVBR 64kbps 20ms cx10 AUDIO".into() });
+    }
+    {
+        let mut cfg = EncodeConfig::new(16000, 1);
+        cfg.bitrate = 24000;
+        cfg.vbr = 1;
+        cfg.vbr_constraint = 1;
+        cases.push(SweepCase { cfg, label: "Hybrid 16k/1ch CVBR 24kbps 20ms cx10 AUDIO".into() });
+    }
+    {
+        let mut cfg = EncodeConfig::new(8000, 1);
+        cfg.bitrate = 12000;
+        cfg.application = voip;
+        cfg.vbr = 1;
+        cfg.vbr_constraint = 1;
+        cases.push(SweepCase { cfg, label: "SILK 8k/1ch CVBR 12kbps 20ms cx10 VOIP".into() });
+    }
+
+    cases
+}
+
+fn cmd_sweep(filter: Option<&str>, stop_on_fail: bool) {
+    let cases = sweep_cases();
+    let total = cases.len();
+    let filtered: Vec<&SweepCase> = if let Some(f) = filter {
+        let f_lower = f.to_lowercase();
+        cases
+            .iter()
+            .filter(|c| c.label.to_lowercase().contains(&f_lower))
+            .collect()
+    } else {
+        cases.iter().collect()
+    };
+
+    println!(
+        "sweep: {} configurations ({} after filter)",
+        total,
+        filtered.len()
+    );
+    println!();
+
+    let mut pass = 0;
+    let mut fail = 0;
+    let mut skip = 0;
+
+    for (i, case) in filtered.iter().enumerate() {
+        // Load signal: use generated noise/silence for DTX, WAV file otherwise
+        let pcm = if case.cfg.dtx != 0 {
+            generate_dtx_signal(case.cfg.sample_rate, case.cfg.channels, 1.0, 42)
+        } else {
+            let wav_path = resolve_wav_path(case.cfg.sample_rate, case.cfg.channels);
+            let wav = read_wav(Path::new(&wav_path));
+            wav.samples
+        };
+
+        // Encode with both
+        let c_enc = c_encode_cfg(&pcm, &case.cfg);
+        let rust_enc = rust_encode_cfg(&pcm, &case.cfg);
+
+        if rust_enc.is_empty() {
+            println!(
+                "[{:4}/{}] SKIP  {}",
+                i + 1,
+                filtered.len(),
+                case.label
+            );
+            skip += 1;
+            continue;
+        }
+
+        // Compare encoded bytes
+        let enc_match = c_enc == rust_enc;
+
+        // Decode C-encoded data with both decoders
+        let c_dec = c_decode_cfg(&c_enc, &case.cfg);
+        let rust_dec = rust_decode_cfg(&c_enc, &case.cfg);
+        let dec_match = c_dec == rust_dec;
+
+        if enc_match && dec_match {
+            println!(
+                "[{:4}/{}] PASS  {}",
+                i + 1,
+                filtered.len(),
+                case.label
+            );
+            pass += 1;
+        } else {
+            println!(
+                "[{:4}/{}] FAIL  {}",
+                i + 1,
+                filtered.len(),
+                case.label
+            );
+            if !enc_match {
+                let stats = compare_bytes(&c_enc, &rust_enc);
+                println!(
+                    "  encode: {} bytes differ (first at offset {}, max_diff={})",
+                    stats.total - stats.matching,
+                    stats.first_diff_offset.unwrap_or(0),
+                    stats.max_diff
+                );
+            }
+            if !dec_match {
+                let stats = compare_samples(&c_dec, &rust_dec);
+                println!(
+                    "  decode: {} samples differ (first at {}, max_diff={})",
+                    stats.total - stats.matching,
+                    stats.first_diff_offset.unwrap_or(0),
+                    stats.max_diff
+                );
+            }
+            fail += 1;
+            if stop_on_fail {
+                println!("\nsweep: stopped on first failure");
+                break;
+            }
+        }
+    }
+
+    println!();
+    println!("sweep: {} PASS, {} FAIL, {} SKIP", pass, fail, skip);
+
+    if fail > 0 {
+        process::exit(1);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -2600,6 +3556,8 @@ fn usage() {
     eprintln!("  mdopus-compare encode <input.wav> [--bitrate N] [--complexity N]");
     eprintln!("  mdopus-compare decode <input.opus>");
     eprintln!("  mdopus-compare roundtrip <input.wav> [--bitrate N]");
+    eprintln!("  mdopus-compare plc <input.wav> [--bitrate N]");
+    eprintln!("  mdopus-compare sweep [filter] [--stop-on-fail]");
     eprintln!("  mdopus-compare bench <input.wav> [--bitrate N] [--complexity N] [--iters N]");
     eprintln!("  mdopus-compare unit <module_name>");
     eprintln!();
@@ -2611,6 +3569,13 @@ fn usage() {
     eprintln!("  --bitrate N      Target bitrate in bps (default: 64000)");
     eprintln!("  --complexity N   Encoder complexity 0-10 (default: 10)");
     eprintln!("  --iters N        Benchmark iterations (default: 10)");
+    eprintln!("  --stop-on-fail   (sweep) Stop after first failing configuration");
+    eprintln!();
+    eprintln!("SWEEP FILTER EXAMPLES:");
+    eprintln!("  mdopus-compare sweep CELT          Only CELT configurations");
+    eprintln!("  mdopus-compare sweep SILK          Only SILK configurations");
+    eprintln!("  mdopus-compare sweep stereo        Only stereo (2ch) configurations");
+    eprintln!("  mdopus-compare sweep VBR           Only VBR configurations");
 }
 
 fn parse_option(args: &[String], flag: &str, default: i32) -> i32 {
@@ -2704,6 +3669,26 @@ fn main() {
             }
             let bitrate = parse_option(&args, "--bitrate", 64000);
             cmd_decode_framecompare(&args[2], bitrate);
+        }
+        "plc" => {
+            if args.len() < 3 {
+                eprintln!("ERROR: plc requires an input WAV file");
+                process::exit(1);
+            }
+            let bitrate = parse_option(&args, "--bitrate", 64000);
+            cmd_plc(&args[2], bitrate);
+        }
+        "sweep" => {
+            let stop_on_fail = args.iter().any(|a| a == "--stop-on-fail");
+            // Find filter: first positional arg after "sweep" that isn't a flag
+            let filter = args.get(2).and_then(|s| {
+                if s.starts_with("--") {
+                    None
+                } else {
+                    Some(s.as_str())
+                }
+            });
+            cmd_sweep(filter, stop_on_fail);
         }
         "--help" | "-h" | "help" => {
             usage();
