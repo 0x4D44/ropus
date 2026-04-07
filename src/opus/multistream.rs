@@ -1635,7 +1635,8 @@ impl MappingMatrix {
                     >> 8;
             }
             // Final shift: (tmp + 64) >> 7, total shift = 8+7 = 15
-            output[output_rows as usize * i] = sat16((tmp + 64) >> 7);
+            let out_idx = output_rows as usize * i + output_row as usize;
+            output[out_idx] = sat16((tmp + 64) >> 7);
         }
     }
 
@@ -1652,7 +1653,7 @@ impl MappingMatrix {
         frame_size: i32,
     ) {
         for i in 0..frame_size as usize {
-            let input_sample = input[input_rows as usize * i] as i32;
+            let input_sample = input[input_rows as usize * i + input_row as usize] as i32;
             for row in 0..output_rows {
                 let tmp = (self.data[self.idx(row, input_row)] as i32) * input_sample;
                 let out_idx = (output_rows as usize) * i + row as usize;
