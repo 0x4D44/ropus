@@ -7,4 +7,7 @@ __pycache__
 
 # Debug trace/output artifacts
 /*.txt
+notes/*.txt
+notes/*.log
+/*.log
 /build.rs
