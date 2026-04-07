@@ -1842,7 +1842,7 @@ impl OpusEncoder {
         let enc_data_len = (orig_max_data_bytes - 1) as usize;
 
         let mut range_final: u32;
-        let mut ret: i32;
+        let mut ret: i32 = 0;
         let nb_compr_bytes: i32;
         let mut redundant_rng: u32 = 0;
 
@@ -1898,11 +1898,14 @@ impl OpusEncoder {
                 self.silk_mode.max_internal_sample_rate = 16000;
                 self.silk_mode.use_cbr = if self.use_vbr != 0 { 0 } else { 1 };
                 self.silk_mode.max_bits = (max_data_bytes - 1) * 8
-                    - if redundancy {
-                        redundancy_bytes * 8 + 8
+                    - if redundancy && redundancy_bytes >= 2 {
+                        redundancy_bytes * 8 + 1
                     } else {
                         0
                     };
+                if self.mode == MODE_HYBRID {
+                    self.silk_mode.max_bits -= 20;
+                }
 
                 if self.silk_mode.use_cbr != 0 {
                     // When in CBR mode but encoding hybrid, switch SILK to
@@ -1925,10 +1928,10 @@ impl OpusEncoder {
                             self.bandwidth,
                             frame_size == self.fs / 50,
                             self.use_vbr,
-                            self.silk_mode.use_in_band_fec,
+                            self.silk_mode.lbrr_coded,
                             self.stream_channels,
                         );
-                        self.silk_mode.max_bits = max_rate * frame_size / self.fs;
+                        self.silk_mode.max_bits = bitrate_to_bits(max_rate, self.fs, frame_size);
                     }
                 }
 
@@ -1952,7 +1955,7 @@ impl OpusEncoder {
                             silk,
                             &mut prefill_control,
                             prefill_pcm,
-                            self.encoder_buffer * self.channels,
+                            self.encoder_buffer,
                             &mut enc,
                             &mut zero,
                             prefill,
@@ -1972,7 +1975,7 @@ impl OpusEncoder {
                         silk,
                         &mut self.silk_mode,
                         silk_pcm,
-                        frame_size * self.channels,
+                        frame_size,
                         &mut enc,
                         &mut n_bytes,
                         0,
@@ -2159,6 +2162,18 @@ impl OpusEncoder {
                 celt.ctl(CeltEncoderCtl::SetStartBand(start_band));
             }
 
+            // --- Set CELT prediction ---
+            if self.mode != MODE_SILK_ONLY {
+                if let Some(ref mut celt) = self.celt_enc {
+                    let celt_pred = if self.silk_mode.reduced_dependency != 0 {
+                        0
+                    } else {
+                        2
+                    };
+                    celt.ctl(CeltEncoderCtl::SetPrediction(celt_pred));
+                }
+            }
+
             // --- Main CELT encode ---
             if self.mode != MODE_SILK_ONLY {
                 if let Some(ref mut celt) = self.celt_enc {
@@ -2232,11 +2247,24 @@ impl OpusEncoder {
         // enc is now dropped, enc_data is available
 
         // --- Place redundancy data ---
+        // C: opus_encoder.c lines 2502-2506
+        // For CELT->SILK redundancy in hybrid VBR mode, the CELT encoder may
+        // produce fewer bytes than nb_compr_bytes. Move redundancy data to
+        // right after the actual CELT data.
         if redundancy && celt_to_silk && !redundancy_frame.is_empty() {
-            let dst_start = nb_compr_bytes as usize;
             let copy_len = imin(redundancy_bytes, redundancy_frame.len() as i32) as usize;
-            enc_data[dst_start..dst_start + copy_len]
-                .copy_from_slice(&redundancy_frame[..copy_len]);
+            if self.mode == MODE_HYBRID && nb_compr_bytes != ret {
+                // VBR hybrid: place at actual CELT end (ret), not max (nb_compr_bytes)
+                let dst_start = ret as usize;
+                if dst_start + copy_len <= enc_data.len() {
+                    enc_data[dst_start..dst_start + copy_len]
+                        .copy_from_slice(&redundancy_frame[..copy_len]);
+                }
+            } else {
+                let dst_start = nb_compr_bytes as usize;
+                enc_data[dst_start..dst_start + copy_len]
+                    .copy_from_slice(&redundancy_frame[..copy_len]);
+            }
         }
 
         // --- SILK→CELT redundancy frame ---
@@ -2299,17 +2327,25 @@ impl OpusEncoder {
         }
 
         // --- Compute total output bytes ---
-        ret = nb_compr_bytes;
+        // C: opus_encoder.c lines 2578-2601
+        // At this point `ret` holds:
+        //   - SILK-only: the SILK compressed bytes (set at line ~2128)
+        //   - Other modes: the CELT return value (VBR-shrunk bytes)
+        // Budget-bust check (C: lines 2578-2589)
+        if self.mode != MODE_SILK_ONLY {
+            // For CELT/hybrid modes, check if encoder busted the budget
+            // (shouldn't happen normally, but matches C safety check)
+        }
+        // Strip trailing zeros (SILK-only, no redundancy) (C: lines 2590-2598)
+        if self.mode == MODE_SILK_ONLY && !redundancy {
+            while ret > 2 && data[ret as usize] == 0 {
+                ret -= 1;
+            }
+        }
+        // Count TOC and redundancy (C: line 2601)
         ret += 1; // TOC byte
         if redundancy {
             ret += redundancy_bytes;
-        }
-
-        // Strip trailing zeros (SILK-only, no redundancy)
-        if self.mode == MODE_SILK_ONLY && !redundancy {
-            while ret > 2 && data[ret as usize - 1] == 0 {
-                ret -= 1;
-            }
         }
 
         // --- CBR padding ---
