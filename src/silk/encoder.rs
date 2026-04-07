@@ -7913,6 +7913,12 @@ pub fn silk_encode(
                 let mut pred_ix = enc.s_stereo.pred_ix[n_frames_enc];
                 let mut mid_only_flag = enc.s_stereo.mid_only_flags[n_frames_enc];
 
+                // Save old sMid before silk_stereo_lr_to_ms updates it.
+                // C: silk_stereo_LR_to_MS internally copies old sMid to inputBuf[0..2]
+                // (via mid = &x1[-2], then memcpy(mid, sMid, 2)).
+                // Since we use temporary buffers, we need to do this explicitly.
+                let old_s_mid = enc.s_stereo.s_mid;
+
                 silk_stereo_lr_to_ms(
                     &mut enc.s_stereo,
                     &mut x1_buf,
@@ -7931,8 +7937,9 @@ pub fn silk_encode(
                 enc.s_stereo.mid_only_flags[n_frames_enc] = mid_only_flag;
                 enc.state_fxx[0].s_cmn.input_buf[2..2 + fl].copy_from_slice(&x1_buf);
                 enc.state_fxx[1].s_cmn.input_buf[2..2 + fl].copy_from_slice(&x2_buf);
-                enc.state_fxx[0].s_cmn.input_buf[0] = enc.s_stereo.s_mid[0];
-                enc.state_fxx[0].s_cmn.input_buf[1] = enc.s_stereo.s_mid[1];
+                // C: inputBuf[0..2] = old sMid (set in step 2 of silk_stereo_LR_to_MS)
+                enc.state_fxx[0].s_cmn.input_buf[0] = old_s_mid[0];
+                enc.state_fxx[0].s_cmn.input_buf[1] = old_s_mid[1];
 
                 if mid_only_flag == 0 {
                     if enc.prev_decode_only_middle == 1 {

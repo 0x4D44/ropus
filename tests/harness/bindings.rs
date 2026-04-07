@@ -61,6 +61,7 @@ pub const OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST: c_int = 4046;
 
 // Getter CTL request codes
 pub const OPUS_GET_FINAL_RANGE_REQUEST: c_int = 4031;
+pub const OPUS_GET_BANDWIDTH_REQUEST: c_int = 4009;
 
 // Internal CTL (from opus_private.h)
 pub const OPUS_SET_FORCE_MODE_REQUEST: c_int = 11002;
@@ -303,6 +304,22 @@ unsafe extern "C" {
         fine_quant_out: *mut opus_int32,
         cc: c_int,
         lm: c_int,
+    );
+    pub fn debug_c_hp_cutoff_stereo(
+        input: *const opus_int16,
+        cutoff_hz: opus_int32,
+        output: *mut opus_int16,
+        hp_mem: *mut opus_int32,
+        len: c_int,
+        fs: opus_int32,
+    );
+    pub fn debug_get_encoder_hp_state(
+        enc: *mut OpusEncoder,
+        hp_mem_out: *mut opus_int32,
+        variable_hp_smth2: *mut opus_int32,
+        mode_out: *mut opus_int32,
+        stream_channels_out: *mut opus_int32,
+        bandwidth_out: *mut opus_int32,
     );
 }
 

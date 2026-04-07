@@ -241,6 +241,11 @@ impl<'a> RangeEncoder<'a> {
         self.nbits_total - ec_ilog(self.rng)
     }
 
+    /// Debug accessor for nbits_total.
+    pub fn nbits_total(&self) -> i32 {
+        self.nbits_total
+    }
+
     /// Adjust nbits_total by a delta. Used by the CELT encoder to mark
     /// the remaining budget as consumed (e.g. for silence frames).
     /// Matches C: `enc->nbits_total += delta`.

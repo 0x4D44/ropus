@@ -3,6 +3,7 @@
 #include "opus.h"
 #include "opus_types.h"
 #include "silk/fixed/structs_FIX.h"
+#include "silk/SigProc_FIX.h"
 #include "celt/celt.h"
 #include "celt/modes.h"
 #include "celt/mathops.h"
@@ -536,4 +537,111 @@ int debug_get_celt_old_log_e(OpusDecoder *opus_dec, opus_int32 *out_log_e, opus_
         out_log_e2[i] = oldLogE2[i];
     }
     return nbEBands;
+}
+
+/* Extract encoder internal state for comparison.
+ * Requires knowing the struct layout from opus_encoder.c. */
+typedef struct {
+    opus_int32 celt_enc_offset;
+    opus_int32 silk_enc_offset;
+    silk_EncControlStruct silk_mode;
+    int application;
+    int channels;
+    int delay_compensation;
+    int force_channels;
+    int signal_type;
+    int user_bandwidth;
+    int max_bandwidth;
+    int user_forced_mode;
+    int voice_ratio;
+    opus_int32 Fs;
+    int use_vbr;
+    int vbr_constraint;
+    int variable_duration;
+    opus_int32 bitrate_bps;
+    opus_int32 user_bitrate_bps;
+    int lsb_depth;
+    int encoder_buffer;
+    int lfe;
+    int arch;
+    int use_dtx;
+    int fec_config;
+    /* OPUS_ENCODER_RESET_START */
+    int stream_channels;
+    opus_int16 hybrid_stereo_width_Q14;
+    opus_int32 variable_HP_smth2_Q15;
+    opus_int16 prev_HB_gain;
+    opus_int32 hp_mem[4];
+    int mode;
+    int prev_mode;
+} OpusEncoderTrace;
+
+void debug_get_encoder_hp_state(OpusEncoder *enc,
+    opus_int32 *hp_mem_out,
+    opus_int32 *variable_hp_smth2,
+    opus_int32 *mode_out,
+    opus_int32 *stream_channels_out,
+    opus_int32 *bandwidth_out)
+{
+    /* Use byte offsets from the original struct definition in opus_encoder.c.
+     * The OpusEncoder is opaque, but we know its layout. Use sizeof checks. */
+    OpusEncoderTrace *st = (OpusEncoderTrace *)enc;
+
+    /* Verify our struct matches by checking known values */
+    fprintf(stderr, "[debug] sizeof(silk_EncControlStruct)=%d sizeof(OpusEncoderTrace)=%d\n",
+        (int)sizeof(silk_EncControlStruct), (int)sizeof(OpusEncoderTrace));
+    fprintf(stderr, "[debug] app=%d channels=%d Fs=%d enc_buf=%d\n",
+        st->application, st->channels, st->Fs, st->encoder_buffer);
+    fprintf(stderr, "[debug] stream_ch=%d hw_Q14=%d hp_smth2=%d prev_hb=%d\n",
+        st->stream_channels, (int)st->hybrid_stereo_width_Q14,
+        st->variable_HP_smth2_Q15, (int)st->prev_HB_gain);
+    fprintf(stderr, "[debug] mode=%d prev_mode=%d\n", st->mode, st->prev_mode);
+
+    int i;
+    /* Scan bytes around expected location to find the right offset */
+    opus_int32 *raw = (opus_int32 *)enc;
+    int total_ints = (int)sizeof(OpusEncoderTrace) / 4;
+    fprintf(stderr, "[debug] scanning for hp_smth2 (expect ~2903 after frame 0):\n");
+    /* Print the int32 values around the expected location */
+    int start_field = (int)(((char*)&st->variable_HP_smth2_Q15 - (char*)st) / 4);
+    for (i = start_field - 3; i <= start_field + 5 && i < total_ints; i++) {
+        if (i >= 0) {
+            fprintf(stderr, "  raw[%d] = %d (0x%08x)%s\n", i, raw[i], (unsigned)raw[i],
+                i == start_field ? " <-- variable_HP_smth2_Q15" : "");
+        }
+    }
+
+    for (i = 0; i < 4; i++) hp_mem_out[i] = st->hp_mem[i];
+    *variable_hp_smth2 = st->variable_HP_smth2_Q15;
+    *mode_out = st->mode;
+    *stream_channels_out = st->stream_channels;
+    *bandwidth_out = 0;
+}
+
+/* Run the C hp_cutoff biquad on stereo data and return the result.
+ * This lets us compare the Rust hp_cutoff output with the C output exactly. */
+void debug_c_hp_cutoff_stereo(
+    const opus_int16 *in,
+    opus_int32 cutoff_Hz,
+    opus_int16 *out,
+    opus_int32 *hp_mem,  /* 4 elements, modified in place */
+    int len,
+    opus_int32 Fs
+) {
+    opus_int32 B_Q28[3], A_Q28[2];
+    opus_int32 Fc_Q19, r_Q28, r_Q22;
+
+    Fc_Q19 = silk_DIV32_16(silk_SMULBB(SILK_FIX_CONST(1.5 * 3.14159 / 1000, 19), cutoff_Hz), Fs/1000);
+    r_Q28 = SILK_FIX_CONST(1.0, 28) - silk_MUL(SILK_FIX_CONST(0.92, 9), Fc_Q19);
+
+    B_Q28[0] = r_Q28;
+    B_Q28[1] = silk_LSHIFT(-r_Q28, 1);
+    B_Q28[2] = r_Q28;
+
+    r_Q22 = silk_RSHIFT(r_Q28, 6);
+    A_Q28[0] = silk_SMULWW(r_Q22, silk_SMULWW(Fc_Q19, Fc_Q19) - SILK_FIX_CONST(2.0, 22));
+    A_Q28[1] = silk_SMULWW(r_Q22, r_Q22);
+
+    /* Use the stride2 function that the real C code uses for stereo */
+    silk_biquad_alt_stride2(in, B_Q28, A_Q28, hp_mem, out, len, 0);
 }

@@ -5853,6 +5853,85 @@ fn parse_option(args: &[String], flag: &str, default: i32) -> i32 {
     default
 }
 
+fn cmd_hp_cutoff_compare() {
+    // Compare C and Rust hp_cutoff for stereo data
+    // Use the same noise generator as the sweep tests
+    let pcm = generate_noise(48000, 2, 0.02, 42); // 20ms of stereo 48kHz noise
+    let len = 960; // 48000 * 0.02 = 960 samples per channel
+    let cutoff_hz = 60; // actual initial cutoff for CELT mode
+    let fs = 48000;
+
+    // C hp_cutoff
+    let mut c_out = vec![0i16; pcm.len()];
+    let mut c_hp_mem = [0i32; 4];
+    unsafe {
+        bindings::debug_c_hp_cutoff_stereo(
+            pcm.as_ptr(),
+            cutoff_hz,
+            c_out.as_mut_ptr(),
+            c_hp_mem.as_mut_ptr(),
+            len,
+            fs,
+        );
+    }
+
+    // Rust hp_cutoff
+    use mdopus::opus::encoder::hp_cutoff_debug;
+    let mut r_out = vec![0i16; pcm.len()];
+    let mut r_hp_mem = [0i32; 4];
+    hp_cutoff_debug(
+        &pcm,
+        cutoff_hz,
+        &mut r_out,
+        &mut r_hp_mem,
+        len as usize,
+        2,
+        fs,
+    );
+
+    // Compare
+    let mut ndiff = 0;
+    let mut first_diff = None;
+    for i in 0..pcm.len() {
+        if c_out[i] != r_out[i] {
+            if ndiff < 10 {
+                println!(
+                    "  sample[{}]: C={} R={} diff={}",
+                    i,
+                    c_out[i],
+                    r_out[i],
+                    (c_out[i] as i32 - r_out[i] as i32).abs()
+                );
+            }
+            if first_diff.is_none() {
+                first_diff = Some(i);
+            }
+            ndiff += 1;
+        }
+    }
+
+    if ndiff == 0 {
+        println!("hp_cutoff stereo: MATCH ({} samples compared)", pcm.len());
+    } else {
+        println!(
+            "hp_cutoff stereo: {} samples DIFFER (first at {}, total={})",
+            ndiff,
+            first_diff.unwrap_or(0),
+            pcm.len()
+        );
+    }
+
+    // Also compare hp_mem state
+    if c_hp_mem == r_hp_mem {
+        println!("hp_mem state: MATCH");
+    } else {
+        println!("hp_mem state: DIFFER");
+        for i in 0..4 {
+            println!("  hp_mem[{}]: C={} R={}", i, c_hp_mem[i], r_hp_mem[i]);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
@@ -6008,6 +6087,9 @@ fn main() {
         }
         "multistream" => {
             cmd_multistream();
+        }
+        "hp-compare" => {
+            cmd_hp_cutoff_compare();
         }
         "test-all" => {
             cmd_test_all();

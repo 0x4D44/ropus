@@ -627,6 +627,19 @@ fn silk_biquad_res(
     }
 }
 
+/// Public debug wrapper for hp_cutoff (for test harness comparison).
+pub fn hp_cutoff_debug(
+    input: &[i16],
+    cutoff_hz: i32,
+    output: &mut [i16],
+    hp_mem: &mut [i32; 4],
+    len: usize,
+    channels: i32,
+    fs: i32,
+) {
+    hp_cutoff(input, cutoff_hz, output, hp_mem, len, channels, fs);
+}
+
 /// Variable HP cutoff filter for VOIP mode.
 /// Matches C `hp_cutoff` (fixed-point path).
 fn hp_cutoff(
@@ -2618,6 +2631,16 @@ impl OpusEncoder {
 
     pub fn get_lsb_depth(&self) -> i32 {
         self.lsb_depth
+    }
+
+    /// Debug accessor for HP filter state.
+    pub fn get_hp_mem(&self) -> [i32; 4] {
+        self.hp_mem
+    }
+
+    /// Debug accessor for variable HP smoothing state.
+    pub fn get_variable_hp_smth2(&self) -> i32 {
+        self.variable_hp_smth2_q15
     }
 
     pub fn set_expert_frame_duration(&mut self, duration: i32) -> i32 {
