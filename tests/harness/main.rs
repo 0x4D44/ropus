@@ -245,22 +245,90 @@ fn print_sample_result(label: &str, stats: &CompareStats, a: &[i16], b: &[i16]) 
 }
 
 // ---------------------------------------------------------------------------
-// C reference encode/decode via FFI
+// Encode configuration
 // ---------------------------------------------------------------------------
 
-fn c_encode(
-    pcm: &[i16],
+#[allow(dead_code)]
+struct EncodeConfig {
     sample_rate: i32,
     channels: i32,
     bitrate: i32,
     complexity: i32,
-) -> Vec<u8> {
+    application: i32,
+    vbr: i32,
+    vbr_constraint: i32,
+    frame_ms: f64,
+    fec: i32,
+    packet_loss_pct: i32,
+    dtx: i32,
+    signal: i32,
+    bandwidth: i32,
+    force_channels: i32,
+    max_bandwidth: i32,
+    lsb_depth: i32,
+    prediction_disabled: i32,
+    phase_inversion_disabled: i32,
+    force_mode: i32,
+}
+
+impl EncodeConfig {
+    fn new(sample_rate: i32, channels: i32) -> Self {
+        Self {
+            sample_rate,
+            channels,
+            bitrate: 64000,
+            complexity: 10,
+            application: bindings::OPUS_APPLICATION_AUDIO,
+            vbr: 0,
+            vbr_constraint: 0,
+            frame_ms: 20.0,
+            fec: 0,
+            packet_loss_pct: 0,
+            dtx: 0,
+            signal: bindings::OPUS_AUTO,
+            bandwidth: bindings::OPUS_AUTO,
+            force_channels: bindings::OPUS_AUTO,
+            max_bandwidth: bindings::OPUS_BANDWIDTH_FULLBAND,
+            lsb_depth: 24,
+            prediction_disabled: 0,
+            phase_inversion_disabled: 0,
+            force_mode: bindings::OPUS_AUTO,
+        }
+    }
+
+    fn frame_size(&self) -> usize {
+        (self.sample_rate as f64 * self.frame_ms / 1000.0) as usize
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic noise generator
+// ---------------------------------------------------------------------------
+
+#[allow(dead_code)]
+fn generate_noise(sample_rate: i32, channels: i32, duration_secs: f64, seed: u64) -> Vec<i16> {
+    let num_samples = (sample_rate as f64 * duration_secs) as usize * channels as usize;
+    let mut rng = seed;
+    let mut samples = Vec::with_capacity(num_samples);
+    for _ in 0..num_samples {
+        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        // Use bits 33-48 directly as i16 — uniform over full i16 range
+        samples.push((rng >> 33) as i16);
+    }
+    samples
+}
+
+// ---------------------------------------------------------------------------
+// C reference encode/decode via FFI
+// ---------------------------------------------------------------------------
+
+fn c_encode_cfg(pcm: &[i16], cfg: &EncodeConfig) -> Vec<u8> {
     unsafe {
         let mut error: i32 = 0;
         let enc = bindings::opus_encoder_create(
-            sample_rate,
-            channels,
-            bindings::OPUS_APPLICATION_AUDIO,
+            cfg.sample_rate,
+            cfg.channels,
+            cfg.application,
             &mut error,
         );
         if enc.is_null() || error != bindings::OPUS_OK {
@@ -271,15 +339,34 @@ fn c_encode(
             process::exit(1);
         }
 
-        // Set bitrate
-        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
-        // Set complexity
-        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, complexity);
-        // Force CBR for deterministic output
-        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_VBR_REQUEST, 0i32);
+        macro_rules! ctl {
+            ($enc:expr, $req:expr, $val:expr) => {{
+                let ret = bindings::opus_encoder_ctl($enc, $req, $val);
+                if ret != bindings::OPUS_OK {
+                    eprintln!("WARNING: C opus_encoder_ctl({}, {}) failed: {}", $req, $val, bindings::error_string(ret));
+                }
+            }};
+        }
 
-        let frame_size = (sample_rate / 50) as usize; // 20ms frames
-        let samples_per_frame = frame_size * channels as usize;
+        // Apply all CTL settings
+        ctl!(enc, bindings::OPUS_SET_BITRATE_REQUEST, cfg.bitrate);
+        ctl!(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, cfg.complexity);
+        ctl!(enc, bindings::OPUS_SET_VBR_REQUEST, cfg.vbr);
+        ctl!(enc, bindings::OPUS_SET_VBR_CONSTRAINT_REQUEST, cfg.vbr_constraint);
+        ctl!(enc, bindings::OPUS_SET_INBAND_FEC_REQUEST, cfg.fec);
+        ctl!(enc, bindings::OPUS_SET_PACKET_LOSS_PERC_REQUEST, cfg.packet_loss_pct);
+        ctl!(enc, bindings::OPUS_SET_DTX_REQUEST, cfg.dtx);
+        ctl!(enc, bindings::OPUS_SET_SIGNAL_REQUEST, cfg.signal);
+        ctl!(enc, bindings::OPUS_SET_BANDWIDTH_REQUEST, cfg.bandwidth);
+        ctl!(enc, bindings::OPUS_SET_FORCE_CHANNELS_REQUEST, cfg.force_channels);
+        ctl!(enc, bindings::OPUS_SET_MAX_BANDWIDTH_REQUEST, cfg.max_bandwidth);
+        ctl!(enc, bindings::OPUS_SET_LSB_DEPTH_REQUEST, cfg.lsb_depth);
+        ctl!(enc, bindings::OPUS_SET_PREDICTION_DISABLED_REQUEST, cfg.prediction_disabled);
+        ctl!(enc, bindings::OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST, cfg.phase_inversion_disabled);
+        ctl!(enc, bindings::OPUS_SET_FORCE_MODE_REQUEST, cfg.force_mode);
+
+        let frame_size = cfg.frame_size();
+        let samples_per_frame = frame_size * cfg.channels as usize;
         let max_packet = 4000;
         let mut output = Vec::new();
         let mut packet = vec![0u8; max_packet];
@@ -312,10 +399,23 @@ fn c_encode(
     }
 }
 
-fn c_decode(encoded: &[u8], sample_rate: i32, channels: i32) -> Vec<i16> {
+fn c_encode(
+    pcm: &[i16],
+    sample_rate: i32,
+    channels: i32,
+    bitrate: i32,
+    complexity: i32,
+) -> Vec<u8> {
+    let mut cfg = EncodeConfig::new(sample_rate, channels);
+    cfg.bitrate = bitrate;
+    cfg.complexity = complexity;
+    c_encode_cfg(pcm, &cfg)
+}
+
+fn c_decode_cfg(encoded: &[u8], cfg: &EncodeConfig) -> Vec<i16> {
     unsafe {
         let mut error: i32 = 0;
-        let dec = bindings::opus_decoder_create(sample_rate, channels, &mut error);
+        let dec = bindings::opus_decoder_create(cfg.sample_rate, cfg.channels, &mut error);
         if dec.is_null() || error != bindings::OPUS_OK {
             eprintln!(
                 "ERROR: C opus_decoder_create failed: {}",
@@ -324,8 +424,8 @@ fn c_decode(encoded: &[u8], sample_rate: i32, channels: i32) -> Vec<i16> {
             process::exit(1);
         }
 
-        let frame_size = (sample_rate / 50) as usize; // 20ms
-        let mut pcm = vec![0i16; frame_size * channels as usize];
+        let frame_size = cfg.frame_size();
+        let mut pcm = vec![0i16; frame_size * cfg.channels as usize];
         let mut output = Vec::new();
 
         let mut pos = 0;
@@ -353,7 +453,7 @@ fn c_decode(encoded: &[u8], sample_rate: i32, channels: i32) -> Vec<i16> {
                 bindings::opus_decoder_destroy(dec);
                 process::exit(1);
             }
-            output.extend_from_slice(&pcm[..ret as usize * channels as usize]);
+            output.extend_from_slice(&pcm[..ret as usize * cfg.channels as usize]);
             pos += pkt_len;
         }
 
@@ -362,34 +462,51 @@ fn c_decode(encoded: &[u8], sample_rate: i32, channels: i32) -> Vec<i16> {
     }
 }
 
+fn c_decode(encoded: &[u8], sample_rate: i32, channels: i32) -> Vec<i16> {
+    let cfg = EncodeConfig::new(sample_rate, channels);
+    c_decode_cfg(encoded, &cfg)
+}
+
 // ---------------------------------------------------------------------------
-// Rust implementation stubs
-// (These call into our Rust port. Currently stubbed -- will be filled in
-//  as modules are ported.)
+// Rust implementation encode/decode
 // ---------------------------------------------------------------------------
 
-fn rust_encode(
-    pcm: &[i16],
-    sample_rate: i32,
-    channels: i32,
-    bitrate: i32,
-    complexity: i32,
-) -> Vec<u8> {
-    use mdopus::opus::encoder::{OPUS_APPLICATION_AUDIO, OpusEncoder};
+fn rust_encode_cfg(pcm: &[i16], cfg: &EncodeConfig) -> Vec<u8> {
+    use mdopus::opus::encoder::OpusEncoder;
 
-    let mut enc = match OpusEncoder::new(sample_rate, channels, OPUS_APPLICATION_AUDIO) {
+    let mut enc = match OpusEncoder::new(cfg.sample_rate, cfg.channels, cfg.application) {
         Ok(e) => e,
         Err(code) => {
             eprintln!("ERROR: Rust OpusEncoder::new failed: {}", code);
             return Vec::new();
         }
     };
-    enc.set_bitrate(bitrate);
-    enc.set_complexity(complexity);
-    enc.set_vbr(0); // CBR for deterministic output
 
-    let frame_size = (sample_rate / 50) as usize; // 20ms frames
-    let samples_per_frame = frame_size * channels as usize;
+    fn check_ctl(name: &str, ret: i32) {
+        if ret != 0 {
+            eprintln!("WARNING: Rust {} failed: {}", name, ret);
+        }
+    }
+
+    // Apply all settings
+    check_ctl("set_bitrate", enc.set_bitrate(cfg.bitrate));
+    check_ctl("set_complexity", enc.set_complexity(cfg.complexity));
+    check_ctl("set_vbr", enc.set_vbr(cfg.vbr));
+    check_ctl("set_vbr_constraint", enc.set_vbr_constraint(cfg.vbr_constraint));
+    check_ctl("set_inband_fec", enc.set_inband_fec(cfg.fec));
+    check_ctl("set_packet_loss_perc", enc.set_packet_loss_perc(cfg.packet_loss_pct));
+    check_ctl("set_dtx", enc.set_dtx(cfg.dtx));
+    check_ctl("set_signal", enc.set_signal(cfg.signal));
+    check_ctl("set_bandwidth", enc.set_bandwidth(cfg.bandwidth));
+    check_ctl("set_force_channels", enc.set_force_channels(cfg.force_channels));
+    check_ctl("set_max_bandwidth", enc.set_max_bandwidth(cfg.max_bandwidth));
+    check_ctl("set_lsb_depth", enc.set_lsb_depth(cfg.lsb_depth));
+    check_ctl("set_prediction_disabled", enc.set_prediction_disabled(cfg.prediction_disabled));
+    check_ctl("set_phase_inversion_disabled", enc.set_phase_inversion_disabled(cfg.phase_inversion_disabled));
+    check_ctl("set_force_mode", enc.set_force_mode(cfg.force_mode));
+
+    let frame_size = cfg.frame_size();
+    let samples_per_frame = frame_size * cfg.channels as usize;
     let max_packet = 4000;
     let mut output = Vec::new();
     let mut packet = vec![0u8; max_packet];
@@ -421,10 +538,23 @@ fn rust_encode(
     output
 }
 
-fn rust_decode(encoded: &[u8], sample_rate: i32, channels: i32) -> Vec<i16> {
+fn rust_encode(
+    pcm: &[i16],
+    sample_rate: i32,
+    channels: i32,
+    bitrate: i32,
+    complexity: i32,
+) -> Vec<u8> {
+    let mut cfg = EncodeConfig::new(sample_rate, channels);
+    cfg.bitrate = bitrate;
+    cfg.complexity = complexity;
+    rust_encode_cfg(pcm, &cfg)
+}
+
+fn rust_decode_cfg(encoded: &[u8], cfg: &EncodeConfig) -> Vec<i16> {
     use mdopus::opus::decoder::OpusDecoder;
 
-    let mut dec = match OpusDecoder::new(sample_rate, channels) {
+    let mut dec = match OpusDecoder::new(cfg.sample_rate, cfg.channels) {
         Ok(d) => d,
         Err(code) => {
             eprintln!("ERROR: Rust OpusDecoder::new failed: {}", code);
@@ -432,8 +562,8 @@ fn rust_decode(encoded: &[u8], sample_rate: i32, channels: i32) -> Vec<i16> {
         }
     };
 
-    let frame_size = (sample_rate / 50) as usize; // 20ms
-    let mut pcm = vec![0i16; frame_size * channels as usize];
+    let frame_size = cfg.frame_size();
+    let mut pcm = vec![0i16; frame_size * cfg.channels as usize];
     let mut output = Vec::new();
 
     let mut pos = 0;
@@ -452,7 +582,7 @@ fn rust_decode(encoded: &[u8], sample_rate: i32, channels: i32) -> Vec<i16> {
             false,
         ) {
             Ok(ret) => {
-                output.extend_from_slice(&pcm[..ret as usize * channels as usize]);
+                output.extend_from_slice(&pcm[..ret as usize * cfg.channels as usize]);
             }
             Err(code) => {
                 eprintln!(
@@ -465,6 +595,11 @@ fn rust_decode(encoded: &[u8], sample_rate: i32, channels: i32) -> Vec<i16> {
         pos += pkt_len;
     }
     output
+}
+
+fn rust_decode(encoded: &[u8], sample_rate: i32, channels: i32) -> Vec<i16> {
+    let cfg = EncodeConfig::new(sample_rate, channels);
+    rust_decode_cfg(encoded, &cfg)
 }
 
 // ---------------------------------------------------------------------------

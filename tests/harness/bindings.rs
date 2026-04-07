@@ -30,10 +30,29 @@ pub const OPUS_APPLICATION_VOIP: c_int = 2048;
 pub const OPUS_APPLICATION_AUDIO: c_int = 2049;
 pub const OPUS_APPLICATION_RESTRICTED_LOWDELAY: c_int = 2051;
 
+pub const OPUS_AUTO: c_int = -1000;
+
+// Bandwidth values
+pub const OPUS_BANDWIDTH_FULLBAND: c_int = 1105;
+
 // CTL request codes
 pub const OPUS_SET_BITRATE_REQUEST: c_int = 4002;
+pub const OPUS_SET_MAX_BANDWIDTH_REQUEST: c_int = 4004;
 pub const OPUS_SET_VBR_REQUEST: c_int = 4006;
+pub const OPUS_SET_BANDWIDTH_REQUEST: c_int = 4008;
 pub const OPUS_SET_COMPLEXITY_REQUEST: c_int = 4010;
+pub const OPUS_SET_INBAND_FEC_REQUEST: c_int = 4012;
+pub const OPUS_SET_PACKET_LOSS_PERC_REQUEST: c_int = 4014;
+pub const OPUS_SET_DTX_REQUEST: c_int = 4016;
+pub const OPUS_SET_VBR_CONSTRAINT_REQUEST: c_int = 4020;
+pub const OPUS_SET_FORCE_CHANNELS_REQUEST: c_int = 4022;
+pub const OPUS_SET_SIGNAL_REQUEST: c_int = 4024;
+pub const OPUS_SET_LSB_DEPTH_REQUEST: c_int = 4036;
+pub const OPUS_SET_PREDICTION_DISABLED_REQUEST: c_int = 4042;
+pub const OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST: c_int = 4046;
+
+// Internal CTL (from opus_private.h)
+pub const OPUS_SET_FORCE_MODE_REQUEST: c_int = 11002;
 
 // ---------------------------------------------------------------------------
 // Opaque encoder/decoder handles
