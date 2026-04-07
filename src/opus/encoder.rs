@@ -2330,13 +2330,22 @@ impl OpusEncoder {
     // -----------------------------------------------------------------------
 
     pub fn set_bitrate(&mut self, bitrate: i32) -> i32 {
-        if bitrate != OPUS_AUTO
-            && bitrate != OPUS_BITRATE_MAX
-            && (bitrate < 500 || bitrate > 750000 * self.channels)
-        {
-            return OPUS_BAD_ARG;
+        if bitrate != OPUS_AUTO && bitrate != OPUS_BITRATE_MAX {
+            if bitrate <= 0 {
+                return OPUS_BAD_ARG;
+            }
+            // Clamp to valid range, matching C reference behavior
+            let clamped = if bitrate <= 500 {
+                500
+            } else if bitrate > 750000 * self.channels {
+                750000 * self.channels
+            } else {
+                bitrate
+            };
+            self.user_bitrate_bps = clamped;
+        } else {
+            self.user_bitrate_bps = bitrate;
         }
-        self.user_bitrate_bps = bitrate;
         OPUS_OK
     }
 

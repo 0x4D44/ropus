@@ -2736,6 +2736,219 @@ fn cmd_plc(wav_path: &str, bitrate: i32) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// FEC (Forward Error Correction) decode helpers
+// ---------------------------------------------------------------------------
+
+fn fec_decode_c(
+    sr: i32,
+    ch: i32,
+    frame_size: usize,
+    packets: &[Vec<u8>],
+    drops: &[usize],
+) -> Vec<i16> {
+    unsafe {
+        let mut error: i32 = 0;
+        let dec = bindings::opus_decoder_create(sr, ch, &mut error);
+        if dec.is_null() || error != bindings::OPUS_OK {
+            eprintln!(
+                "ERROR: C opus_decoder_create failed: {}",
+                bindings::error_string(error)
+            );
+            process::exit(1);
+        }
+
+        let samples_per_frame = frame_size * ch as usize;
+        let mut pcm = vec![0i16; samples_per_frame];
+        let mut output = Vec::new();
+
+        for i in 0..packets.len() {
+            let is_dropped = drops.contains(&i);
+            let prev_dropped = i > 0 && drops.contains(&(i - 1));
+
+            if is_dropped {
+                // This frame is dropped — use PLC
+                let ret = bindings::opus_decode(
+                    dec,
+                    std::ptr::null(),
+                    0,
+                    pcm.as_mut_ptr(),
+                    frame_size as i32,
+                    0,
+                );
+                if ret > 0 {
+                    output.extend_from_slice(&pcm[..ret as usize * ch as usize]);
+                }
+            } else if prev_dropped {
+                // Previous frame was dropped, current is available.
+                // Recover previous frame using FEC from current packet.
+                let ret = bindings::opus_decode(
+                    dec,
+                    packets[i].as_ptr(),
+                    packets[i].len() as i32,
+                    pcm.as_mut_ptr(),
+                    frame_size as i32,
+                    1, // decode_fec=1
+                );
+                if ret > 0 {
+                    output.extend_from_slice(&pcm[..ret as usize * ch as usize]);
+                }
+                // Now decode current frame normally
+                let ret = bindings::opus_decode(
+                    dec,
+                    packets[i].as_ptr(),
+                    packets[i].len() as i32,
+                    pcm.as_mut_ptr(),
+                    frame_size as i32,
+                    0,
+                );
+                if ret > 0 {
+                    output.extend_from_slice(&pcm[..ret as usize * ch as usize]);
+                }
+            } else {
+                // Normal decode
+                let ret = bindings::opus_decode(
+                    dec,
+                    packets[i].as_ptr(),
+                    packets[i].len() as i32,
+                    pcm.as_mut_ptr(),
+                    frame_size as i32,
+                    0,
+                );
+                if ret > 0 {
+                    output.extend_from_slice(&pcm[..ret as usize * ch as usize]);
+                }
+            }
+        }
+
+        bindings::opus_decoder_destroy(dec);
+        output
+    }
+}
+
+fn fec_decode_rust(
+    sr: i32,
+    ch: i32,
+    frame_size: usize,
+    packets: &[Vec<u8>],
+    drops: &[usize],
+) -> Vec<i16> {
+    use mdopus::opus::decoder::OpusDecoder;
+
+    let mut dec = match OpusDecoder::new(sr, ch) {
+        Ok(d) => d,
+        Err(code) => {
+            eprintln!("ERROR: Rust OpusDecoder::new failed: {}", code);
+            process::exit(1);
+        }
+    };
+
+    let samples_per_frame = frame_size * ch as usize;
+    let mut pcm = vec![0i16; samples_per_frame];
+    let mut output = Vec::new();
+
+    for i in 0..packets.len() {
+        let is_dropped = drops.contains(&i);
+        let prev_dropped = i > 0 && drops.contains(&(i - 1));
+
+        if is_dropped {
+            // This frame is dropped — use PLC
+            match dec.decode(None, &mut pcm, frame_size as i32, false) {
+                Ok(ret) => output.extend_from_slice(&pcm[..ret as usize * ch as usize]),
+                Err(_) => {} // PLC can fail on first frame etc.
+            }
+        } else if prev_dropped {
+            // Previous frame was dropped, current is available.
+            // Recover previous frame using FEC from current packet.
+            match dec.decode(Some(&packets[i]), &mut pcm, frame_size as i32, true) {
+                Ok(ret) => output.extend_from_slice(&pcm[..ret as usize * ch as usize]),
+                Err(e) => {
+                    eprintln!("FEC Rust FEC-decode error at frame {}: {}", i, e);
+                }
+            }
+            // Now decode current frame normally
+            match dec.decode(Some(&packets[i]), &mut pcm, frame_size as i32, false) {
+                Ok(ret) => output.extend_from_slice(&pcm[..ret as usize * ch as usize]),
+                Err(e) => {
+                    eprintln!("FEC Rust normal-decode error at frame {}: {}", i, e);
+                }
+            }
+        } else {
+            // Normal decode
+            match dec.decode(Some(&packets[i]), &mut pcm, frame_size as i32, false) {
+                Ok(ret) => output.extend_from_slice(&pcm[..ret as usize * ch as usize]),
+                Err(e) => {
+                    eprintln!("FEC Rust decode error at frame {}: {}", i, e);
+                }
+            }
+        }
+    }
+
+    output
+}
+
+fn cmd_fec(wav_path: &str, bitrate: i32, loss_pct: i32) {
+    let wav = read_wav(Path::new(wav_path));
+    let sr = wav.sample_rate as i32;
+    let ch = wav.channels as i32;
+    let frame_size = (sr / 50) as usize;
+
+    println!(
+        "FEC test: {} Hz, {} ch, bitrate={}, loss_pct={}",
+        sr, ch, bitrate, loss_pct
+    );
+
+    // Encode with FEC enabled
+    let mut cfg = EncodeConfig::new(sr, ch);
+    cfg.bitrate = bitrate;
+    cfg.application = bindings::OPUS_APPLICATION_VOIP; // FEC is most relevant for VOIP
+    cfg.fec = 1;
+    cfg.packet_loss_pct = loss_pct;
+
+    let c_enc = c_encode_cfg(&wav.samples, &cfg);
+    let rust_enc = rust_encode_cfg(&wav.samples, &cfg);
+
+    // 1. Compare encoded bytes
+    let enc_stats = compare_bytes(&c_enc, &rust_enc);
+    if enc_stats.first_diff_offset.is_none() {
+        println!("  encode (FEC enabled): PASS ({} bytes)", c_enc.len());
+    } else {
+        println!(
+            "  encode (FEC enabled): FAIL at byte {} (max_diff={})",
+            enc_stats.first_diff_offset.unwrap(),
+            enc_stats.max_diff
+        );
+    }
+
+    // 2. FEC recovery test: simulate packet loss and recover via FEC
+    let packets = parse_packets(&c_enc);
+    let drops: Vec<usize> = vec![5, 10, 15, 20, 25]
+        .into_iter()
+        .filter(|&d| d < packets.len())
+        .collect();
+
+    // Decode with FEC recovery using C decoder
+    let c_fec_pcm = fec_decode_c(sr, ch, frame_size, &packets, &drops);
+    // Decode with FEC recovery using Rust decoder
+    let rust_fec_pcm = fec_decode_rust(sr, ch, frame_size, &packets, &drops);
+
+    let dec_stats = compare_samples(&c_fec_pcm, &rust_fec_pcm);
+    if dec_stats.first_diff_offset.is_none() {
+        println!(
+            "  FEC decode recovery: PASS ({} samples, {} drops)",
+            dec_stats.total,
+            drops.len()
+        );
+    } else {
+        println!(
+            "  FEC decode recovery: FAIL at sample {} (max_diff={}, {} drops)",
+            dec_stats.first_diff_offset.unwrap(),
+            dec_stats.max_diff,
+            drops.len()
+        );
+    }
+}
+
 fn cmd_bench(wav_path: &str, bitrate: i32, complexity: i32, iters: u32) {
     let wav = read_wav(Path::new(wav_path));
     let sr = wav.sample_rate as i32;
@@ -3546,6 +3759,639 @@ fn cmd_sweep(filter: Option<&str>, stop_on_fail: bool) {
 }
 
 // ---------------------------------------------------------------------------
+// DTX (Discontinuous Transmission) test
+// ---------------------------------------------------------------------------
+
+fn dtx_test_one(sr: i32, ch: i32, pcm: &[i16], bitrate: i32) {
+    println!("DTX test: {} Hz, {} ch, bitrate={}", sr, ch, bitrate);
+
+    let mut cfg = EncodeConfig::new(sr, ch);
+    cfg.bitrate = bitrate;
+    cfg.application = bindings::OPUS_APPLICATION_VOIP; // DTX most relevant for VOIP
+    cfg.dtx = 1;
+
+    let c_enc = c_encode_cfg(pcm, &cfg);
+    let rust_enc = rust_encode_cfg(pcm, &cfg);
+
+    // Compare encoded bytes
+    let enc_stats = compare_bytes(&c_enc, &rust_enc);
+    if enc_stats.first_diff_offset.is_none() {
+        println!("  encode: PASS ({} bytes)", c_enc.len());
+    } else {
+        println!(
+            "  encode: FAIL at byte {} (max_diff={})",
+            enc_stats.first_diff_offset.unwrap(),
+            enc_stats.max_diff
+        );
+    }
+
+    // Analyze packet sizes to verify DTX behavior
+    let c_packets = parse_packets(&c_enc);
+    let r_packets = parse_packets(&rust_enc);
+
+    let c_dtx_frames = c_packets.iter().filter(|p| p.len() <= 2).count();
+    let r_dtx_frames = r_packets.iter().filter(|p| p.len() <= 2).count();
+    println!(
+        "  C DTX frames: {}/{}, Rust DTX frames: {}/{}",
+        c_dtx_frames,
+        c_packets.len(),
+        r_dtx_frames,
+        r_packets.len()
+    );
+
+    // Decode both and compare
+    let c_dec = c_decode_cfg(&c_enc, &cfg);
+    let rust_dec = rust_decode_cfg(&c_enc, &cfg);
+
+    let dec_stats = compare_samples(&c_dec, &rust_dec);
+    if dec_stats.first_diff_offset.is_none() {
+        println!("  decode: PASS ({} samples)", dec_stats.total);
+    } else {
+        println!(
+            "  decode: FAIL at sample {} (max_diff={})",
+            dec_stats.first_diff_offset.unwrap(),
+            dec_stats.max_diff
+        );
+    }
+}
+
+fn cmd_dtx(wav_path: &str, bitrate: i32) {
+    if wav_path == "generate" {
+        // Generate test signals at multiple sample rates
+        for &(test_sr, test_ch) in &[(48000, 1), (16000, 1), (8000, 1)] {
+            let signal = generate_dtx_signal(test_sr, test_ch, 2.0, 42);
+            dtx_test_one(test_sr, test_ch, &signal, bitrate);
+        }
+        return;
+    }
+
+    let wav = read_wav(Path::new(wav_path));
+    dtx_test_one(
+        wav.sample_rate as i32,
+        wav.channels as i32,
+        &wav.samples,
+        bitrate,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// API validation: compare C and Rust error handling for invalid inputs
+// ---------------------------------------------------------------------------
+
+fn cmd_api() {
+    println!("API validation: testing error handling parity between C and Rust");
+    println!();
+    let mut pass = 0u32;
+    let mut fail = 0u32;
+
+    // -----------------------------------------------------------------------
+    // 1. Encoder creation -- invalid and valid parameters
+    // -----------------------------------------------------------------------
+
+    println!("--- Encoder creation ---");
+
+    macro_rules! test_enc_create {
+        ($sr:expr, $ch:expr, $app:expr, $label:expr) => {{
+            let c_result = unsafe {
+                let mut err: i32 = 0;
+                let enc = bindings::opus_encoder_create($sr, $ch, $app, &mut err);
+                if !enc.is_null() {
+                    bindings::opus_encoder_destroy(enc);
+                }
+                err
+            };
+            let r_result = match mdopus::opus::encoder::OpusEncoder::new($sr, $ch, $app) {
+                Ok(_) => 0i32,
+                Err(e) => e,
+            };
+            // Both succeed or both fail
+            let ok = (c_result == 0) == (r_result == 0);
+            if ok {
+                println!("  PASS  {}: C={}, Rust={}", $label, c_result, r_result);
+                pass += 1;
+            } else {
+                println!("  FAIL  {}: C={}, Rust={}", $label, c_result, r_result);
+                fail += 1;
+            }
+        }};
+    }
+
+    let audio = bindings::OPUS_APPLICATION_AUDIO;
+    let voip = bindings::OPUS_APPLICATION_VOIP;
+    let lowdelay = bindings::OPUS_APPLICATION_RESTRICTED_LOWDELAY;
+
+    // Invalid sample rates
+    test_enc_create!(44100, 1, audio, "enc_create(44100, 1, AUDIO)");
+    test_enc_create!(0, 1, audio, "enc_create(0, 1, AUDIO)");
+    test_enc_create!(-1, 1, audio, "enc_create(-1, 1, AUDIO)");
+    test_enc_create!(96000, 1, audio, "enc_create(96000, 1, AUDIO)");
+    test_enc_create!(11025, 1, audio, "enc_create(11025, 1, AUDIO)");
+
+    // Invalid channels
+    test_enc_create!(48000, 0, audio, "enc_create(48000, 0, AUDIO)");
+    test_enc_create!(48000, 3, audio, "enc_create(48000, 3, AUDIO)");
+    test_enc_create!(48000, -1, audio, "enc_create(48000, -1, AUDIO)");
+    test_enc_create!(48000, 255, audio, "enc_create(48000, 255, AUDIO)");
+
+    // Invalid application
+    test_enc_create!(48000, 1, 9999, "enc_create(48000, 1, 9999)");
+    test_enc_create!(48000, 1, 0, "enc_create(48000, 1, 0)");
+    test_enc_create!(48000, 1, -1, "enc_create(48000, 1, -1)");
+
+    // Valid cases -- all five valid sample rates
+    test_enc_create!(48000, 1, audio, "enc_create(48000, 1, AUDIO)");
+    test_enc_create!(48000, 2, voip, "enc_create(48000, 2, VOIP)");
+    test_enc_create!(8000, 1, lowdelay, "enc_create(8000, 1, LOWDELAY)");
+    test_enc_create!(12000, 1, audio, "enc_create(12000, 1, AUDIO)");
+    test_enc_create!(16000, 2, voip, "enc_create(16000, 2, VOIP)");
+    test_enc_create!(24000, 1, audio, "enc_create(24000, 1, AUDIO)");
+
+    println!();
+
+    // -----------------------------------------------------------------------
+    // 2. Decoder creation -- invalid and valid parameters
+    // -----------------------------------------------------------------------
+
+    println!("--- Decoder creation ---");
+
+    macro_rules! test_dec_create {
+        ($sr:expr, $ch:expr, $label:expr) => {{
+            let c_result = unsafe {
+                let mut err: i32 = 0;
+                let dec = bindings::opus_decoder_create($sr, $ch, &mut err);
+                if !dec.is_null() {
+                    bindings::opus_decoder_destroy(dec);
+                }
+                err
+            };
+            let r_result = match mdopus::opus::decoder::OpusDecoder::new($sr, $ch) {
+                Ok(_) => 0i32,
+                Err(e) => e,
+            };
+            let ok = (c_result == 0) == (r_result == 0);
+            if ok {
+                println!("  PASS  {}: C={}, Rust={}", $label, c_result, r_result);
+                pass += 1;
+            } else {
+                println!("  FAIL  {}: C={}, Rust={}", $label, c_result, r_result);
+                fail += 1;
+            }
+        }};
+    }
+
+    // Invalid sample rates
+    test_dec_create!(44100, 1, "dec_create(44100, 1)");
+    test_dec_create!(0, 1, "dec_create(0, 1)");
+    test_dec_create!(-1, 1, "dec_create(-1, 1)");
+    test_dec_create!(96000, 1, "dec_create(96000, 1)");
+
+    // Invalid channels
+    test_dec_create!(48000, 0, "dec_create(48000, 0)");
+    test_dec_create!(48000, 3, "dec_create(48000, 3)");
+    test_dec_create!(48000, -1, "dec_create(48000, -1)");
+
+    // Valid cases
+    test_dec_create!(48000, 1, "dec_create(48000, 1)");
+    test_dec_create!(48000, 2, "dec_create(48000, 2)");
+    test_dec_create!(8000, 1, "dec_create(8000, 1)");
+    test_dec_create!(8000, 2, "dec_create(8000, 2)");
+    test_dec_create!(12000, 1, "dec_create(12000, 1)");
+    test_dec_create!(16000, 2, "dec_create(16000, 2)");
+    test_dec_create!(24000, 1, "dec_create(24000, 1)");
+
+    println!();
+
+    // -----------------------------------------------------------------------
+    // 3. Encoder CTL -- invalid values
+    // -----------------------------------------------------------------------
+
+    println!("--- Encoder CTL ---");
+
+    // Create a valid C encoder and Rust encoder for CTL tests
+    let c_enc = unsafe {
+        let mut err: i32 = 0;
+        let enc = bindings::opus_encoder_create(48000, 2, audio, &mut err);
+        assert!(
+            !enc.is_null() && err == 0,
+            "C encoder creation failed for CTL tests"
+        );
+        enc
+    };
+    let mut r_enc = mdopus::opus::encoder::OpusEncoder::new(48000, 2, audio)
+        .expect("Rust encoder creation failed for CTL tests");
+
+    macro_rules! test_ctl {
+        ($c_req:expr, $c_val:expr, $rust_call:expr, $label:expr) => {{
+            let c_ret = unsafe { bindings::opus_encoder_ctl(c_enc, $c_req, $c_val) };
+            let r_ret: i32 = $rust_call;
+            // Both succeed (==0) or both fail (!=0)
+            let ok = (c_ret == 0) == (r_ret == 0);
+            if ok {
+                println!("  PASS  {}: C={}, Rust={}", $label, c_ret, r_ret);
+                pass += 1;
+            } else {
+                println!("  FAIL  {}: C={}, Rust={}", $label, c_ret, r_ret);
+                fail += 1;
+            }
+        }};
+    }
+
+    // Bitrate
+    test_ctl!(
+        bindings::OPUS_SET_BITRATE_REQUEST,
+        -2i32,
+        r_enc.set_bitrate(-2),
+        "set_bitrate(-2)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_BITRATE_REQUEST,
+        300i32,
+        r_enc.set_bitrate(300),
+        "set_bitrate(300)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_BITRATE_REQUEST,
+        2000000i32,
+        r_enc.set_bitrate(2000000),
+        "set_bitrate(2000000)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_BITRATE_REQUEST,
+        64000i32,
+        r_enc.set_bitrate(64000),
+        "set_bitrate(64000) [valid]"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_BITRATE_REQUEST,
+        500i32,
+        r_enc.set_bitrate(500),
+        "set_bitrate(500) [min valid]"
+    );
+
+    // Complexity
+    test_ctl!(
+        bindings::OPUS_SET_COMPLEXITY_REQUEST,
+        -1i32,
+        r_enc.set_complexity(-1),
+        "set_complexity(-1)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_COMPLEXITY_REQUEST,
+        11i32,
+        r_enc.set_complexity(11),
+        "set_complexity(11)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_COMPLEXITY_REQUEST,
+        0i32,
+        r_enc.set_complexity(0),
+        "set_complexity(0) [valid]"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_COMPLEXITY_REQUEST,
+        10i32,
+        r_enc.set_complexity(10),
+        "set_complexity(10) [valid]"
+    );
+
+    // VBR
+    test_ctl!(
+        bindings::OPUS_SET_VBR_REQUEST,
+        -1i32,
+        r_enc.set_vbr(-1),
+        "set_vbr(-1)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_VBR_REQUEST,
+        2i32,
+        r_enc.set_vbr(2),
+        "set_vbr(2)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_VBR_REQUEST,
+        0i32,
+        r_enc.set_vbr(0),
+        "set_vbr(0) [valid]"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_VBR_REQUEST,
+        1i32,
+        r_enc.set_vbr(1),
+        "set_vbr(1) [valid]"
+    );
+
+    // VBR constraint
+    test_ctl!(
+        bindings::OPUS_SET_VBR_CONSTRAINT_REQUEST,
+        -1i32,
+        r_enc.set_vbr_constraint(-1),
+        "set_vbr_constraint(-1)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_VBR_CONSTRAINT_REQUEST,
+        2i32,
+        r_enc.set_vbr_constraint(2),
+        "set_vbr_constraint(2)"
+    );
+
+    // Inband FEC
+    test_ctl!(
+        bindings::OPUS_SET_INBAND_FEC_REQUEST,
+        -1i32,
+        r_enc.set_inband_fec(-1),
+        "set_inband_fec(-1)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_INBAND_FEC_REQUEST,
+        3i32,
+        r_enc.set_inband_fec(3),
+        "set_inband_fec(3)"
+    );
+
+    // Packet loss percentage
+    test_ctl!(
+        bindings::OPUS_SET_PACKET_LOSS_PERC_REQUEST,
+        -1i32,
+        r_enc.set_packet_loss_perc(-1),
+        "set_packet_loss_perc(-1)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_PACKET_LOSS_PERC_REQUEST,
+        101i32,
+        r_enc.set_packet_loss_perc(101),
+        "set_packet_loss_perc(101)"
+    );
+
+    // DTX
+    test_ctl!(
+        bindings::OPUS_SET_DTX_REQUEST,
+        -1i32,
+        r_enc.set_dtx(-1),
+        "set_dtx(-1)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_DTX_REQUEST,
+        2i32,
+        r_enc.set_dtx(2),
+        "set_dtx(2)"
+    );
+
+    // Signal
+    test_ctl!(
+        bindings::OPUS_SET_SIGNAL_REQUEST,
+        0i32,
+        r_enc.set_signal(0),
+        "set_signal(0)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_SIGNAL_REQUEST,
+        9999i32,
+        r_enc.set_signal(9999),
+        "set_signal(9999)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_SIGNAL_REQUEST,
+        bindings::OPUS_SIGNAL_VOICE,
+        r_enc.set_signal(mdopus::opus::encoder::OPUS_SIGNAL_VOICE),
+        "set_signal(VOICE) [valid]"
+    );
+
+    // Bandwidth
+    test_ctl!(
+        bindings::OPUS_SET_BANDWIDTH_REQUEST,
+        0i32,
+        r_enc.set_bandwidth(0),
+        "set_bandwidth(0)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_BANDWIDTH_REQUEST,
+        9999i32,
+        r_enc.set_bandwidth(9999),
+        "set_bandwidth(9999)"
+    );
+
+    // Max bandwidth
+    test_ctl!(
+        bindings::OPUS_SET_MAX_BANDWIDTH_REQUEST,
+        0i32,
+        r_enc.set_max_bandwidth(0),
+        "set_max_bandwidth(0)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_MAX_BANDWIDTH_REQUEST,
+        9999i32,
+        r_enc.set_max_bandwidth(9999),
+        "set_max_bandwidth(9999)"
+    );
+
+    // LSB depth
+    test_ctl!(
+        bindings::OPUS_SET_LSB_DEPTH_REQUEST,
+        7i32,
+        r_enc.set_lsb_depth(7),
+        "set_lsb_depth(7)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_LSB_DEPTH_REQUEST,
+        25i32,
+        r_enc.set_lsb_depth(25),
+        "set_lsb_depth(25)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_LSB_DEPTH_REQUEST,
+        16i32,
+        r_enc.set_lsb_depth(16),
+        "set_lsb_depth(16) [valid]"
+    );
+
+    // Prediction disabled
+    test_ctl!(
+        bindings::OPUS_SET_PREDICTION_DISABLED_REQUEST,
+        -1i32,
+        r_enc.set_prediction_disabled(-1),
+        "set_prediction_disabled(-1)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_PREDICTION_DISABLED_REQUEST,
+        2i32,
+        r_enc.set_prediction_disabled(2),
+        "set_prediction_disabled(2)"
+    );
+
+    // Force channels
+    test_ctl!(
+        bindings::OPUS_SET_FORCE_CHANNELS_REQUEST,
+        0i32,
+        r_enc.set_force_channels(0),
+        "set_force_channels(0)"
+    );
+    test_ctl!(
+        bindings::OPUS_SET_FORCE_CHANNELS_REQUEST,
+        3i32,
+        r_enc.set_force_channels(3),
+        "set_force_channels(3)"
+    );
+
+    unsafe {
+        bindings::opus_encoder_destroy(c_enc);
+    }
+
+    println!();
+
+    // -----------------------------------------------------------------------
+    // 4. Decode with invalid inputs
+    // -----------------------------------------------------------------------
+
+    println!("--- Decode with invalid inputs ---");
+
+    // First encode a valid packet with C reference so we have real data
+    let c_enc_tmp = unsafe {
+        let mut err: i32 = 0;
+        let enc = bindings::opus_encoder_create(48000, 1, audio, &mut err);
+        assert!(!enc.is_null() && err == 0);
+        enc
+    };
+
+    let silence = vec![0i16; 960]; // 20ms at 48kHz mono
+    let mut c_pkt = vec![0u8; 4000];
+    let c_pkt_len = unsafe {
+        bindings::opus_encode(c_enc_tmp, silence.as_ptr(), 960, c_pkt.as_mut_ptr(), 4000)
+    };
+    assert!(c_pkt_len > 0, "C encode of silence failed");
+    let c_pkt_len = c_pkt_len as usize;
+    unsafe {
+        bindings::opus_encoder_destroy(c_enc_tmp);
+    }
+
+    let valid_pkt = &c_pkt[..c_pkt_len];
+
+    // Helper: test decode with a byte slice (non-null data)
+    fn test_decode_data(
+        data: &[u8],
+        c_data_len: i32,
+        frame_size: i32,
+        label: &str,
+        pass: &mut u32,
+        fail: &mut u32,
+    ) {
+        // C decoder -- fresh each time to avoid state contamination
+        let c_dec = unsafe {
+            let mut err: i32 = 0;
+            let dec = bindings::opus_decoder_create(48000, 1, &mut err);
+            assert!(!dec.is_null() && err == 0);
+            dec
+        };
+        let mut c_pcm = vec![0i16; 5760];
+        let c_ret = unsafe {
+            bindings::opus_decode(c_dec, data.as_ptr(), c_data_len, c_pcm.as_mut_ptr(), frame_size, 0)
+        };
+        unsafe {
+            bindings::opus_decoder_destroy(c_dec);
+        }
+
+        // Rust decoder -- fresh each time
+        let mut r_dec =
+            mdopus::opus::decoder::OpusDecoder::new(48000, 1).expect("Rust decoder failed");
+        let mut r_pcm = vec![0i16; 5760];
+        let r_data: Option<&[u8]> = if c_data_len > 0 {
+            Some(&data[..c_data_len as usize])
+        } else {
+            Some(&[])
+        };
+        let r_ret = match r_dec.decode(r_data, &mut r_pcm, frame_size, false) {
+            Ok(n) => n,
+            Err(e) => e,
+        };
+
+        let ok = (c_ret >= 0) == (r_ret >= 0);
+        if ok {
+            println!("  PASS  {}: C={}, Rust={}", label, c_ret, r_ret);
+            *pass += 1;
+        } else {
+            println!("  FAIL  {}: C={}, Rust={}", label, c_ret, r_ret);
+            *fail += 1;
+        }
+    }
+
+    // Helper: test decode with NULL/None data (PLC path)
+    fn test_decode_null(
+        frame_size: i32,
+        label: &str,
+        pass: &mut u32,
+        fail: &mut u32,
+    ) {
+        let c_dec = unsafe {
+            let mut err: i32 = 0;
+            let dec = bindings::opus_decoder_create(48000, 1, &mut err);
+            assert!(!dec.is_null() && err == 0);
+            dec
+        };
+        let mut c_pcm = vec![0i16; 5760];
+        let c_ret = unsafe {
+            bindings::opus_decode(c_dec, std::ptr::null(), 0, c_pcm.as_mut_ptr(), frame_size, 0)
+        };
+        unsafe {
+            bindings::opus_decoder_destroy(c_dec);
+        }
+
+        let mut r_dec =
+            mdopus::opus::decoder::OpusDecoder::new(48000, 1).expect("Rust decoder failed");
+        let mut r_pcm = vec![0i16; 5760];
+        let r_ret = match r_dec.decode(None, &mut r_pcm, frame_size, false) {
+            Ok(n) => n,
+            Err(e) => e,
+        };
+
+        let ok = (c_ret >= 0) == (r_ret >= 0);
+        if ok {
+            println!("  PASS  {}: C={}, Rust={}", label, c_ret, r_ret);
+            *pass += 1;
+        } else {
+            println!("  FAIL  {}: C={}, Rust={}", label, c_ret, r_ret);
+            *fail += 1;
+        }
+    }
+
+    // Valid decode (baseline)
+    test_decode_data(valid_pkt, c_pkt_len as i32, 960, "decode(valid, 960)", &mut pass, &mut fail);
+
+    // Null/None data -- triggers PLC
+    test_decode_null(960, "decode(NULL, 960) [PLC]", &mut pass, &mut fail);
+
+    // Frame size 0
+    test_decode_data(valid_pkt, c_pkt_len as i32, 0, "decode(valid, fs=0)", &mut pass, &mut fail);
+
+    // Empty packet (0-length data pointer)
+    test_decode_data(valid_pkt, 0, 960, "decode(data, len=0, 960)", &mut pass, &mut fail);
+
+    // Very small frame size
+    test_decode_data(valid_pkt, c_pkt_len as i32, 1, "decode(valid, fs=1)", &mut pass, &mut fail);
+
+    // Large frame size (5760 = 120ms at 48kHz -- max supported)
+    test_decode_data(valid_pkt, c_pkt_len as i32, 5760, "decode(valid, fs=5760)", &mut pass, &mut fail);
+
+    // Corrupted packet: single byte
+    let bad_pkt: [u8; 1] = [0xFF];
+    test_decode_data(&bad_pkt, 1, 960, "decode([0xFF], 960)", &mut pass, &mut fail);
+
+    // Null data with frame_size 0
+    test_decode_null(0, "decode(NULL, fs=0)", &mut pass, &mut fail);
+
+    // Note: negative length (C `len=-1`) cannot be tested through Rust's slice
+    // API -- Rust prevents negative-length slices by construction. The C reference
+    // returns OPUS_INVALID_PACKET for negative len; the Rust API prevents this
+    // class of error at the type level. Skipped.
+
+    println!();
+    println!("========================================");
+    println!("API validation: {} PASS, {} FAIL", pass, fail);
+    println!("========================================");
+    if fail > 0 {
+        process::exit(1);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -3557,9 +4403,12 @@ fn usage() {
     eprintln!("  mdopus-compare decode <input.opus>");
     eprintln!("  mdopus-compare roundtrip <input.wav> [--bitrate N]");
     eprintln!("  mdopus-compare plc <input.wav> [--bitrate N]");
+    eprintln!("  mdopus-compare fec <input.wav> [--bitrate N] [--loss-pct N]");
+    eprintln!("  mdopus-compare dtx <input.wav|generate> [--bitrate N]");
     eprintln!("  mdopus-compare sweep [filter] [--stop-on-fail]");
     eprintln!("  mdopus-compare bench <input.wav> [--bitrate N] [--complexity N] [--iters N]");
     eprintln!("  mdopus-compare unit <module_name>");
+    eprintln!("  mdopus-compare api");
     eprintln!();
     eprintln!("MODULES for 'unit':");
     eprintln!("  range_coder   Range coder (entenc/entdec)");
@@ -3569,6 +4418,7 @@ fn usage() {
     eprintln!("  --bitrate N      Target bitrate in bps (default: 64000)");
     eprintln!("  --complexity N   Encoder complexity 0-10 (default: 10)");
     eprintln!("  --iters N        Benchmark iterations (default: 10)");
+    eprintln!("  --loss-pct N     Packet loss percentage for FEC (default: 20)");
     eprintln!("  --stop-on-fail   (sweep) Stop after first failing configuration");
     eprintln!();
     eprintln!("SWEEP FILTER EXAMPLES:");
@@ -3678,6 +4528,23 @@ fn main() {
             let bitrate = parse_option(&args, "--bitrate", 64000);
             cmd_plc(&args[2], bitrate);
         }
+        "fec" => {
+            if args.len() < 3 {
+                eprintln!("ERROR: fec requires an input WAV file");
+                process::exit(1);
+            }
+            let bitrate = parse_option(&args, "--bitrate", 64000);
+            let loss_pct = parse_option(&args, "--loss-pct", 20);
+            cmd_fec(&args[2], bitrate, loss_pct);
+        }
+        "dtx" => {
+            if args.len() < 3 {
+                eprintln!("ERROR: dtx requires an input WAV file or 'generate'");
+                process::exit(1);
+            }
+            let bitrate = parse_option(&args, "--bitrate", 24000);
+            cmd_dtx(&args[2], bitrate);
+        }
         "sweep" => {
             let stop_on_fail = args.iter().any(|a| a == "--stop-on-fail");
             // Find filter: first positional arg after "sweep" that isn't a flag
@@ -3689,6 +4556,9 @@ fn main() {
                 }
             });
             cmd_sweep(filter, stop_on_fail);
+        }
+        "api" => {
+            cmd_api();
         }
         "--help" | "-h" | "help" => {
             usage();
