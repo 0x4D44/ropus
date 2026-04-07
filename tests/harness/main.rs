@@ -2898,6 +2898,8 @@ fn cmd_fec(wav_path: &str, bitrate: i32, loss_pct: i32) {
         sr, ch, bitrate, loss_pct
     );
 
+    let mut all_pass = true;
+
     // Encode with FEC enabled
     let mut cfg = EncodeConfig::new(sr, ch);
     cfg.bitrate = bitrate;
@@ -2918,6 +2920,7 @@ fn cmd_fec(wav_path: &str, bitrate: i32, loss_pct: i32) {
             enc_stats.first_diff_offset.unwrap(),
             enc_stats.max_diff
         );
+        all_pass = false;
     }
 
     // 2. FEC recovery test: simulate packet loss and recover via FEC
@@ -2946,6 +2949,11 @@ fn cmd_fec(wav_path: &str, bitrate: i32, loss_pct: i32) {
             dec_stats.max_diff,
             drops.len()
         );
+        all_pass = false;
+    }
+
+    if !all_pass {
+        process::exit(1);
     }
 }
 
@@ -3762,8 +3770,10 @@ fn cmd_sweep(filter: Option<&str>, stop_on_fail: bool) {
 // DTX (Discontinuous Transmission) test
 // ---------------------------------------------------------------------------
 
-fn dtx_test_one(sr: i32, ch: i32, pcm: &[i16], bitrate: i32) {
+fn dtx_test_one(sr: i32, ch: i32, pcm: &[i16], bitrate: i32) -> bool {
     println!("DTX test: {} Hz, {} ch, bitrate={}", sr, ch, bitrate);
+
+    let mut all_pass = true;
 
     let mut cfg = EncodeConfig::new(sr, ch);
     cfg.bitrate = bitrate;
@@ -3783,6 +3793,7 @@ fn dtx_test_one(sr: i32, ch: i32, pcm: &[i16], bitrate: i32) {
             enc_stats.first_diff_offset.unwrap(),
             enc_stats.max_diff
         );
+        all_pass = false;
     }
 
     // Analyze packet sizes to verify DTX behavior
@@ -3812,26 +3823,38 @@ fn dtx_test_one(sr: i32, ch: i32, pcm: &[i16], bitrate: i32) {
             dec_stats.first_diff_offset.unwrap(),
             dec_stats.max_diff
         );
+        all_pass = false;
     }
+
+    all_pass
 }
 
 fn cmd_dtx(wav_path: &str, bitrate: i32) {
+    let mut all_pass = true;
+
     if wav_path == "generate" {
         // Generate test signals at multiple sample rates
         for &(test_sr, test_ch) in &[(48000, 1), (16000, 1), (8000, 1)] {
             let signal = generate_dtx_signal(test_sr, test_ch, 2.0, 42);
-            dtx_test_one(test_sr, test_ch, &signal, bitrate);
+            if !dtx_test_one(test_sr, test_ch, &signal, bitrate) {
+                all_pass = false;
+            }
+        }
+        if !all_pass {
+            process::exit(1);
         }
         return;
     }
 
     let wav = read_wav(Path::new(wav_path));
-    dtx_test_one(
+    if !dtx_test_one(
         wav.sample_rate as i32,
         wav.channels as i32,
         &wav.samples,
         bitrate,
-    );
+    ) {
+        process::exit(1);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -5067,6 +5090,7 @@ fn cmd_longsoak(duration_secs: i32, sample_rate: i32) {
         println!("  OVERALL: PASS");
     } else {
         println!("  OVERALL: FAIL");
+        process::exit(1);
     }
 }
 
@@ -5689,6 +5713,73 @@ fn cmd_multistream() {
 }
 
 // ---------------------------------------------------------------------------
+// Test-all: sequential full test suite
+// ---------------------------------------------------------------------------
+
+fn cmd_test_all() {
+    println!("=== mdopus full test suite ===");
+    println!();
+
+    // Each command calls process::exit(1) on failure, so if any fails
+    // the remaining tests won't run. This is acceptable for a sequential
+    // test runner -- fix failures before running the full suite.
+
+    println!("--- [1/11] api ---");
+    cmd_api();
+    println!();
+
+    println!("--- [2/11] sweep ---");
+    cmd_sweep(None, false);
+    println!();
+
+    println!("--- [3/11] plc (48k mono noise) ---");
+    cmd_plc("tests/vectors/48000hz_mono_noise.wav", 64000);
+    println!();
+
+    println!("--- [4/11] plc (8k mono noise) ---");
+    cmd_plc("tests/vectors/8000hz_mono_noise.wav", 12000);
+    println!();
+
+    println!("--- [5/11] fec (48k mono noise) ---");
+    cmd_fec("tests/vectors/48000hz_mono_noise.wav", 64000, 20);
+    println!();
+
+    println!("--- [6/11] dtx (generate) ---");
+    cmd_dtx("generate", 24000);
+    println!();
+
+    println!("--- [7/11] packets (48k mono noise) ---");
+    cmd_packets("tests/vectors/48000hz_mono_noise.wav");
+    println!();
+
+    println!("--- [8/11] decode-formats (48k mono noise) ---");
+    cmd_decode_formats("tests/vectors/48000hz_mono_noise.wav");
+    println!();
+
+    println!("--- [9/11] repacketizer (48k mono noise) ---");
+    cmd_repacketizer("tests/vectors/48000hz_mono_noise.wav");
+    println!();
+
+    println!("--- [10/11] multistream ---");
+    cmd_multistream();
+    println!();
+
+    println!("--- [11/11] longsoak (5s) ---");
+    cmd_longsoak(5, 48000);
+    println!();
+
+    // Quality is a sanity check that doesn't fail on LOW results,
+    // so run it last as informational.
+    println!("--- [bonus] quality (48k mono sine440) ---");
+    cmd_quality("tests/vectors/48000hz_mono_sine440.wav");
+    println!();
+
+    println!("========================================");
+    println!("=== ALL TESTS PASSED ===");
+    println!("========================================");
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -5712,6 +5803,7 @@ fn usage() {
     eprintln!("  mdopus-compare multistream");
     eprintln!("  mdopus-compare unit <module_name>");
     eprintln!("  mdopus-compare api");
+    eprintln!("  mdopus-compare test-all");
     eprintln!();
     eprintln!("MODULES for 'unit':");
     eprintln!("  range_coder   Range coder (entenc/entdec)");
@@ -5900,6 +5992,9 @@ fn main() {
         }
         "multistream" => {
             cmd_multistream();
+        }
+        "test-all" => {
+            cmd_test_all();
         }
         "--help" | "-h" | "help" => {
             usage();
