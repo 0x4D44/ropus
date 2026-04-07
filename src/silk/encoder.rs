@@ -7644,6 +7644,14 @@ pub fn silk_encode(
     enc.n_channels_api = enc_control.n_channels_api;
     enc.n_channels_internal = n_channels_internal as i32;
 
+    // Normalize n_samples_in to per-channel count (C: silk_Encode receives
+    // per-channel frame_size, but the Rust caller may pass frame_size*channels).
+    let n_samples_in = if enc_control.n_channels_api > 1 {
+        n_samples_in / enc_control.n_channels_api
+    } else {
+        n_samples_in
+    };
+
     // Compute number of 10ms blocks
     let n_blocks_of_10ms = if n_samples_in > 0 {
         (100 * n_samples_in) / enc_control.api_sample_rate
@@ -7682,16 +7690,23 @@ pub fn silk_encode(
     // Max samples to buffer and corresponding input samples
     let n_samples_to_buffer_max = (10 * n_blocks_of_10ms * fs_khz) as usize;
 
-    // Input buffering / resampling loop (matches C while(1) loop)
+    // C: tot_blocks = (nBlocksOf10ms > 1) ? nBlocksOf10ms >> 1 : 1
+    let tot_blocks = if n_blocks_of_10ms > 1 { n_blocks_of_10ms >> 1 } else { 1 };
+    let mut curr_block: i32 = 0;
+
+    // Main encode loop — matches C while(1) in enc_API.c.
+    // Iterates once per SILK sub-frame (20ms). For 40ms payload there are 2 iterations,
+    // for 60ms there are 3, etc.
     let mut samples_offset: usize = 0;
     let mut n_samples_remaining = n_samples_in;
 
     loop {
-        // How many internal-rate samples to buffer this iteration
+        let mut curr_n_bits_used_lbrr: i32 = 0;
+
+        // --- Buffer one sub-frame of input ---
         let mut n_samples_to_buffer = (frame_length - enc.state_fxx[0].s_cmn.input_buf_ix) as usize;
         n_samples_to_buffer = n_samples_to_buffer.min(n_samples_to_buffer_max);
 
-        // How many API-rate samples that corresponds to
         let n_samples_from_input = if fs_khz * 1000 != 0 {
             ((n_samples_to_buffer as i64 * enc_control.api_sample_rate as i64)
                 / (fs_khz as i64 * 1000)) as usize
@@ -7703,11 +7718,9 @@ pub fn silk_encode(
             break;
         }
 
-        // Resample and buffer input per channel
-        // Matches C: enc_API.c lines 291-341 (three cases)
+        // Resample and buffer input per channel (C: enc_API.c lines 291-341)
         let api_in = &samples_in[samples_offset..];
         if enc_control.n_channels_api == 2 && n_channels_internal == 2 {
-            // Case 1: stereo API, stereo internal — de-interleave each channel
             for n in 0..2 {
                 let input: Vec<i16> = (0..n_samples_from_input)
                     .map(|i| api_in[i * 2 + n])
@@ -7725,8 +7738,6 @@ pub fn silk_encode(
                 enc.state_fxx[n].s_cmn.input_buf_ix += n_samples_to_buffer as i32;
             }
         } else if enc_control.n_channels_api == 2 && n_channels_internal == 1 {
-            // Case 2: stereo API, mono internal — downmix L+R to mono
-            // C: buf[n] = silk_RSHIFT_ROUND(samplesIn[2*n] + samplesIn[2*n+1], 1)
             let input: Vec<i16> = (0..n_samples_from_input)
                 .map(|i| {
                     let sum = api_in[i * 2] as i32 + api_in[i * 2 + 1] as i32;
@@ -7739,8 +7750,6 @@ pub fn silk_encode(
                 &mut buf,
                 &input,
             );
-            // On the first mono frame after stereo, average with second resampler
-            // C: enc_API.c lines 323-331
             if enc.n_prev_channels_internal == 2 && enc.state_fxx[0].s_cmn.n_frames_encoded == 0 {
                 let mut buf2 = vec![0i16; n_samples_to_buffer];
                 silk_resampler_run(
@@ -7759,7 +7768,6 @@ pub fn silk_encode(
                 .copy_from_slice(&buf[..copy_len]);
             enc.state_fxx[0].s_cmn.input_buf_ix += n_samples_to_buffer as i32;
         } else {
-            // Case 3: mono API, mono internal
             let input = api_in[..n_samples_from_input].to_vec();
             let mut buf = vec![0i16; n_samples_to_buffer];
             silk_resampler_run(
@@ -7777,434 +7785,317 @@ pub fn silk_encode(
         samples_offset += n_samples_from_input * enc_control.n_channels_api as usize;
         n_samples_remaining -= n_samples_from_input as i32;
 
-        // Default
         enc.allow_bandwidth_switch = 0;
 
-        // Check if we have a full frame
+        // --- Encode if we have a full sub-frame ---
         if enc.state_fxx[0].s_cmn.input_buf_ix >= frame_length {
-            break;
-        }
-    }
+            // --- Prefill mode ---
+            if prefill_flag != 0 {
+                for n in 0..n_channels_internal {
+                    let mut dummy_bytes = 0i32;
+                    silk_encode_frame_fix(
+                        &mut enc.state_fxx[n],
+                        &mut dummy_bytes,
+                        range_enc,
+                        CODE_INDEPENDENTLY,
+                        0,
+                        0,
+                    );
+                    enc.state_fxx[n].s_cmn.controlled_since_last_payload = 0;
+                    enc.state_fxx[n].s_cmn.input_buf_ix = 0;
+                    enc.state_fxx[n].s_cmn.n_frames_encoded += 1;
+                }
+                if n_samples_remaining <= 0 {
+                    break;
+                }
+                curr_block += 1;
+                continue;
+            }
 
-    // Not enough data buffered yet
-    if enc.state_fxx[0].s_cmn.input_buf_ix < frame_length {
-        *n_bytes_out = 0;
-        return SILK_NO_ERROR;
-    }
+            // --- LBRR encoding (first sub-frame only) ---
+            if enc.state_fxx[0].s_cmn.n_frames_encoded == 0 {
+                let shift = ((n_frames_per_packet + 1) * n_channels_internal as i32) as u32;
+                let icdf = [(256u32 - (256u32 >> shift)) as u8, 0u8];
+                range_enc.encode_icdf(0, &icdf, 8);
+                let curr_n_bits_used_lbrr_start = range_enc.tell();
 
-    // Prefill mode: warm up filters by calling encode_frame (matching C behavior).
-    // C's silk_Encode falls through to its while(1) encode loop during prefill,
-    // calling encode_frame for each frame of input. encode_frame handles prefill
-    // internally: it increments frame_counter, runs LP variable cutoff, updates
-    // x_buf, then returns early without entropy coding.
-    if prefill_flag != 0 {
-        loop {
-            // Encode the buffered frame per channel (matches C: silk_encode_frame_Fxx)
-            for n in 0..n_channels_internal {
-                let mut dummy_bytes = 0i32;
-                silk_encode_frame_fix(
-                    &mut enc.state_fxx[n],
-                    &mut dummy_bytes,
-                    range_enc,
-                    CODE_INDEPENDENTLY,
-                    0,
-                    0,
+                if enc.state_fxx[0].s_cmn.lbrr_enabled != 0 {
+                    if n_frames_per_packet > 1 {
+                        let mut flags = 0u32;
+                        for i in 0..n_frames_per_packet as usize {
+                            flags |= (enc.state_fxx[0].s_cmn.lbrr_flags[i] as u32) << i;
+                        }
+                        range_enc.encode_icdf(
+                            flags,
+                            SILK_LBRR_FLAGS_ICDF_PTR[(n_frames_per_packet - 2) as usize],
+                            8,
+                        );
+                    }
+
+                    for i in 0..n_frames_per_packet as usize {
+                        if enc.state_fxx[0].s_cmn.lbrr_flags[i] != 0 {
+                            silk_encode_indices(
+                                &enc.state_fxx[0].s_cmn,
+                                range_enc,
+                                i,
+                                true,
+                                CODE_INDEPENDENTLY,
+                            );
+                            silk_encode_pulses(
+                                range_enc,
+                                enc.state_fxx[0].s_cmn.indices_lbrr[i].signal_type as i32,
+                                enc.state_fxx[0].s_cmn.indices_lbrr[i].quant_offset_type as i32,
+                                &enc.state_fxx[0].s_cmn.pulses_lbrr[i],
+                                enc.state_fxx[0].s_cmn.frame_length as usize,
+                            );
+                        }
+                    }
+                }
+
+                for n in 0..n_channels_internal {
+                    for flag in enc.state_fxx[n].s_cmn.lbrr_flags.iter_mut() {
+                        *flag = 0;
+                    }
+                }
+
+                curr_n_bits_used_lbrr = range_enc.tell() - curr_n_bits_used_lbrr_start;
+            }
+
+            // --- HP variable cutoff ---
+            silk_hp_variable_cutoff(&mut enc.state_fxx[0]);
+
+            // --- Target bitrate (C enc_API.c:412-443) ---
+            const BITRESERVOIR_DECAY_TIME_MS: i32 = 500;
+
+            let mut n_bits_target = silk_div32_16(
+                silk_mul(enc_control.bit_rate, enc_control.payload_size_ms),
+                1000,
+            );
+            if prefill_flag == 0 {
+                if curr_n_bits_used_lbrr < 10 {
+                    enc.n_bits_used_lbrr = 0;
+                } else if enc.n_bits_used_lbrr < 10 {
+                    enc.n_bits_used_lbrr = curr_n_bits_used_lbrr;
+                } else {
+                    enc.n_bits_used_lbrr = (enc.n_bits_used_lbrr + curr_n_bits_used_lbrr) / 2;
+                }
+                n_bits_target -= enc.n_bits_used_lbrr;
+            }
+            n_bits_target = silk_div32_16(n_bits_target, n_frames_per_packet);
+
+            let mut target_rate = if enc_control.payload_size_ms == 10 {
+                silk_smulbb(n_bits_target, 100)
+            } else {
+                silk_smulbb(n_bits_target, 50)
+            };
+            target_rate -= silk_div32_16(
+                silk_mul(enc.n_bits_exceeded, 1000),
+                BITRESERVOIR_DECAY_TIME_MS,
+            );
+            if prefill_flag == 0 && enc.state_fxx[0].s_cmn.n_frames_encoded > 0 {
+                let bits_balance = range_enc.tell()
+                    - enc.n_bits_used_lbrr
+                    - n_bits_target * enc.state_fxx[0].s_cmn.n_frames_encoded;
+                target_rate -= silk_div32_16(silk_mul(bits_balance, 1000), BITRESERVOIR_DECAY_TIME_MS);
+            }
+            let target_rate = target_rate.max(5000).min(enc_control.bit_rate);
+
+            // --- Stereo LR→MS / mono buffer ---
+            let mut ms_target_rates_bps = [0i32; 2];
+            if n_channels_internal == 2 {
+                let n_frames_enc = enc.state_fxx[0].s_cmn.n_frames_encoded as usize;
+                let speech_act_q8 = enc.state_fxx[0].s_cmn.speech_activity_q8;
+                let to_mono = enc_control.to_mono != 0;
+                let fl = frame_length as usize;
+
+                let mut x1_buf = enc.state_fxx[0].s_cmn.input_buf[2..2 + fl].to_vec();
+                let mut x2_buf = enc.state_fxx[1].s_cmn.input_buf[2..2 + fl].to_vec();
+                let mut pred_ix = enc.s_stereo.pred_ix[n_frames_enc];
+                let mut mid_only_flag = enc.s_stereo.mid_only_flags[n_frames_enc];
+
+                silk_stereo_lr_to_ms(
+                    &mut enc.s_stereo,
+                    &mut x1_buf,
+                    &mut x2_buf,
+                    &mut pred_ix,
+                    &mut mid_only_flag,
+                    &mut ms_target_rates_bps,
+                    target_rate,
+                    speech_act_q8,
+                    to_mono,
+                    fs_khz,
+                    fl,
                 );
+
+                enc.s_stereo.pred_ix[n_frames_enc] = pred_ix;
+                enc.s_stereo.mid_only_flags[n_frames_enc] = mid_only_flag;
+                enc.state_fxx[0].s_cmn.input_buf[2..2 + fl].copy_from_slice(&x1_buf);
+                enc.state_fxx[1].s_cmn.input_buf[2..2 + fl].copy_from_slice(&x2_buf);
+                enc.state_fxx[0].s_cmn.input_buf[0] = enc.s_stereo.s_mid[0];
+                enc.state_fxx[0].s_cmn.input_buf[1] = enc.s_stereo.s_mid[1];
+
+                if mid_only_flag == 0 {
+                    if enc.prev_decode_only_middle == 1 {
+                        enc.state_fxx[1].s_shape = SilkShapeStateFix::default();
+                        enc.state_fxx[1].s_cmn.s_nsq = NsqState::default();
+                        enc.state_fxx[1].s_cmn.prev_nlsfq_q15 = [0; MAX_LPC_ORDER];
+                        enc.state_fxx[1].s_cmn.s_lp.in_lp_state = [0; 2];
+                        enc.state_fxx[1].s_cmn.prev_lag = 100;
+                        enc.state_fxx[1].s_cmn.s_nsq.lag_prev = 100;
+                        enc.state_fxx[1].s_shape.last_gain_index = 10;
+                        enc.state_fxx[1].s_cmn.prev_signal_type = TYPE_NO_VOICE_ACTIVITY;
+                        enc.state_fxx[1].s_cmn.s_nsq.prev_gain_q16 = 65536;
+                        enc.state_fxx[1].s_cmn.first_frame_after_reset = 1;
+                    }
+                    let input_copy = enc.state_fxx[1].s_cmn.input_buf[1..1 + fl].to_vec();
+                    silk_vad_get_sa_q8(&mut enc.state_fxx[1].s_cmn, &input_copy);
+                    silk_encode_do_vad_fix(&mut enc.state_fxx[1], activity);
+                } else {
+                    enc.state_fxx[1].s_cmn.vad_flags[n_frames_enc] = 0;
+                }
+
+                if prefill_flag == 0 {
+                    silk_stereo_encode_pred(range_enc, &enc.s_stereo.pred_ix[n_frames_enc]);
+                    if enc.state_fxx[1].s_cmn.vad_flags[n_frames_enc] == 0 {
+                        silk_stereo_encode_mid_only(range_enc, enc.s_stereo.mid_only_flags[n_frames_enc]);
+                    }
+                }
+            } else {
+                let fl = frame_length as usize;
+                enc.state_fxx[0].s_cmn.input_buf[0] = enc.s_stereo.s_mid[0];
+                enc.state_fxx[0].s_cmn.input_buf[1] = enc.s_stereo.s_mid[1];
+                if fl + 2 <= enc.state_fxx[0].s_cmn.input_buf.len() {
+                    enc.s_stereo.s_mid[0] = enc.state_fxx[0].s_cmn.input_buf[fl];
+                    enc.s_stereo.s_mid[1] = enc.state_fxx[0].s_cmn.input_buf[fl + 1];
+                }
+            }
+
+            // --- VAD on channel 0 ---
+            {
+                let fl = frame_length as usize;
+                let input_copy = enc.state_fxx[0].s_cmn.input_buf[1..1 + fl].to_vec();
+                silk_vad_get_sa_q8(&mut enc.state_fxx[0].s_cmn, &input_copy);
+                silk_encode_do_vad_fix(&mut enc.state_fxx[0], activity);
+            }
+
+            // --- Encode frame per channel (C enc_API.c:482-530) ---
+            for n in 0..n_channels_internal {
+                // Rate constraints per block (C enc_API.c:487-497)
+                let mut max_bits = enc_control.max_bits;
+                if tot_blocks == 2 && curr_block == 0 {
+                    max_bits = max_bits * 3 / 5;
+                } else if tot_blocks == 3 {
+                    if curr_block == 0 {
+                        max_bits = max_bits * 2 / 5;
+                    } else if curr_block == 1 {
+                        max_bits = max_bits * 3 / 4;
+                    }
+                }
+                let mut use_cbr = if enc_control.use_cbr != 0 && curr_block == tot_blocks - 1 { enc_control.use_cbr } else { 0 };
+
+                let channel_rate = if n_channels_internal == 1 {
+                    target_rate
+                } else {
+                    ms_target_rates_bps[n]
+                };
+
+                if n_channels_internal == 2 && n == 0 && ms_target_rates_bps[1] > 0 {
+                    use_cbr = 0;
+                    max_bits -= enc_control.max_bits / (tot_blocks * 2);
+                }
+
+                let cond_coding = if enc.state_fxx[0].s_cmn.n_frames_encoded.wrapping_sub(n as i32) <= 0 {
+                    CODE_INDEPENDENTLY
+                } else if n > 0 && enc.prev_decode_only_middle != 0 {
+                    CODE_INDEPENDENTLY_NO_LTP_SCALING
+                } else {
+                    CODE_CONDITIONALLY
+                };
+
+                if channel_rate > 0 {
+                    silk_control_snr(&mut enc.state_fxx[n].s_cmn, channel_rate);
+                }
+
+                let mut frame_n_bytes = 0i32;
+                ret = silk_encode_frame_fix(
+                    &mut enc.state_fxx[n],
+                    &mut frame_n_bytes,
+                    range_enc,
+                    cond_coding,
+                    max_bits,
+                    use_cbr,
+                );
+
                 enc.state_fxx[n].s_cmn.controlled_since_last_payload = 0;
                 enc.state_fxx[n].s_cmn.input_buf_ix = 0;
                 enc.state_fxx[n].s_cmn.n_frames_encoded += 1;
             }
 
-            // Try to buffer next frame from remaining input (matches C while(1) loop)
+            // Update prev_decode_only_middle (C enc_API.c:533)
+            let n_enc = enc.state_fxx[0].s_cmn.n_frames_encoded;
+            if n_enc > 0 {
+                enc.prev_decode_only_middle = enc.s_stereo.mid_only_flags[(n_enc - 1) as usize] as i32;
+            }
+
+            // --- Check if packet is complete ---
+            if enc.state_fxx[0].s_cmn.n_frames_encoded >= n_frames_per_packet {
+                // Build VAD/LBRR flags
+                let mut flags: u32 = 0;
+                for n in 0..n_channels_internal {
+                    for i in 0..n_frames_per_packet as usize {
+                        flags = flags << 1;
+                        flags |= enc.state_fxx[n].s_cmn.vad_flags[i] as u32;
+                    }
+                    flags = flags << 1;
+                    flags |= enc.state_fxx[n].s_cmn.lbrr_flag as u32;
+                }
+                if prefill_flag == 0 {
+                    let n_bits = ((n_frames_per_packet + 1) * n_channels_internal as i32) as u32;
+                    range_enc.patch_initial_bits(flags, n_bits);
+                }
+
+                if enc.state_fxx[0].s_cmn.in_dtx != 0
+                    && (n_channels_internal == 1 || enc.state_fxx[1].s_cmn.in_dtx != 0)
+                {
+                    *n_bytes_out = 0;
+                } else {
+                    *n_bytes_out = (range_enc.tell() + 7) >> 3;
+                }
+
+                enc.n_bits_exceeded += (*n_bytes_out as i32) * 8;
+                enc.n_bits_exceeded -= silk_div32_16(
+                    silk_mul(enc_control.bit_rate, enc_control.payload_size_ms),
+                    1000,
+                );
+                enc.n_bits_exceeded = enc.n_bits_exceeded.max(0).min(10000);
+
+                for n in 0..n_channels_internal {
+                    enc.state_fxx[n].s_cmn.n_frames_encoded = 0;
+                }
+            }
+
+            // If no more input, we're done
             if n_samples_remaining <= 0 {
                 break;
             }
-
-            let mut n_stb = (frame_length - enc.state_fxx[0].s_cmn.input_buf_ix) as usize;
-            n_stb = n_stb.min(n_samples_to_buffer_max);
-            let n_sfi = if fs_khz * 1000 != 0 {
-                ((n_stb as i64 * enc_control.api_sample_rate as i64) / (fs_khz as i64 * 1000))
-                    as usize
-            } else {
-                0
-            };
-            if n_sfi == 0 {
-                break;
-            }
-
-            // Buffer input with same 3-case logic as main loop
-            let api_in = &samples_in[samples_offset..];
-            if enc_control.n_channels_api == 2 && n_channels_internal == 2 {
-                for n in 0..2 {
-                    let input: Vec<i16> = (0..n_sfi).map(|i| api_in[i * 2 + n]).collect();
-                    let mut buf = vec![0i16; n_stb];
-                    silk_resampler_run(
-                        &mut enc.state_fxx[n].s_cmn.resampler_state,
-                        &mut buf,
-                        &input,
-                    );
-                    let buf_ix = enc.state_fxx[n].s_cmn.input_buf_ix as usize;
-                    let copy_len = n_stb.min(MAX_FRAME_LENGTH + 2 - buf_ix);
-                    enc.state_fxx[n].s_cmn.input_buf[buf_ix + 2..buf_ix + 2 + copy_len]
-                        .copy_from_slice(&buf[..copy_len]);
-                    enc.state_fxx[n].s_cmn.input_buf_ix += n_stb as i32;
-                }
-            } else if enc_control.n_channels_api == 2 && n_channels_internal == 1 {
-                let input: Vec<i16> = (0..n_sfi)
-                    .map(|i| {
-                        let sum = api_in[i * 2] as i32 + api_in[i * 2 + 1] as i32;
-                        silk_rshift_round(sum, 1) as i16
-                    })
-                    .collect();
-                let mut buf = vec![0i16; n_stb];
-                silk_resampler_run(
-                    &mut enc.state_fxx[0].s_cmn.resampler_state,
-                    &mut buf,
-                    &input,
-                );
-                let buf_ix = enc.state_fxx[0].s_cmn.input_buf_ix as usize;
-                let copy_len = n_stb.min(MAX_FRAME_LENGTH + 2 - buf_ix);
-                enc.state_fxx[0].s_cmn.input_buf[buf_ix + 2..buf_ix + 2 + copy_len]
-                    .copy_from_slice(&buf[..copy_len]);
-                enc.state_fxx[0].s_cmn.input_buf_ix += n_stb as i32;
-            } else {
-                let input = api_in[..n_sfi].to_vec();
-                let mut buf = vec![0i16; n_stb];
-                silk_resampler_run(
-                    &mut enc.state_fxx[0].s_cmn.resampler_state,
-                    &mut buf,
-                    &input,
-                );
-                let buf_ix = enc.state_fxx[0].s_cmn.input_buf_ix as usize;
-                let copy_len = n_stb.min(MAX_FRAME_LENGTH + 2 - buf_ix);
-                enc.state_fxx[0].s_cmn.input_buf[buf_ix + 2..buf_ix + 2 + copy_len]
-                    .copy_from_slice(&buf[..copy_len]);
-                enc.state_fxx[0].s_cmn.input_buf_ix += n_stb as i32;
-            }
-
-            samples_offset += n_sfi * enc_control.n_channels_api as usize;
-            n_samples_remaining -= n_sfi as i32;
-
-            if enc.state_fxx[0].s_cmn.input_buf_ix < frame_length {
-                break;
-            }
+        } else {
+            // Not enough data buffered — exit loop
+            break;
         }
 
+        curr_block += 1;
+    } // end main encode loop
+
+    // Handle prefill cleanup (C enc_API.c:261-268)
+    if prefill_flag != 0 {
         for n in 0..n_channels_internal {
             enc.state_fxx[n].s_cmn.prefill_flag = 0;
         }
         *n_bytes_out = 0;
-        return SILK_NO_ERROR;
     }
 
-    // Encode LBRR data from previous packet (if any)
-    if enc.state_fxx[0].s_cmn.n_frames_encoded == 0 {
-        // Create space at start of payload for VAD and FEC flags
-        // Matches C: ec_enc_icdf(psRangeEnc, 0, iCDF, 8) in enc_API.c
-        let shift = ((n_frames_per_packet + 1) * n_channels_internal as i32) as u32;
-        let icdf = [(256u32 - (256u32 >> shift)) as u8, 0u8];
-        range_enc.encode_icdf(0, &icdf, 8);
-        let curr_n_bits_used_lbrr_start = range_enc.tell();
-
-        // LBRR flags
-        if enc.state_fxx[0].s_cmn.lbrr_enabled != 0 {
-            let _lbrr_flag0 = enc.state_fxx[0].s_cmn.lbrr_flag;
-            if n_frames_per_packet > 1 {
-                // Encode LBRR flags
-                let mut flags = 0u32;
-                for i in 0..n_frames_per_packet as usize {
-                    flags |= (enc.state_fxx[0].s_cmn.lbrr_flags[i] as u32) << i;
-                }
-                range_enc.encode_icdf(
-                    flags,
-                    SILK_LBRR_FLAGS_ICDF_PTR[(n_frames_per_packet - 2) as usize],
-                    8,
-                );
-            }
-
-            // Encode LBRR data for each frame that has it
-            for i in 0..n_frames_per_packet as usize {
-                if enc.state_fxx[0].s_cmn.lbrr_flags[i] != 0 {
-                    silk_encode_indices(
-                        &enc.state_fxx[0].s_cmn,
-                        range_enc,
-                        i,
-                        true,
-                        CODE_INDEPENDENTLY,
-                    );
-                    silk_encode_pulses(
-                        range_enc,
-                        enc.state_fxx[0].s_cmn.indices_lbrr[i].signal_type as i32,
-                        enc.state_fxx[0].s_cmn.indices_lbrr[i].quant_offset_type as i32,
-                        &enc.state_fxx[0].s_cmn.pulses_lbrr[i],
-                        enc.state_fxx[0].s_cmn.frame_length as usize,
-                    );
-                }
-            }
-        }
-
-        // Reset LBRR flags (matches C: silk_memset LBRR_flags)
-        for n in 0..n_channels_internal {
-            for flag in enc.state_fxx[n].s_cmn.lbrr_flags.iter_mut() {
-                *flag = 0;
-            }
-        }
-
-        // Track bits used for LBRR (matches C: curr_nBitsUsedLBRR update)
-        let curr_n_bits_used_lbrr = range_enc.tell() - curr_n_bits_used_lbrr_start;
-        if curr_n_bits_used_lbrr < 10 {
-            enc.n_bits_used_lbrr = 0;
-        } else if enc.n_bits_used_lbrr < 10 {
-            enc.n_bits_used_lbrr = curr_n_bits_used_lbrr;
-        } else {
-            enc.n_bits_used_lbrr = (enc.n_bits_used_lbrr + curr_n_bits_used_lbrr) / 2;
-        }
-    }
-
-    // Apply HP variable cutoff filter
-    silk_hp_variable_cutoff(&mut enc.state_fxx[0]);
-
-    // Compute target bitrate (C enc_API.c:422-454)
-    const BITRESERVOIR_DECAY_TIME_MS: i32 = 500;
-
-    // Total bits for packet
-    let mut n_bits_target = silk_div32_16(
-        silk_mul(enc_control.bit_rate, enc_control.payload_size_ms),
-        1000,
-    );
-
-    // Subtract LBRR bits (if not prefill)
-    if prefill_flag == 0 {
-        n_bits_target -= enc.n_bits_used_lbrr;
-    }
-
-    // Divide by frames per packet
-    n_bits_target = silk_div32_16(n_bits_target, n_frames_per_packet);
-
-    // Convert to bps
-    let mut target_rate = if enc_control.payload_size_ms == 10 {
-        silk_smulbb(n_bits_target, 100)
-    } else {
-        silk_smulbb(n_bits_target, 50)
-    };
-
-    // Subtract bit reservoir decay
-    target_rate -= silk_div32_16(
-        silk_mul(enc.n_bits_exceeded, 1000),
-        BITRESERVOIR_DECAY_TIME_MS,
-    );
-
-    // Intra-packet balance for frame 2+
-    if prefill_flag == 0 && enc.state_fxx[0].s_cmn.n_frames_encoded > 0 {
-        let bits_balance = range_enc.tell()
-            - enc.n_bits_used_lbrr
-            - n_bits_target * enc.state_fxx[0].s_cmn.n_frames_encoded;
-        target_rate -= silk_div32_16(silk_mul(bits_balance, 1000), BITRESERVOIR_DECAY_TIME_MS);
-    }
-
-    // Clamp to [5000, bitRate]
-    let target_rate = target_rate.max(5000).min(enc_control.bit_rate);
-
-    // Convert Left/Right to Mid/Side (stereo) or just buffer (mono)
-    // Matches C: enc_API.c lines 445-479
-    let mut ms_target_rates_bps = [0i32; 2];
-    if n_channels_internal == 2 {
-        let n_frames_enc = enc.state_fxx[0].s_cmn.n_frames_encoded as usize;
-        let speech_act_q8 = enc.state_fxx[0].s_cmn.speech_activity_q8;
-        let to_mono = enc_control.to_mono != 0;
-
-        // silk_stereo_LR_to_MS operates on inputBuf[2..] (x1/x2 pointers)
-        // We need to pass mutable slices starting at index 2
-        let fl = frame_length as usize;
-
-        // Extract the two input buffers into temporary vectors for the conversion
-        let mut x1_buf = enc.state_fxx[0].s_cmn.input_buf[2..2 + fl].to_vec();
-        let mut x2_buf = enc.state_fxx[1].s_cmn.input_buf[2..2 + fl].to_vec();
-
-        // The C function reads x1[-2], x1[-1] from the overlap region.
-        // silk_stereo_lr_to_ms handles this internally using state.s_mid/s_side.
-
-        let mut pred_ix = enc.s_stereo.pred_ix[n_frames_enc];
-        let mut mid_only_flag = enc.s_stereo.mid_only_flags[n_frames_enc];
-
-        silk_stereo_lr_to_ms(
-            &mut enc.s_stereo,
-            &mut x1_buf,
-            &mut x2_buf,
-            &mut pred_ix,
-            &mut mid_only_flag,
-            &mut ms_target_rates_bps,
-            target_rate,
-            speech_act_q8,
-            to_mono,
-            fs_khz,
-            fl,
-        );
-
-        // Write back results
-        enc.s_stereo.pred_ix[n_frames_enc] = pred_ix;
-        enc.s_stereo.mid_only_flags[n_frames_enc] = mid_only_flag;
-
-        // Copy converted M/S back into inputBuf[2..]
-        enc.state_fxx[0].s_cmn.input_buf[2..2 + fl].copy_from_slice(&x1_buf);
-        enc.state_fxx[1].s_cmn.input_buf[2..2 + fl].copy_from_slice(&x2_buf);
-
-        // Copy the overlap from s_stereo.s_mid into inputBuf[0..2] for channel 0
-        enc.state_fxx[0].s_cmn.input_buf[0] = enc.s_stereo.s_mid[0];
-        enc.state_fxx[0].s_cmn.input_buf[1] = enc.s_stereo.s_mid[1];
-        // Note: s_mid was already updated inside silk_stereo_lr_to_ms
-
-        if mid_only_flag == 0 {
-            // Side channel is active
-            if enc.prev_decode_only_middle == 1 {
-                // Reset side channel encoder state (C: enc_API.c lines 454-463)
-                enc.state_fxx[1].s_shape = SilkShapeStateFix::default();
-                enc.state_fxx[1].s_cmn.s_nsq = NsqState::default();
-                enc.state_fxx[1].s_cmn.prev_nlsfq_q15 = [0; MAX_LPC_ORDER];
-                enc.state_fxx[1].s_cmn.s_lp.in_lp_state = [0; 2];
-                enc.state_fxx[1].s_cmn.prev_lag = 100;
-                enc.state_fxx[1].s_cmn.s_nsq.lag_prev = 100;
-                enc.state_fxx[1].s_shape.last_gain_index = 10;
-                enc.state_fxx[1].s_cmn.prev_signal_type = TYPE_NO_VOICE_ACTIVITY;
-                enc.state_fxx[1].s_cmn.s_nsq.prev_gain_q16 = 65536;
-                enc.state_fxx[1].s_cmn.first_frame_after_reset = 1;
-            }
-            // VAD on side channel
-            let input_copy = enc.state_fxx[1].s_cmn.input_buf[1..1 + fl].to_vec();
-            silk_vad_get_sa_q8(&mut enc.state_fxx[1].s_cmn, &input_copy);
-            silk_encode_do_vad_fix(&mut enc.state_fxx[1], activity);
-        } else {
-            // Mid-only: set side VAD flag to 0
-            enc.state_fxx[1].s_cmn.vad_flags[n_frames_enc] = 0;
-        }
-
-        // Encode stereo prediction parameters (C: enc_API.c lines 469-474)
-        if prefill_flag == 0 {
-            silk_stereo_encode_pred(range_enc, &enc.s_stereo.pred_ix[n_frames_enc]);
-            if enc.state_fxx[1].s_cmn.vad_flags[n_frames_enc] == 0 {
-                silk_stereo_encode_mid_only(range_enc, enc.s_stereo.mid_only_flags[n_frames_enc]);
-            }
-        }
-    } else {
-        // Mono: buffer sMid overlap (C: enc_API.c lines 476-478)
-        let fl = frame_length as usize;
-        enc.state_fxx[0].s_cmn.input_buf[0] = enc.s_stereo.s_mid[0];
-        enc.state_fxx[0].s_cmn.input_buf[1] = enc.s_stereo.s_mid[1];
-        if fl + 2 <= enc.state_fxx[0].s_cmn.input_buf.len() {
-            enc.s_stereo.s_mid[0] = enc.state_fxx[0].s_cmn.input_buf[fl];
-            enc.s_stereo.s_mid[1] = enc.state_fxx[0].s_cmn.input_buf[fl + 1];
-        }
-    }
-
-    // VAD on channel 0 (C: enc_API.c line 480)
-    {
-        let fl = frame_length as usize;
-        let input_copy = enc.state_fxx[0].s_cmn.input_buf[1..1 + fl].to_vec();
-        silk_vad_get_sa_q8(&mut enc.state_fxx[0].s_cmn, &input_copy);
-        silk_encode_do_vad_fix(&mut enc.state_fxx[0], activity);
-    }
-
-    // Encode frame per channel (C: enc_API.c lines 482-530)
-    for n in 0..n_channels_internal {
-        let cond_coding = if enc.state_fxx[0]
-            .s_cmn
-            .n_frames_encoded
-            .wrapping_sub(n as i32)
-            <= 0
-        {
-            CODE_INDEPENDENTLY
-        } else if n > 0 && enc.prev_decode_only_middle != 0 {
-            // If we skipped a side frame in this packet, we don't
-            // need LTP scaling; the LTP state is well-defined.
-            CODE_INDEPENDENTLY_NO_LTP_SCALING
-        } else {
-            CODE_CONDITIONALLY
-        };
-
-        // Channel rate: mono uses target_rate, stereo uses MS rates
-        let channel_rate = if n_channels_internal == 1 {
-            target_rate
-        } else {
-            ms_target_rates_bps[n]
-        };
-
-        if channel_rate > 0 {
-            silk_control_snr(&mut enc.state_fxx[n].s_cmn, channel_rate);
-        }
-
-        let mut max_bits = enc_control.max_bits;
-        let mut use_cbr = enc_control.use_cbr;
-
-        // For stereo mid channel when side is active, adjust maxBits and disable CBR
-        if n_channels_internal == 2 {
-            if n == 0 && ms_target_rates_bps[1] > 0 {
-                use_cbr = 0;
-                max_bits -= enc_control.max_bits / 2;
-            }
-        }
-
-        let mut frame_n_bytes = 0i32;
-        ret = silk_encode_frame_fix(
-            &mut enc.state_fxx[n],
-            &mut frame_n_bytes,
-            range_enc,
-            cond_coding,
-            max_bits,
-            use_cbr,
-        );
-
-        enc.state_fxx[n].s_cmn.controlled_since_last_payload = 0;
-        enc.state_fxx[n].s_cmn.input_buf_ix = 0;
-        enc.state_fxx[n].s_cmn.n_frames_encoded += 1;
-    }
-
-    // Update prev_decode_only_middle (C: enc_API.c line 533)
-    let n_enc = enc.state_fxx[0].s_cmn.n_frames_encoded;
-    if n_enc > 0 {
-        enc.prev_decode_only_middle = enc.s_stereo.mid_only_flags[(n_enc - 1) as usize] as i32;
-    }
-
-    // Check if packet is complete — patch VAD/LBRR flags
-    if enc.state_fxx[0].s_cmn.n_frames_encoded >= n_frames_per_packet {
-        // Build VAD/LBRR flags
-        let mut flags: u32 = 0;
-        for n in 0..n_channels_internal {
-            for i in 0..n_frames_per_packet as usize {
-                flags = flags << 1;
-                flags |= enc.state_fxx[n].s_cmn.vad_flags[i] as u32;
-            }
-            flags = flags << 1;
-            flags |= enc.state_fxx[n].s_cmn.lbrr_flag as u32;
-        }
-        if prefill_flag == 0 {
-            let n_bits = ((n_frames_per_packet + 1) * n_channels_internal as i32) as u32;
-            range_enc.patch_initial_bits(flags, n_bits);
-        }
-
-        // Check DTX — return zero bytes if all channels in DTX
-        if enc.state_fxx[0].s_cmn.in_dtx != 0
-            && (n_channels_internal == 1 || enc.state_fxx[1].s_cmn.in_dtx != 0)
-        {
-            *n_bytes_out = 0;
-        } else {
-            *n_bytes_out = (range_enc.tell() + 7) >> 3;
-        }
-
-        // Update bit reservoir (C enc_API.c:566-568)
-        enc.n_bits_exceeded += (*n_bytes_out as i32) * 8;
-        enc.n_bits_exceeded -= silk_div32_16(
-            silk_mul(enc_control.bit_rate, enc_control.payload_size_ms),
-            1000,
-        );
-        enc.n_bits_exceeded = enc.n_bits_exceeded.max(0).min(10000);
-
-        // Reset frame counter for next packet
-        for n in 0..n_channels_internal {
-            enc.state_fxx[n].s_cmn.n_frames_encoded = 0;
-        }
-    } else {
-        *n_bytes_out = 0;
-    }
+    // If packet was never completed, n_bytes_out stays 0
+    // (it was already set if packet completed above, or initialized to 0 by caller)
 
     // Query encoder status
     silk_query_encoder(enc, enc_control);
