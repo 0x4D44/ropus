@@ -68,6 +68,9 @@ const TYPE_NO_VOICE_ACTIVITY: i32 = 0;
 const NB_SPEECH_FRAMES_BEFORE_DTX: i32 = 10; // 200ms
 const MAX_CONSECUTIVE_DTX: i32 = 20; // 400ms
 
+// PSEUDO_SNR_THRESHOLD = 10^(25/10) = 316.23 → QCONST16(316.23, 0) = 316
+const PSEUDO_SNR_THRESHOLD: i32 = 316;
+
 // HP filter smoothing coefficient — Q16, matching C's SILK_FIX_CONST(0.015, 16) = 983
 const VARIABLE_HP_SMTH_COEF2: i32 = 983; // Q16
 const VARIABLE_HP_MIN_CUTOFF_HZ: i32 = 60;
@@ -232,6 +235,7 @@ pub struct OpusEncoder {
     first: i32,
     width_mem: StereoWidthState,
     nb_no_activity_ms_q1: i32,
+    peak_signal_energy: i32,
     nonfinal_frame: i32,
     pub range_final: u32,
     delay_buffer: Vec<i16>,
@@ -340,6 +344,38 @@ fn is_digital_silence(pcm: &[i16], frame_size: i32, channels: i32, _lsb_depth: i
         }
     }
     true
+}
+
+/// Compute frame energy for DTX activity detection.
+/// Matches C `compute_frame_energy` (fixed-point path, opus_encoder.c:1080-1105).
+fn compute_frame_energy(pcm: &[i16], frame_size: i32, channels: i32) -> i32 {
+    let len = (frame_size * channels) as usize;
+
+    // Find max amplitude
+    let mut sample_max: i32 = 0;
+    for i in 0..len {
+        let abs_val = (pcm[i] as i32).abs();
+        if abs_val > sample_max {
+            sample_max = abs_val;
+        }
+    }
+
+    // Compute shift to prevent overflow in MAC
+    let max_shift = celt_ilog2(len as i32);
+    let shift = imax(0, (celt_ilog2(1 + sample_max) << 1) + max_shift - 28);
+
+    // Accumulate energy
+    let mut energy: i32 = 0;
+    for i in 0..len {
+        let s = (pcm[i] as i32) >> shift;
+        energy += s * s;
+    }
+
+    // Normalize by frame length and shift back
+    energy /= len as i32;
+    energy <<= shift;
+
+    energy
 }
 
 /// Resolve user bitrate to effective bitrate.
@@ -922,6 +958,7 @@ impl OpusEncoder {
             first: 1,
             width_mem: StereoWidthState::default(),
             nb_no_activity_ms_q1: 0,
+            peak_signal_energy: 0,
             nonfinal_frame: 0,
             range_final: 0,
             delay_buffer: vec![0i16; (encoder_buffer * channels) as usize],
@@ -1076,6 +1113,7 @@ impl OpusEncoder {
         self.first = 1;
         self.width_mem = StereoWidthState::default();
         self.nb_no_activity_ms_q1 = 0;
+        self.peak_signal_energy = 0;
         self.nonfinal_frame = 0;
         self.range_final = 0;
         self.delay_buffer.fill(0);
@@ -1154,6 +1192,15 @@ impl OpusEncoder {
 
         // C: st->voice_ratio = -1; (reset each frame, #else / FIXED_POINT path)
         self.voice_ratio = -1;
+
+        // --- Track peak signal energy ---
+        // C: st->peak_signal_energy = MAX32(MULT16_32_Q15(QCONST16(0.999f, 15), st->peak_signal_energy),
+        //         compute_frame_energy(pcm, frame_size, st->channels, st->arch));
+        if !is_silence {
+            let frame_energy = compute_frame_energy(pcm, frame_size, self.channels);
+            self.peak_signal_energy =
+                (((self.peak_signal_energy as i64 * 32735) >> 15) as i32).max(frame_energy);
+        }
 
         // --- Stereo width ---
         let stereo_width = if self.channels == 2 && self.force_channels != 1 {
@@ -1686,7 +1733,24 @@ impl OpusEncoder {
         let frame_rate = self.fs / frame_size;
 
         // --- Activity detection ---
-        let mut activity = if is_silence { 0 } else { VAD_NO_DECISION };
+        // C: if (is_silence) activity = !is_silence;
+        //    else if (st->mode == MODE_CELT_ONLY) { noise_energy based check }
+        //    else activity = VAD_NO_DECISION; (SILK handles it)
+        let mut activity = if is_silence {
+            0
+        } else if self.mode == MODE_CELT_ONLY {
+            let noise_energy = compute_frame_energy(pcm, frame_size, self.channels);
+            // C: activity = st->peak_signal_energy < (QCONST16(PSEUDO_SNR_THRESHOLD, 0) * (opus_val64)HALF32(noise_energy));
+            // HALF32(x) = x >> 1 in fixed-point
+            let half_noise = (noise_energy >> 1) as i64;
+            if (self.peak_signal_energy as i64) < (PSEUDO_SNR_THRESHOLD as i64 * half_noise) {
+                1
+            } else {
+                0
+            }
+        } else {
+            VAD_NO_DECISION
+        };
 
         // --- SILK bandwidth switch ---
         if self.silk_bw_switch != 0 {
@@ -2230,6 +2294,8 @@ impl OpusEncoder {
                 toc_slice[0] = gen_toc(self.mode, frame_rate, curr_bandwidth, self.stream_channels);
                 return Ok(1);
             }
+        } else {
+            self.nb_no_activity_ms_q1 = 0;
         }
 
         // --- Compute total output bytes ---
