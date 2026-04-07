@@ -2222,21 +2222,55 @@ fn celt_encode_core(
         vbr_rate = bitrate_to_bits(st.bitrate, mode.fs, frame_size) << BITRES;
         effective_bytes = vbr_rate >> (3 + BITRES);
     } else {
+        // Bug 12: CBR rate clamping (C lines 1910-1921)
+        let mut tmp = st.bitrate * frame_size;
+        if tell > 1 {
+            tmp += tell * mode.fs;
+        }
+        if st.bitrate != OPUS_BITRATE_MAX {
+            nb_compressed_bytes = nb_compressed_bytes.min(
+                (tmp + 4 * mode.fs) / (8 * mode.fs) - (st.signalling != 0) as i32,
+            ).max(2);
+            enc_ref.shrink(nb_compressed_bytes as u32);
+        }
         effective_bytes = nb_compressed_bytes - nb_filled_bytes;
     }
-    let nb_available_bytes = nb_compressed_bytes - nb_filled_bytes;
+    let mut nb_available_bytes = nb_compressed_bytes - nb_filled_bytes;
+
+    // Equivalent rate for analysis decisions (C lines 1925-1927, before CVBR clamping)
+    let mut equiv_rate = (nb_compressed_bytes as i64 * 8 * 50 << (3 - lm)) as i32
+        - (40 * c + 20) * ((400 >> lm) - 50);
+    // Bug 4: equiv_rate clamping (C lines 1926-1927)
+    if st.bitrate != OPUS_BITRATE_MAX {
+        equiv_rate = equiv_rate.min(st.bitrate - (40 * c + 20) * ((400 >> lm) - 50));
+    }
+
+    // Bug 1: Constrained VBR early clamping (C lines 1935-1960)
+    if vbr_rate > 0 && st.constrained_vbr != 0 {
+        let vbr_bound = vbr_rate;
+        let max_allowed = ((vbr_rate + vbr_bound - st.vbr_reservoir) >> (BITRES + 3))
+            .max(if tell == 1 { 2 } else { 0 })
+            .min(nb_available_bytes);
+        if max_allowed < nb_available_bytes {
+            nb_compressed_bytes = nb_filled_bytes + max_allowed;
+            nb_available_bytes = max_allowed;
+            enc_ref.shrink(nb_compressed_bytes as u32);
+        }
+    }
+    // total_bits must be set after CVBR clamping (C line 1961)
     let mut total_bits = nb_compressed_bytes * 8;
 
-    // Equivalent rate for analysis decisions
-    let equiv_rate = (nb_compressed_bytes as i64 * 8 * 50 << (3 - lm)) as i32
-        - (40 * c + 20) * ((400 >> lm) - 50);
-
-    // Silence detection
+    // Silence detection (Bug 11: overlap_max tracking, C lines 1969-1973)
     let mut silence = false;
-    let sample_max = celt_maxabs16(
-        &pcm.iter().map(|&x| x as i32).collect::<Vec<_>>()
-            [..((n - overlap) / st.upsample * cc) as usize],
+    let pcm_as_i32: Vec<i32> = pcm.iter().map(|&x| x as i32).collect();
+    let mut sample_max = st.overlap_max.max(celt_maxabs16(
+        &pcm_as_i32[..(cc * (n - overlap) / st.upsample) as usize],
+    ));
+    st.overlap_max = celt_maxabs16(
+        &pcm_as_i32[(cc * (n - overlap) / st.upsample) as usize
+            ..(cc * n / st.upsample) as usize],
     );
+    sample_max = sample_max.max(st.overlap_max);
     if sample_max == 0 {
         silence = true;
     }
@@ -2765,6 +2799,11 @@ fn celt_encode_core(
 
     // VBR rate control
     if vbr_rate > 0 {
+        // Bug 5: packet_size_cap in VBR (C line 2445)
+        // Don't attempt to use more than 510 kb/s, even for frames smaller than 20 ms.
+        let packet_size_cap: i32 = 1275;
+        nb_compressed_bytes = nb_compressed_bytes.min(packet_size_cap >> (3 - lm));
+
         let lm_diff = mode.max_lm - lm;
         let mut base_target = if !hybrid {
             vbr_rate - ((40 * c + 20) << BITRES)
@@ -2777,37 +2816,59 @@ fn celt_encode_core(
             base_target += st.vbr_offset >> lm_diff;
         }
 
-        let mut target = compute_vbr(
-            mode,
-            &st.analysis,
-            base_target,
-            lm,
-            equiv_rate,
-            st.last_coded_bands,
-            c,
-            st.intensity,
-            st.constrained_vbr,
-            st.stereo_saving,
-            tot_boost,
-            tf_estimate,
-            pitch_change,
-            max_depth,
-            st.lfe,
-            st.energy_mask.is_some(),
-            0,
-            temporal_vbr,
-        );
+        // Bug 6: Hybrid VBR target (C lines 2456-2475)
+        let mut target = if !hybrid {
+            compute_vbr(
+                mode,
+                &st.analysis,
+                base_target,
+                lm,
+                equiv_rate,
+                st.last_coded_bands,
+                c,
+                st.intensity,
+                st.constrained_vbr,
+                st.stereo_saving,
+                tot_boost,
+                tf_estimate,
+                pitch_change,
+                max_depth,
+                st.lfe,
+                st.energy_mask.is_some(),
+                0,
+                temporal_vbr,
+            )
+        } else {
+            let mut t = base_target;
+            // Tonal frames need more bits than noisy ones
+            if st.silk_info.offset < 100 {
+                t += 12 << BITRES >> (3 - lm);
+            }
+            if st.silk_info.offset > 100 {
+                t -= 18 << BITRES >> (3 - lm);
+            }
+            // Boosting bitrate on transients and vowels
+            t += mult16_16_q14(tf_estimate - qconst16(0.25, 14), 50 << BITRES);
+            // If strong transient, ensure enough bits for first two bands
+            if tf_estimate > qconst16(0.7, 14) {
+                t = t.max(50 << BITRES);
+            }
+            t
+        };
 
         target += enc_ref.tell_frac() as i32;
 
         let mut nb_avail = (target + (1 << (BITRES + 2))) >> (BITRES + 3);
         nb_avail = nb_avail.max(min_allowed).min(nb_compressed_bytes);
 
-        let delta = target - vbr_rate;
+        let mut delta = target - vbr_rate;
 
-        // Update VBR state
-        if st.constrained_vbr != 0 {
-            st.vbr_reservoir += (nb_avail << (BITRES + 3)) - vbr_rate;
+        // Bug 2: VBR silence override (C lines 2487-2499)
+        target = nb_avail << (BITRES + 3);
+        if silence {
+            nb_avail = 2;
+            target = 2 * 8 << BITRES;
+            delta = 0;
         }
 
         if st.vbr_count < 970 {
@@ -2819,6 +2880,11 @@ fn celt_encode_core(
             qconst16(0.001, 15)
         };
 
+        // Update VBR state — uses target (possibly overridden for silence)
+        if st.constrained_vbr != 0 {
+            st.vbr_reservoir += target - vbr_rate;
+        }
+
         if st.constrained_vbr != 0 {
             st.vbr_drift += mult16_32_q15(
                 alpha,
@@ -2829,14 +2895,13 @@ fn celt_encode_core(
 
         if st.constrained_vbr != 0 && st.vbr_reservoir < 0 {
             let adjust = (-st.vbr_reservoir) / (8 << BITRES);
-            if !silence {
-                nb_avail += adjust;
-            }
+            nb_avail += if silence { 0 } else { adjust };
             st.vbr_reservoir = 0;
         }
 
         nb_compressed_bytes = nb_compressed_bytes.min(nb_avail);
-        let _ = nb_compressed_bytes - nb_filled_bytes; // effective_bytes updated but used later
+        // Bug 3: ec_enc_shrink after VBR (C line 2532)
+        enc_ref.shrink(nb_compressed_bytes as u32);
     }
 
     // Bit allocation

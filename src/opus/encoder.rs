@@ -68,8 +68,8 @@ const TYPE_NO_VOICE_ACTIVITY: i32 = 0;
 const NB_SPEECH_FRAMES_BEFORE_DTX: i32 = 10; // 200ms
 const MAX_CONSECUTIVE_DTX: i32 = 20; // 400ms
 
-// HP filter smoothing coefficient
-const VARIABLE_HP_SMTH_COEF2: i32 = qconst16(0.015, 15); // Q15
+// HP filter smoothing coefficient — Q16, matching C's SILK_FIX_CONST(0.015, 16) = 983
+const VARIABLE_HP_SMTH_COEF2: i32 = 983; // Q16
 const VARIABLE_HP_MIN_CUTOFF_HZ: i32 = 60;
 
 // ===========================================================================
@@ -585,8 +585,9 @@ fn silk_biquad_res(
             .wrapping_add(silk_smulwb(out32_q14, a1_u))
             .wrapping_add(silk_smulwb(b_q28[2], inval));
 
-        // Output: round-shift Q14→Q0, saturate to i16
-        output[k * stride] = silk_sat16(silk_rshift_round(out32_q14, 14)) as i16;
+        // Output: ceiling-shift Q14→Q0, saturate to i16
+        // C uses: silk_SAT16(silk_RSHIFT(out32_Q14 + (1<<14) - 1, 14))
+        output[k * stride] = silk_sat16((out32_q14 + (1 << 14) - 1) >> 14) as i16;
     }
 }
 
@@ -1151,6 +1152,9 @@ impl OpusEncoder {
         let lsb_depth = imin(lsb_depth, self.lsb_depth);
         let is_silence = is_digital_silence(pcm, frame_size, self.channels, lsb_depth);
 
+        // C: st->voice_ratio = -1; (reset each frame, #else / FIXED_POINT path)
+        self.voice_ratio = -1;
+
         // --- Stereo width ---
         let stereo_width = if self.channels == 2 && self.force_channels != 1 {
             compute_stereo_width(pcm, frame_size, self.fs, &mut self.width_mem)
@@ -1274,7 +1278,8 @@ impl OpusEncoder {
         );
 
         // --- SILK DTX ---
-        self.silk_mode.use_dtx = if self.use_dtx != 0 { 1 } else { 0 };
+        // C: st->silk_mode.useDTX = st->use_dtx && !is_silence;
+        self.silk_mode.use_dtx = if self.use_dtx != 0 && !is_silence { 1 } else { 0 };
 
         // --- Mode selection ---
         let mut mode: i32;
@@ -1285,9 +1290,8 @@ impl OpusEncoder {
             let mode_voice = MODE_THRESHOLDS[0][0]
                 + (stereo_width as i64 * (MODE_THRESHOLDS[1][0] - MODE_THRESHOLDS[0][0]) as i64
                     / Q15ONE as i64) as i32;
-            let mode_music = MODE_THRESHOLDS[0][1]
-                + (stereo_width as i64 * (MODE_THRESHOLDS[1][1] - MODE_THRESHOLDS[0][1]) as i64
-                    / Q15ONE as i64) as i32;
+            // C: both MULT16_32_Q15 terms use mode_thresholds[1][1]
+            let mode_music = MODE_THRESHOLDS[1][1];
             let mut threshold = mode_music
                 + (voice_est as i64 * voice_est as i64 * (mode_voice - mode_music) as i64 / 16384)
                     as i32;
@@ -1739,10 +1743,9 @@ impl OpusEncoder {
             silk_lshift(silk_lin2log(VARIABLE_HP_MIN_CUTOFF_HZ), 8)
         };
 
-        self.variable_hp_smth2_q15 += mult16_32_q15(
-            VARIABLE_HP_SMTH_COEF2,
-            hp_freq_smth1 - self.variable_hp_smth2_q15,
-        );
+        // C: silk_SMLAWB(smth2, diff, SILK_FIX_CONST(0.015, 16)) = smth2 + (diff * 983) >> 16
+        let hp_diff = hp_freq_smth1 - self.variable_hp_smth2_q15;
+        self.variable_hp_smth2_q15 += ((hp_diff as i64 * VARIABLE_HP_SMTH_COEF2 as i64) >> 16) as i32;
         let cutoff_hz = silk_log2lin(shr32(self.variable_hp_smth2_q15, 8));
 
         // --- HP / DC filter on new PCM ---
