@@ -4392,6 +4392,1303 @@ fn cmd_api() {
 }
 
 // ---------------------------------------------------------------------------
+// Packet introspection comparison (C vs Rust)
+// ---------------------------------------------------------------------------
+
+fn cmd_packets(wav_path: &str) {
+    use mdopus::opus::decoder::{
+        opus_packet_get_bandwidth, opus_packet_get_nb_channels, opus_packet_get_nb_frames,
+        opus_packet_get_nb_samples, opus_packet_get_samples_per_frame,
+    };
+
+    println!("Packet introspection comparison: C vs Rust");
+    println!();
+
+    // Generate packets at several configs to cover different TOC bytes
+    let configs: &[(&str, i32, i32, i32, i32)] = &[
+        (
+            "CELT 48k mono",
+            48000,
+            1,
+            64000,
+            bindings::OPUS_APPLICATION_AUDIO,
+        ),
+        (
+            "VOIP 48k mono",
+            48000,
+            1,
+            64000,
+            bindings::OPUS_APPLICATION_VOIP,
+        ),
+        (
+            "SILK 8k mono",
+            8000,
+            1,
+            12000,
+            bindings::OPUS_APPLICATION_VOIP,
+        ),
+        (
+            "Hybrid 16k mono",
+            16000,
+            1,
+            24000,
+            bindings::OPUS_APPLICATION_AUDIO,
+        ),
+        (
+            "Stereo 48k",
+            48000,
+            2,
+            128000,
+            bindings::OPUS_APPLICATION_AUDIO,
+        ),
+    ];
+
+    // Also encode from the provided WAV for realistic packets
+    let wav = read_wav(Path::new(wav_path));
+    let wav_sr = wav.sample_rate as i32;
+    let wav_ch = wav.channels as i32;
+
+    let mut pass = 0u32;
+    let mut fail = 0u32;
+
+    for (label, sr, ch, br, app) in configs {
+        println!("--- {} (sr={}, ch={}, br={}) ---", label, sr, ch, br);
+
+        // Generate noise at the right rate/channels
+        let pcm = generate_noise(*sr, *ch, 0.5, 42);
+        let mut cfg = EncodeConfig::new(*sr, *ch);
+        cfg.bitrate = *br;
+        cfg.application = *app;
+        let encoded = c_encode_cfg(&pcm, &cfg);
+        let packets = parse_packets(&encoded);
+
+        for (i, pkt) in packets.iter().take(5).enumerate() {
+            if pkt.is_empty() {
+                continue;
+            }
+            // C introspection
+            let c_bw = unsafe { bindings::opus_packet_get_bandwidth(pkt.as_ptr()) };
+            let c_ch = unsafe { bindings::opus_packet_get_nb_channels(pkt.as_ptr()) };
+            let c_nf =
+                unsafe { bindings::opus_packet_get_nb_frames(pkt.as_ptr(), pkt.len() as i32) };
+            let c_spf =
+                unsafe { bindings::opus_packet_get_samples_per_frame(pkt.as_ptr(), *sr) };
+            let c_ns = unsafe {
+                bindings::opus_packet_get_nb_samples(pkt.as_ptr(), pkt.len() as i32, *sr)
+            };
+
+            // Rust introspection
+            let r_bw = opus_packet_get_bandwidth(pkt);
+            let r_ch = opus_packet_get_nb_channels(pkt);
+            let r_nf = opus_packet_get_nb_frames(pkt).unwrap_or(-999);
+            let r_spf = opus_packet_get_samples_per_frame(pkt, *sr);
+            let r_ns = opus_packet_get_nb_samples(pkt, *sr).unwrap_or(-999);
+
+            // Compare each function
+            let funcs: &[(&str, i32, i32)] = &[
+                ("get_bandwidth", c_bw, r_bw),
+                ("get_nb_channels", c_ch, r_ch),
+                ("get_nb_frames", c_nf, r_nf),
+                ("get_samples_per_frame", c_spf, r_spf),
+                ("get_nb_samples", c_ns, r_ns),
+            ];
+
+            for (fname, c_val, r_val) in funcs {
+                if c_val == r_val {
+                    pass += 1;
+                } else {
+                    fail += 1;
+                    println!(
+                        "  pkt[{}] {}: FAIL (C={}, Rust={}, TOC=0x{:02x})",
+                        i, fname, c_val, r_val, pkt[0]
+                    );
+                }
+            }
+        }
+    }
+
+    // Also test with WAV-derived packets
+    println!("--- WAV-derived ({} Hz, {} ch) ---", wav_sr, wav_ch);
+    let wav_cfg = EncodeConfig::new(wav_sr, wav_ch);
+    let wav_encoded = c_encode_cfg(&wav.samples, &wav_cfg);
+    let wav_packets = parse_packets(&wav_encoded);
+
+    for (i, pkt) in wav_packets.iter().take(5).enumerate() {
+        if pkt.is_empty() {
+            continue;
+        }
+        let c_bw = unsafe { bindings::opus_packet_get_bandwidth(pkt.as_ptr()) };
+        let c_ch = unsafe { bindings::opus_packet_get_nb_channels(pkt.as_ptr()) };
+        let c_nf = unsafe { bindings::opus_packet_get_nb_frames(pkt.as_ptr(), pkt.len() as i32) };
+        let c_spf = unsafe { bindings::opus_packet_get_samples_per_frame(pkt.as_ptr(), wav_sr) };
+        let c_ns = unsafe {
+            bindings::opus_packet_get_nb_samples(pkt.as_ptr(), pkt.len() as i32, wav_sr)
+        };
+
+        let r_bw = opus_packet_get_bandwidth(pkt);
+        let r_ch = opus_packet_get_nb_channels(pkt);
+        let r_nf = opus_packet_get_nb_frames(pkt).unwrap_or(-999);
+        let r_spf = opus_packet_get_samples_per_frame(pkt, wav_sr);
+        let r_ns = opus_packet_get_nb_samples(pkt, wav_sr).unwrap_or(-999);
+
+        let funcs: &[(&str, i32, i32)] = &[
+            ("get_bandwidth", c_bw, r_bw),
+            ("get_nb_channels", c_ch, r_ch),
+            ("get_nb_frames", c_nf, r_nf),
+            ("get_samples_per_frame", c_spf, r_spf),
+            ("get_nb_samples", c_ns, r_ns),
+        ];
+
+        for (fname, c_val, r_val) in funcs {
+            if c_val == r_val {
+                pass += 1;
+            } else {
+                fail += 1;
+                println!(
+                    "  pkt[{}] {}: FAIL (C={}, Rust={}, TOC=0x{:02x})",
+                    i, fname, c_val, r_val, pkt[0]
+                );
+            }
+        }
+    }
+
+    println!();
+    println!("========================================");
+    println!("packets: {} PASS, {} FAIL", pass, fail);
+    println!("========================================");
+    if fail > 0 {
+        process::exit(1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Decode format comparison (i16, f32, i32/24-bit)
+// ---------------------------------------------------------------------------
+
+fn compare_f32_samples(a: &[f32], b: &[f32]) -> (usize, usize, Option<usize>, f32) {
+    let total = a.len().max(b.len());
+    let mut matching = 0usize;
+    let mut first_diff = None;
+    let mut max_diff: f32 = 0.0;
+
+    for i in 0..total {
+        let va = a.get(i).copied().unwrap_or(0.0);
+        let vb = b.get(i).copied().unwrap_or(0.0);
+        let diff = (va - vb).abs();
+        if diff == 0.0 {
+            matching += 1;
+        } else {
+            if first_diff.is_none() {
+                first_diff = Some(i);
+            }
+            if diff > max_diff {
+                max_diff = diff;
+            }
+        }
+    }
+    (total, matching, first_diff, max_diff)
+}
+
+fn compare_i32_samples(a: &[i32], b: &[i32]) -> (usize, usize, Option<usize>, i32) {
+    let total = a.len().max(b.len());
+    let mut matching = 0usize;
+    let mut first_diff = None;
+    let mut max_diff: i32 = 0;
+
+    for i in 0..total {
+        let va = a.get(i).copied().unwrap_or(0);
+        let vb = b.get(i).copied().unwrap_or(0);
+        let diff = (va - vb).abs();
+        if diff == 0 {
+            matching += 1;
+        } else {
+            if first_diff.is_none() {
+                first_diff = Some(i);
+            }
+            max_diff = max_diff.max(diff);
+        }
+    }
+    (total, matching, first_diff, max_diff)
+}
+
+fn cmd_decode_formats(wav_path: &str) {
+    use mdopus::opus::decoder::OpusDecoder as RustDecoder;
+
+    println!("Decode format comparison: C vs Rust (i16, f32, i32/24-bit)");
+    println!();
+
+    let wav = read_wav(Path::new(wav_path));
+    let sr = wav.sample_rate as i32;
+    let ch = wav.channels as i32;
+
+    // Encode with C to get reference packets
+    let cfg = EncodeConfig::new(sr, ch);
+    let encoded = c_encode_cfg(&wav.samples, &cfg);
+    let packets = parse_packets(&encoded);
+
+    println!(
+        "Input: {} ({} Hz, {} ch, {} packets)",
+        wav_path,
+        sr,
+        ch,
+        packets.len()
+    );
+
+    let frame_size = cfg.frame_size();
+    let frame_samples = frame_size * ch as usize;
+
+    let mut pass = 0u32;
+    let mut fail = 0u32;
+
+    // --- i16 decode comparison ---
+    println!();
+    println!("--- i16 decode ---");
+    {
+        let c_dec = unsafe {
+            let mut error: i32 = 0;
+            let dec = bindings::opus_decoder_create(sr, ch, &mut error);
+            if dec.is_null() || error != bindings::OPUS_OK {
+                eprintln!(
+                    "ERROR: C opus_decoder_create failed: {}",
+                    bindings::error_string(error)
+                );
+                process::exit(1);
+            }
+            dec
+        };
+        let mut r_dec = match RustDecoder::new(sr, ch) {
+            Ok(d) => d,
+            Err(code) => {
+                eprintln!("ERROR: Rust OpusDecoder::new failed: {}", code);
+                process::exit(1);
+            }
+        };
+
+        let mut c_pcm = vec![0i16; frame_samples];
+        let mut r_pcm = vec![0i16; frame_samples];
+        let mut total_match = 0usize;
+        let mut total_samples = 0usize;
+        let mut first_fail_frame = None;
+
+        for (i, pkt) in packets.iter().enumerate() {
+            let c_ret = unsafe {
+                bindings::opus_decode(
+                    c_dec,
+                    pkt.as_ptr(),
+                    pkt.len() as i32,
+                    c_pcm.as_mut_ptr(),
+                    frame_size as i32,
+                    0,
+                )
+            };
+            let r_ret = r_dec
+                .decode(Some(pkt), &mut r_pcm, frame_size as i32, false)
+                .unwrap_or(-1);
+
+            if c_ret > 0 && r_ret > 0 {
+                let n = c_ret as usize * ch as usize;
+                total_samples += n;
+                let stats = compare_samples(&c_pcm[..n], &r_pcm[..n]);
+                total_match += stats.matching;
+                if stats.first_diff_offset.is_some() && first_fail_frame.is_none() {
+                    first_fail_frame = Some(i);
+                }
+            }
+        }
+
+        if total_match == total_samples {
+            println!("  i16: PASS ({} samples, all match)", total_samples);
+            pass += 1;
+        } else {
+            let diff_count = total_samples - total_match;
+            println!(
+                "  i16: FAIL ({}/{} samples match, first diff at frame {:?})",
+                total_match, total_samples, first_fail_frame
+            );
+            fail += 1;
+            let _ = diff_count; // suppress unused warning
+        }
+
+        unsafe {
+            bindings::opus_decoder_destroy(c_dec);
+        }
+    }
+
+    // --- f32 decode comparison ---
+    // C fixed-point build doesn't export opus_decode_float (DISABLE_FLOAT_API),
+    // so we decode with C (i16) and convert to f32 the same way the C fixed-point
+    // code does: sample * (1.0 / 32768.0). Then compare against Rust decode_float.
+    println!();
+    println!("--- f32 decode ---");
+    {
+        let c_dec = unsafe {
+            let mut error: i32 = 0;
+            let dec = bindings::opus_decoder_create(sr, ch, &mut error);
+            if dec.is_null() || error != bindings::OPUS_OK {
+                eprintln!(
+                    "ERROR: C opus_decoder_create failed: {}",
+                    bindings::error_string(error)
+                );
+                process::exit(1);
+            }
+            dec
+        };
+        let mut r_dec = match RustDecoder::new(sr, ch) {
+            Ok(d) => d,
+            Err(code) => {
+                eprintln!("ERROR: Rust OpusDecoder::new failed: {}", code);
+                process::exit(1);
+            }
+        };
+
+        let mut c_pcm_16 = vec![0i16; frame_samples];
+        let mut r_pcm_f = vec![0.0f32; frame_samples];
+        let mut total_match = 0usize;
+        let mut total_samples = 0usize;
+        let mut first_fail_frame = None;
+        let mut worst_diff: f32 = 0.0;
+
+        for (i, pkt) in packets.iter().enumerate() {
+            let c_ret = unsafe {
+                bindings::opus_decode(
+                    c_dec,
+                    pkt.as_ptr(),
+                    pkt.len() as i32,
+                    c_pcm_16.as_mut_ptr(),
+                    frame_size as i32,
+                    0,
+                )
+            };
+            let r_ret = r_dec
+                .decode_float(Some(pkt), &mut r_pcm_f, frame_size as i32, false)
+                .unwrap_or(-1);
+
+            if c_ret > 0 && r_ret > 0 {
+                let n = c_ret as usize * ch as usize;
+                total_samples += n;
+                // Convert C i16 to f32 the same way C fixed-point does
+                let c_pcm_f: Vec<f32> = c_pcm_16[..n]
+                    .iter()
+                    .map(|&s| s as f32 * (1.0 / 32768.0))
+                    .collect();
+                let (_, m, fd, md) = compare_f32_samples(&c_pcm_f, &r_pcm_f[..n]);
+                total_match += m;
+                if md > worst_diff {
+                    worst_diff = md;
+                }
+                if fd.is_some() && first_fail_frame.is_none() {
+                    first_fail_frame = Some(i);
+                }
+            }
+        }
+
+        if total_match == total_samples {
+            println!("  f32: PASS ({} samples, all match)", total_samples);
+            pass += 1;
+        } else {
+            println!(
+                "  f32: FAIL ({}/{} samples match, max_diff={:.9}, first diff at frame {:?})",
+                total_match, total_samples, worst_diff, first_fail_frame
+            );
+            fail += 1;
+        }
+
+        unsafe {
+            bindings::opus_decoder_destroy(c_dec);
+        }
+    }
+
+    // --- i32/24-bit decode comparison ---
+    // C fixed-point opus_decode in 24-bit mode: decode to i16 then <<8.
+    // The C API doesn't have a direct opus_decode24() export, so we emulate
+    // by calling C opus_decode (i16) and shifting left by 8, then comparing
+    // against the Rust decode24.
+    println!();
+    println!("--- i32/24-bit decode ---");
+    {
+        let c_dec = unsafe {
+            let mut error: i32 = 0;
+            let dec = bindings::opus_decoder_create(sr, ch, &mut error);
+            if dec.is_null() || error != bindings::OPUS_OK {
+                eprintln!(
+                    "ERROR: C opus_decoder_create failed: {}",
+                    bindings::error_string(error)
+                );
+                process::exit(1);
+            }
+            dec
+        };
+        let mut r_dec = match RustDecoder::new(sr, ch) {
+            Ok(d) => d,
+            Err(code) => {
+                eprintln!("ERROR: Rust OpusDecoder::new failed: {}", code);
+                process::exit(1);
+            }
+        };
+
+        let mut c_pcm_16 = vec![0i16; frame_samples];
+        let mut r_pcm_32 = vec![0i32; frame_samples];
+        let mut total_match = 0usize;
+        let mut total_samples = 0usize;
+        let mut first_fail_frame = None;
+        let mut worst_diff: i32 = 0;
+
+        for (i, pkt) in packets.iter().enumerate() {
+            let c_ret = unsafe {
+                bindings::opus_decode(
+                    c_dec,
+                    pkt.as_ptr(),
+                    pkt.len() as i32,
+                    c_pcm_16.as_mut_ptr(),
+                    frame_size as i32,
+                    0,
+                )
+            };
+            let r_ret = r_dec
+                .decode24(Some(pkt), &mut r_pcm_32, frame_size as i32, false)
+                .unwrap_or(-1);
+
+            if c_ret > 0 && r_ret > 0 {
+                let n = c_ret as usize * ch as usize;
+                total_samples += n;
+                // C reference (fixed-point): i16 shifted left by 8
+                let c_pcm_32: Vec<i32> = c_pcm_16[..n].iter().map(|&s| (s as i32) << 8).collect();
+                let (_, m, fd, md) = compare_i32_samples(&c_pcm_32, &r_pcm_32[..n]);
+                total_match += m;
+                if md > worst_diff {
+                    worst_diff = md;
+                }
+                if fd.is_some() && first_fail_frame.is_none() {
+                    first_fail_frame = Some(i);
+                }
+            }
+        }
+
+        if total_match == total_samples {
+            println!(
+                "  i32/24-bit: PASS ({} samples, all match)",
+                total_samples
+            );
+            pass += 1;
+        } else {
+            println!(
+                "  i32/24-bit: FAIL ({}/{} samples match, max_diff={}, first diff at frame {:?})",
+                total_match, total_samples, worst_diff, first_fail_frame
+            );
+            fail += 1;
+        }
+
+        unsafe {
+            bindings::opus_decoder_destroy(c_dec);
+        }
+    }
+
+    println!();
+    println!("========================================");
+    println!("decode-formats: {} PASS, {} FAIL", pass, fail);
+    println!("========================================");
+    if fail > 0 {
+        process::exit(1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Longsoak: long-duration encode/decode to catch state accumulation bugs
+// ---------------------------------------------------------------------------
+
+fn cmd_longsoak(duration_secs: i32, sample_rate: i32) {
+    let ch = 1; // mono for simplicity
+    let pcm = generate_noise(sample_rate, ch, duration_secs as f64, 12345);
+    let frame_size = (sample_rate / 50) as usize; // 20ms frames
+    let frame_samples = frame_size * ch as usize;
+    let num_frames = pcm.len() / frame_samples;
+
+    println!(
+        "Longsoak: {} Hz, {} ch, {}s ({} frames)",
+        sample_rate, ch, duration_secs, num_frames
+    );
+
+    // Encode with C and Rust
+    let mut cfg = EncodeConfig::new(sample_rate, ch);
+    cfg.bitrate = 64000;
+    let c_enc_data = c_encode_cfg(&pcm, &cfg);
+    let rust_enc_data = rust_encode_cfg(&pcm, &cfg);
+
+    // Compare encoded output
+    let enc_stats = compare_bytes(&c_enc_data, &rust_enc_data);
+    if enc_stats.first_diff_offset.is_none() {
+        println!("  encode: PASS ({} bytes)", c_enc_data.len());
+    } else {
+        println!(
+            "  encode: FAIL at byte {} (of {}, max_diff={})",
+            enc_stats.first_diff_offset.unwrap(),
+            enc_stats.total,
+            enc_stats.max_diff
+        );
+    }
+
+    // Frame-by-frame decode with final_range tracking
+    let packets = parse_packets(&c_enc_data);
+    println!(
+        "  decode: {} packets, frame_size={}",
+        packets.len(),
+        frame_size
+    );
+
+    // Create C decoder
+    let c_dec = unsafe {
+        let mut error: i32 = 0;
+        let dec = bindings::opus_decoder_create(sample_rate, ch, &mut error);
+        if dec.is_null() || error != bindings::OPUS_OK {
+            eprintln!(
+                "ERROR: C opus_decoder_create failed: {}",
+                bindings::error_string(error)
+            );
+            process::exit(1);
+        }
+        dec
+    };
+
+    // Create Rust decoder
+    let mut rust_dec = mdopus::opus::decoder::OpusDecoder::new(sample_rate, ch).unwrap_or_else(|e| {
+        eprintln!("ERROR: Rust OpusDecoder::new failed: {}", e);
+        process::exit(1);
+    });
+
+    let mut c_pcm_buf = vec![0i16; frame_samples];
+    let mut rust_pcm_buf = vec![0i16; frame_samples];
+    let mut first_pcm_fail: Option<usize> = None;
+    let mut first_range_fail: Option<usize> = None;
+    let mut total_sample_diffs = 0u64;
+    let mut max_sample_diff = 0i32;
+
+    for (i, pkt) in packets.iter().enumerate() {
+        // C decode
+        let c_ret = unsafe {
+            bindings::opus_decode(
+                c_dec,
+                pkt.as_ptr(),
+                pkt.len() as i32,
+                c_pcm_buf.as_mut_ptr(),
+                frame_size as i32,
+                0,
+            )
+        };
+        if c_ret < 0 {
+            eprintln!(
+                "  frame {}: C decode error: {}",
+                i,
+                bindings::error_string(c_ret)
+            );
+            break;
+        }
+
+        // Rust decode
+        let rust_ret =
+            match rust_dec.decode(Some(pkt), &mut rust_pcm_buf, frame_size as i32, false) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("  frame {}: Rust decode error: {}", i, e);
+                    break;
+                }
+            };
+
+        // Get final range from both
+        let mut c_range: u32 = 0;
+        unsafe {
+            bindings::opus_decoder_ctl(
+                c_dec,
+                bindings::OPUS_GET_FINAL_RANGE_REQUEST,
+                &mut c_range as *mut u32,
+            );
+        }
+        let rust_range = rust_dec.get_final_range();
+
+        // Compare PCM
+        let c_count = c_ret as usize * ch as usize;
+        let r_count = rust_ret as usize * ch as usize;
+        let len = c_count.min(r_count);
+        for j in 0..len {
+            let d = (c_pcm_buf[j] as i32 - rust_pcm_buf[j] as i32).abs();
+            if d > 0 {
+                total_sample_diffs += 1;
+                max_sample_diff = max_sample_diff.max(d);
+                if first_pcm_fail.is_none() {
+                    first_pcm_fail = Some(i);
+                    println!(
+                        "  frame {:5}: PCM MISMATCH first_diff_sample={} max_diff={} c_samples={} rust_samples={}",
+                        i, j, d, c_count, r_count
+                    );
+                }
+            }
+        }
+
+        // Compare final_range
+        if c_range != rust_range && first_range_fail.is_none() {
+            first_range_fail = Some(i);
+            println!(
+                "  frame {:5}: RANGE MISMATCH C={:08x} Rust={:08x}",
+                i, c_range, rust_range
+            );
+        }
+
+        // Progress reporting every 250 frames
+        if (i + 1) % 250 == 0 || i + 1 == packets.len() {
+            print!(
+                "\r  progress: {}/{} frames ({:.0}%)",
+                i + 1,
+                packets.len(),
+                (i + 1) as f64 / packets.len() as f64 * 100.0
+            );
+        }
+    }
+    println!();
+
+    unsafe {
+        bindings::opus_decoder_destroy(c_dec);
+    }
+
+    // Summary
+    println!();
+    println!("  --- Longsoak summary ---");
+    println!("  frames decoded: {}", packets.len());
+    match first_pcm_fail {
+        None => println!("  PCM:   PASS (all samples match)"),
+        Some(f) => println!(
+            "  PCM:   FAIL (first at frame {}, {} total diffs, max_diff={})",
+            f, total_sample_diffs, max_sample_diff
+        ),
+    }
+    match first_range_fail {
+        None => println!("  Range: PASS (all final_range values match)"),
+        Some(f) => println!("  Range: FAIL (first mismatch at frame {})", f),
+    }
+    if first_pcm_fail.is_none() && first_range_fail.is_none() {
+        println!("  OVERALL: PASS");
+    } else {
+        println!("  OVERALL: FAIL");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Quality: SNR sanity check for encode-decode roundtrip
+// ---------------------------------------------------------------------------
+
+/// Compute SNR in dB between original and decoded signals.
+/// The codec introduces an algorithmic delay of `delay` samples, so
+/// decoded[delay..] corresponds to original[0..]. We compare the
+/// overlapping region: original[0..n-delay] vs decoded[delay..n].
+fn compute_snr(original: &[i16], decoded: &[i16], delay: usize) -> f64 {
+    let orig_len = original.len();
+    let dec_len = decoded.len();
+    if delay >= dec_len || delay >= orig_len {
+        return f64::NEG_INFINITY;
+    }
+    // Compare original[0..compare_len] vs decoded[delay..delay+compare_len]
+    let compare_len = (orig_len - delay).min(dec_len - delay);
+    let mut signal_power = 0.0f64;
+    let mut noise_power = 0.0f64;
+    for i in 0..compare_len {
+        let s = original[i] as f64;
+        let d = decoded[delay + i] as f64;
+        signal_power += s * s;
+        noise_power += (s - d) * (s - d);
+    }
+    if noise_power == 0.0 {
+        return f64::INFINITY;
+    }
+    10.0 * (signal_power / noise_power).log10()
+}
+
+fn cmd_quality(wav_path: &str) {
+    let wav = read_wav(Path::new(wav_path));
+    let sr = wav.sample_rate as i32;
+    let ch = wav.channels as i32;
+
+    let bitrates = [16000, 32000, 64000, 128000, 256000];
+
+    // Account for codec algorithmic delay: decoded output is shifted by
+    // the encoder's lookahead. Opus has ~6.5ms total delay at 48kHz
+    // (2.5ms analysis + 4ms delay compensation). We round to the nearest
+    // frame boundary for simplicity.
+    let delay = ((sr / 400 + sr / 250) as usize) * ch as usize;
+
+    println!(
+        "Quality (SNR) check: {} Hz, {} ch, {} samples (delay compensation: {} samples)",
+        sr,
+        ch,
+        wav.samples.len() / ch as usize,
+        delay / ch as usize
+    );
+    println!("{:>10} {:>10} {:>8}", "Bitrate", "SNR (dB)", "Status");
+
+    for &br in &bitrates {
+        let mut cfg = EncodeConfig::new(sr, ch);
+        cfg.bitrate = br;
+
+        // Encode and decode with Rust
+        let encoded = rust_encode_cfg(&wav.samples, &cfg);
+        if encoded.is_empty() {
+            println!("{:>10} {:>10} {:>8}", br, "N/A", "SKIP");
+            continue;
+        }
+        let decoded = rust_decode_cfg(&encoded, &cfg);
+        if decoded.is_empty() {
+            println!("{:>10} {:>10} {:>8}", br, "N/A", "SKIP");
+            continue;
+        }
+
+        let snr = compute_snr(&wav.samples, &decoded, delay);
+
+        // Minimum expected SNR: conservative sanity thresholds.
+        // These detect "codec is producing garbage", not quality targets.
+        // Noise and short signals will legitimately have low SNR.
+        let min_snr = match br {
+            b if b <= 16000 => -5.0,
+            b if b <= 32000 => -2.0,
+            b if b <= 64000 => 0.0,
+            b if b <= 128000 => 0.0,
+            _ => 0.0,
+        };
+
+        let status = if snr >= min_snr { "OK" } else { "LOW" };
+        println!("{:>10} {:>9.1} {:>8}", br, snr, status);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Repacketizer comparison
+// ---------------------------------------------------------------------------
+
+fn cmd_repacketizer(wav_path: &str) {
+    let wav = read_wav(Path::new(wav_path));
+    let sr = wav.sample_rate as i32;
+    let ch = wav.channels as i32;
+    let cfg = EncodeConfig::new(sr, ch);
+    let encoded = c_encode_cfg(&wav.samples, &cfg);
+    let packets = parse_packets(&encoded);
+
+    if packets.len() < 3 {
+        eprintln!("ERROR: need at least 3 encoded packets, got {}", packets.len());
+        process::exit(1);
+    }
+
+    println!(
+        "Repacketizer test: {} packets from {} Hz {} ch",
+        packets.len(), sr, ch
+    );
+    println!();
+
+    let mut pass = 0u32;
+    let mut fail = 0u32;
+
+    // -----------------------------------------------------------------------
+    // Test 1: Cat 3 packets and compare merged output
+    // -----------------------------------------------------------------------
+    println!("--- Test 1: cat 3 packets, compare merged output ---");
+    {
+        let c_out = unsafe {
+            let rp = bindings::opus_repacketizer_create();
+            assert!(!rp.is_null(), "C opus_repacketizer_create returned null");
+            for i in 0..3 {
+                let ret = bindings::opus_repacketizer_cat(
+                    rp,
+                    packets[i].as_ptr(),
+                    packets[i].len() as i32,
+                );
+                assert!(ret == bindings::OPUS_OK, "C repacketizer_cat failed: {}", ret);
+            }
+            let nb = bindings::opus_repacketizer_get_nb_frames(rp);
+            println!("  C repacketizer: {} frames after cat", nb);
+
+            let mut out = vec![0u8; 4000];
+            let out_len = bindings::opus_repacketizer_out(rp, out.as_mut_ptr(), out.len() as i32);
+            assert!(out_len > 0, "C repacketizer_out failed: {}", out_len);
+            bindings::opus_repacketizer_destroy(rp);
+            out.truncate(out_len as usize);
+            out
+        };
+
+        let rust_out = {
+            use mdopus::opus::repacketizer::OpusRepacketizer;
+            let mut rp = OpusRepacketizer::new();
+            for i in 0..3 {
+                let ret = rp.cat(&packets[i], packets[i].len() as i32);
+                assert!(ret == 0, "Rust repacketizer cat failed: {}", ret);
+            }
+            let nb = rp.get_nb_frames();
+            println!("  Rust repacketizer: {} frames after cat", nb);
+
+            let mut out = vec![0u8; 4000];
+            let maxlen = out.len() as i32;
+            let out_len = rp.out(&mut out, maxlen);
+            assert!(out_len > 0, "Rust repacketizer out failed: {}", out_len);
+            out.truncate(out_len as usize);
+            out
+        };
+
+        let stats = compare_bytes(&c_out, &rust_out);
+        print_result("repack_cat3_out", &stats, &c_out, &rust_out);
+        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 2: out_range — extract frame 1 only from 3 catted packets
+    // -----------------------------------------------------------------------
+    println!();
+    println!("--- Test 2: out_range(1,2) from 3 catted packets ---");
+    {
+        let c_out = unsafe {
+            let rp = bindings::opus_repacketizer_create();
+            for i in 0..3 {
+                bindings::opus_repacketizer_cat(rp, packets[i].as_ptr(), packets[i].len() as i32);
+            }
+            let mut out = vec![0u8; 4000];
+            let out_len = bindings::opus_repacketizer_out_range(rp, 1, 2, out.as_mut_ptr(), out.len() as i32);
+            assert!(out_len > 0, "C repacketizer_out_range failed: {}", out_len);
+            bindings::opus_repacketizer_destroy(rp);
+            out.truncate(out_len as usize);
+            out
+        };
+
+        let rust_out = {
+            use mdopus::opus::repacketizer::OpusRepacketizer;
+            let mut rp = OpusRepacketizer::new();
+            for i in 0..3 {
+                rp.cat(&packets[i], packets[i].len() as i32);
+            }
+            let mut out = vec![0u8; 4000];
+            let maxlen = out.len() as i32;
+            let out_len = rp.out_range(1, 2, &mut out, maxlen);
+            assert!(out_len > 0, "Rust repacketizer out_range failed: {}", out_len);
+            out.truncate(out_len as usize);
+            out
+        };
+
+        let stats = compare_bytes(&c_out, &rust_out);
+        print_result("repack_out_range(1,2)", &stats, &c_out, &rust_out);
+        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 3: out_range(0,2) — first two frames
+    // -----------------------------------------------------------------------
+    println!();
+    println!("--- Test 3: out_range(0,2) from 3 catted packets ---");
+    {
+        let c_out = unsafe {
+            let rp = bindings::opus_repacketizer_create();
+            for i in 0..3 {
+                bindings::opus_repacketizer_cat(rp, packets[i].as_ptr(), packets[i].len() as i32);
+            }
+            let mut out = vec![0u8; 4000];
+            let out_len = bindings::opus_repacketizer_out_range(rp, 0, 2, out.as_mut_ptr(), out.len() as i32);
+            assert!(out_len > 0, "C repacketizer_out_range(0,2) failed: {}", out_len);
+            bindings::opus_repacketizer_destroy(rp);
+            out.truncate(out_len as usize);
+            out
+        };
+
+        let rust_out = {
+            use mdopus::opus::repacketizer::OpusRepacketizer;
+            let mut rp = OpusRepacketizer::new();
+            for i in 0..3 {
+                rp.cat(&packets[i], packets[i].len() as i32);
+            }
+            let mut out = vec![0u8; 4000];
+            let maxlen = out.len() as i32;
+            let out_len = rp.out_range(0, 2, &mut out, maxlen);
+            assert!(out_len > 0, "Rust repacketizer out_range(0,2) failed: {}", out_len);
+            out.truncate(out_len as usize);
+            out
+        };
+
+        let stats = compare_bytes(&c_out, &rust_out);
+        print_result("repack_out_range(0,2)", &stats, &c_out, &rust_out);
+        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 4: pad and unpad a single packet
+    // -----------------------------------------------------------------------
+    println!();
+    println!("--- Test 4: pad and unpad ---");
+    {
+        let orig = &packets[0];
+        let orig_len = orig.len() as i32;
+        let padded_len = orig_len + 64;
+
+        // C pad
+        let c_padded = unsafe {
+            let mut buf = vec![0u8; padded_len as usize];
+            buf[..orig.len()].copy_from_slice(orig);
+            let ret = bindings::opus_packet_pad(buf.as_mut_ptr(), orig_len, padded_len);
+            assert!(ret == bindings::OPUS_OK, "C opus_packet_pad failed: {}", ret);
+            buf
+        };
+
+        // Rust pad
+        let rust_padded = {
+            use mdopus::opus::repacketizer::opus_packet_pad;
+            let mut buf = vec![0u8; padded_len as usize];
+            buf[..orig.len()].copy_from_slice(orig);
+            let ret = opus_packet_pad(&mut buf, orig_len, padded_len);
+            assert!(ret == 0, "Rust opus_packet_pad failed: {}", ret);
+            buf
+        };
+
+        let stats = compare_bytes(&c_padded, &rust_padded);
+        print_result("pad", &stats, &c_padded, &rust_padded);
+        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+
+        // C unpad
+        let c_unpadded = unsafe {
+            let mut buf = c_padded.clone();
+            let ret = bindings::opus_packet_unpad(buf.as_mut_ptr(), padded_len);
+            assert!(ret > 0, "C opus_packet_unpad failed: {}", ret);
+            buf.truncate(ret as usize);
+            buf
+        };
+
+        // Rust unpad
+        let rust_unpadded = {
+            use mdopus::opus::repacketizer::opus_packet_unpad;
+            let mut buf = rust_padded.clone();
+            let ret = opus_packet_unpad(&mut buf, padded_len);
+            assert!(ret > 0, "Rust opus_packet_unpad failed: {}", ret);
+            buf.truncate(ret as usize);
+            buf
+        };
+
+        let stats = compare_bytes(&c_unpadded, &rust_unpadded);
+        print_result("unpad", &stats, &c_unpadded, &rust_unpadded);
+        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+
+        // Verify unpadded matches original
+        let stats = compare_bytes(orig, &c_unpadded);
+        print_result("unpad_vs_original", &stats, orig, &c_unpadded);
+        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 5: init / reset and re-use
+    // -----------------------------------------------------------------------
+    println!();
+    println!("--- Test 5: init/reset re-use ---");
+    {
+        let c_out = unsafe {
+            let rp = bindings::opus_repacketizer_create();
+            bindings::opus_repacketizer_cat(rp, packets[0].as_ptr(), packets[0].len() as i32);
+            bindings::opus_repacketizer_init(rp);
+            bindings::opus_repacketizer_cat(rp, packets[1].as_ptr(), packets[1].len() as i32);
+            bindings::opus_repacketizer_cat(rp, packets[2].as_ptr(), packets[2].len() as i32);
+            let mut out = vec![0u8; 4000];
+            let out_len = bindings::opus_repacketizer_out(rp, out.as_mut_ptr(), out.len() as i32);
+            assert!(out_len > 0, "C repacketizer_out after init failed: {}", out_len);
+            bindings::opus_repacketizer_destroy(rp);
+            out.truncate(out_len as usize);
+            out
+        };
+
+        let rust_out = {
+            use mdopus::opus::repacketizer::OpusRepacketizer;
+            let mut rp = OpusRepacketizer::new();
+            rp.cat(&packets[0], packets[0].len() as i32);
+            rp.init();
+            rp.cat(&packets[1], packets[1].len() as i32);
+            rp.cat(&packets[2], packets[2].len() as i32);
+            let mut out = vec![0u8; 4000];
+            let maxlen = out.len() as i32;
+            let out_len = rp.out(&mut out, maxlen);
+            assert!(out_len > 0, "Rust repacketizer out after init failed: {}", out_len);
+            out.truncate(out_len as usize);
+            out
+        };
+
+        let stats = compare_bytes(&c_out, &rust_out);
+        print_result("repack_init_reuse", &stats, &c_out, &rust_out);
+        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 6: get_nb_frames parity
+    // -----------------------------------------------------------------------
+    println!();
+    println!("--- Test 6: get_nb_frames parity ---");
+    {
+        for count in 1..=3.min(packets.len()) {
+            let c_nb = unsafe {
+                let rp = bindings::opus_repacketizer_create();
+                for i in 0..count {
+                    bindings::opus_repacketizer_cat(rp, packets[i].as_ptr(), packets[i].len() as i32);
+                }
+                let nb = bindings::opus_repacketizer_get_nb_frames(rp);
+                bindings::opus_repacketizer_destroy(rp);
+                nb
+            };
+
+            let r_nb = {
+                use mdopus::opus::repacketizer::OpusRepacketizer;
+                let mut rp = OpusRepacketizer::new();
+                for i in 0..count {
+                    rp.cat(&packets[i], packets[i].len() as i32);
+                }
+                rp.get_nb_frames()
+            };
+
+            if c_nb == r_nb {
+                println!("  PASS  nb_frames after {} cat: C={}, Rust={}", count, c_nb, r_nb);
+                pass += 1;
+            } else {
+                println!("  FAIL  nb_frames after {} cat: C={}, Rust={}", count, c_nb, r_nb);
+                fail += 1;
+            }
+        }
+    }
+
+    println!();
+    println!("========================================");
+    println!("repacketizer: {} PASS, {} FAIL", pass, fail);
+    println!("========================================");
+    if fail > 0 {
+        process::exit(1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Multistream comparison
+// ---------------------------------------------------------------------------
+
+fn cmd_multistream() {
+    println!("Multistream test: stereo (mapping family 0)");
+    println!();
+
+    let sr = 48000i32;
+    let channels = 2i32;
+    let streams = 1i32;
+    let coupled = 1i32;
+    let mapping = [0u8, 1u8];
+    let application = bindings::OPUS_APPLICATION_AUDIO;
+    let frame_size = 960; // 20ms at 48kHz
+    let bitrate = 64000i32;
+
+    let pcm = generate_noise(sr, channels, 0.5, 42);
+    let num_frames = pcm.len() / (frame_size * channels as usize);
+
+    println!("  {} samples, {} frames of {} at {} Hz {} ch",
+        pcm.len() / channels as usize, num_frames, frame_size, sr, channels);
+    println!();
+
+    let mut pass = 0u32;
+    let mut fail = 0u32;
+
+    // -----------------------------------------------------------------------
+    // Test 1: Encode with both C and Rust, compare packets
+    // -----------------------------------------------------------------------
+    println!("--- Test 1: multistream encode comparison ---");
+
+    let c_packets: Vec<Vec<u8>> = unsafe {
+        let mut err: i32 = 0;
+        let enc = bindings::opus_multistream_encoder_create(
+            sr, channels, streams, coupled, mapping.as_ptr(), application, &mut err,
+        );
+        assert!(!enc.is_null() && err == bindings::OPUS_OK,
+            "C multistream_encoder_create failed: {}", err);
+
+        bindings::opus_multistream_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
+        bindings::opus_multistream_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, 10i32);
+        bindings::opus_multistream_encoder_ctl(enc, bindings::OPUS_SET_VBR_REQUEST, 0i32);
+
+        let mut pkts = Vec::new();
+        let mut pos = 0;
+        let samples_per_frame = frame_size * channels as usize;
+        let mut out = vec![0u8; 4000];
+        while pos + samples_per_frame <= pcm.len() {
+            let ret = bindings::opus_multistream_encode(
+                enc,
+                pcm[pos..].as_ptr(),
+                frame_size as i32,
+                out.as_mut_ptr(),
+                out.len() as i32,
+            );
+            assert!(ret > 0, "C multistream_encode failed: {}", ret);
+            pkts.push(out[..ret as usize].to_vec());
+            pos += samples_per_frame;
+        }
+        bindings::opus_multistream_encoder_destroy(enc);
+        pkts
+    };
+
+    let rust_packets: Vec<Vec<u8>> = {
+        use mdopus::opus::multistream::OpusMSEncoder;
+        let mut enc = OpusMSEncoder::new(sr, channels, streams, coupled, &mapping, application)
+            .expect("Rust OpusMSEncoder::new failed");
+
+        enc.set_bitrate(bitrate);
+        enc.set_complexity(10);
+        enc.set_vbr(0);
+
+        let mut pkts = Vec::new();
+        let mut pos = 0;
+        let samples_per_frame = frame_size * channels as usize;
+        let mut out = vec![0u8; 4000];
+        while pos + samples_per_frame <= pcm.len() {
+            let maxlen = out.len() as i32;
+            let ret = enc.encode(
+                &pcm[pos..pos + samples_per_frame],
+                frame_size as i32,
+                &mut out,
+                maxlen,
+            ).expect("Rust multistream encode failed");
+            pkts.push(out[..ret as usize].to_vec());
+            pos += samples_per_frame;
+        }
+        pkts
+    };
+
+    println!("  C encoded {} packets, Rust encoded {} packets", c_packets.len(), rust_packets.len());
+    {
+        let mut all_match = true;
+        let frame_count = c_packets.len().min(rust_packets.len());
+        for i in 0..frame_count {
+            let stats = compare_bytes(&c_packets[i], &rust_packets[i]);
+            if stats.first_diff_offset.is_some() {
+                println!("  Frame {}: FAIL (C {} bytes, Rust {} bytes, first_diff @{})",
+                    i, c_packets[i].len(), rust_packets[i].len(),
+                    stats.first_diff_offset.unwrap());
+                all_match = false;
+            }
+        }
+        if c_packets.len() != rust_packets.len() {
+            all_match = false;
+        }
+        if all_match {
+            println!("  ms_encode: PASS ({} packets, all byte-exact)", frame_count);
+            pass += 1;
+        } else {
+            println!("  ms_encode: FAIL");
+            fail += 1;
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 2: Decode C-encoded packets with both C and Rust, compare PCM
+    // -----------------------------------------------------------------------
+    println!();
+    println!("--- Test 2: multistream decode comparison (C-encoded packets) ---");
+
+    let c_decoded: Vec<i16> = unsafe {
+        let mut err: i32 = 0;
+        let dec = bindings::opus_multistream_decoder_create(
+            sr, channels, streams, coupled, mapping.as_ptr(), &mut err,
+        );
+        assert!(!dec.is_null() && err == bindings::OPUS_OK,
+            "C multistream_decoder_create failed: {}", err);
+
+        let mut output = Vec::new();
+        let mut pcm_buf = vec![0i16; frame_size * channels as usize];
+        for pkt in &c_packets {
+            let ret = bindings::opus_multistream_decode(
+                dec, pkt.as_ptr(), pkt.len() as i32,
+                pcm_buf.as_mut_ptr(), frame_size as i32, 0,
+            );
+            assert!(ret > 0, "C multistream_decode failed: {}", ret);
+            output.extend_from_slice(&pcm_buf[..ret as usize * channels as usize]);
+        }
+        bindings::opus_multistream_decoder_destroy(dec);
+        output
+    };
+
+    let rust_decoded: Vec<i16> = {
+        use mdopus::opus::multistream::OpusMSDecoder;
+        let mut dec = OpusMSDecoder::new(sr, channels, streams, coupled, &mapping)
+            .expect("Rust OpusMSDecoder::new failed");
+
+        let mut output = Vec::new();
+        let mut pcm_buf = vec![0i16; frame_size * channels as usize];
+        for pkt in &c_packets {
+            let ret = dec.decode(Some(pkt.as_slice()), pkt.len() as i32, &mut pcm_buf, frame_size as i32, false)
+                .expect("Rust multistream decode failed");
+            output.extend_from_slice(&pcm_buf[..ret as usize * channels as usize]);
+        }
+        output
+    };
+
+    println!("  C decoded {} samples, Rust decoded {} samples",
+        c_decoded.len() / channels as usize, rust_decoded.len() / channels as usize);
+    {
+        let stats = compare_samples(&c_decoded, &rust_decoded);
+        print_sample_result("ms_decode", &stats, &c_decoded, &rust_decoded);
+        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 3: Full roundtrip — encode with Rust, decode with Rust, vs C roundtrip
+    // -----------------------------------------------------------------------
+    println!();
+    println!("--- Test 3: multistream roundtrip (C enc+dec vs Rust enc+dec) ---");
+
+    let c_roundtrip: Vec<i16> = unsafe {
+        let mut err: i32 = 0;
+        let dec = bindings::opus_multistream_decoder_create(
+            sr, channels, streams, coupled, mapping.as_ptr(), &mut err,
+        );
+        assert!(!dec.is_null() && err == bindings::OPUS_OK);
+
+        let mut output = Vec::new();
+        let mut pcm_buf = vec![0i16; frame_size * channels as usize];
+        for pkt in &c_packets {
+            let ret = bindings::opus_multistream_decode(
+                dec, pkt.as_ptr(), pkt.len() as i32,
+                pcm_buf.as_mut_ptr(), frame_size as i32, 0,
+            );
+            if ret > 0 {
+                output.extend_from_slice(&pcm_buf[..ret as usize * channels as usize]);
+            }
+        }
+        bindings::opus_multistream_decoder_destroy(dec);
+        output
+    };
+
+    let rust_roundtrip: Vec<i16> = {
+        use mdopus::opus::multistream::OpusMSDecoder;
+        let mut dec = OpusMSDecoder::new(sr, channels, streams, coupled, &mapping)
+            .expect("Rust OpusMSDecoder::new failed");
+
+        let mut output = Vec::new();
+        let mut pcm_buf = vec![0i16; frame_size * channels as usize];
+        for pkt in &rust_packets {
+            match dec.decode(Some(pkt.as_slice()), pkt.len() as i32, &mut pcm_buf, frame_size as i32, false) {
+                Ok(ret) => {
+                    output.extend_from_slice(&pcm_buf[..ret as usize * channels as usize]);
+                }
+                Err(e) => {
+                    eprintln!("  WARNING: Rust multistream decode failed on Rust-encoded packet: {}", e);
+                    break;
+                }
+            }
+        }
+        output
+    };
+
+    println!("  C roundtrip {} samples, Rust roundtrip {} samples",
+        c_roundtrip.len() / channels as usize, rust_roundtrip.len() / channels as usize);
+    {
+        let stats = compare_samples(&c_roundtrip, &rust_roundtrip);
+        print_sample_result("ms_roundtrip", &stats, &c_roundtrip, &rust_roundtrip);
+        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+    }
+
+    println!();
+    println!("========================================");
+    println!("multistream: {} PASS, {} FAIL", pass, fail);
+    println!("========================================");
+    if fail > 0 {
+        process::exit(1);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -4407,6 +5704,12 @@ fn usage() {
     eprintln!("  mdopus-compare dtx <input.wav|generate> [--bitrate N]");
     eprintln!("  mdopus-compare sweep [filter] [--stop-on-fail]");
     eprintln!("  mdopus-compare bench <input.wav> [--bitrate N] [--complexity N] [--iters N]");
+    eprintln!("  mdopus-compare longsoak [--duration N] [--sample-rate N]");
+    eprintln!("  mdopus-compare quality <input.wav>");
+    eprintln!("  mdopus-compare packets <input.wav>");
+    eprintln!("  mdopus-compare decode-formats <input.wav>");
+    eprintln!("  mdopus-compare repacketizer <input.wav>");
+    eprintln!("  mdopus-compare multistream");
     eprintln!("  mdopus-compare unit <module_name>");
     eprintln!("  mdopus-compare api");
     eprintln!();
@@ -4419,6 +5722,8 @@ fn usage() {
     eprintln!("  --complexity N   Encoder complexity 0-10 (default: 10)");
     eprintln!("  --iters N        Benchmark iterations (default: 10)");
     eprintln!("  --loss-pct N     Packet loss percentage for FEC (default: 20)");
+    eprintln!("  --duration N     Longsoak duration in seconds (default: 30)");
+    eprintln!("  --sample-rate N  Sample rate for longsoak (default: 48000)");
     eprintln!("  --stop-on-fail   (sweep) Stop after first failing configuration");
     eprintln!();
     eprintln!("SWEEP FILTER EXAMPLES:");
@@ -4559,6 +5864,42 @@ fn main() {
         }
         "api" => {
             cmd_api();
+        }
+        "packets" => {
+            if args.len() < 3 {
+                eprintln!("ERROR: packets requires an input WAV file");
+                process::exit(1);
+            }
+            cmd_packets(&args[2]);
+        }
+        "decode-formats" => {
+            if args.len() < 3 {
+                eprintln!("ERROR: decode-formats requires an input WAV file");
+                process::exit(1);
+            }
+            cmd_decode_formats(&args[2]);
+        }
+        "longsoak" => {
+            let duration = parse_option(&args, "--duration", 30);
+            let sr = parse_option(&args, "--sample-rate", 48000);
+            cmd_longsoak(duration, sr);
+        }
+        "quality" => {
+            if args.len() < 3 {
+                eprintln!("ERROR: quality requires an input WAV file");
+                process::exit(1);
+            }
+            cmd_quality(&args[2]);
+        }
+        "repacketizer" => {
+            if args.len() < 3 {
+                eprintln!("ERROR: repacketizer requires an input WAV file");
+                process::exit(1);
+            }
+            cmd_repacketizer(&args[2]);
+        }
+        "multistream" => {
+            cmd_multistream();
         }
         "--help" | "-h" | "help" => {
             usage();

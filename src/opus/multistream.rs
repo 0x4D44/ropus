@@ -26,6 +26,8 @@ use super::decoder::{
 use super::encoder::{
     frame_size_select, OpusEncoder, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
     OPUS_APPLICATION_VOIP, OPUS_AUTO, OPUS_BITRATE_MAX, OPUS_FRAMESIZE_ARG,
+};
+use super::decoder::{
     OPUS_BANDWIDTH_FULLBAND, OPUS_BANDWIDTH_NARROWBAND,
     OPUS_BANDWIDTH_SUPERWIDEBAND, OPUS_BANDWIDTH_WIDEBAND,
 };
@@ -344,6 +346,15 @@ fn surround_analysis(
             let mut tmp_e = [0i32; 21];
             let shift = celt_mode.max_lm - lm;
             let fft_state = get_fft_state(shift);
+            // Compute trig table offset, matching C: trig += N for each shift level
+            let mdct = &crate::celt::mdct::MDCT_48000_960;
+            let mut trig_offset = 0usize;
+            let mut trig_n = mdct.n;
+            for _ in 0..shift {
+                trig_n >>= 1;
+                trig_offset += trig_n as usize;
+            }
+            let trig = &mdct.trig[trig_offset..];
             clt_mdct_forward(
                 &inp[(freq_size * frame) as usize..],
                 &mut freq,
@@ -352,6 +363,7 @@ fn surround_analysis(
                 shift,
                 1,
                 fft_state,
+                trig,
             );
             if upsample != 1 {
                 let bound = (freq_size / upsample) as usize;

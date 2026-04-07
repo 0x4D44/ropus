@@ -59,6 +59,9 @@ pub const OPUS_SET_LSB_DEPTH_REQUEST: c_int = 4036;
 pub const OPUS_SET_PREDICTION_DISABLED_REQUEST: c_int = 4042;
 pub const OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST: c_int = 4046;
 
+// Getter CTL request codes
+pub const OPUS_GET_FINAL_RANGE_REQUEST: c_int = 4031;
+
 // Internal CTL (from opus_private.h)
 pub const OPUS_SET_FORCE_MODE_REQUEST: c_int = 11002;
 
@@ -72,6 +75,21 @@ pub struct OpusEncoder {
 
 #[repr(C)]
 pub struct OpusDecoder {
+    _opaque: [u8; 0],
+}
+
+#[repr(C)]
+pub struct OpusRepacketizer {
+    _opaque: [u8; 0],
+}
+
+#[repr(C)]
+pub struct OpusMSEncoder {
+    _opaque: [u8; 0],
+}
+
+#[repr(C)]
+pub struct OpusMSDecoder {
     _opaque: [u8; 0],
 }
 
@@ -139,6 +157,17 @@ unsafe extern "C" {
     pub fn opus_decoder_destroy(st: *mut OpusDecoder);
     pub fn opus_decoder_ctl(st: *mut OpusDecoder, request: c_int, ...) -> c_int;
 
+    // Packet introspection
+    pub fn opus_packet_get_bandwidth(data: *const c_uchar) -> c_int;
+    pub fn opus_packet_get_nb_channels(data: *const c_uchar) -> c_int;
+    pub fn opus_packet_get_nb_frames(data: *const c_uchar, len: opus_int32) -> c_int;
+    pub fn opus_packet_get_samples_per_frame(data: *const c_uchar, Fs: opus_int32) -> c_int;
+    pub fn opus_packet_get_nb_samples(
+        data: *const c_uchar,
+        len: opus_int32,
+        Fs: opus_int32,
+    ) -> c_int;
+
     // Info
     pub fn opus_strerror(error: c_int) -> *const std::os::raw::c_char;
     pub fn opus_get_version_string() -> *const std::os::raw::c_char;
@@ -155,6 +184,77 @@ unsafe extern "C" {
     pub fn ec_dec_bit_logp(this: *mut ec_dec, logp: c_uint) -> c_int;
     pub fn ec_dec_bits(this: *mut ec_dec, ftb: c_uint) -> opus_uint32;
     pub fn ec_dec_icdf(this: *mut ec_dec, icdf: *const c_uchar, ftb: c_uint) -> c_int;
+
+    // Repacketizer
+    pub fn opus_repacketizer_create() -> *mut OpusRepacketizer;
+    pub fn opus_repacketizer_destroy(rp: *mut OpusRepacketizer);
+    pub fn opus_repacketizer_init(rp: *mut OpusRepacketizer) -> *mut OpusRepacketizer;
+    pub fn opus_repacketizer_cat(
+        rp: *mut OpusRepacketizer,
+        data: *const c_uchar,
+        len: opus_int32,
+    ) -> c_int;
+    pub fn opus_repacketizer_out(
+        rp: *mut OpusRepacketizer,
+        data: *mut c_uchar,
+        maxlen: opus_int32,
+    ) -> opus_int32;
+    pub fn opus_repacketizer_out_range(
+        rp: *mut OpusRepacketizer,
+        begin: c_int,
+        end: c_int,
+        data: *mut c_uchar,
+        maxlen: opus_int32,
+    ) -> opus_int32;
+    pub fn opus_repacketizer_get_nb_frames(rp: *mut OpusRepacketizer) -> c_int;
+    pub fn opus_packet_pad(
+        data: *mut c_uchar,
+        len: opus_int32,
+        new_len: opus_int32,
+    ) -> c_int;
+    pub fn opus_packet_unpad(
+        data: *mut c_uchar,
+        len: opus_int32,
+    ) -> opus_int32;
+
+    // Multistream encoder
+    pub fn opus_multistream_encoder_create(
+        Fs: opus_int32,
+        channels: c_int,
+        streams: c_int,
+        coupled_streams: c_int,
+        mapping: *const c_uchar,
+        application: c_int,
+        error: *mut c_int,
+    ) -> *mut OpusMSEncoder;
+    pub fn opus_multistream_encode(
+        st: *mut OpusMSEncoder,
+        pcm: *const opus_int16,
+        frame_size: c_int,
+        data: *mut c_uchar,
+        max_data_bytes: opus_int32,
+    ) -> opus_int32;
+    pub fn opus_multistream_encoder_destroy(st: *mut OpusMSEncoder);
+    pub fn opus_multistream_encoder_ctl(st: *mut OpusMSEncoder, request: c_int, ...) -> c_int;
+
+    // Multistream decoder
+    pub fn opus_multistream_decoder_create(
+        Fs: opus_int32,
+        channels: c_int,
+        streams: c_int,
+        coupled_streams: c_int,
+        mapping: *const c_uchar,
+        error: *mut c_int,
+    ) -> *mut OpusMSDecoder;
+    pub fn opus_multistream_decode(
+        st: *mut OpusMSDecoder,
+        data: *const c_uchar,
+        len: opus_int32,
+        pcm: *mut opus_int16,
+        frame_size: c_int,
+        decode_fec: c_int,
+    ) -> c_int;
+    pub fn opus_multistream_decoder_destroy(st: *mut OpusMSDecoder);
 
     // Debug math comparison helpers
     pub fn debug_c_celt_sqrt32(x: opus_int32) -> opus_int32;
