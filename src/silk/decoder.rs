@@ -3249,4 +3249,68 @@ mod tests {
         assert_eq!(written, 0);
         assert_eq!(out, [123; 4]);
     }
+
+    #[test]
+    fn test_resampler_copy_path_exact_batch_skips_second_copy() {
+        let mut rs = SilkResamplerState::default();
+        rs.resampler_function = USE_SILK_RESAMPLER_COPY;
+        rs.fs_in_khz = 4;
+        rs.fs_out_khz = 4;
+        rs.input_delay = 4;
+        rs.delay_buf[..4].copy_from_slice(&[10, 20, 30, 40]);
+
+        let input = [1i16, 2, 3, 4];
+        let mut out = [0i16; 4];
+        silk_resampler(&mut rs, &mut out, &input, input.len());
+
+        assert_eq!(out, [10, 20, 30, 40]);
+        assert_eq!(&rs.delay_buf[..4], &input);
+    }
+
+    #[test]
+    fn test_resampler_up2_mode_processes_second_batch() {
+        let mut rs = SilkResamplerState::default();
+        silk_resampler_init_pub(&mut rs, 8_000, 16_000, false);
+        rs.input_delay = 2;
+        rs.delay_buf[..8].copy_from_slice(&[101, 102, 201, 202, 203, 204, 205, 206]);
+
+        let input = [1i16, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+        let mut out = [0i16; 24];
+        silk_resampler(&mut rs, &mut out, &input, input.len());
+
+        assert!(out.iter().any(|&sample| sample != 0));
+        assert_eq!(&rs.delay_buf[..2], &[9, 10]);
+    }
+
+    #[test]
+    fn test_resampler_down_fir_mode_processes_second_batch() {
+        let mut rs = SilkResamplerState::default();
+        silk_resampler_init_pub(&mut rs, 48_000, 8_000, false);
+        rs.input_delay = 2;
+
+        let seed: Vec<i16> = (0..48).map(|i| (1000 + i) as i16).collect();
+        rs.delay_buf[..48].copy_from_slice(&seed);
+        let input: Vec<i16> = (0..482).map(|i| (2000 + i) as i16).collect();
+        let mut out = vec![0i16; 96];
+        silk_resampler(&mut rs, &mut out, &input, input.len());
+
+        assert!(out.iter().any(|&sample| sample != 0));
+        assert_eq!(&rs.delay_buf[..2], &input[input.len() - 2..]);
+    }
+
+    #[test]
+    fn test_resampler_iir_fir_mode_processes_second_batch() {
+        let mut rs = SilkResamplerState::default();
+        silk_resampler_init_pub(&mut rs, 8_000, 48_000, false);
+        rs.input_delay = 2;
+
+        let seed: Vec<i16> = (0..8).map(|i| (3000 + i) as i16).collect();
+        rs.delay_buf[..8].copy_from_slice(&seed);
+        let input: Vec<i16> = (0..82).map(|i| (4000 + i) as i16).collect();
+        let mut out = vec![0i16; 512];
+        silk_resampler(&mut rs, &mut out, &input, input.len());
+
+        assert!(out.iter().any(|&sample| sample != 0));
+        assert_eq!(&rs.delay_buf[..2], &input[input.len() - 2..]);
+    }
 }

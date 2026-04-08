@@ -2693,6 +2693,30 @@ mod tests {
     }
 
     #[test]
+    fn test_channel_pos_three_and_five_paths() {
+        let mut pos = [0i32; 8];
+
+        channel_pos(3, &mut pos);
+        assert_eq!(pos, [1, 2, 3, 1, 3, 0, 0, 0]);
+
+        channel_pos(5, &mut pos);
+        assert_eq!(pos, [1, 2, 3, 1, 3, 0, 0, 0]);
+    }
+
+    #[test]
+    fn test_matrix_order_paths_four_five_six() {
+        for (order_plus_one, expected_dim) in [(4, 18), (5, 27), (6, 38)] {
+            let mixing = get_mixing_matrix_for_order(order_plus_one).unwrap();
+            let demixing = get_demixing_matrix_for_order(order_plus_one).unwrap();
+            assert_eq!((mixing.rows, mixing.cols, mixing.gain), (expected_dim, expected_dim, 0));
+            assert_eq!(
+                (demixing.rows, demixing.cols, demixing.gain),
+                (expected_dim, expected_dim, 0)
+            );
+        }
+    }
+
+    #[test]
     fn test_layout_helper_branches_and_encoder_constructor_errors() {
         let mut layout = ChannelLayout::new();
         layout.nb_channels = 4;
@@ -2829,6 +2853,30 @@ mod tests {
     }
 
     #[test]
+    fn test_encoder_bitrate_special_values_and_non_surround_reset() {
+        let mut enc = OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO).unwrap();
+        let channels = enc.layout.nb_channels;
+
+        assert_eq!(enc.set_bitrate(0), OPUS_BAD_ARG);
+
+        assert_eq!(enc.set_bitrate(1), OPUS_OK);
+        assert_eq!(enc.bitrate_bps, 500 * channels);
+
+        assert_eq!(enc.set_bitrate(2_000_000_000), OPUS_OK);
+        assert_eq!(enc.bitrate_bps, 750000 * channels);
+
+        assert_eq!(enc.set_bitrate(OPUS_AUTO), OPUS_OK);
+        assert_eq!(enc.bitrate_bps, OPUS_AUTO);
+
+        assert_eq!(enc.set_bitrate(OPUS_BITRATE_MAX), OPUS_OK);
+        assert_eq!(enc.bitrate_bps, OPUS_BITRATE_MAX);
+
+        enc.reset();
+        assert!(enc.preemph_mem.is_empty());
+        assert!(enc.window_mem.is_empty());
+    }
+
+    #[test]
     fn test_projection_helper_branches_and_family2_constructor() {
         assert_eq!(get_order_plus_one_from_channels(0), Err(OPUS_BAD_ARG));
         assert_eq!(get_order_plus_one_from_channels(4), Ok(2));
@@ -2855,6 +2903,73 @@ mod tests {
         assert_eq!(&mapping[..4], &[0, 1, 2, 3]);
         assert_eq!(enc.nb_streams(), 4);
         assert_eq!(enc.nb_coupled_streams(), 0);
+    }
+
+    #[test]
+    fn test_projection_encoder_wrapper_methods() {
+        let (mut enc, streams, coupled) =
+            OpusProjectionEncoder::new(48000, 9, 3, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(streams, 5);
+        assert_eq!(coupled, 4);
+
+        assert_eq!(enc.set_bitrate(OPUS_AUTO), OPUS_OK);
+        assert_eq!(enc.ms_encoder.bitrate_bps, OPUS_AUTO);
+        assert_eq!(enc.set_bitrate(OPUS_BITRATE_MAX), OPUS_OK);
+        assert_eq!(enc.ms_encoder.bitrate_bps, OPUS_BITRATE_MAX);
+        assert_eq!(enc.set_complexity(4), OPUS_OK);
+        assert_eq!(enc.set_vbr(0), OPUS_OK);
+        assert_eq!(enc.get_bitrate(), enc.ms_encoder.get_bitrate());
+
+        let pcm = patterned_pcm_i16(960, 9, 71);
+        let mut packet = vec![0u8; 5000];
+        let len = enc.encode(&pcm, 960, &mut packet, 5000).unwrap();
+        assert!(len > 0);
+        assert_eq!(enc.get_final_range(), enc.ms_encoder.get_final_range());
+        assert_eq!(enc.ms_encoder.get_encoder(0).unwrap().ms_get_complexity(), 4);
+        assert_eq!(enc.ms_encoder.get_encoder(0).unwrap().ms_get_vbr(), 0);
+
+        enc.reset();
+        assert_eq!(enc.get_final_range(), 0);
+    }
+
+    #[test]
+    fn test_ms_decoder_wrapper_methods_multi_stream() {
+        let (mut enc, streams, coupled, mapping) =
+            OpusMSEncoder::new_surround(48000, 6, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        let pcm = patterned_pcm_i16(960, 6, 73);
+        let mut packet = vec![0u8; 4000];
+        let len = enc.encode(&pcm, 960, &mut packet, 4000).unwrap();
+
+        let mut dec = OpusMSDecoder::new(48000, 6, streams, coupled, &mapping).unwrap();
+        let mut out = vec![0i16; 960 * 6];
+        assert_eq!(
+            dec.decode(Some(&packet[..len as usize]), len, &mut out, 960, false)
+                .unwrap(),
+            960
+        );
+
+        let _ = dec.get_bandwidth();
+        assert_eq!(dec.get_last_packet_duration(), 960);
+        assert_eq!(dec.set_gain(222), OPUS_OK);
+        assert_eq!(dec.get_gain(), 222);
+        assert_eq!(dec.set_phase_inversion_disabled(1), OPUS_OK);
+        assert_eq!(dec.get_phase_inversion_disabled(), 1);
+        assert_eq!(dec.set_complexity(6), OPUS_OK);
+        assert_eq!(dec.get_complexity(), 6);
+
+        for i in 0..streams as usize {
+            let child = dec.get_decoder(i).unwrap();
+            assert_eq!(child.ms_get_gain(), 222);
+            assert_eq!(child.ms_get_phase_inversion_disabled(), 1);
+            assert_eq!(child.ms_get_complexity(), 6);
+        }
+        assert!(dec.get_decoder(streams as usize).is_none());
+        assert!(dec.get_decoder_mut(0).is_some());
+        assert_ne!(dec.get_final_range(), 0);
+
+        dec.reset();
+        assert_eq!(dec.get_final_range(), 0);
+        assert_eq!(dec.get_last_packet_duration(), 0);
     }
 
     #[test]
@@ -3029,5 +3144,32 @@ mod tests {
             .expect("projection decode");
         assert_eq!(decoded, 960);
         assert!(out.iter().all(|&sample| sample == 0));
+    }
+
+    #[test]
+    fn test_projection_decoder_wrapper_methods() {
+        let (mut enc, streams, coupled) =
+            OpusProjectionEncoder::new(48000, 9, 3, OPUS_APPLICATION_AUDIO).unwrap();
+        let demixing = enc.get_demixing_matrix();
+        let matrix_size = enc.get_demixing_matrix_size();
+        let mut dec = OpusProjectionDecoder::new(48000, 9, streams, coupled, &demixing, matrix_size)
+            .unwrap();
+
+        let pcm = patterned_pcm_i16(960, 9, 79);
+        let mut packet = vec![0u8; 5000];
+        let len = enc.encode(&pcm, 960, &mut packet, 5000).unwrap();
+        let mut out = vec![0i16; 960 * 9];
+        assert_eq!(
+            dec.decode(Some(&packet[..len as usize]), len, &mut out, 960, false)
+                .unwrap(),
+            960
+        );
+
+        assert_eq!(dec.get_sample_rate(), 48000);
+        assert_ne!(dec.get_final_range(), 0);
+        assert_eq!(dec.set_gain(345), OPUS_OK);
+        assert_eq!(dec.get_gain(), 345);
+        dec.reset();
+        assert_eq!(dec.get_final_range(), 0);
     }
 }
