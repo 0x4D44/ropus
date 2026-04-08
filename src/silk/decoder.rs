@@ -2719,6 +2719,32 @@ mod tests {
     }
 
     #[test]
+    fn test_reset_helpers_use_default_frame_and_lpc_fallbacks() {
+        let mut dec = SilkDecoderState::new();
+        dec.frame_length = 0;
+        dec.lpc_order = 0;
+        dec.prev_gain_q16 = 123;
+        dec.loss_cnt = 4;
+        dec.first_frame_after_reset = false;
+        dec.exc_q14.fill(99);
+        dec.out_buf.fill(77);
+
+        silk_plc_reset(&mut dec);
+        assert_eq!(dec.s_plc.pitch_l_q8, 320 << 7);
+
+        silk_cng_reset(&mut dec);
+        let step = 32767i32 / 11;
+        assert_eq!(dec.s_cng.cng_smth_nlsf_q15[9] as i32, step * 10);
+
+        dec.reset();
+        assert_eq!(dec.prev_gain_q16, 65536);
+        assert_eq!(dec.loss_cnt, 0);
+        assert!(dec.first_frame_after_reset);
+        assert!(dec.exc_q14.iter().all(|&x| x == 0));
+        assert!(dec.out_buf.iter().all(|&x| x == 0));
+    }
+
+    #[test]
     fn test_resampler_init_copy() {
         let mut rs = SilkResamplerState::default();
         silk_resampler_init(&mut rs, 16000, 16000, false);
@@ -2906,6 +2932,36 @@ mod tests {
         assert_eq!(dec.nlsf_cb.order, SILK_NLSF_CB_WB.order);
         assert_eq!(dec.nlsf_cb.cb1_icdf, SILK_NLSF_CB1_ICDF_WB.as_slice());
         assert_eq!(dec.nlsf_cb.ec_icdf, SILK_NLSF_CB2_ICDF_WB.as_slice());
+    }
+
+    #[test]
+    fn test_decoder_set_fs_and_resampler_cover_remaining_ratio_paths() {
+        let mut dec = SilkDecoderState::new();
+        dec.nb_subfr = 2;
+        silk_decoder_set_fs(&mut dec, 16, 48_000);
+        assert_eq!(
+            dec.pitch_contour_icdf,
+            SILK_PITCH_CONTOUR_10_MS_ICDF.as_slice()
+        );
+
+        let mut ratio_2_3 = SilkResamplerState::default();
+        silk_resampler_init_pub(&mut ratio_2_3, 24_000, 16_000, false);
+        assert_eq!(ratio_2_3.resampler_function, USE_SILK_RESAMPLER_DOWN_FIR);
+        assert_eq!(ratio_2_3.fir_fracs, 2);
+        assert_eq!(ratio_2_3.fir_order, RESAMPLER_DOWN_ORDER_FIR0 as i32);
+        assert!(matches!(ratio_2_3.coefs, ResamplerCoefs::Ratio2_3));
+
+        let mut ratio_1_4 = SilkResamplerState::default();
+        silk_resampler_init_pub(&mut ratio_1_4, 16_000, 4_000, false);
+        assert_eq!(ratio_1_4.resampler_function, USE_SILK_RESAMPLER_DOWN_FIR);
+        assert_eq!(ratio_1_4.fir_fracs, 1);
+        assert_eq!(ratio_1_4.fir_order, RESAMPLER_DOWN_ORDER_FIR2 as i32);
+        assert!(matches!(ratio_1_4.coefs, ResamplerCoefs::Ratio1_4));
+
+        assert_eq!(
+            get_down_fir_coefs(ResamplerCoefs::None),
+            SILK_RESAMPLER_1_3_COEFS.as_slice()
+        );
     }
 
     #[test]

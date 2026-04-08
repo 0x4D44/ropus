@@ -3399,6 +3399,91 @@ mod tests {
     }
 
     #[test]
+    fn test_encoder_ctl_branch_matrix_for_band_and_flag_settings() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetStartBand(-1)), OPUS_BAD_ARG);
+        assert_eq!(
+            enc.ctl(CeltEncoderCtl::SetStartBand(enc.mode.nb_ebands - 1)),
+            OPUS_OK
+        );
+        assert_eq!(enc.start, enc.mode.nb_ebands - 1);
+
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetEndBand(0)), OPUS_BAD_ARG);
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetEndBand(enc.mode.nb_ebands)), OPUS_OK);
+        assert_eq!(enc.end, enc.mode.nb_ebands);
+
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetPrediction(3)), OPUS_BAD_ARG);
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetPrediction(0)), OPUS_OK);
+        assert_eq!(enc.disable_pf, 1);
+        assert_eq!(enc.force_intra, 1);
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetPrediction(2)), OPUS_OK);
+        assert_eq!(enc.disable_pf, 0);
+        assert_eq!(enc.force_intra, 0);
+
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetPacketLossPerc(-1)), OPUS_BAD_ARG);
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetPacketLossPerc(15)), OPUS_OK);
+        assert_eq!(enc.loss_rate, 15);
+
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetBitrate(500)), OPUS_BAD_ARG);
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetBitrate(OPUS_BITRATE_MAX)), OPUS_OK);
+        assert_eq!(enc.bitrate, OPUS_BITRATE_MAX);
+
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetChannels(0)), OPUS_BAD_ARG);
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetChannels(2)), OPUS_OK);
+        assert_eq!(enc.stream_channels, 2);
+
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetLsbDepth(25)), OPUS_BAD_ARG);
+        assert_eq!(
+            enc.ctl(CeltEncoderCtl::SetPhaseInversionDisabled(2)),
+            OPUS_BAD_ARG
+        );
+        assert_eq!(
+            enc.ctl(CeltEncoderCtl::SetPhaseInversionDisabled(1)),
+            OPUS_OK
+        );
+        assert_eq!(enc.disable_inv, 1);
+    }
+
+    #[test]
+    fn test_encoder_ctl_auxiliary_setters_and_noop_getters() {
+        let mut enc = CeltEncoder::new(48000, 2).unwrap();
+        let analysis = AnalysisInfo {
+            valid: 1,
+            tonality: 0.5,
+            ..AnalysisInfo::default()
+        };
+        let silk_info = SILKInfo {
+            signal_type: 2,
+            ..SILKInfo::default()
+        };
+
+        enc.rng = 0x1234_5678;
+        enc.vbr_count = 321;
+
+        assert_eq!(enc.ctl(CeltEncoderCtl::GetLsbDepth), OPUS_OK);
+        assert_eq!(enc.ctl(CeltEncoderCtl::GetPhaseInversionDisabled), OPUS_OK);
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetAnalysis(analysis.clone())), OPUS_OK);
+        assert_eq!(enc.analysis.valid, analysis.valid);
+        assert_eq!(enc.analysis.tonality, analysis.tonality);
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetSilkInfo(silk_info.clone())), OPUS_OK);
+        assert_eq!(enc.silk_info.signal_type, silk_info.signal_type);
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetSignalling(0)), OPUS_OK);
+        assert_eq!(enc.signalling, 0);
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetLfe(1)), OPUS_OK);
+        assert_eq!(enc.lfe, 1);
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetEnergyMask), OPUS_OK);
+        assert_eq!(enc.ctl(CeltEncoderCtl::GetFinalRange), OPUS_OK);
+        assert_eq!(enc.final_range(), 0x1234_5678);
+        assert_eq!(enc.ctl(CeltEncoderCtl::SetInputClipping(0)), OPUS_OK);
+        assert_eq!(enc.clip, 0);
+
+        assert_eq!(enc.ctl(CeltEncoderCtl::ResetState), OPUS_OK);
+        assert_eq!(enc.vbr_count, 0);
+        assert_eq!(enc.final_range(), 0);
+    }
+
+    #[test]
     fn test_median_of_5() {
         assert_eq!(median_of_5(&[1, 2, 3, 4, 5]), 3);
         assert_eq!(median_of_5(&[5, 4, 3, 2, 1]), 3);
