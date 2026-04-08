@@ -2160,6 +2160,115 @@ mod tests {
     }
 
     #[test]
+    fn test_extension_iterator_frame_max_limits_results() {
+        let ext0 = OpusExtensionData {
+            id: 5,
+            frame: 0,
+            data: &[0x11],
+            len: 1,
+        };
+        let ext1 = OpusExtensionData {
+            id: 5,
+            frame: 1,
+            data: &[0x22],
+            len: 1,
+        };
+        let ext2 = OpusExtensionData {
+            id: 5,
+            frame: 2,
+            data: &[0x33],
+            len: 1,
+        };
+
+        let size = opus_packet_extensions_generate(None, 256, &[ext0, ext1, ext2], 3, false);
+        assert!(size > 0);
+
+        let mut buf = vec![0u8; size as usize];
+        assert_eq!(
+            opus_packet_extensions_generate(Some(&mut buf), size, &[ext0, ext1, ext2], 3, false),
+            size
+        );
+
+        let mut iter = OpusExtensionIterator::new(&buf, size, 3);
+        iter.set_frame_max(1);
+
+        let (ret, ext) = iter.next_ext();
+        assert_eq!(ret, 1);
+        assert_eq!(ext.frame, 0);
+        assert_eq!(ext.data, &[0x11]);
+        assert_eq!(iter.next_ext().0, 0);
+    }
+
+    #[test]
+    fn test_extension_iterator_rejects_invalid_frame_separator_increment() {
+        let data = [0x03u8, 0x02];
+        let mut iter = OpusExtensionIterator::new(&data, data.len() as i32, 2);
+
+        let (ret, _) = iter.next_ext();
+        assert_eq!(ret, OPUS_INVALID_PACKET);
+    }
+
+    #[test]
+    fn test_packet_extensions_parse_buffer_too_small() {
+        let ext0 = OpusExtensionData {
+            id: 5,
+            frame: 0,
+            data: &[0x11],
+            len: 1,
+        };
+        let ext1 = OpusExtensionData {
+            id: 6,
+            frame: 0,
+            data: &[0x22],
+            len: 1,
+        };
+
+        let size = opus_packet_extensions_generate(None, 256, &[ext0, ext1], 1, false);
+        assert!(size > 0);
+
+        let mut buf = vec![0u8; size as usize];
+        assert_eq!(
+            opus_packet_extensions_generate(Some(&mut buf), size, &[ext0, ext1], 1, false),
+            size
+        );
+
+        let mut parsed = [OpusExtensionData::EMPTY; 1];
+        let mut nb_ext = 1;
+        assert_eq!(
+            opus_packet_extensions_parse(&buf, size, &mut parsed, &mut nb_ext, 1),
+            OPUS_BUFFER_TOO_SMALL
+        );
+    }
+
+    #[test]
+    fn test_packet_extensions_generate_error_paths() {
+        let valid = OpusExtensionData {
+            id: 5,
+            frame: 0,
+            data: &[0x11],
+            len: 1,
+        };
+
+        let bad_frame = OpusExtensionData { frame: 2, ..valid };
+        assert_eq!(
+            opus_packet_extensions_generate(None, 64, &[bad_frame], 1, false),
+            OPUS_BAD_ARG
+        );
+
+        let bad_id = OpusExtensionData { id: 2, ..valid };
+        assert_eq!(
+            opus_packet_extensions_generate(None, 64, &[bad_id], 1, false),
+            OPUS_BAD_ARG
+        );
+
+        let mut short = [0u8; 1];
+        assert_eq!(
+            opus_packet_extensions_generate(Some(&mut short), 1, &[valid], 1, false),
+            OPUS_BUFFER_TOO_SMALL
+        );
+    }
+
+    #[test]
     fn test_parse_code3_cbr_packet() {
         // Construct a Code 3 CBR packet: TOC|0x03, count=3, then 3 frames of 2 bytes
         let mut pkt = vec![0x08u8 | 0x03, 3]; // TOC with code 3, count=3 (CBR, no P, no V)
