@@ -2052,6 +2052,17 @@ mod tests {
             .unwrap();
         assert_eq!(decoded24, 960);
         assert!(pcm24.iter().any(|&sample| sample != 0));
+        let mut too_small24 = vec![0i32; 480];
+        assert_eq!(
+            dec24.decode24(Some(packet), &mut too_small24, 480, false),
+            Err(OPUS_BUFFER_TOO_SMALL)
+        );
+        assert_eq!(
+            dec24.decode24(Some(packet), &mut pcm24, 0, false),
+            Err(OPUS_BAD_ARG)
+        );
+        let mut plc24 = vec![0i32; 960];
+        assert_eq!(dec24.decode24(None, &mut plc24, 960, false).unwrap(), 960);
 
         let mut decf = OpusDecoder::new(48000, 1).unwrap();
         let mut pcmf = vec![0.0f32; 960];
@@ -2060,6 +2071,17 @@ mod tests {
             .unwrap();
         assert_eq!(decodedf, 960);
         assert!(pcmf.iter().any(|sample| sample.abs() > 1e-4));
+        let mut too_smallf = vec![0.0f32; 480];
+        assert_eq!(
+            decf.decode_float(Some(packet), &mut too_smallf, 480, false),
+            Err(OPUS_BUFFER_TOO_SMALL)
+        );
+        assert_eq!(
+            decf.decode_float(Some(packet), &mut pcmf, 0, false),
+            Err(OPUS_BAD_ARG)
+        );
+        let mut plc_f = vec![0.0f32; 960];
+        assert_eq!(decf.decode_float(None, &mut plc_f, 960, false).unwrap(), 960);
 
         let mut lowdelay =
             OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();

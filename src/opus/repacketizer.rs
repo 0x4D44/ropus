@@ -2427,6 +2427,52 @@ mod tests {
     }
 
     #[test]
+    fn test_packet_extensions_and_out_range_guard_paths() {
+        let ext = OpusExtensionData {
+            id: 5,
+            frame: 0,
+            data: &[0x11],
+            len: 1,
+        };
+
+        let mut parsed = [OpusExtensionData::EMPTY; 1];
+        let mut nb_ext = 1;
+        assert_eq!(
+            opus_packet_extensions_parse(&[], 0, &mut parsed, &mut nb_ext, 1),
+            0
+        );
+        assert_eq!(nb_ext, 0);
+
+        assert_eq!(
+            opus_packet_extensions_generate(
+                None,
+                64,
+                &[ext],
+                (MAX_FRAMES as i32) + 1,
+                false
+            ),
+            OPUS_BAD_ARG
+        );
+
+        let mut short = [0u8; 1];
+        assert_eq!(
+            opus_packet_extensions_generate(Some(&mut short), 1, &[ext], 1, false),
+            OPUS_BUFFER_TOO_SMALL
+        );
+
+        let pkt = [0x08u8, 0xAA];
+        let mut rp = OpusRepacketizer::new();
+        assert_eq!(rp.cat(&pkt, 2), OPUS_OK);
+
+        let mut out = [0u8; 4];
+        assert_eq!(rp.out_range_impl(0, 0, &mut out, 4, false, false, &[]), OPUS_BAD_ARG);
+        assert_eq!(
+            rp.out_range_impl(0, 1, &mut out, 1, false, false, &[]),
+            OPUS_BUFFER_TOO_SMALL
+        );
+    }
+
+    #[test]
     fn test_parse_code3_cbr_packet() {
         // Construct a Code 3 CBR packet: TOC|0x03, count=3, then 3 frames of 2 bytes
         let mut pkt = vec![0x08u8 | 0x03, 3]; // TOC with code 3, count=3 (CBR, no P, no V)
