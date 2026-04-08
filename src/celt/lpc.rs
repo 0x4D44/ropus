@@ -352,3 +352,85 @@ pub fn celt_iir(x: &[i32], den: &[i32], y_out: &mut [i32], n: usize, ord: usize,
         mem[i] = y_out[n - i - 1];
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn celt_lpc_zero_autocorr_falls_back_to_unit_filter() {
+        let mut lpc_out = [1234; 4];
+        let ac = [0; 5];
+
+        celt_lpc(&mut lpc_out, &ac, 4);
+
+        assert_eq!(lpc_out, [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn celt_lpc_nonzero_autocorr_emits_prediction_coefficients() {
+        let mut lpc_out = [0; 2];
+        let ac = [1 << 20, 1 << 18, 0];
+
+        celt_lpc(&mut lpc_out, &ac, 2);
+
+        assert!(lpc_out[0] < 0);
+        assert_ne!(lpc_out, [4096, 0]);
+    }
+
+    #[test]
+    fn celt_autocorr_zero_signal_odd_length_normalizes_and_hits_tail() {
+        let x = [0; 5];
+        let mut ac = [1; 3];
+
+        let shift = celt_autocorr(&x, &mut ac, None, 0, 2, 5);
+
+        assert_eq!(shift, -28);
+        assert_eq!(ac, [268_435_456, 0, 0]);
+    }
+
+    #[test]
+    fn celt_autocorr_zero_signal_with_window_hits_window_branch() {
+        let x = [0; 6];
+        let window = [32_767, 16_384];
+        let mut ac = [1; 4];
+
+        let shift = celt_autocorr(&x, &mut ac, Some(&window), 2, 3, 6);
+
+        assert_eq!(shift, -28);
+        assert_eq!(ac, [268_435_456, 0, 0, 0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "window required when overlap > 0")]
+    fn celt_autocorr_requires_window_for_overlap() {
+        let x = [0; 4];
+        let mut ac = [0; 2];
+
+        let _ = celt_autocorr(&x, &mut ac, None, 1, 1, 4);
+    }
+
+    #[test]
+    fn celt_fir_zero_coefficients_copy_input_and_use_scalar_tail() {
+        let x = [10, 11, 12, 13, 14, 15, 16, 17];
+        let num = [0, 0, 0];
+        let mut y = [-1; 5];
+
+        celt_fir(&x, &num, &mut y, 5, 3);
+
+        assert_eq!(y, [13, 14, 15, 16, 17]);
+    }
+
+    #[test]
+    fn celt_iir_zero_feedback_copy_input_and_update_memory() {
+        let x = [7, 8, 9, 10, 11];
+        let den = [0, 0, 0, 0];
+        let mut y = [-1; 5];
+        let mut mem = [1, 2, 3, 4];
+
+        celt_iir(&x, &den, &mut y, 5, 4, &mut mem);
+
+        assert_eq!(y, x);
+        assert_eq!(mem, [11, 10, 9, 8]);
+    }
+}
