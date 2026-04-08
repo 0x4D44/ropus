@@ -2404,6 +2404,24 @@ mod tests {
     }
 
     #[test]
+    fn test_lpcnet_state_reset_signal_clears_runtime_state() {
+        let mut st = LPCNetState::new();
+        st.deemph_mem = 1.25;
+        st.last_exc = 42;
+        st.last_sig.fill(3.0);
+        st.nnet.gru_a_state.fill(0.5);
+        st.nnet.gru_b_state.fill(-0.5);
+
+        st.reset_signal();
+
+        assert_eq!(st.deemph_mem, 0.0);
+        assert_eq!(st.last_exc, lin2ulaw(0.0));
+        assert!(st.last_sig.iter().all(|&v| v == 0.0));
+        assert!(st.nnet.gru_a_state.iter().all(|&v| v == 0.0));
+        assert!(st.nnet.gru_b_state.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
     fn test_band_energy_symmetry() {
         // DC-only signal: all energy in band 0.
         let mut x = vec![Cpx::default(); FREQ_SIZE];
@@ -2420,6 +2438,13 @@ mod tests {
     }
 
     #[test]
+    fn test_plc_load_model_returns_zero_for_stubbed_loaders() {
+        let mut plc = LPCNetPLCState::new();
+        assert_eq!(plc.load_model(&[1, 2, 3]), 0);
+        assert!(!plc.loaded);
+    }
+
+    #[test]
     fn test_run_frame_network_updates_state_and_deferred_flush() {
         let mut st = LPCNetState::new();
         st.model.feature_conv1.kernel_size = 2;
@@ -2431,6 +2456,9 @@ mod tests {
         assert_eq!(st.frame_count, 1);
         assert!(st.lpc.iter().all(|x| x.is_finite()));
         assert!(st.old_lpc[0].iter().all(|x| x.is_finite()));
+
+        st.run_frame_network(&features);
+        assert_eq!(st.frame_count, 2);
 
         st.run_frame_network_deferred(&features);
         st.run_frame_network_deferred(&features);
@@ -2450,6 +2478,17 @@ mod tests {
     }
 
     #[test]
+    fn test_run_frame_network_caps_frame_count_at_1000() {
+        let mut st = LPCNetState::new();
+        st.frame_count = 1000;
+        let features = [0.0f32; NB_FEATURES];
+
+        st.run_frame_network(&features);
+
+        assert_eq!(st.frame_count, 1000);
+    }
+
+    #[test]
     fn test_synthesize_and_blend_with_default_model() {
         let mut st = LPCNetState::new();
         let features = [0.0f32; NB_FEATURES];
@@ -2459,14 +2498,54 @@ mod tests {
 
         let mut synthesized = [0i16; FRAME_SIZE];
         st.synthesize(&features, &mut synthesized, FRAME_SIZE);
-        assert!(synthesized
-            .iter()
-            .all(|&x| (-32767..=32767).contains(&(x as i32))));
+        assert!(
+            synthesized
+                .iter()
+                .all(|&x| (-32767..=32767).contains(&(x as i32)))
+        );
 
         let pcm_in = [123i16; FRAME_SIZE];
         let mut blended = [0i16; FRAME_SIZE];
         st.synthesize_blend(&pcm_in, &mut blended, FRAME_SIZE);
         assert_eq!(blended, pcm_in);
+    }
+
+    #[test]
+    fn test_queue_features_rolls_buffer() {
+        let mut plc = LPCNetPLCState::new();
+        let first = [1.0f32; NB_FEATURES];
+        let second = [2.0f32; NB_FEATURES];
+        let third = [3.0f32; NB_FEATURES];
+
+        plc.queue_features(&first);
+        assert_eq!(
+            &plc.cont_features[(CONT_VECTORS - 1) * NB_FEATURES..CONT_VECTORS * NB_FEATURES],
+            &first
+        );
+
+        plc.queue_features(&second);
+        assert_eq!(
+            &plc.cont_features[(CONT_VECTORS - 2) * NB_FEATURES..(CONT_VECTORS - 1) * NB_FEATURES],
+            &first
+        );
+        assert_eq!(
+            &plc.cont_features[(CONT_VECTORS - 1) * NB_FEATURES..CONT_VECTORS * NB_FEATURES],
+            &second
+        );
+
+        plc.queue_features(&third);
+        assert_eq!(
+            &plc.cont_features[(CONT_VECTORS - 3) * NB_FEATURES..(CONT_VECTORS - 2) * NB_FEATURES],
+            &first
+        );
+        assert_eq!(
+            &plc.cont_features[(CONT_VECTORS - 2) * NB_FEATURES..(CONT_VECTORS - 1) * NB_FEATURES],
+            &second
+        );
+        assert_eq!(
+            &plc.cont_features[(CONT_VECTORS - 1) * NB_FEATURES..CONT_VECTORS * NB_FEATURES],
+            &third
+        );
     }
 
     #[test]
@@ -2577,6 +2656,19 @@ mod tests {
         st.synthesize_tail_impl(&mut output, 2, 1);
         assert_eq!(output[0], 20000);
         assert_eq!(output[1], 32767);
+    }
+
+    #[test]
+    fn test_synthesize_tail_impl_negative_clip() {
+        let mut st = LPCNetState::new();
+        st.frame_count = FEATURES_DELAY as i32 + 1;
+        st.last_sig[0] = 10_000.0;
+        st.lpc[0] = 10.0;
+
+        let mut output = [0i16; 1];
+        st.synthesize_tail_impl(&mut output, 1, 0);
+
+        assert_eq!(output[0], -32767);
     }
 
     #[test]
