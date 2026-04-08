@@ -1756,6 +1756,57 @@ mod tests {
     }
 
     #[test]
+    fn test_packet_parse_code2_two_byte_size_and_payload_offset() {
+        let mut pkt = vec![0x82u8, 0xFC, 0x02];
+        pkt.extend_from_slice(&[0u8; 300]);
+
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let count = opus_packet_parse_impl(
+            &pkt,
+            pkt.len() as i32,
+            false,
+            &mut toc,
+            &mut sizes,
+            &mut offset,
+            None,
+        );
+
+        assert_eq!(count, 2);
+        assert_eq!(toc, 0x82);
+        assert_eq!(sizes[0], 260);
+        assert_eq!(sizes[1], 40);
+        assert_eq!(offset, 3);
+    }
+
+    #[test]
+    fn test_packet_parse_code3_padding_loop_and_packet_offset() {
+        let mut pkt = vec![0x83u8, 0x42, 0xFF, 0x01];
+        pkt.extend_from_slice(&[0u8; 259]);
+
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let mut packet_offset = 0i32;
+        let count = opus_packet_parse_impl(
+            &pkt,
+            pkt.len() as i32,
+            false,
+            &mut toc,
+            &mut sizes,
+            &mut offset,
+            Some(&mut packet_offset),
+        );
+
+        assert_eq!(count, 2);
+        assert_eq!(toc, 0x83);
+        assert_eq!(&sizes[..2], &[2, 2]);
+        assert_eq!(offset, 4);
+        assert_eq!(packet_offset, pkt.len() as i32);
+    }
+
+    #[test]
     fn test_packet_parse_code3_self_delimited_paths() {
         let pkt_cbr = [0x83u8, 0x03, 0x02, 0, 1, 2, 3, 4, 5];
         let mut toc = 0u8;
@@ -1812,6 +1863,24 @@ mod tests {
                 None,
             ),
             OPUS_INVALID_PACKET
+        );
+    }
+
+    #[test]
+    fn test_decode24_and_decode_float_reject_invalid_packets() {
+        let mut dec24 = OpusDecoder::new(48000, 1).unwrap();
+        let mut pcm24 = vec![0i32; 960];
+        let bad_packet = [0x9Bu8, 7];
+        assert_eq!(
+            dec24.decode24(Some(&bad_packet), &mut pcm24, 960, false),
+            Err(OPUS_INVALID_PACKET)
+        );
+
+        let mut decf = OpusDecoder::new(48000, 1).unwrap();
+        let mut pcmf = vec![0.0f32; 960];
+        assert_eq!(
+            decf.decode_float(Some(&bad_packet), &mut pcmf, 960, false),
+            Err(OPUS_INVALID_PACKET)
         );
     }
 
