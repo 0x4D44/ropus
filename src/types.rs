@@ -665,4 +665,111 @@ mod tests {
         assert_eq!(sround16(100000, 1), 32767); // saturates to max
         assert_eq!(sround16(-100000, 1), -32767); // saturates to min
     }
+
+    #[test]
+    fn test_min_max_abs_helpers() {
+        assert_eq!(min16(3, 7), 3);
+        assert_eq!(max16(3, 7), 7);
+        assert_eq!(min32(-9, 2), -9);
+        assert_eq!(max32(-9, 2), 2);
+        assert_eq!(imin(5, -5), -5);
+        assert_eq!(imax(5, -5), 5);
+        assert_eq!(abs16(-123), 123);
+        assert_eq!(abs32(-123456), 123456);
+    }
+
+    #[test]
+    fn test_saturation_helpers() {
+        assert_eq!(saturate(2, 3), 2);
+        assert_eq!(saturate(5, 3), 3);
+        assert_eq!(saturate(-5, 3), -3);
+
+        assert_eq!(saturate16(2), 2);
+        assert_eq!(saturate16(40000), 32767);
+        assert_eq!(saturate16(-40000), -32768);
+    }
+
+    #[test]
+    fn test_shift_helpers() {
+        assert_eq!(shr16(-16, 2), -4);
+        assert_eq!(shl16(1, 15), -32768);
+        assert_eq!(shl16(-1, 1), -2);
+        assert_eq!(shr32(-32, 3), -4);
+        assert_eq!(shl32(3, 4), 48);
+        assert_eq!(shr64(-64, 3), -8);
+        assert_eq!(shr(128, 5), 4);
+        assert_eq!(shl(2, 6), 128);
+        assert_eq!(pshr(5, 1), 3);
+        assert_eq!(half16(9), 4);
+        assert_eq!(half32(9), 4);
+        assert_eq!(vshr32(256, 4), 16);
+        assert_eq!(vshr32(16, -4), 256);
+        assert_eq!(vshr32(100, 0), 100);
+        assert_eq!(pshr32_ovflw(5, 1), 3);
+        assert_eq!(shl32_ovflw(1, 31), i32::MIN);
+    }
+
+    #[test]
+    fn test_add_sub_and_neg_helpers() {
+        assert_eq!(add16(32767, 1), -32768);
+        assert_eq!(sub16(-32768, 1), 32767);
+        assert_eq!(add32(1, 2), 3);
+        assert_eq!(sub32(5, 2), 3);
+        assert_eq!(add32_ovflw(i32::MAX, 1), i32::MIN);
+        assert_eq!(sub32_ovflw(i32::MIN, 1), i32::MAX);
+        assert_eq!(neg16(7), -7);
+        assert_eq!(neg32(-7), 7);
+        assert_eq!(neg32_ovflw(i32::MIN), i32::MIN);
+    }
+
+    #[test]
+    fn test_multiply_and_mac_helpers() {
+        assert_eq!(imul32(3, -4), -12);
+        assert_eq!(mult16_16_16(200, 300), 60000);
+        assert_eq!(mult32_32_32(12345, -6789), -83_810_205);
+        assert_eq!(mult16_16(300, -200), -60000);
+        assert_eq!(mult16_16su(-2, 65535), -131070);
+        assert_eq!(mac16_16(100, 300, -200), -59900);
+
+        assert_eq!(mult16_16_q11_32(1024, 1024), 512);
+        assert_eq!(mult16_16_q11(1024, 1024), 512);
+        assert_eq!(mult16_16_q13(1024, 1024), 128);
+        assert_eq!(mult16_16_q14(1024, 1024), 64);
+        assert_eq!(mult16_16_q15(1024, 1024), 32);
+        assert_eq!(mult16_16_p13(1024, 1024), 128);
+        assert_eq!(mult16_16_p14(1024, 1024), 64);
+        assert_eq!(mult16_16_p15(1024, 1024), 32);
+
+        assert_eq!(mult16_32_q15(1024, 1 << 20), 32768);
+        assert_eq!(mult16_32_q16(1024, 1 << 20), 16384);
+        assert_eq!(mult16_32_p16(1024, 1 << 20), 16384);
+
+        assert_eq!(mult32_32_q16(1 << 16, 1 << 16), 65536);
+        assert_eq!(mult32_32_q31(i32::MAX, i32::MAX), 2_147_483_646);
+        assert_eq!(mult32_32_p31(1 << 30, 2), 1);
+        assert_eq!(mult32_32_p31_ovflw(1 << 30, 2), 1);
+        assert_eq!(mult32_32_q32(1 << 16, 1 << 16), 1);
+
+        assert_eq!(mac16_32_q15(100, 1024, 1 << 20), 32868);
+        assert_eq!(mac16_32_q16(100, 1024, 1 << 20), 16484);
+    }
+
+    #[test]
+    fn test_division_and_conversion_helpers() {
+        assert_eq!(div32_16(100, -5), -20);
+        assert_eq!(div32(100, -5), -20);
+        assert_eq!(qconst32(0.5, 16), 32768);
+        assert_eq!(sig2word16(1 << SIG_SHIFT), 1);
+        assert_eq!(sig2word16(1 << 30), 32767);
+        assert_eq!(sig2word16(-1 << 30), -32768);
+        assert_eq!(float2int(1.5), 2);
+        assert_eq!(float2int(2.5), 2);
+        assert_eq!(float2int(-1.5), -2);
+        assert_eq!(float2int16(0.5), 16384);
+        assert_eq!(float2int16(1.0), 32767);
+        assert_eq!(float2int16(-1.0), -32768);
+        assert_eq!(float2int24(0.5), 4_194_304);
+        assert_eq!(float2int24(1.0), 8_388_608);
+        assert_eq!(float2int24(-1.0), -8_388_608);
+    }
 }
