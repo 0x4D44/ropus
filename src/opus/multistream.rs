@@ -13,20 +13,20 @@
 use crate::celt::bands::compute_band_energies;
 use crate::celt::encoder::{celt_preemphasis, clt_mdct_forward, get_fft_state};
 use crate::celt::math_ops::{celt_log2, isqrt32};
-use crate::celt::modes::{CELTMode, bitrate_to_bits, bits_to_bitrate, resampling_factor};
+use crate::celt::modes::{bitrate_to_bits, bits_to_bitrate, resampling_factor, CELTMode};
 use crate::celt::quant_bands::amp2log2;
 use crate::types::*;
 
 use super::decoder::{
-    MODE_CELT_ONLY, OPUS_BAD_ARG, OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR, OPUS_INVALID_PACKET,
-    OPUS_OK, OPUS_UNIMPLEMENTED, OpusDecoder, opus_packet_get_nb_samples,
+    opus_packet_get_nb_samples, OpusDecoder, MODE_CELT_ONLY, OPUS_BAD_ARG, OPUS_BUFFER_TOO_SMALL,
+    OPUS_INTERNAL_ERROR, OPUS_INVALID_PACKET, OPUS_OK, OPUS_UNIMPLEMENTED,
 };
 use super::decoder::{
     OPUS_BANDWIDTH_FULLBAND, OPUS_BANDWIDTH_NARROWBAND, OPUS_BANDWIDTH_SUPERWIDEBAND,
     OPUS_BANDWIDTH_WIDEBAND,
 };
 use super::encoder::{
-    OPUS_AUTO, OPUS_BITRATE_MAX, OPUS_FRAMESIZE_ARG, OpusEncoder, frame_size_select,
+    frame_size_select, OpusEncoder, OPUS_AUTO, OPUS_BITRATE_MAX, OPUS_FRAMESIZE_ARG,
 };
 use super::repacketizer::OpusRepacketizer;
 
@@ -2149,7 +2149,10 @@ impl OpusProjectionDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::opus::encoder::OPUS_APPLICATION_AUDIO;
+    use crate::opus::encoder::{
+        OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY, OPUS_FRAMESIZE_20_MS,
+        OPUS_FRAMESIZE_40_MS, OPUS_SIGNAL_MUSIC,
+    };
 
     fn patterned_pcm_i16(frame_size: usize, channels: usize, seed: i32) -> Vec<i16> {
         (0..frame_size * channels)
@@ -2386,13 +2389,11 @@ mod tests {
             .unwrap();
         assert_eq!(muted_decoded, 960);
         assert!(muted_out.iter().step_by(2).any(|&sample| sample != 123));
-        assert!(
-            muted_out
-                .iter()
-                .skip(1)
-                .step_by(2)
-                .all(|&sample| sample == 0)
-        );
+        assert!(muted_out
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .all(|&sample| sample == 0));
     }
 
     #[test]
@@ -2652,7 +2653,43 @@ mod tests {
         assert_eq!(parse_multistream_subpacket(&[0x03, 0x02, 0x01], 3, true), 4);
         assert!(parse_multistream_subpacket(&[0x03], 1, false) < 0);
         assert!(parse_multistream_subpacket(&[0x03, 0x00], 2, false) < 0);
+        assert!(parse_multistream_subpacket(&[0x03, 0xB1], 2, false) < 0);
         assert!(parse_multistream_subpacket(&[0x03, 0x41, 0xFF], 3, false) < 0);
+    }
+
+    #[test]
+    fn test_channel_pos_branches_and_matrix_helpers() {
+        let mut pos = [0i32; 8];
+
+        channel_pos(4, &mut pos);
+        assert_eq!(pos, [1, 3, 1, 3, 0, 0, 0, 0]);
+
+        channel_pos(7, &mut pos);
+        assert_eq!(pos, [1, 2, 3, 1, 3, 2, 0, 0]);
+
+        channel_pos(8, &mut pos);
+        assert_eq!(pos, [1, 2, 3, 1, 3, 1, 3, 0]);
+
+        channel_pos(2, &mut pos);
+        assert_eq!(pos, [0, 0, 0, 0, 0, 0, 0, 0]);
+
+        assert!(mapping_matrix_valid_size(1, 1));
+        assert!(!mapping_matrix_valid_size(256, 1));
+        assert!(!mapping_matrix_valid_size(255, 128));
+
+        let mixing = get_mixing_matrix_for_order(3).unwrap();
+        let demixing = get_demixing_matrix_for_order(3).unwrap();
+        assert_eq!((mixing.rows, mixing.cols, mixing.gain), (11, 11, 0));
+        assert_eq!(
+            (demixing.rows, demixing.cols, demixing.gain),
+            (11, 11, 3050)
+        );
+
+        assert!(matches!(get_mixing_matrix_for_order(7), Err(OPUS_BAD_ARG)));
+        assert!(matches!(
+            get_demixing_matrix_for_order(7),
+            Err(OPUS_BAD_ARG)
+        ));
     }
 
     #[test]
@@ -2732,6 +2769,66 @@ mod tests {
     }
 
     #[test]
+    fn test_encoder_accessors_reset_and_child_propagation() {
+        let (mut enc, streams, coupled, mapping) =
+            OpusMSEncoder::new_surround(48000, 6, 1, OPUS_APPLICATION_AUDIO).unwrap();
+
+        assert_eq!(streams, 4);
+        assert_eq!(coupled, 2);
+        assert_eq!(&mapping[..6], &[0, 4, 1, 2, 3, 5]);
+        assert_eq!(enc.get_application(), OPUS_APPLICATION_AUDIO);
+        assert_eq!(enc.get_sample_rate(), 48000);
+        assert_eq!(
+            enc.get_lookahead(),
+            enc.get_encoder(0).unwrap().ms_get_lookahead()
+        );
+        assert!(enc.get_encoder(1).is_some());
+        assert!(enc.get_encoder(99).is_none());
+        assert!(enc.get_encoder_mut(0).is_some());
+
+        assert_eq!(
+            enc.set_application(OPUS_APPLICATION_RESTRICTED_LOWDELAY),
+            OPUS_OK
+        );
+        assert_eq!(enc.get_application(), OPUS_APPLICATION_RESTRICTED_LOWDELAY);
+        enc.set_expert_frame_duration(OPUS_FRAMESIZE_40_MS);
+        assert_eq!(enc.get_expert_frame_duration(), OPUS_FRAMESIZE_40_MS);
+        assert_eq!(enc.set_complexity(7), OPUS_OK);
+        assert_eq!(enc.set_vbr(0), OPUS_OK);
+        assert_eq!(enc.set_vbr_constraint(1), OPUS_OK);
+        assert_eq!(enc.set_signal(OPUS_SIGNAL_MUSIC), OPUS_OK);
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_FULLBAND), OPUS_OK);
+        assert_eq!(enc.set_max_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        assert_eq!(enc.set_inband_fec(1), OPUS_OK);
+        assert_eq!(enc.set_packet_loss_perc(12), OPUS_OK);
+        assert_eq!(enc.set_dtx(1), OPUS_OK);
+        assert_eq!(enc.set_lsb_depth(12), OPUS_OK);
+        assert_eq!(enc.set_prediction_disabled(1), OPUS_OK);
+        assert_eq!(enc.set_phase_inversion_disabled(1), OPUS_OK);
+        assert_eq!(enc.set_force_mode(MODE_CELT_ONLY), OPUS_OK);
+        assert_eq!(enc.set_force_channels(1), OPUS_OK);
+
+        {
+            let child = enc.get_encoder_mut(0).unwrap();
+            child.ms_set_variable_duration(OPUS_FRAMESIZE_20_MS);
+            child.ms_set_lsb_depth(14);
+        }
+
+        let child = enc.get_encoder(0).unwrap();
+        assert_eq!(child.ms_get_complexity(), 7);
+        assert_eq!(child.ms_get_vbr(), 0);
+        assert_eq!(child.ms_get_variable_duration(), OPUS_FRAMESIZE_20_MS);
+        assert_eq!(child.ms_get_lsb_depth(), 14);
+        assert_eq!(child.ms_get_lookahead(), enc.get_lookahead());
+
+        enc.preemph_mem[0] = 17;
+        enc.window_mem[0] = 29;
+        enc.reset();
+        assert!(enc.preemph_mem.iter().all(|&v| v == 0));
+        assert!(enc.window_mem.iter().all(|&v| v == 0));
+    }
+
+    #[test]
     fn test_projection_helper_branches_and_family2_constructor() {
         assert_eq!(get_order_plus_one_from_channels(0), Err(OPUS_BAD_ARG));
         assert_eq!(get_order_plus_one_from_channels(4), Ok(2));
@@ -2800,6 +2897,44 @@ mod tests {
             Ok(960)
         );
         assert!(out.iter().any(|&sample| sample != 0));
+    }
+
+    #[test]
+    fn test_decoder_accessors_reset_and_child_propagation() {
+        let mut enc = OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO).unwrap();
+        let pcm = patterned_pcm_i16(960, 2, 31);
+        let mut packet = vec![0u8; 4000];
+        let len = enc.encode(&pcm, 960, &mut packet, 4000).unwrap();
+
+        let mut dec = OpusMSDecoder::new(48000, 2, 1, 1, &[0, 1]).unwrap();
+        let mut out = vec![0i16; 960 * 2];
+        assert_eq!(dec.get_sample_rate(), 48000);
+        assert_eq!(dec.get_bandwidth(), 0);
+        assert_eq!(dec.get_last_packet_duration(), 0);
+        assert!(dec.get_decoder(0).is_some());
+        assert!(dec.get_decoder(1).is_none());
+        assert!(dec.get_decoder_mut(0).is_some());
+
+        dec.set_gain(123);
+        dec.set_phase_inversion_disabled(1);
+        dec.set_complexity(7);
+        assert_eq!(dec.get_gain(), 123);
+        assert_eq!(dec.get_phase_inversion_disabled(), 1);
+        assert_eq!(dec.get_complexity(), 7);
+
+        let decoded = dec
+            .decode(Some(&packet[..len as usize]), len, &mut out, 960, false)
+            .unwrap();
+        assert_eq!(decoded, 960);
+        assert_ne!(dec.get_final_range(), 0);
+        assert_eq!(dec.get_last_packet_duration(), 960);
+
+        dec.reset();
+        assert_eq!(dec.get_final_range(), 0);
+        assert_eq!(dec.get_last_packet_duration(), 0);
+        assert_eq!(dec.get_gain(), 123);
+        assert_eq!(dec.get_phase_inversion_disabled(), 1);
+        assert_eq!(dec.get_complexity(), 7);
     }
 
     #[test]
