@@ -77,7 +77,7 @@ Modules ported bottom-up by dependency:
 - Safe Rust only; `unsafe` permitted only for FFI to C reference in test harness
 - **Bit-exact numerical output** is a hard requirement — every sample must match
 - Fixed-point arithmetic must match C reference precisely (uses `OPUS_FAST_INT64` path)
-- No platform-specific SIMD (ARM, MIPS, x86 intrinsics skipped)
+- SIMD enabled by default via the `wide` crate (safe, portable); no platform-specific intrinsics (ARM, MIPS, x86 skipped)
 - Match C reference API semantics; Rust API can be idiomatic on top
 - Clippy allows for C-port patterns (see `lib.rs` preamble)
 

@@ -22,8 +22,12 @@
    to disable it in C to get an apples-to-apples comparison. */
 #define DISABLE_FLOAT_API 1
 
-/* Disable all SIMD / arch-specific code */
-/* (no OPUS_X86_MAY_HAVE_*, no OPUS_ARM_*, etc.) */
+/* Enable x86 SIMD (SSE/SSE2/SSE4.1) with runtime detection */
+#define OPUS_HAVE_RTCD 1
+#define OPUS_X86_MAY_HAVE_SSE 1
+#define OPUS_X86_MAY_HAVE_SSE2 1
+#define OPUS_X86_MAY_HAVE_SSE4_1 1
+#define CPU_INFO_BY_C 1
 
 /* Disable DNN/ML features (not needed for core codec comparison) */
 /* #undef ENABLE_DEEP_PLC */

@@ -159,6 +159,28 @@ fn main() {
         "silk/fixed/schur_FIX.c",
     ];
 
+    // --- CELT x86 SIMD sources ---
+    let celt_x86_sources = [
+        "celt/x86/x86cpu.c",
+        "celt/x86/x86_celt_map.c",
+        "celt/x86/pitch_sse.c",
+        "celt/x86/pitch_sse2.c",
+        "celt/x86/pitch_sse4_1.c",
+        "celt/x86/vq_sse2.c",
+        "celt/x86/celt_lpc_sse4_1.c",
+    ];
+
+    // --- SILK x86 SIMD sources ---
+    let silk_x86_sources = [
+        "silk/x86/x86_silk_map.c",
+        "silk/x86/NSQ_sse4_1.c",
+        "silk/x86/NSQ_del_dec_sse4_1.c",
+        "silk/x86/VAD_sse4_1.c",
+        "silk/x86/VQ_WMat_EC_sse4_1.c",
+        "silk/fixed/x86/burg_modified_FIX_sse4_1.c",
+        "silk/fixed/x86/vector_ops_FIX_sse4_1.c",
+    ];
+
     // --- Opus top-level sources ---
     let opus_sources = [
         "src/opus.c",
@@ -198,10 +220,16 @@ fn main() {
     for src in &celt_sources {
         build.file(ref_dir.join(src));
     }
+    for src in &celt_x86_sources {
+        build.file(ref_dir.join(src));
+    }
     for src in &silk_sources {
         build.file(ref_dir.join(src));
     }
     for src in &silk_fixed_sources {
+        build.file(ref_dir.join(src));
+    }
+    for src in &silk_x86_sources {
         build.file(ref_dir.join(src));
     }
     for src in &opus_sources {

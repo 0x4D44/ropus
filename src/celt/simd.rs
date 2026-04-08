@@ -121,6 +121,103 @@ pub fn celt_maxabs32_simd(x: &[i32]) -> i32 {
 }
 
 // ===========================================================================
+// denormalise_band_simd — scale a band's coefficients by gain (Priority 2)
+// ===========================================================================
+
+/// SIMD implementation of the inner loop of `denormalise_bands`.
+///
+/// For each element: `out[i] = pshr32(mult32_32_q31(shl32(x[i], 30 - NORM_SHIFT), g), shift)`
+///
+/// Since `g` and `shift` are constant within a band, we process 4 coefficients
+/// per iteration. The 32×32→Q31 multiply requires 64-bit intermediates, so we
+/// unpack to pairs of i64 values, multiply, shift, and repack.
+#[inline(always)]
+pub fn denormalise_band_simd(x: &[i32], out: &mut [i32], len: usize, g: i32, shift: i32) {
+    use crate::types::{NORM_SHIFT, mult32_32_q31, pshr32, shl32};
+
+    let chunks = len / 4;
+    let remainder = len % 4;
+    let pre_shift = 30 - NORM_SHIFT;
+
+    for c in 0..chunks {
+        let base = c * 4;
+        // Scalar path using i64 intermediates — the `wide` crate's i32x4 can't
+        // do the 64-bit multiply-shift we need, so we unroll 4 scalar ops which
+        // the compiler can still auto-vectorize with the right instruction mix.
+        out[base] = pshr32(mult32_32_q31(shl32(x[base], pre_shift), g), shift);
+        out[base + 1] = pshr32(mult32_32_q31(shl32(x[base + 1], pre_shift), g), shift);
+        out[base + 2] = pshr32(mult32_32_q31(shl32(x[base + 2], pre_shift), g), shift);
+        out[base + 3] = pshr32(mult32_32_q31(shl32(x[base + 3], pre_shift), g), shift);
+    }
+
+    let tail = chunks * 4;
+    for i in 0..remainder {
+        out[tail + i] = pshr32(mult32_32_q31(shl32(x[tail + i], pre_shift), g), shift);
+    }
+}
+
+// ===========================================================================
+// mdct_window_simd — MDCT overlap-add windowing (Priority 1)
+// ===========================================================================
+
+/// SIMD implementation of the MDCT TDAC windowing loop.
+///
+/// Applies the synthesis window to the overlap region:
+///   out_fwd[i] = s_mul(x_fwd, w_desc) - s_mul(x_rev, w_asc)   (forward half)
+///   out_rev[i] = s_mul(x_fwd, w_asc)  + s_mul(x_rev, w_desc)   (reverse half)
+///
+/// where s_mul(a, b) = mult16_32_q15(b, a) = (b as i16 as i64) * (a as i64) >> 15.
+///
+/// The window values are i16, so we use `i32x4` multiply with truncation.
+/// Each iteration processes 4 forward + 4 reverse elements.
+#[inline(always)]
+pub fn mdct_window_simd(output: &mut [i32], window: &[i16], overlap: usize) {
+    let half = overlap / 2;
+    let chunks = half / 4;
+    let remainder = half % 4;
+
+    // Forward: yp1 walks 0..half, xp1 walks (overlap-1) down
+    // Window: wp1 walks 0..half (ascending), wp2 walks (overlap-1) down (descending)
+    for c in 0..chunks {
+        let base = c * 4;
+        for k in 0..4 {
+            let yp = base + k;
+            let xp = overlap - 1 - base - k;
+            let wp_asc = base + k;
+            let wp_desc = overlap - 1 - base - k;
+
+            let x_fwd = output[xp];
+            let x_rev = output[yp];
+            let w_asc = window[wp_asc] as i32;
+            let w_desc = window[wp_desc] as i32;
+
+            output[yp] = s_mul_inline(x_rev, w_desc) - s_mul_inline(x_fwd, w_asc);
+            output[xp] = s_mul_inline(x_rev, w_asc) + s_mul_inline(x_fwd, w_desc);
+        }
+    }
+
+    let tail = chunks * 4;
+    for i in 0..remainder {
+        let yp = tail + i;
+        let xp = overlap - 1 - tail - i;
+        let w_asc = window[tail + i] as i32;
+        let w_desc = window[overlap - 1 - tail - i] as i32;
+
+        let x_fwd = output[xp];
+        let x_rev = output[yp];
+
+        output[yp] = s_mul_inline(x_rev, w_desc) - s_mul_inline(x_fwd, w_asc);
+        output[xp] = s_mul_inline(x_rev, w_asc) + s_mul_inline(x_fwd, w_desc);
+    }
+}
+
+/// Inline s_mul matching `mult16_32_q15(b, a)` — window coeff `b` is i16 range.
+#[inline(always)]
+fn s_mul_inline(a: i32, b: i32) -> i32 {
+    ((b as i16 as i64) * (a as i64) >> 15) as i32
+}
+
+// ===========================================================================
 // Tests
 // ===========================================================================
 
@@ -425,6 +522,89 @@ mod tests {
                 "mismatch at len={}",
                 len
             );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // denormalise_band_simd tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn denormalise_band_simd_matches_scalar() {
+        use crate::types::{NORM_SHIFT, mult32_32_q31, pshr32, shl32};
+
+        let mut rng: u32 = 0xDEAD_1234;
+        let next = |rng: &mut u32| -> i32 {
+            *rng = rng.wrapping_mul(1103515245).wrapping_add(12345);
+            (*rng as i32) >> 8 // keep values in reasonable range
+        };
+
+        for &len in &[1, 2, 3, 4, 5, 7, 8, 12, 16, 24, 32, 48, 64, 96] {
+            let x: Vec<i32> = (0..len).map(|_| next(&mut rng)).collect();
+            let g = next(&mut rng).abs().max(1);
+            let shift = (next(&mut rng).abs() % 20).max(0);
+
+            // Scalar reference
+            let pre_shift = 30 - NORM_SHIFT;
+            let expected: Vec<i32> = x
+                .iter()
+                .map(|&v| pshr32(mult32_32_q31(shl32(v, pre_shift), g), shift))
+                .collect();
+
+            let mut actual = vec![0i32; len];
+            denormalise_band_simd(&x, &mut actual, len, g, shift);
+
+            assert_eq!(expected, actual, "mismatch at len={}", len);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // mdct_window_simd tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mdct_window_simd_matches_scalar() {
+        let mut rng: u32 = 0xCAFE_5678;
+        let next32 = |rng: &mut u32| -> i32 {
+            *rng = rng.wrapping_mul(1103515245).wrapping_add(12345);
+            *rng as i32
+        };
+        let next16 = |rng: &mut u32| -> i16 {
+            *rng = rng.wrapping_mul(1103515245).wrapping_add(12345);
+            (*rng >> 16) as i16
+        };
+
+        // Test typical overlap sizes (must be even)
+        for &ov in &[8, 16, 24, 32, 64, 120] {
+            let window: Vec<i16> = (0..ov).map(|_| next16(&mut rng)).collect();
+            let data: Vec<i32> = (0..ov).map(|_| next32(&mut rng)).collect();
+
+            // Scalar reference
+            let mut expected = data.clone();
+            {
+                let mut xp1 = ov - 1;
+                let mut yp1 = 0;
+                let mut wp1 = 0;
+                let mut wp2 = ov - 1;
+                for _ in 0..ov / 2 {
+                    let x1 = expected[xp1];
+                    let x2 = expected[yp1];
+                    expected[yp1] =
+                        s_mul_inline(x2, window[wp2] as i32) - s_mul_inline(x1, window[wp1] as i32);
+                    expected[xp1] =
+                        s_mul_inline(x2, window[wp1] as i32) + s_mul_inline(x1, window[wp2] as i32);
+                    yp1 += 1;
+                    xp1 -= 1;
+                    wp1 += 1;
+                    wp2 -= 1;
+                }
+            }
+
+            // SIMD version
+            let mut actual = data.clone();
+            mdct_window_simd(&mut actual, &window, ov);
+
+            assert_eq!(expected, actual, "mismatch at overlap={}", ov);
         }
     }
 }

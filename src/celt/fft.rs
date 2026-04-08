@@ -5,6 +5,7 @@
 //! radix-2, 3, 4, and 5 butterfly stages.
 
 use crate::types::*;
+use crate::{uc, uc_mut, uc_set};
 
 // =========================================================================
 // Constants
@@ -122,13 +123,13 @@ fn fft_downshift(x: &mut [KissFftCpx], n: usize, total: &mut i32, step: i32) {
     *total -= shift;
     if shift == 1 {
         for j in 0..n {
-            x[j].r = shr32(x[j].r, 1);
-            x[j].i = shr32(x[j].i, 1);
+            uc_mut!(x, j).r = shr32(uc!(x, j).r, 1);
+            uc_mut!(x, j).i = shr32(uc!(x, j).i, 1);
         }
     } else if shift > 0 {
         for j in 0..n {
-            x[j].r = pshr32(x[j].r, shift);
-            x[j].i = pshr32(x[j].i, shift);
+            uc_mut!(x, j).r = pshr32(uc!(x, j).r, shift);
+            uc_mut!(x, j).i = pshr32(uc!(x, j).i, shift);
         }
     }
 }
@@ -146,36 +147,36 @@ fn kf_bfly2(fout: &mut [KissFftCpx], _m: usize, n: usize) {
     let mut idx = 0;
     for _ in 0..n {
         // Element 0: trivial butterfly (twiddle = 1)
-        let t = fout[idx + 4];
-        fout[idx + 4] = c_sub(fout[idx], t);
-        c_addto(&mut fout[idx], t);
+        let t = uc!(fout, idx + 4);
+        uc_set!(fout, idx + 4, c_sub(uc!(fout, idx), t));
+        c_addto(uc_mut!(fout, idx), t);
 
         // Element 1: twiddle = W8*(1+j)/√2
         let t = KissFftCpx {
-            r: s_mul(add32_ovflw(fout[idx + 5].r, fout[idx + 5].i), tw),
-            i: s_mul(sub32_ovflw(fout[idx + 5].i, fout[idx + 5].r), tw),
+            r: s_mul(add32_ovflw(uc!(fout, idx + 5).r, uc!(fout, idx + 5).i), tw),
+            i: s_mul(sub32_ovflw(uc!(fout, idx + 5).i, uc!(fout, idx + 5).r), tw),
         };
-        fout[idx + 5] = c_sub(fout[idx + 1], t);
-        c_addto(&mut fout[idx + 1], t);
+        uc_set!(fout, idx + 5, c_sub(uc!(fout, idx + 1), t));
+        c_addto(uc_mut!(fout, idx + 1), t);
 
         // Element 2: twiddle = -j
         let t = KissFftCpx {
-            r: fout[idx + 6].i,
-            i: neg32_ovflw(fout[idx + 6].r),
+            r: uc!(fout, idx + 6).i,
+            i: neg32_ovflw(uc!(fout, idx + 6).r),
         };
-        fout[idx + 6] = c_sub(fout[idx + 2], t);
-        c_addto(&mut fout[idx + 2], t);
+        uc_set!(fout, idx + 6, c_sub(uc!(fout, idx + 2), t));
+        c_addto(uc_mut!(fout, idx + 2), t);
 
         // Element 3: twiddle = W8 conjugate
         let t = KissFftCpx {
-            r: s_mul(sub32_ovflw(fout[idx + 7].i, fout[idx + 7].r), tw),
+            r: s_mul(sub32_ovflw(uc!(fout, idx + 7).i, uc!(fout, idx + 7).r), tw),
             i: s_mul(
-                neg32_ovflw(add32_ovflw(fout[idx + 7].i, fout[idx + 7].r)),
+                neg32_ovflw(add32_ovflw(uc!(fout, idx + 7).i, uc!(fout, idx + 7).r)),
                 tw,
             ),
         };
-        fout[idx + 7] = c_sub(fout[idx + 3], t);
-        c_addto(&mut fout[idx + 3], t);
+        uc_set!(fout, idx + 7, c_sub(uc!(fout, idx + 3), t));
+        c_addto(uc_mut!(fout, idx + 3), t);
 
         idx += 8;
     }
@@ -194,18 +195,18 @@ fn kf_bfly4(
         // Degenerate case: all twiddles are 1
         let mut idx = 0;
         for _ in 0..n {
-            let scratch0 = c_sub(fout[idx], fout[idx + 2]);
-            let tmp = fout[idx + 2];
-            c_addto(&mut fout[idx], tmp);
-            let scratch1 = c_add(fout[idx + 1], fout[idx + 3]);
-            fout[idx + 2] = c_sub(fout[idx], scratch1);
-            c_addto(&mut fout[idx], scratch1);
-            let scratch1 = c_sub(fout[idx + 1], fout[idx + 3]);
+            let scratch0 = c_sub(uc!(fout, idx), uc!(fout, idx + 2));
+            let tmp = uc!(fout, idx + 2);
+            c_addto(uc_mut!(fout, idx), tmp);
+            let scratch1 = c_add(uc!(fout, idx + 1), uc!(fout, idx + 3));
+            uc_set!(fout, idx + 2, c_sub(uc!(fout, idx), scratch1));
+            c_addto(uc_mut!(fout, idx), scratch1);
+            let scratch1 = c_sub(uc!(fout, idx + 1), uc!(fout, idx + 3));
 
-            fout[idx + 1].r = add32_ovflw(scratch0.r, scratch1.i);
-            fout[idx + 1].i = sub32_ovflw(scratch0.i, scratch1.r);
-            fout[idx + 3].r = sub32_ovflw(scratch0.r, scratch1.i);
-            fout[idx + 3].i = add32_ovflw(scratch0.i, scratch1.r);
+            uc_mut!(fout, idx + 1).r = add32_ovflw(scratch0.r, scratch1.i);
+            uc_mut!(fout, idx + 1).i = sub32_ovflw(scratch0.i, scratch1.r);
+            uc_mut!(fout, idx + 3).r = sub32_ovflw(scratch0.r, scratch1.i);
+            uc_mut!(fout, idx + 3).i = add32_ovflw(scratch0.i, scratch1.r);
             idx += 4;
         }
     } else {
@@ -219,24 +220,24 @@ fn kf_bfly4(
             let mut tw3_idx = 0usize;
             for j in 0..m {
                 let f = base + j;
-                let scratch0 = c_mul(fout[f + m], twiddles[tw1_idx]);
-                let scratch1 = c_mul(fout[f + m2], twiddles[tw2_idx]);
-                let scratch2 = c_mul(fout[f + m3], twiddles[tw3_idx]);
+                let scratch0 = c_mul(uc!(fout, f + m), uc!(twiddles, tw1_idx));
+                let scratch1 = c_mul(uc!(fout, f + m2), uc!(twiddles, tw2_idx));
+                let scratch2 = c_mul(uc!(fout, f + m3), uc!(twiddles, tw3_idx));
 
-                let scratch5 = c_sub(fout[f], scratch1);
-                c_addto(&mut fout[f], scratch1);
+                let scratch5 = c_sub(uc!(fout, f), scratch1);
+                c_addto(uc_mut!(fout, f), scratch1);
                 let scratch3 = c_add(scratch0, scratch2);
                 let scratch4 = c_sub(scratch0, scratch2);
-                fout[f + m2] = c_sub(fout[f], scratch3);
+                uc_set!(fout, f + m2, c_sub(uc!(fout, f), scratch3));
                 tw1_idx += fstride;
                 tw2_idx += fstride * 2;
                 tw3_idx += fstride * 3;
-                c_addto(&mut fout[f], scratch3);
+                c_addto(uc_mut!(fout, f), scratch3);
 
-                fout[f + m].r = add32_ovflw(scratch5.r, scratch4.i);
-                fout[f + m].i = sub32_ovflw(scratch5.i, scratch4.r);
-                fout[f + m3].r = sub32_ovflw(scratch5.r, scratch4.i);
-                fout[f + m3].i = add32_ovflw(scratch5.i, scratch4.r);
+                uc_mut!(fout, f + m).r = add32_ovflw(scratch5.r, scratch4.i);
+                uc_mut!(fout, f + m).i = sub32_ovflw(scratch5.i, scratch4.r);
+                uc_mut!(fout, f + m3).r = sub32_ovflw(scratch5.r, scratch4.i);
+                uc_mut!(fout, f + m3).i = add32_ovflw(scratch5.i, scratch4.r);
             }
         }
     }
@@ -259,28 +260,29 @@ fn kf_bfly3(
         let base = i * mm;
         let mut tw1_idx = 0usize;
         let mut tw2_idx = 0usize;
+        let twiddles = st.twiddles;
         for j in 0..m {
             let f = base + j;
-            let scratch1 = c_mul(fout[f + m], st.twiddles[tw1_idx]);
-            let scratch2 = c_mul(fout[f + m2], st.twiddles[tw2_idx]);
+            let scratch1 = c_mul(uc!(fout, f + m), uc!(twiddles, tw1_idx));
+            let scratch2 = c_mul(uc!(fout, f + m2), uc!(twiddles, tw2_idx));
 
             let scratch3 = c_add(scratch1, scratch2);
             let mut scratch0 = c_sub(scratch1, scratch2);
             tw1_idx += fstride;
             tw2_idx += fstride * 2;
 
-            fout[f + m].r = sub32_ovflw(fout[f].r, half_of(scratch3.r));
-            fout[f + m].i = sub32_ovflw(fout[f].i, half_of(scratch3.i));
+            uc_mut!(fout, f + m).r = sub32_ovflw(uc!(fout, f).r, half_of(scratch3.r));
+            uc_mut!(fout, f + m).i = sub32_ovflw(uc!(fout, f).i, half_of(scratch3.i));
 
             c_mulbyscalar(&mut scratch0, epi3_i);
 
-            c_addto(&mut fout[f], scratch3);
+            c_addto(uc_mut!(fout, f), scratch3);
 
-            fout[f + m2].r = add32_ovflw(fout[f + m].r, scratch0.i);
-            fout[f + m2].i = sub32_ovflw(fout[f + m].i, scratch0.r);
+            uc_mut!(fout, f + m2).r = add32_ovflw(uc!(fout, f + m).r, scratch0.i);
+            uc_mut!(fout, f + m2).i = sub32_ovflw(uc!(fout, f + m).i, scratch0.r);
 
-            fout[f + m].r = sub32_ovflw(fout[f + m].r, scratch0.i);
-            fout[f + m].i = add32_ovflw(fout[f + m].i, scratch0.r);
+            uc_mut!(fout, f + m).r = sub32_ovflw(uc!(fout, f + m).r, scratch0.i);
+            uc_mut!(fout, f + m).i = add32_ovflw(uc!(fout, f + m).i, scratch0.r);
         }
     }
 }
@@ -310,19 +312,19 @@ fn kf_bfly5(
             let f3 = f0 + 3 * m;
             let f4 = f0 + 4 * m;
 
-            let scratch0 = fout[f0];
-            let scratch1 = c_mul(fout[f1], twiddles[u * fstride]);
-            let scratch2 = c_mul(fout[f2], twiddles[2 * u * fstride]);
-            let scratch3 = c_mul(fout[f3], twiddles[3 * u * fstride]);
-            let scratch4 = c_mul(fout[f4], twiddles[4 * u * fstride]);
+            let scratch0 = uc!(fout, f0);
+            let scratch1 = c_mul(uc!(fout, f1), uc!(twiddles, u * fstride));
+            let scratch2 = c_mul(uc!(fout, f2), uc!(twiddles, 2 * u * fstride));
+            let scratch3 = c_mul(uc!(fout, f3), uc!(twiddles, 3 * u * fstride));
+            let scratch4 = c_mul(uc!(fout, f4), uc!(twiddles, 4 * u * fstride));
 
             let scratch7 = c_add(scratch1, scratch4);
             let scratch10 = c_sub(scratch1, scratch4);
             let scratch8 = c_add(scratch2, scratch3);
             let scratch9 = c_sub(scratch2, scratch3);
 
-            fout[f0].r = add32_ovflw(fout[f0].r, add32_ovflw(scratch7.r, scratch8.r));
-            fout[f0].i = add32_ovflw(fout[f0].i, add32_ovflw(scratch7.i, scratch8.i));
+            uc_mut!(fout, f0).r = add32_ovflw(uc!(fout, f0).r, add32_ovflw(scratch7.r, scratch8.r));
+            uc_mut!(fout, f0).i = add32_ovflw(uc!(fout, f0).i, add32_ovflw(scratch7.i, scratch8.i));
 
             let scratch5 = KissFftCpx {
                 r: add32_ovflw(
@@ -342,8 +344,8 @@ fn kf_bfly5(
                 )),
             };
 
-            fout[f1] = c_sub(scratch5, scratch6);
-            fout[f4] = c_add(scratch5, scratch6);
+            uc_set!(fout, f1, c_sub(scratch5, scratch6));
+            uc_set!(fout, f4, c_add(scratch5, scratch6));
 
             let scratch11 = KissFftCpx {
                 r: add32_ovflw(
@@ -360,8 +362,8 @@ fn kf_bfly5(
                 i: sub32_ovflw(s_mul(scratch10.r, yb_i), s_mul(scratch9.r, ya_i)),
             };
 
-            fout[f2] = c_add(scratch11, scratch12);
-            fout[f3] = c_sub(scratch11, scratch12);
+            uc_set!(fout, f2, c_add(scratch11, scratch12));
+            uc_set!(fout, f3, c_sub(scratch11, scratch12));
         }
     }
 }
@@ -427,15 +429,14 @@ pub fn opus_fft_impl(st: &KissFftState, fout: &mut [KissFftCpx], mut downshift: 
 /// Scales input by 1/nfft during bit-reversal permutation.
 pub fn opus_fft(st: &KissFftState, fin: &[KissFftCpx], fout: &mut [KissFftCpx]) {
     let scale = st.scale;
-    // scale_shift for MULT16_32_Q16 scaling (one less than ilog2)
     let scale_shift = st.scale_shift - 1;
+    let bitrev = st.bitrev;
 
-    // Bit-reverse the input with scaling
     for i in 0..st.nfft as usize {
-        let x = fin[i];
-        let rev = st.bitrev[i] as usize;
-        fout[rev].r = s_mul2(x.r, scale);
-        fout[rev].i = s_mul2(x.i, scale);
+        let x = uc!(fin, i);
+        let rev = uc!(bitrev, i) as usize;
+        uc_mut!(fout, rev).r = s_mul2(x.r, scale);
+        uc_mut!(fout, rev).i = s_mul2(x.i, scale);
     }
     opus_fft_impl(st, fout, scale_shift);
 }
@@ -443,19 +444,17 @@ pub fn opus_fft(st: &KissFftState, fin: &[KissFftCpx], fout: &mut [KissFftCpx]) 
 /// Inverse FFT. Out-of-place (fin must not alias fout).
 /// Uses the conjugate-FFT-conjugate trick: no 1/N scaling.
 pub fn opus_ifft(st: &KissFftState, fin: &[KissFftCpx], fout: &mut [KissFftCpx]) {
-    // Bit-reverse the input (no scaling)
+    let bitrev = st.bitrev;
     for i in 0..st.nfft as usize {
-        let rev = st.bitrev[i] as usize;
-        fout[rev] = fin[i];
+        let rev = uc!(bitrev, i) as usize;
+        uc_set!(fout, rev, uc!(fin, i));
     }
-    // Conjugate
     for i in 0..st.nfft as usize {
-        fout[i].i = -fout[i].i;
+        uc_mut!(fout, i).i = -uc!(fout, i).i;
     }
     opus_fft_impl(st, fout, 0);
-    // Conjugate output
     for i in 0..st.nfft as usize {
-        fout[i].i = -fout[i].i;
+        uc_mut!(fout, i).i = -uc!(fout, i).i;
     }
 }
 

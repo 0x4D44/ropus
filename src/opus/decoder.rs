@@ -2083,7 +2083,10 @@ mod tests {
         assert_eq!(opus_packet_get_nb_frames(&[0x83]), Err(OPUS_INVALID_PACKET));
 
         // CELT-only, 20 ms per frame, code 3 with 7 frames => 140 ms > 120 ms max.
-        assert_eq!(opus_packet_get_nb_samples(&[0x9B, 7], 48000), Err(OPUS_INVALID_PACKET));
+        assert_eq!(
+            opus_packet_get_nb_samples(&[0x9B, 7], 48000),
+            Err(OPUS_INVALID_PACKET)
+        );
     }
 
     #[test]
@@ -2099,7 +2102,9 @@ mod tests {
         let mut dtx_dec = OpusDecoder::new(48000, 1).unwrap();
         dtx_dec.frame_size = 480;
         let mut dtx_pcm = vec![7i16; 960];
-        let decoded = dtx_dec.decode_frame(Some(&[0x80]), &mut dtx_pcm, 960, false).unwrap();
+        let decoded = dtx_dec
+            .decode_frame(Some(&[0x80]), &mut dtx_pcm, 960, false)
+            .unwrap();
         assert_eq!(decoded, 480);
         assert!(dtx_pcm[..480].iter().all(|&sample| sample == 0));
     }

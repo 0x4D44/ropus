@@ -8,8 +8,9 @@ autobenches = false
 autotests = false
 
 [features]
-default = []
+default = ["simd", "unchecked-indexing"]
 simd = ["wide"]
+unchecked-indexing = []
 dnn = []
 
 [dependencies]
