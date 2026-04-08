@@ -2183,6 +2183,7 @@ pub fn quant_all_bands<EC: EcCoder>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::celt::modes::mode_create;
 
     #[test]
     fn test_celt_lcg_rand() {
@@ -2280,5 +2281,87 @@ mod tests {
         assert!(qn >= 1);
         assert!(qn <= 256);
         assert_eq!(qn & 1, 0); // Must be even (or 1)
+    }
+
+    #[test]
+    fn test_compute_band_energies_and_normalise_zero_signal() {
+        let mode = mode_create(48000, 960).unwrap();
+        let n = mode.short_mdct_size as usize;
+        let freq = vec![0i32; n];
+        let mut band_e = vec![0i32; mode.nb_ebands as usize];
+        compute_band_energies(mode, &freq, &mut band_e, 4, 1, 0);
+
+        assert!(band_e.iter().take(4).all(|&e| e == EPSILON));
+
+        let mut norm = vec![123i32; n];
+        normalise_bands(mode, &freq, &mut norm, &band_e, 4, 1, 1);
+        let processed = mode.ebands[4] as usize;
+        assert!(norm[..processed].iter().all(|&sample| sample == 0));
+    }
+
+    #[test]
+    fn test_denormalise_bands_zeroing_and_downsample_boundaries() {
+        let mode = mode_create(48000, 960).unwrap();
+        let n = mode.short_mdct_size as usize;
+        let mut freq = vec![7i32; n];
+        let x = vec![1 << NORM_SHIFT; n];
+        let mut band_log_e = vec![0i32; mode.nb_ebands as usize];
+        band_log_e[1] = 1 << DB_SHIFT;
+        band_log_e[2] = 1 << DB_SHIFT;
+
+        denormalise_bands(mode, &x, &mut freq, &band_log_e, 1, 3, 1, 2, false);
+        let start = mode.ebands[1] as usize;
+        let bound = (mode.short_mdct_size / 2) as usize;
+        assert!(freq[..start].iter().all(|&sample| sample == 0));
+        assert!(freq[bound..].iter().all(|&sample| sample == 0));
+        assert!(freq[start..bound].iter().any(|&sample| sample != 0));
+
+        freq.fill(7);
+        denormalise_bands(mode, &x, &mut freq, &band_log_e, 1, 3, 1, 1, true);
+        assert!(freq.iter().all(|&sample| sample == 0));
+    }
+
+    #[test]
+    fn test_spreading_decision_branches_and_tapset_update() {
+        let mode = mode_create(48000, 960).unwrap();
+        let n = mode.short_mdct_size as usize;
+        let x = vec![0i32; n];
+        let mut average = 0;
+        let mut hf_average = 0;
+        let mut tapset = 1;
+        let spread_weight = vec![1i32; mode.nb_ebands as usize];
+
+        assert_eq!(
+            spreading_decision(
+                mode,
+                &x,
+                &mut average,
+                SPREAD_NORMAL,
+                &mut hf_average,
+                &mut tapset,
+                false,
+                1,
+                1,
+                1,
+                &spread_weight
+            ),
+            SPREAD_NONE
+        );
+
+        let decision = spreading_decision(
+            mode,
+            &x,
+            &mut average,
+            SPREAD_NONE,
+            &mut hf_average,
+            &mut tapset,
+            true,
+            mode.nb_ebands,
+            1,
+            1,
+            &spread_weight,
+        );
+        assert_eq!(tapset, 2);
+        assert_eq!(decision, SPREAD_NONE);
     }
 }
