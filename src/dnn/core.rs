@@ -1642,6 +1642,51 @@ mod tests {
         (a - b).abs() < eps
     }
 
+    fn f32_bytes(values: &[f32]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(values.len() * 4);
+        for &value in values {
+            bytes.extend_from_slice(&value.to_ne_bytes());
+        }
+        bytes
+    }
+
+    fn i8_bytes(values: &[i8]) -> Vec<u8> {
+        values.iter().map(|&value| value as u8).collect()
+    }
+
+    fn i32_bytes(values: &[i32]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(values.len() * 4);
+        for &value in values {
+            bytes.extend_from_slice(&value.to_ne_bytes());
+        }
+        bytes
+    }
+
+    fn make_weight_record(
+        name: &str,
+        weight_type: i32,
+        payload: &[u8],
+        block_size: usize,
+        nul_terminated: bool,
+    ) -> Vec<u8> {
+        let mut record = vec![0u8; WEIGHT_BLOCK_SIZE + block_size];
+        record[4..8].copy_from_slice(&WEIGHT_BLOB_VERSION.to_ne_bytes());
+        record[8..12].copy_from_slice(&weight_type.to_ne_bytes());
+        record[12..16].copy_from_slice(&(payload.len() as i32).to_ne_bytes());
+        record[16..20].copy_from_slice(&(block_size as i32).to_ne_bytes());
+
+        let name_bytes = name.as_bytes();
+        record[20..20 + name_bytes.len()].copy_from_slice(name_bytes);
+        if nul_terminated {
+            record[20 + name_bytes.len()] = 0;
+        } else {
+            record[63] = b'X';
+        }
+
+        record[WEIGHT_BLOCK_SIZE..WEIGHT_BLOCK_SIZE + payload.len()].copy_from_slice(payload);
+        record
+    }
+
     // --- Approximation functions ---
 
     #[test]
@@ -1985,5 +2030,376 @@ mod tests {
         let decoded = ulaw2lin(encoded as f32);
         // Should be within ~5% for moderate values
         assert!((decoded - original).abs() / original < 0.1);
+    }
+
+    #[test]
+    fn test_activation_swish_and_exp_paths() {
+        let mut swish = vec![-1.0, 0.0, 1.0];
+        let swish_len = swish.len();
+        compute_activation(&mut swish, swish_len, ACTIVATION_SWISH);
+        assert!(swish[0] < 0.0);
+        assert!(approx_eq(swish[1], 0.0, EPS));
+        assert!(swish[2] > 0.5);
+
+        let mut exp = vec![0.0, 1.0];
+        let exp_len = exp.len();
+        compute_activation(&mut exp, exp_len, ACTIVATION_EXP);
+        assert!(exp[0] > 0.99);
+        assert!(exp[1] > 2.5);
+    }
+
+    #[test]
+    fn test_compute_gated_activation_inplace_sigmoid() {
+        let layer = LinearLayer {
+            bias: Some(vec![0.0, 0.0]),
+            float_weights: Some(vec![0.0; 4]),
+            nb_inputs: 2,
+            nb_outputs: 2,
+            ..Default::default()
+        };
+        let mut data = vec![4.0, -2.0];
+        compute_gated_activation_inplace(&layer, &mut data, ACTIVATION_SIGMOID);
+        assert!(approx_eq(data[0], 2.0, 0.01));
+        assert!(approx_eq(data[1], -1.0, 0.01));
+    }
+
+    #[test]
+    fn test_compute_linear_dense_diag_and_int8_paths() {
+        let dense = LinearLayer {
+            bias: Some(vec![0.0; 6]),
+            subias: Some(vec![1.0; 6]),
+            float_weights: Some(vec![0.0; 12]),
+            diag: Some(vec![1.0; 6]),
+            nb_inputs: 2,
+            nb_outputs: 6,
+            ..Default::default()
+        };
+        let input = vec![2.0, 3.0];
+        let mut dense_out = vec![0.0; 6];
+        compute_linear(&dense, &mut dense_out, &input);
+        assert_eq!(dense.subias.as_ref().unwrap().len(), 6);
+        assert_eq!(dense_out, vec![2.0, 3.0, 2.0, 3.0, 2.0, 3.0]);
+
+        let sparse = LinearLayer {
+            float_weights: None,
+            weights: Some(vec![1; 32]),
+            scale: Some(vec![1.0; 8]),
+            weights_idx: Some(vec![1, 0]),
+            nb_inputs: 4,
+            nb_outputs: 8,
+            ..Default::default()
+        };
+        let mut sparse_out = vec![0.0; 8];
+        let sparse_input = vec![1.0 / 127.0; 4];
+        compute_linear(&sparse, &mut sparse_out, &sparse_input);
+        assert!(sparse_out.iter().all(|&v| approx_eq(v, 4.0, EPS)));
+    }
+
+    #[test]
+    fn test_compute_generic_conv1d_dilation_updates_memory() {
+        let layer = LinearLayer {
+            bias: Some(vec![0.0]),
+            float_weights: Some(vec![0.0; 4]),
+            nb_inputs: 4,
+            nb_outputs: 1,
+            ..Default::default()
+        };
+        let input = vec![1.0, 2.0];
+
+        let mut output1 = vec![9.0];
+        let mut mem1 = vec![10.0, 20.0];
+        compute_generic_conv1d_dilation(&layer, &mut output1, &mut mem1, &input, 2, 1, ACTIVATION_LINEAR);
+        assert!(approx_eq(output1[0], 0.0, EPS));
+        assert_eq!(mem1, vec![1.0, 2.0]);
+
+        let mut output2 = vec![9.0];
+        let mut mem2 = vec![10.0, 11.0, 20.0, 21.0];
+        compute_generic_conv1d_dilation(&layer, &mut output2, &mut mem2, &input, 2, 2, ACTIVATION_LINEAR);
+        assert!(approx_eq(output2[0], 0.0, EPS));
+        assert_eq!(mem2, vec![20.0, 21.0, 1.0, 2.0]);
+    }
+
+    #[test]
+    fn test_compute_conv2d_generic_and_specialized_paths() {
+        let generic = Conv2dLayer {
+            bias: Some(vec![1.0]),
+            float_weights: Some(vec![2.0]),
+            in_channels: 1,
+            out_channels: 1,
+            ktime: 1,
+            kheight: 1,
+        };
+        let mut out = vec![0.0; 2];
+        let mut mem = vec![];
+        let input = vec![3.0, 4.0];
+        compute_conv2d(&generic, &mut out, &mut mem, &input, 2, 2, ACTIVATION_LINEAR);
+        assert_eq!(out, vec![7.0, 9.0]);
+        assert!(mem.is_empty());
+
+        let specialized = Conv2dLayer {
+            bias: Some(vec![0.0]),
+            float_weights: Some(vec![
+                0.0, 0.0, 0.0, //
+                0.0, 1.0, 0.0, //
+                0.0, 1.0, 0.0,
+            ]),
+            in_channels: 1,
+            out_channels: 1,
+            ktime: 3,
+            kheight: 3,
+        };
+        let mut out2 = vec![0.0; 1];
+        let mut mem2 = vec![0.0; 6];
+        let input2 = vec![1.0, 2.0, 3.0];
+        compute_conv2d(&specialized, &mut out2, &mut mem2, &input2, 1, 1, ACTIVATION_LINEAR);
+        assert!(approx_eq(out2[0], 2.0, EPS));
+        assert_eq!(mem2, vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn test_parse_weights_and_linear_init_paths() {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&make_weight_record(
+            "bias",
+            WEIGHT_TYPE_FLOAT,
+            &f32_bytes(&[1.25, -2.5]),
+            8,
+            true,
+        ));
+        blob.extend_from_slice(&make_weight_record(
+            "weights",
+            WEIGHT_TYPE_INT8,
+            &i8_bytes(&[1, -2, 3, 4]),
+            4,
+            true,
+        ));
+        let arrays = parse_weights(&blob).expect("valid weight blob");
+        assert_eq!(arrays.len(), 2);
+        assert_eq!(arrays[0].name, "bias");
+        assert_eq!(arrays[0].weight_type, WEIGHT_TYPE_FLOAT);
+        assert_eq!(arrays[1].name, "weights");
+        assert_eq!(arrays[1].weight_type, WEIGHT_TYPE_INT8);
+
+        let dense_arrays = vec![
+            WeightArray {
+                name: "bias".into(),
+                weight_type: WEIGHT_TYPE_FLOAT,
+                size: 24,
+                data: f32_bytes(&[0.0; 6]),
+            },
+            WeightArray {
+                name: "subias".into(),
+                weight_type: WEIGHT_TYPE_FLOAT,
+                size: 24,
+                data: f32_bytes(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+            },
+            WeightArray {
+                name: "fw".into(),
+                weight_type: WEIGHT_TYPE_FLOAT,
+                size: 48,
+                data: f32_bytes(&[0.0; 12]),
+            },
+            WeightArray {
+                name: "diag".into(),
+                weight_type: WEIGHT_TYPE_FLOAT,
+                size: 24,
+                data: f32_bytes(&[1.0; 6]),
+            },
+        ];
+        let dense = linear_init(
+            &dense_arrays,
+            Some("bias"),
+            Some("subias"),
+            None,
+            Some("fw"),
+            None,
+            Some("diag"),
+            None,
+            2,
+            6,
+        )
+        .expect("dense linear init");
+        assert_eq!(dense.subias.as_ref().unwrap()[1], 2.0);
+        let mut dense_out = vec![0.0; 6];
+        compute_linear(&dense, &mut dense_out, &[2.0, 3.0]);
+        assert_eq!(dense_out, vec![2.0, 3.0, 2.0, 3.0, 2.0, 3.0]);
+
+        let sparse_arrays = vec![
+            WeightArray {
+                name: "idx".into(),
+                weight_type: WEIGHT_TYPE_INT,
+                size: 8,
+                data: i32_bytes(&[1, 0]),
+            },
+            WeightArray {
+                name: "weights".into(),
+                weight_type: WEIGHT_TYPE_INT8,
+                size: 32,
+                data: i8_bytes(&[1; 32]),
+            },
+            WeightArray {
+                name: "scale".into(),
+                weight_type: WEIGHT_TYPE_FLOAT,
+                size: 32,
+                data: f32_bytes(&[1.0; 8]),
+            },
+        ];
+        let sparse = linear_init(
+            &sparse_arrays,
+            None,
+            None,
+            Some("weights"),
+            None,
+            Some("idx"),
+            None,
+            Some("scale"),
+            4,
+            8,
+        )
+        .expect("sparse linear init");
+        let mut sparse_out = vec![0.0; 8];
+        compute_linear(&sparse, &mut sparse_out, &[1.0 / 127.0; 4]);
+        assert!(sparse_out.iter().all(|&v| approx_eq(v, 4.0, EPS)));
+
+        assert!(linear_init(
+            &sparse_arrays,
+            None,
+            None,
+            Some("weights"),
+            None,
+            Some("idx"),
+            None,
+            None,
+            4,
+            8,
+        )
+        .is_err());
+
+        let bad_idx_arrays = vec![WeightArray {
+            name: "bad_idx".into(),
+            weight_type: WEIGHT_TYPE_INT,
+            size: 8,
+            data: i32_bytes(&[1, 1]),
+        }];
+        assert!(linear_init(
+            &bad_idx_arrays,
+            None,
+            None,
+            Some("weights"),
+            None,
+            Some("bad_idx"),
+            None,
+            Some("scale"),
+            4,
+            8,
+        )
+        .is_err());
+
+        let mut negative_size = make_weight_record("bad", WEIGHT_TYPE_FLOAT, &f32_bytes(&[0.0]), 4, true);
+        negative_size[12..16].copy_from_slice(&(-1i32).to_ne_bytes());
+        assert!(parse_weights(&negative_size).is_err());
+
+        let mut bad_nul = make_weight_record("bad", WEIGHT_TYPE_FLOAT, &f32_bytes(&[0.0]), 4, false);
+        bad_nul[16..20].copy_from_slice(&(4i32).to_ne_bytes());
+        assert!(parse_weights(&bad_nul).is_err());
+
+        let mut small_block = make_weight_record("bad", WEIGHT_TYPE_FLOAT, &f32_bytes(&[0.0]), 4, true);
+        small_block[12..16].copy_from_slice(&(8i32).to_ne_bytes());
+        assert!(parse_weights(&small_block).is_err());
+    }
+
+    #[test]
+    fn test_nndsp_smoke_paths_with_zero_weights() {
+        let zero_dense = |nb_inputs: usize, nb_outputs: usize| LinearLayer {
+            float_weights: Some(vec![0.0; nb_inputs * nb_outputs]),
+            nb_inputs,
+            nb_outputs,
+            ..Default::default()
+        };
+
+        let mut adaconv_state = AdaConvState::new();
+        let adaconv_kernel = zero_dense(2, 2);
+        let adaconv_gain = zero_dense(2, 1);
+        let mut adaconv_out = vec![1.0; 4];
+        adaconv_process_frame(
+            &mut adaconv_state,
+            &mut adaconv_out,
+            &[1.0, 2.0, 3.0, 4.0],
+            &[0.25, -0.5],
+            &adaconv_kernel,
+            &adaconv_gain,
+            2,
+            4,
+            2,
+            1,
+            1,
+            2,
+            1,
+            0.0,
+            0.0,
+            0.0,
+            &[1.0, 0.0],
+        );
+        assert!(adaconv_out.iter().all(|&v| approx_eq(v, 0.0, EPS)));
+        assert_eq!(&adaconv_state.history[..2], &[3.0, 4.0]);
+        assert!(adaconv_state.last_kernel[..2].iter().all(|&v| approx_eq(v, 0.0, EPS)));
+
+        let mut adacomb_state = AdaCombState::new();
+        let adacomb_kernel = zero_dense(2, 2);
+        let adacomb_gain = zero_dense(2, 1);
+        let adacomb_global = zero_dense(2, 1);
+        let mut adacomb_out = vec![0.0; 4];
+        adacomb_process_frame(
+            &mut adacomb_state,
+            &mut adacomb_out,
+            &[1.0, 2.0, 3.0, 4.0],
+            &[0.1, -0.2],
+            &adacomb_kernel,
+            &adacomb_gain,
+            &adacomb_global,
+            1,
+            2,
+            4,
+            2,
+            2,
+            1,
+            0.0,
+            0.0,
+            0.0,
+            &[0.0, 0.0],
+        );
+        assert!(adacomb_out
+            .iter()
+            .zip([1.0, 2.0, 3.0, 4.0])
+            .all(|(a, b)| approx_eq(*a, b, 0.001)));
+        assert_eq!(adacomb_state.last_pitch_lag, 1);
+        assert!(approx_eq(adacomb_state.last_global_gain, 1.0, EPS));
+
+        let mut adashape_state = AdaShapeState::new();
+        let alpha1f = zero_dense(2, 4);
+        let alpha1t = zero_dense(3, 4);
+        let alpha2 = zero_dense(2, 4);
+        let mut adashape_out = vec![0.0; 4];
+        adashape_process_frame(
+            &mut adashape_state,
+            &mut adashape_out,
+            &[1.0, 2.0, 3.0, 4.0],
+            &[0.25, -0.5],
+            &alpha1f,
+            &alpha1t,
+            &alpha2,
+            2,
+            4,
+            2,
+            2,
+        );
+        assert!(adashape_out
+            .iter()
+            .zip([1.0, 2.0, 3.0, 4.0])
+            .all(|(a, b)| approx_eq(*a, b, 0.001)));
+        assert!(adashape_state.conv_alpha1f_state.iter().all(|&v| approx_eq(v, 0.0, EPS)));
+        assert!(adashape_state.conv_alpha1t_state.iter().all(|&v| approx_eq(v, 0.0, EPS)));
+        assert!(adashape_state.conv_alpha2_state.iter().all(|&v| approx_eq(v, 0.0, EPS)));
+        assert!(approx_eq(adashape_state.interpolate_state[0], 0.0, EPS));
     }
 }

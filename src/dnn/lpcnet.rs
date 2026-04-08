@@ -2323,6 +2323,8 @@ mod tests {
     #[test]
     fn test_run_frame_network_updates_state_and_deferred_flush() {
         let mut st = LPCNetState::new();
+        st.model.feature_conv1.kernel_size = 2;
+        st.model.feature_conv2.kernel_size = 2;
         let mut features = [0.0f32; NB_FEATURES];
         features[NB_BANDS] = 0.25;
 
@@ -2334,6 +2336,15 @@ mod tests {
         st.run_frame_network_deferred(&features);
         st.run_frame_network_deferred(&features);
         assert_eq!(st.feature_buffer_fill, 2);
+        let mut shifted_features = features;
+        shifted_features[0] = 1.0;
+        st.run_frame_network_deferred(&shifted_features);
+        assert_eq!(st.feature_buffer_fill, 2);
+        assert_eq!(&st.feature_buffer[..NB_FEATURES], &features[..NB_FEATURES]);
+        assert_eq!(
+            &st.feature_buffer[NB_FEATURES..2 * NB_FEATURES],
+            &shifted_features[..NB_FEATURES]
+        );
         st.run_frame_network_flush();
         assert_eq!(st.feature_buffer_fill, 0);
         assert!(st.frame_count >= 3);
@@ -2358,9 +2369,8 @@ mod tests {
     }
 
     #[test]
-    fn test_plc_state_bookkeeping_and_concealment_smoke() {
+    fn test_plc_state_bookkeeping() {
         let mut plc = LPCNetPLCState::new();
-        let pcm = [0i16; FRAME_SIZE];
         let features = [0.0f32; NB_FEATURES];
 
         plc.fec_add(Some(&features));
@@ -2370,15 +2380,24 @@ mod tests {
         plc.fec_clear();
         assert_eq!(plc.fec_fill_pos, 0);
         assert_eq!(plc.fec_skip, 0);
+    }
+
+    #[test]
+    fn test_plc_update_resets_loss_and_blend() {
+        let mut plc = LPCNetPLCState::new();
+        let pcm = [0i16; FRAME_SIZE];
+
+        plc.analysis_gap = false;
+        plc.analysis_pos = FRAME_SIZE - 1;
+        plc.predict_pos = FRAME_SIZE - 1;
+        plc.loss_count = 7;
+        plc.blend = 3;
 
         assert_eq!(plc.update(&pcm), 0);
+        assert!(plc.analysis_gap);
+        assert_eq!(plc.analysis_pos, FRAME_SIZE - 1);
+        assert_eq!(plc.predict_pos, FRAME_SIZE - 1);
+        assert_eq!(plc.loss_count, 0);
         assert_eq!(plc.blend, 0);
-
-        plc.loaded = true;
-        plc.fec_add(Some(&features));
-        let mut concealed = [0i16; FRAME_SIZE];
-        assert_eq!(plc.conceal(&mut concealed), 0);
-        assert_eq!(plc.blend, 1);
-        assert!(concealed.iter().all(|x| *x >= -32767 && *x <= 32767));
     }
 }

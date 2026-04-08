@@ -1976,6 +1976,19 @@ impl OpusProjectionDecoder {
 mod tests {
     use super::*;
 
+    fn patterned_pcm_i16(frame_size: usize, channels: usize, seed: i32) -> Vec<i16> {
+        (0..frame_size * channels)
+            .map(|i| {
+                let base = ((i as i32 * 7919 + seed * 911) % 28000) - 14000;
+                if channels == 2 && i % 2 == 1 {
+                    (base / 2) as i16
+                } else {
+                    base as i16
+                }
+            })
+            .collect()
+    }
+
     #[test]
     fn test_validate_layout_valid() {
         let mut layout = ChannelLayout::new();
@@ -2308,5 +2321,190 @@ mod tests {
         assert!(mapping_matrix_valid_size(255, 127)); // 255*127*2 = 64770 < 65004
         assert!(!mapping_matrix_valid_size(256, 1)); // exceeds 255
         assert!(!mapping_matrix_valid_size(255, 128)); // 255*128*2 = 65280 > 65004
+    }
+
+    #[test]
+    fn test_validate_encoder_layout_missing_channels() {
+        let mut coupled = ChannelLayout::new();
+        coupled.nb_channels = 2;
+        coupled.nb_streams = 1;
+        coupled.nb_coupled_streams = 1;
+        coupled.mapping[0] = 0;
+        coupled.mapping[1] = 255;
+        assert!(!validate_encoder_layout(&coupled));
+
+        let mut mono = ChannelLayout::new();
+        mono.nb_channels = 3;
+        mono.nb_streams = 2;
+        mono.nb_coupled_streams = 1;
+        mono.mapping[0] = 0;
+        mono.mapping[1] = 1;
+        mono.mapping[2] = 255;
+        assert!(!validate_encoder_layout(&mono));
+    }
+
+    #[test]
+    fn test_parse_size_field_and_subpacket_variants() {
+        assert_eq!(parse_size_field(&[], 0), (-1, -1));
+        assert_eq!(parse_size_field(&[251], 1), (1, 251));
+        assert_eq!(parse_size_field(&[252], 1), (-1, -1));
+        assert_eq!(parse_size_field(&[252, 1], 2), (2, 256));
+
+        assert_eq!(parse_multistream_subpacket(&[0x00], 1, false), 1);
+        assert_eq!(
+            parse_multistream_subpacket(&[0x00, 0x05, 0, 0, 0, 0, 0], 7, true),
+            7
+        );
+        assert_eq!(
+            parse_multistream_subpacket(&[0x01, 0x03, 0, 0, 0, 0, 0, 0], 8, true),
+            8
+        );
+        assert_eq!(
+            parse_multistream_subpacket(&[0x02, 0x02, 0x03, 0, 0, 0, 0, 0], 8, true),
+            8
+        );
+        assert_eq!(parse_multistream_subpacket(&[0x03, 0x02], 2, false), 2);
+        assert!(parse_multistream_subpacket(&[0x03, 0x42, 0x01], 3, false) < 0);
+        assert_eq!(parse_multistream_subpacket(&[0x03, 0x82, 0x01, 0x00], 4, false), 3);
+        assert_eq!(parse_multistream_subpacket(&[0x03, 0x02, 0x01], 3, true), 4);
+        assert!(parse_multistream_subpacket(&[0x03], 1, false) < 0);
+        assert!(parse_multistream_subpacket(&[0x03, 0x00], 2, false) < 0);
+        assert!(parse_multistream_subpacket(&[0x03, 0x41, 0xFF], 3, false) < 0);
+    }
+
+    #[test]
+    fn test_ms_decoder_rejects_invalid_lengths_and_small_frames() {
+        let (mut enc, streams, coupled, mapping) =
+            OpusMSEncoder::new_surround(48000, 6, 1, OPUS_APPLICATION_AUDIO)
+                .expect("surround multistream encoder");
+        let mut packet = vec![0u8; 4000];
+        let pcm = patterned_pcm_i16(960, 6, 17);
+        let len = enc
+            .encode(&pcm, 960, &mut packet, 4000)
+            .expect("encode valid multistream packet");
+
+        let mut dec = OpusMSDecoder::new(48000, 6, streams, coupled, &mapping)
+            .expect("surround multistream decoder");
+        let mut out = vec![0i16; 960 * 6];
+
+        assert_eq!(
+            dec.decode(Some(&packet[..len as usize]), -1, &mut out, 960, false),
+            Err(OPUS_BAD_ARG)
+        );
+        assert_eq!(
+            dec.decode(Some(&packet[..1]), 1, &mut out, 960, false),
+            Err(OPUS_INVALID_PACKET)
+        );
+        assert_eq!(
+            dec.decode(Some(&packet[..len as usize]), len, &mut out, 0, false),
+            Err(OPUS_BAD_ARG)
+        );
+        assert_eq!(
+            dec.decode(Some(&packet[..len as usize]), 0, &mut out, 960, false),
+            Ok(960)
+        );
+        assert_eq!(
+            dec.decode(Some(&packet[..len as usize]), len, &mut out, 120, false),
+            Err(OPUS_BUFFER_TOO_SMALL)
+        );
+        assert_eq!(
+            dec.decode(Some(&packet[..len as usize]), len, &mut out, 960, false),
+            Ok(960)
+        );
+        assert!(out.iter().any(|&sample| sample != 0));
+    }
+
+    #[test]
+    fn test_surround_and_ambisonics_construction_paths() {
+        assert!(matches!(
+            OpusMSEncoder::new_surround(48000, 3, 0, OPUS_APPLICATION_AUDIO),
+            Err(OPUS_UNIMPLEMENTED)
+        ));
+        assert!(matches!(
+            OpusMSEncoder::new_surround(48000, 9, 1, OPUS_APPLICATION_AUDIO),
+            Err(OPUS_UNIMPLEMENTED)
+        ));
+        assert!(matches!(
+            OpusMSEncoder::new_surround(48000, 5, 2, OPUS_APPLICATION_AUDIO),
+            Err(OPUS_BAD_ARG)
+        ));
+
+        let (mut enc, streams, coupled, mapping) =
+            OpusMSEncoder::new_surround(48000, 9, 2, OPUS_APPLICATION_AUDIO)
+                .expect("ambisonics multistream encoder");
+        assert_eq!(streams, 9);
+        assert_eq!(coupled, 0);
+        assert_eq!(&mapping[..9], &[0, 1, 2, 3, 4, 5, 6, 7, 8]);
+
+        let pcm = patterned_pcm_i16(960, 9, 23);
+        let mut packet = vec![0u8; 4000];
+        let len = enc
+            .encode(&pcm, 960, &mut packet, 4000)
+            .expect("ambisonics encode");
+        assert!(len > 0);
+        assert_eq!(enc.nb_streams(), 9);
+        assert_eq!(enc.nb_coupled_streams(), 0);
+        assert!(enc.get_final_range() != 0);
+
+        let mut dec = OpusMSDecoder::new(48000, 9, streams, coupled, &mapping)
+            .expect("ambisonics multistream decoder");
+        let mut out = vec![0i16; 960 * 9];
+        let decoded = dec
+            .decode(Some(&packet[..len as usize]), len, &mut out, 960, false)
+            .expect("ambisonics decode");
+        assert_eq!(decoded, 960);
+        assert_eq!(dec.nb_streams(), 9);
+        assert_eq!(dec.nb_coupled_streams(), 0);
+        assert!(out.iter().any(|&sample| sample != 0));
+    }
+
+    #[test]
+    fn test_projection_encoder_decoder_roundtrip_and_invalid_inputs() {
+        assert!(matches!(
+            OpusProjectionEncoder::new(48000, 5, 3, OPUS_APPLICATION_AUDIO),
+            Err(OPUS_BAD_ARG)
+        ));
+        assert!(matches!(
+            OpusProjectionEncoder::new(48000, 4, 2, OPUS_APPLICATION_AUDIO),
+            Err(OPUS_BAD_ARG)
+        ));
+        assert!(matches!(
+            OpusProjectionDecoder::new(48000, 5, 5, 0, &[0u8; 48], 48),
+            Err(OPUS_BAD_ARG)
+        ));
+
+        let (mut enc, streams, coupled) =
+            OpusProjectionEncoder::new(48000, 9, 3, OPUS_APPLICATION_AUDIO)
+                .expect("projection encoder");
+        assert_eq!(streams, 5);
+        assert_eq!(coupled, 4);
+        assert_eq!(enc.get_demixing_matrix_gain(), 3050);
+        assert_eq!(enc.get_demixing_matrix_size(), 9 * (streams + coupled) * 2);
+
+        let demixing = enc.get_demixing_matrix();
+        let mut dec = OpusProjectionDecoder::new(
+            48000,
+            9,
+            streams,
+            coupled,
+            &demixing,
+            enc.get_demixing_matrix_size(),
+        )
+        .expect("projection decoder");
+        assert_eq!(dec.get_sample_rate(), 48000);
+
+        let pcm = vec![0i16; 960 * 9];
+        let mut packet = vec![0u8; 4000];
+        let len = enc
+            .encode(&pcm, 960, &mut packet, 4000)
+            .expect("projection encode");
+        assert!(len > 0);
+
+        let mut out = vec![1i16; 960 * 9];
+        let decoded = dec
+            .decode(Some(&packet[..len as usize]), len, &mut out, 960, false)
+            .expect("projection decode");
+        assert_eq!(decoded, 960);
+        assert!(out.iter().all(|&sample| sample == 0));
     }
 }

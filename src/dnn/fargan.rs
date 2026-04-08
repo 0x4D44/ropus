@@ -11,9 +11,9 @@
 //! computation, exp, float-to-int16 conversion).
 
 use super::core::{
-    ACTIVATION_LINEAR, ACTIVATION_SIGMOID, ACTIVATION_TANH, LinearLayer, WeightArray,
     compute_generic_conv1d, compute_generic_dense, compute_generic_gru, compute_glu, linear_init,
-    parse_weights,
+    parse_weights, LinearLayer, WeightArray, ACTIVATION_LINEAR, ACTIVATION_SIGMOID,
+    ACTIVATION_TANH,
 };
 use super::lpcnet::{LPCNET_FRAME_SIZE, NB_BANDS, NB_FEATURES, PITCH_MAX_PERIOD};
 
@@ -1001,6 +1001,157 @@ impl FarganState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dnn::core::{WeightArray, WEIGHT_TYPE_FLOAT, WEIGHT_TYPE_INT8};
+
+    fn zero_f32_array(name: &'static str, len: usize) -> WeightArray {
+        WeightArray {
+            name: name.to_string(),
+            weight_type: WEIGHT_TYPE_FLOAT,
+            size: len * 4,
+            data: vec![0u8; len * 4],
+        }
+    }
+
+    fn zero_i8_array(name: &'static str, len: usize) -> WeightArray {
+        WeightArray {
+            name: name.to_string(),
+            weight_type: WEIGHT_TYPE_INT8,
+            size: len,
+            data: vec![0u8; len],
+        }
+    }
+
+    fn valid_zero_weight_arrays() -> Vec<WeightArray> {
+        vec![
+            // Conditioning network
+            zero_f32_array("cond_net_pembed_bias", COND_NET_PEMBED_OUT_SIZE),
+            zero_f32_array(
+                "cond_net_pembed_weights_float",
+                PEMBED_NUM_ENTRIES * COND_NET_PEMBED_OUT_SIZE,
+            ),
+            zero_f32_array("cond_net_fdense1_bias", COND_NET_FCONV1_IN_SIZE),
+            zero_f32_array("cond_net_fconv1_bias", COND_NET_FCONV1_OUT_SIZE),
+            zero_i8_array(
+                "cond_net_fconv1_weights_int8",
+                COND_NET_FCONV1_IN_SIZE * 3 * COND_NET_FCONV1_OUT_SIZE,
+            ),
+            zero_f32_array("cond_net_fconv1_subias", COND_NET_FCONV1_OUT_SIZE),
+            zero_f32_array("cond_net_fconv1_scale", COND_NET_FCONV1_OUT_SIZE),
+            zero_f32_array("cond_net_fdense2_bias", COND_NET_FDENSE2_OUT_SIZE),
+            zero_i8_array(
+                "cond_net_fdense2_weights_int8",
+                COND_NET_FCONV1_OUT_SIZE * COND_NET_FDENSE2_OUT_SIZE,
+            ),
+            zero_f32_array("cond_net_fdense2_subias", COND_NET_FDENSE2_OUT_SIZE),
+            zero_f32_array("cond_net_fdense2_scale", COND_NET_FDENSE2_OUT_SIZE),
+            // Signal network
+            zero_f32_array("sig_net_cond_gain_dense_bias", 1),
+            zero_f32_array("sig_net_fwc0_conv_bias", SIG_NET_FWC0_CONV_OUT_SIZE),
+            zero_i8_array(
+                "sig_net_fwc0_conv_weights_int8",
+                SIG_NET_INPUT_SIZE * 2 * SIG_NET_FWC0_CONV_OUT_SIZE,
+            ),
+            zero_f32_array("sig_net_fwc0_conv_subias", SIG_NET_FWC0_CONV_OUT_SIZE),
+            zero_f32_array("sig_net_fwc0_conv_scale", SIG_NET_FWC0_CONV_OUT_SIZE),
+            zero_f32_array("sig_net_fwc0_glu_gate_bias", SIG_NET_FWC0_GLU_GATE_OUT_SIZE),
+            zero_i8_array(
+                "sig_net_fwc0_glu_gate_weights_int8",
+                SIG_NET_FWC0_CONV_OUT_SIZE * SIG_NET_FWC0_GLU_GATE_OUT_SIZE,
+            ),
+            zero_f32_array(
+                "sig_net_fwc0_glu_gate_subias",
+                SIG_NET_FWC0_GLU_GATE_OUT_SIZE,
+            ),
+            zero_f32_array(
+                "sig_net_fwc0_glu_gate_scale",
+                SIG_NET_FWC0_GLU_GATE_OUT_SIZE,
+            ),
+            zero_f32_array("sig_net_gain_dense_out_bias", 4),
+            zero_f32_array(
+                "sig_net_gain_dense_out_weights_float",
+                SIG_NET_FWC0_GLU_GATE_OUT_SIZE * 4,
+            ),
+            zero_i8_array(
+                "sig_net_gru1_input_weights_int8",
+                (SIG_NET_FWC0_GLU_GATE_OUT_SIZE + 2 * FARGAN_SUBFRAME_SIZE)
+                    * (3 * SIG_NET_GRU1_STATE_SIZE),
+            ),
+            zero_f32_array("sig_net_gru1_input_subias", 3 * SIG_NET_GRU1_STATE_SIZE),
+            zero_f32_array("sig_net_gru1_input_scale", 3 * SIG_NET_GRU1_STATE_SIZE),
+            zero_i8_array(
+                "sig_net_gru1_recurrent_weights_int8",
+                SIG_NET_GRU1_STATE_SIZE * (3 * SIG_NET_GRU1_STATE_SIZE),
+            ),
+            zero_f32_array("sig_net_gru1_recurrent_subias", 3 * SIG_NET_GRU1_STATE_SIZE),
+            zero_f32_array("sig_net_gru1_recurrent_scale", 3 * SIG_NET_GRU1_STATE_SIZE),
+            zero_i8_array(
+                "sig_net_gru1_glu_gate_weights_int8",
+                SIG_NET_GRU1_OUT_SIZE * SIG_NET_GRU1_OUT_SIZE,
+            ),
+            zero_f32_array("sig_net_gru1_glu_gate_bias", SIG_NET_GRU1_OUT_SIZE),
+            zero_f32_array("sig_net_gru1_glu_gate_subias", SIG_NET_GRU1_OUT_SIZE),
+            zero_f32_array("sig_net_gru1_glu_gate_scale", SIG_NET_GRU1_OUT_SIZE),
+            zero_i8_array(
+                "sig_net_gru2_input_weights_int8",
+                (SIG_NET_GRU1_OUT_SIZE + 2 * FARGAN_SUBFRAME_SIZE) * (3 * SIG_NET_GRU2_STATE_SIZE),
+            ),
+            zero_f32_array("sig_net_gru2_input_subias", 3 * SIG_NET_GRU2_STATE_SIZE),
+            zero_f32_array("sig_net_gru2_input_scale", 3 * SIG_NET_GRU2_STATE_SIZE),
+            zero_i8_array(
+                "sig_net_gru2_recurrent_weights_int8",
+                SIG_NET_GRU2_STATE_SIZE * (3 * SIG_NET_GRU2_STATE_SIZE),
+            ),
+            zero_f32_array("sig_net_gru2_recurrent_subias", 3 * SIG_NET_GRU2_STATE_SIZE),
+            zero_f32_array("sig_net_gru2_recurrent_scale", 3 * SIG_NET_GRU2_STATE_SIZE),
+            zero_i8_array(
+                "sig_net_gru2_glu_gate_weights_int8",
+                SIG_NET_GRU2_OUT_SIZE * SIG_NET_GRU2_OUT_SIZE,
+            ),
+            zero_f32_array("sig_net_gru2_glu_gate_bias", SIG_NET_GRU2_OUT_SIZE),
+            zero_f32_array("sig_net_gru2_glu_gate_subias", SIG_NET_GRU2_OUT_SIZE),
+            zero_f32_array("sig_net_gru2_glu_gate_scale", SIG_NET_GRU2_OUT_SIZE),
+            zero_i8_array(
+                "sig_net_gru3_input_weights_int8",
+                (SIG_NET_GRU2_OUT_SIZE + 2 * FARGAN_SUBFRAME_SIZE) * (3 * SIG_NET_GRU3_STATE_SIZE),
+            ),
+            zero_f32_array("sig_net_gru3_input_subias", 3 * SIG_NET_GRU3_STATE_SIZE),
+            zero_f32_array("sig_net_gru3_input_scale", 3 * SIG_NET_GRU3_STATE_SIZE),
+            zero_i8_array(
+                "sig_net_gru3_recurrent_weights_int8",
+                SIG_NET_GRU3_STATE_SIZE * (3 * SIG_NET_GRU3_STATE_SIZE),
+            ),
+            zero_f32_array("sig_net_gru3_recurrent_subias", 3 * SIG_NET_GRU3_STATE_SIZE),
+            zero_f32_array("sig_net_gru3_recurrent_scale", 3 * SIG_NET_GRU3_STATE_SIZE),
+            zero_i8_array(
+                "sig_net_gru3_glu_gate_weights_int8",
+                SIG_NET_GRU3_OUT_SIZE * SIG_NET_GRU3_OUT_SIZE,
+            ),
+            zero_f32_array("sig_net_gru3_glu_gate_bias", SIG_NET_GRU3_OUT_SIZE),
+            zero_f32_array("sig_net_gru3_glu_gate_subias", SIG_NET_GRU3_OUT_SIZE),
+            zero_f32_array("sig_net_gru3_glu_gate_scale", SIG_NET_GRU3_OUT_SIZE),
+            zero_f32_array("sig_net_skip_dense_bias", SIG_NET_SKIP_DENSE_OUT_SIZE),
+            zero_i8_array(
+                "sig_net_skip_dense_weights_int8",
+                SKIP_CAT_SIZE * SIG_NET_SKIP_DENSE_OUT_SIZE,
+            ),
+            zero_f32_array("sig_net_skip_dense_subias", SIG_NET_SKIP_DENSE_OUT_SIZE),
+            zero_f32_array("sig_net_skip_dense_scale", SIG_NET_SKIP_DENSE_OUT_SIZE),
+            zero_f32_array("sig_net_skip_glu_gate_bias", SIG_NET_SKIP_DENSE_OUT_SIZE),
+            zero_i8_array(
+                "sig_net_skip_glu_gate_weights_int8",
+                SIG_NET_SKIP_DENSE_OUT_SIZE * SIG_NET_SKIP_DENSE_OUT_SIZE,
+            ),
+            zero_f32_array("sig_net_skip_glu_gate_subias", SIG_NET_SKIP_DENSE_OUT_SIZE),
+            zero_f32_array("sig_net_skip_glu_gate_scale", SIG_NET_SKIP_DENSE_OUT_SIZE),
+            zero_i8_array(
+                "sig_net_sig_dense_out_weights_int8",
+                SIG_NET_SKIP_DENSE_OUT_SIZE * FARGAN_SUBFRAME_SIZE,
+            ),
+            zero_f32_array("sig_net_sig_dense_out_bias", FARGAN_SUBFRAME_SIZE),
+            zero_f32_array("sig_net_sig_dense_out_subias", FARGAN_SUBFRAME_SIZE),
+            zero_f32_array("sig_net_sig_dense_out_scale", FARGAN_SUBFRAME_SIZE),
+        ]
+    }
 
     #[test]
     fn test_constants_consistency() {
@@ -1151,12 +1302,46 @@ mod tests {
     }
 
     #[test]
-    fn test_cont_primes_state_from_pcm_history() {
-        let mut st = FarganState::new_empty();
+    fn test_new_with_zero_weights_initializes_real_model() {
+        let st = FarganState::new(&valid_zero_weight_arrays()).expect("zero model");
+        assert!(!st.cont_initialized);
+        assert_eq!(st.last_period, 0);
+        assert_eq!(
+            st.model
+                .cond_net_pembed
+                .float_weights
+                .as_ref()
+                .unwrap()
+                .len(),
+            PEMBED_NUM_ENTRIES * COND_NET_PEMBED_OUT_SIZE
+        );
+    }
+
+    #[test]
+    fn test_compute_fargan_cond_clamps_pitch_embedding_index() {
+        let st = FarganState::new(&valid_zero_weight_arrays()).expect("zero model");
+        let mut cond = [0.0f32; COND_NET_FDENSE2_OUT_SIZE];
+        let mut cond_state = st.cond_conv1_state.clone();
+        let features = [0.0f32; NB_FEATURES];
+
+        compute_fargan_cond(&st.model, &mut cond_state, &mut cond, &features, 23);
+        assert!(cond.iter().all(|x| x.is_finite()));
+
+        let mut high_features = [0.0f32; NB_FEATURES];
+        high_features[NB_BANDS] = -1.5;
+        compute_fargan_cond(&st.model, &mut cond_state, &mut cond, &high_features, 256);
+        assert!(cond.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn test_cont_and_synthesize_update_state_with_zero_model() {
+        let mut st = FarganState::new(&valid_zero_weight_arrays()).expect("zero model");
         let pcm0: Vec<f32> = (0..FARGAN_CONT_SAMPLES)
             .map(|i| (i as f32 / FARGAN_CONT_SAMPLES as f32) - 0.5)
             .collect();
-        let features0 = vec![0.0f32; 5 * NB_FEATURES];
+        let mut features0 = vec![0.0f32; 5 * NB_FEATURES];
+        features0[NB_BANDS] = 2.0;
+        features0[NB_FEATURES + NB_BANDS] = -1.5;
 
         st.cont(&pcm0, &features0);
 
@@ -1167,11 +1352,26 @@ mod tests {
         assert!(st.gru1_state.iter().all(|x| x.is_finite()));
         assert!(st.gru2_state.iter().all(|x| x.is_finite()));
         assert!(st.gru3_state.iter().all(|x| x.is_finite()));
+        assert_eq!(
+            st.last_period,
+            decode_pitch_period(&features0[3 * NB_FEATURES..4 * NB_FEATURES])
+        );
+
+        let mut pcm = [0.0f32; FARGAN_FRAME_SIZE];
+        let mut synth_features = [0.0f32; NB_FEATURES];
+        synth_features[NB_BANDS] = 2.0;
+        st.synthesize(&mut pcm, &synth_features);
+        assert!(pcm.iter().all(|x| x.is_finite()));
+        assert_eq!(st.last_period, decode_pitch_period(&synth_features));
+
+        let mut pcm_i16 = [0i16; LPCNET_FRAME_SIZE];
+        st.synthesize_int(&mut pcm_i16, &synth_features);
+        assert!(pcm_i16.iter().all(|&x| x == 0));
     }
 
     #[test]
     fn test_synthesize_updates_last_period_and_outputs_finite_samples() {
-        let mut st = FarganState::new_empty();
+        let mut st = FarganState::new(&valid_zero_weight_arrays()).expect("zero model");
         let pcm0 = vec![0.0f32; FARGAN_CONT_SAMPLES];
         let mut features = [0.0f32; NB_FEATURES];
         features[NB_BANDS] = 0.25;
@@ -1185,6 +1385,6 @@ mod tests {
 
         let mut pcm_i16 = [0i16; LPCNET_FRAME_SIZE];
         st.synthesize_int(&mut pcm_i16, &features);
-        assert!(pcm_i16.iter().all(|x| *x >= -32767 && *x <= 32767));
+        assert!(pcm_i16.iter().all(|&x| x == 0));
     }
 }
