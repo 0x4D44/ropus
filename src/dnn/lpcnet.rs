@@ -2211,6 +2211,8 @@ impl LPCNetPLCState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dnn::core;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
 
     fn patterned_pcm(seed: i32) -> [i16; FRAME_SIZE] {
         let mut pcm = [0i16; FRAME_SIZE];
@@ -2219,6 +2221,100 @@ mod tests {
             *sample = v as i16;
         }
         pcm
+    }
+
+    fn patterned_frame(seed: i32) -> [f32; FRAME_SIZE] {
+        let pcm = patterned_pcm(seed);
+        let mut input = [0.0f32; FRAME_SIZE];
+        for (dst, src) in input.iter_mut().zip(pcm) {
+            *dst = src as f32 / 32768.0;
+        }
+        input
+    }
+
+    fn append_weight_record(blob: &mut Vec<u8>, name: &str, weight_type: i32, payload_len: usize) {
+        let mut record = vec![0u8; core::WEIGHT_BLOCK_SIZE + payload_len];
+        record[4..8].copy_from_slice(&core::WEIGHT_BLOB_VERSION.to_ne_bytes());
+        record[8..12].copy_from_slice(&weight_type.to_ne_bytes());
+        record[12..16].copy_from_slice(&(payload_len as i32).to_ne_bytes());
+        record[16..20].copy_from_slice(&(payload_len as i32).to_ne_bytes());
+        let name_bytes = name.as_bytes();
+        record[20..20 + name_bytes.len()].copy_from_slice(name_bytes);
+        blob.extend_from_slice(&record);
+    }
+
+    fn append_float_record(blob: &mut Vec<u8>, name: &str, count: usize) {
+        append_weight_record(blob, name, core::WEIGHT_TYPE_FLOAT, count * 4);
+    }
+
+    fn append_int8_record(blob: &mut Vec<u8>, name: &str, count: usize) {
+        append_weight_record(blob, name, core::WEIGHT_TYPE_INT8, count);
+    }
+
+    fn make_pitchdnn_weight_blob() -> Vec<u8> {
+        let mut blob = Vec::new();
+
+        for name in [
+            "dense_if_upsampler_1_bias",
+            "dense_if_upsampler_1_subias",
+            "dense_if_upsampler_1_scale",
+        ] {
+            append_float_record(&mut blob, name, 64);
+        }
+        append_int8_record(&mut blob, "dense_if_upsampler_1_weights_int8", 88 * 64);
+
+        for name in [
+            "dense_if_upsampler_2_bias",
+            "dense_if_upsampler_2_subias",
+            "dense_if_upsampler_2_scale",
+        ] {
+            append_float_record(&mut blob, name, 64);
+        }
+        append_int8_record(&mut blob, "dense_if_upsampler_2_weights_int8", 64 * 64);
+
+        append_float_record(&mut blob, "conv2d_1_bias", 4);
+        append_float_record(&mut blob, "conv2d_1_weight_float", 4 * 3 * 3);
+
+        append_float_record(&mut blob, "conv2d_2_bias", 1);
+        append_float_record(&mut blob, "conv2d_2_weight_float", 4 * 3 * 3);
+
+        for name in [
+            "dense_downsampler_bias",
+            "dense_downsampler_subias",
+            "dense_downsampler_scale",
+        ] {
+            append_float_record(&mut blob, name, 64);
+        }
+        append_int8_record(&mut blob, "dense_downsampler_weights_int8", 288 * 64);
+
+        for name in [
+            "gru_1_input_bias",
+            "gru_1_input_subias",
+            "gru_1_input_scale",
+        ] {
+            append_float_record(&mut blob, name, 3 * 64);
+        }
+        append_int8_record(&mut blob, "gru_1_input_weights_int8", 64 * 3 * 64);
+
+        for name in [
+            "gru_1_recurrent_bias",
+            "gru_1_recurrent_subias",
+            "gru_1_recurrent_scale",
+        ] {
+            append_float_record(&mut blob, name, 3 * 64);
+        }
+        append_int8_record(&mut blob, "gru_1_recurrent_weights_int8", 64 * 3 * 64);
+
+        for name in [
+            "dense_final_upsampler_bias",
+            "dense_final_upsampler_subias",
+            "dense_final_upsampler_scale",
+        ] {
+            append_float_record(&mut blob, name, 3 * 64);
+        }
+        append_int8_record(&mut blob, "dense_final_upsampler_weights_int8", 64 * 3 * 64);
+
+        blob
     }
 
     #[test]
@@ -2438,9 +2534,27 @@ mod tests {
     }
 
     #[test]
+    fn test_lpcnet_state_load_model_accepts_valid_blob() {
+        let mut blob = Vec::new();
+        append_float_record(&mut blob, "demo", 1);
+
+        let mut st = LPCNetState::new();
+        assert_eq!(st.load_model(&blob), 0);
+    }
+
+    #[test]
     fn test_plc_load_model_invalid_blob_returns_error() {
         let mut plc = LPCNetPLCState::new();
         assert_eq!(plc.load_model(&[1, 2, 3]), -1);
+        assert!(!plc.loaded);
+    }
+
+    #[test]
+    fn test_plc_load_model_accepts_encoder_blob_but_not_fargan_blob() {
+        let blob = make_pitchdnn_weight_blob();
+
+        let mut plc = LPCNetPLCState::new();
+        assert_eq!(plc.load_model(&blob), 0);
         assert!(!plc.loaded);
     }
 
@@ -2498,16 +2612,28 @@ mod tests {
 
         let mut synthesized = [0i16; FRAME_SIZE];
         st.synthesize(&features, &mut synthesized, FRAME_SIZE);
-        assert!(
-            synthesized
-                .iter()
-                .all(|&x| (-32767..=32767).contains(&(x as i32)))
-        );
+        assert!(synthesized
+            .iter()
+            .all(|&x| (-32767..=32767).contains(&(x as i32))));
 
         let pcm_in = [123i16; FRAME_SIZE];
         let mut blended = [0i16; FRAME_SIZE];
         st.synthesize_blend(&pcm_in, &mut blended, FRAME_SIZE);
         assert_eq!(blended, pcm_in);
+    }
+
+    #[test]
+    fn test_compute_frame_features_updates_state_before_pitchdnn_panic() {
+        let mut enc = LPCNetEncState::new();
+        let input = patterned_frame(7);
+
+        let result = catch_unwind(AssertUnwindSafe(|| enc.compute_frame_features(&input)));
+        assert!(result.is_err());
+        assert!(enc.analysis_mem.iter().any(|&v| v != 0.0));
+        assert!(enc.pitch_mem.iter().any(|&v| v != 0.0));
+        assert!(enc.prev_if.iter().any(|c| c.r != 0.0 || c.i != 0.0));
+        assert!(enc.features[..NB_BANDS].iter().any(|&v| v != 0.0));
+        assert!(enc.lpc.iter().any(|&v| v != 0.0));
     }
 
     #[test]

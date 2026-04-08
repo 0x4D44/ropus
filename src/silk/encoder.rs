@@ -8716,6 +8716,172 @@ mod tests {
     }
 
     #[test]
+    fn test_control_audio_bandwidth_initializes_from_zero_state() {
+        let mut ctrl = SilkEncControlStruct::default();
+        let mut state = SilkEncoderState::default();
+        state.desired_internal_fs_hz = 12_000;
+        state.api_fs_hz = 8_000;
+        state.max_internal_fs_hz = 16_000;
+        state.min_internal_fs_hz = 8_000;
+
+        assert_eq!(silk_control_audio_bandwidth(&mut state, &mut ctrl), 8);
+    }
+
+    #[test]
+    fn test_control_audio_bandwidth_switch_state_machine_edges() {
+        let mut down_ctrl = SilkEncControlStruct::default();
+        let mut down_state = SilkEncoderState::default();
+        down_state.fs_khz = 0;
+        down_state.s_lp.saved_fs_khz = 16;
+        down_state.desired_internal_fs_hz = 8_000;
+        down_state.api_fs_hz = 48_000;
+        down_state.max_internal_fs_hz = 16_000;
+        down_state.min_internal_fs_hz = 8_000;
+        down_state.allow_bandwidth_switch = 1;
+        down_state.s_lp.mode = 0;
+
+        assert_eq!(
+            silk_control_audio_bandwidth(&mut down_state, &mut down_ctrl),
+            16
+        );
+        assert_eq!(down_state.s_lp.transition_frame_no, TRANSITION_FRAMES);
+        assert_eq!(down_state.s_lp.mode, -2);
+        assert_eq!(down_state.s_lp.in_lp_state, [0; 2]);
+
+        let mut up_wait_ctrl = SilkEncControlStruct::default();
+        up_wait_ctrl.payload_size_ms = 20;
+        up_wait_ctrl.max_bits = 1_000;
+        let mut up_wait_state = SilkEncoderState::default();
+        up_wait_state.fs_khz = 8;
+        up_wait_state.desired_internal_fs_hz = 16_000;
+        up_wait_state.api_fs_hz = 48_000;
+        up_wait_state.max_internal_fs_hz = 16_000;
+        up_wait_state.min_internal_fs_hz = 8_000;
+        up_wait_state.allow_bandwidth_switch = 1;
+        up_wait_state.s_lp.mode = 0;
+
+        assert_eq!(
+            silk_control_audio_bandwidth(&mut up_wait_state, &mut up_wait_ctrl),
+            8
+        );
+        assert_eq!(up_wait_ctrl.switch_ready, 1);
+        assert_eq!(up_wait_ctrl.max_bits, 800);
+
+        let mut up_recover_ctrl = SilkEncControlStruct::default();
+        let mut up_recover_state = SilkEncoderState::default();
+        up_recover_state.fs_khz = 8;
+        up_recover_state.desired_internal_fs_hz = 16_000;
+        up_recover_state.api_fs_hz = 48_000;
+        up_recover_state.max_internal_fs_hz = 16_000;
+        up_recover_state.min_internal_fs_hz = 8_000;
+        up_recover_state.allow_bandwidth_switch = 1;
+        up_recover_state.s_lp.mode = -1;
+
+        assert_eq!(
+            silk_control_audio_bandwidth(&mut up_recover_state, &mut up_recover_ctrl),
+            8
+        );
+        assert_eq!(up_recover_state.s_lp.mode, 1);
+
+        let mut reset_ctrl = SilkEncControlStruct::default();
+        let mut reset_state = SilkEncoderState::default();
+        reset_state.fs_khz = 8;
+        reset_state.desired_internal_fs_hz = 8_000;
+        reset_state.api_fs_hz = 48_000;
+        reset_state.max_internal_fs_hz = 16_000;
+        reset_state.min_internal_fs_hz = 8_000;
+        reset_state.allow_bandwidth_switch = 1;
+        reset_state.s_lp.mode = -1;
+        reset_state.s_lp.transition_frame_no = TRANSITION_FRAMES;
+
+        assert_eq!(
+            silk_control_audio_bandwidth(&mut reset_state, &mut reset_ctrl),
+            8
+        );
+        assert_eq!(reset_state.s_lp.mode, 0);
+    }
+
+    #[test]
+    fn test_setup_complexity_boundary_tiers_and_cap() {
+        let cases = [
+            (1, SILK_PE_MID_COMPLEX, 8, 14, 1, 0, 3),
+            (2, SILK_PE_MIN_COMPLEX, 6, 12, 2, 0, 2),
+            (3, SILK_PE_MID_COMPLEX, 8, 14, 2, 0, 4),
+            (4, SILK_PE_MID_COMPLEX, 8, 16, 2, 1, 6),
+            (6, SILK_PE_MID_COMPLEX, 8, 20, 3, 1, 8),
+            (
+                8,
+                SILK_PE_MAX_COMPLEX,
+                8,
+                24,
+                MAX_DEL_DEC_STATES as i32,
+                1,
+                16,
+            ),
+        ];
+
+        for (
+            complexity,
+            expected_complexity,
+            expected_pitch_order,
+            expected_shaping_order,
+            expected_delayed_states,
+            expected_interpolated,
+            expected_survivors,
+        ) in cases
+        {
+            let mut state = SilkEncoderState::default();
+            state.fs_khz = 16;
+            state.predict_lpc_order = 8;
+
+            silk_setup_complexity(&mut state, complexity);
+
+            assert_eq!(state.pitch_estimation_complexity, expected_complexity);
+            assert_eq!(state.pitch_estimation_lpc_order, expected_pitch_order);
+            assert_eq!(state.shaping_lpc_order, expected_shaping_order);
+            assert_eq!(state.n_states_delayed_decision, expected_delayed_states);
+            assert_eq!(state.use_interpolated_nlsfs, expected_interpolated);
+            assert_eq!(state.nlsf_msvq_survivors, expected_survivors);
+            assert_eq!(state.complexity, complexity);
+        }
+    }
+
+    #[test]
+    fn test_setup_lbrr_disable_leaves_gain_unchanged() {
+        let mut state = SilkEncoderState::default();
+        state.lbrr_enabled = 1;
+        state.lbrr_gain_increases = 5;
+        state.packet_loss_perc = 50;
+
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.lbrr_coded = 0;
+
+        assert_eq!(silk_setup_lbrr(&mut state, &ctrl), 0);
+        assert_eq!(state.lbrr_enabled, 0);
+        assert_eq!(state.lbrr_gain_increases, 5);
+    }
+
+    #[test]
+    fn test_setup_fs_rejects_short_invalid_packet_size() {
+        let mut state = SilkEncoderStateFix::default();
+        state.s_cmn.packet_size_ms = 20;
+        state.s_cmn.fs_khz = 8;
+
+        assert_eq!(
+            silk_setup_fs(&mut state, 8, 5),
+            SILK_ENC_PACKET_SIZE_NOT_SUPPORTED
+        );
+        assert_eq!(state.s_cmn.packet_size_ms, 5);
+        assert_eq!(state.s_cmn.n_frames_per_packet, 1);
+        assert_eq!(state.s_cmn.nb_subfr, 1);
+        assert_eq!(state.s_cmn.frame_length, 40);
+        assert_eq!(
+            state.s_cmn.pitch_lpc_win_length,
+            FIND_PITCH_LPC_WIN_MS_2_SF * 8
+        );
+    }
+
+    #[test]
     fn test_gains_quant_roundtrip() {
         let mut gains_q16 = [65536i32, 80000, 50000, 65536];
         let mut ind = [0i8; 4];
