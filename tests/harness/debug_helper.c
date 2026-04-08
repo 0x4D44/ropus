@@ -460,6 +460,29 @@ void debug_c_decode_energy(
     /* For fine energy, we'd need the allocation -- skip for now, just compare coarse */
 }
 
+/* Return the preemph_memD from the CELT decoder */
+void debug_get_celt_preemph_mem(OpusDecoder *opus_dec, opus_int32 *out_mem) {
+    OpusDecoderOffsets *hdr = (OpusDecoderOffsets *)opus_dec;
+    struct CELTDecoder_trace *celt =
+        (struct CELTDecoder_trace *)((char *)opus_dec + hdr->celt_dec_offset);
+    out_mem[0] = celt->preemph_memD[0];
+    out_mem[1] = celt->preemph_memD[1];
+}
+
+/* Return decode_mem samples from the CELT decoder.
+ * offset: sample offset within channel 0's decode_mem
+ * count: number of samples to return
+ * out: output buffer */
+void debug_get_celt_decode_mem(OpusDecoder *opus_dec, int offset, int count, opus_int32 *out) {
+    OpusDecoderOffsets *hdr = (OpusDecoderOffsets *)opus_dec;
+    struct CELTDecoder_trace *celt =
+        (struct CELTDecoder_trace *)((char *)opus_dec + hdr->celt_dec_offset);
+    int i;
+    for (i = 0; i < count; i++) {
+        out[i] = celt->decode_mem[offset + i];
+    }
+}
+
 /* Return the full oldBandE array from the CELT decoder.
  * out_buf must have room for 2*nbEBands i32 values.
  * Returns nbEBands (caller knows total length = 2*nbEBands). */

@@ -588,7 +588,8 @@ fn prefilter_and_fold(
                         + mult16_32_q15(g10, buf[idx - t1])
                         + mult16_32_q15(g11, add32(buf[idx + 1 - t1], buf[idx - 1 - t1]))
                         + mult16_32_q15(g12, add32(buf[idx + 2 - t1], buf[idx - 2 - t1]));
-                    etmp[i] = val;
+                    // Fixed-point bias correction matching C comb_filter_const_c: SUB32(y[i], 1)
+                    etmp[i] = saturate(val - 1, SIG_SAT);
                 }
             }
         }

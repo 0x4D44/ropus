@@ -5932,6 +5932,132 @@ fn cmd_hp_cutoff_compare() {
     }
 }
 
+fn cmd_debug_decode_25ms() {
+    // Debug: decode 2.5ms frames at 48k/1ch/64kbps AUDIO and compare per-frame
+    use mdopus::opus::decoder::OpusDecoder as RustDecoder;
+    use mdopus::opus::encoder::OpusEncoder as RustEncoder;
+
+    let sr = 48000;
+    let ch = 1;
+    let bitrate = 64000;
+    let frame_ms = 2.5f64;
+    let frame_size = (sr as f64 * frame_ms / 1000.0) as usize; // 120
+
+    // Generate noise input
+    let pcm = generate_noise(sr, ch, 0.1, 42); // 100ms
+
+    // Encode with C reference (using AUDIO mode)
+    let mut cfg = EncodeConfig::new(sr, ch);
+    cfg.bitrate = bitrate;
+    cfg.frame_ms = frame_ms;
+    cfg.application = bindings::OPUS_APPLICATION_AUDIO;
+    let encoded = c_encode_cfg(&pcm, &cfg);
+
+    println!("Encoded {} bytes from {} samples (frame_size={})", encoded.len(), pcm.len(), frame_size);
+
+    // Create C decoder
+    let c_dec = unsafe {
+        let mut error: i32 = 0;
+        let dec = bindings::opus_decoder_create(sr, ch, &mut error);
+        assert!(!dec.is_null() && error == bindings::OPUS_OK);
+        dec
+    };
+
+    // Create Rust decoder
+    let mut rust_dec = RustDecoder::new(sr, ch).expect("Rust decoder init");
+
+    let mut c_pcm = vec![0i16; frame_size * ch as usize];
+    let mut rust_pcm = vec![0i16; frame_size * ch as usize];
+    let mut pos = 0;
+    let mut frame_idx = 0;
+
+    while pos + 2 <= encoded.len() {
+        let pkt_len = u16::from_le_bytes([encoded[pos], encoded[pos + 1]]) as usize;
+        pos += 2;
+        if pos + pkt_len > encoded.len() { break; }
+        let pkt = &encoded[pos..pos + pkt_len];
+
+        // C decode
+        let c_ret = unsafe {
+            bindings::opus_decode(
+                c_dec, pkt.as_ptr(), pkt_len as i32,
+                c_pcm.as_mut_ptr(), frame_size as i32, 0,
+            )
+        };
+        assert!(c_ret >= 0);
+
+        // Get C final range
+        let mut c_range: u32 = 0;
+        unsafe { bindings::opus_decoder_ctl(c_dec, 4031i32, &mut c_range as *mut u32); }
+
+        // Rust decode
+        let rust_ret = rust_dec.decode(Some(pkt), &mut rust_pcm, frame_size as i32, false)
+            .expect("Rust decode");
+        let rust_range = rust_dec.get_final_range();
+
+        // Compare
+        let count = (c_ret as usize).min(rust_ret as usize) * ch as usize;
+        let mut max_diff = 0i32;
+        let mut first_diff: Option<usize> = None;
+        let mut ndiff = 0usize;
+        for i in 0..count {
+            let d = (c_pcm[i] as i32 - rust_pcm[i] as i32).abs();
+            if d != 0 {
+                ndiff += 1;
+                if first_diff.is_none() { first_diff = Some(i); }
+                if d > max_diff { max_diff = d; }
+            }
+        }
+
+        // Compare C vs Rust internal state
+        if frame_idx < 3 {
+            // C old_band_e
+            let mut c_band_e = [0i32; 42];
+            unsafe { bindings::debug_get_celt_old_band_e(c_dec, c_band_e.as_mut_ptr(), 42); }
+            let r_band_e = rust_dec.debug_get_old_band_e();
+            let mut be_diff = false;
+            for i in 0..42.min(r_band_e.len()) {
+                if c_band_e[i] != r_band_e[i] {
+                    be_diff = true;
+                    break;
+                }
+            }
+            if be_diff {
+                println!("  old_band_e DIFFER after frame {}:", frame_idx);
+                for i in 0..21.min(r_band_e.len()) {
+                    if c_band_e[i] != r_band_e[i] {
+                        println!("    band[{}]: C={} R={}", i, c_band_e[i], r_band_e[i]);
+                    }
+                }
+            } else {
+                println!("  old_band_e: MATCH after frame {}", frame_idx);
+            }
+        }
+
+        if ndiff == 0 {
+            println!("Frame {:3}: {} bytes, {} samples - MATCH (range: C={:#010x} R={:#010x})",
+                frame_idx, pkt_len, c_ret, c_range, rust_range);
+        } else {
+            println!("Frame {:3}: {} bytes, {} samples - DIFFER: {} diffs, first at sample {}, max_diff={} (range: C={:#010x} R={:#010x})",
+                frame_idx, pkt_len, c_ret, ndiff, first_diff.unwrap(), max_diff, c_range, rust_range);
+            // Print first 10 differing samples
+            let mut shown = 0;
+            for i in 0..count {
+                let d = (c_pcm[i] as i32 - rust_pcm[i] as i32).abs();
+                if d != 0 && shown < 10 {
+                    println!("  sample[{}]: C={} R={} (diff={})", i, c_pcm[i], rust_pcm[i], c_pcm[i] as i32 - rust_pcm[i] as i32);
+                    shown += 1;
+                }
+            }
+        }
+
+        pos += pkt_len;
+        frame_idx += 1;
+    }
+
+    unsafe { bindings::opus_decoder_destroy(c_dec); }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
@@ -6090,6 +6216,9 @@ fn main() {
         }
         "hp-compare" => {
             cmd_hp_cutoff_compare();
+        }
+        "debug-decode-25ms" => {
+            cmd_debug_decode_25ms();
         }
         "test-all" => {
             cmd_test_all();

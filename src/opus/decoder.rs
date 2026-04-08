@@ -1261,6 +1261,10 @@ impl OpusDecoder {
     }
 
     /// Get the CELT decoder's postfilter state (for debug comparison).
+    pub fn debug_get_preemph_mem(&self) -> [i32; 2] {
+        self.celt_dec.preemph_mem_d
+    }
+
     pub fn debug_get_postfilter(&self) -> (i32, i32, i32, i32, i32, i32) {
         (
             self.celt_dec.postfilter_period,

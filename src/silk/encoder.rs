@@ -6906,6 +6906,109 @@ pub fn silk_find_pitch_lags_fix(
 // Encode frame
 // ===========================================================================
 
+/// Low Bitrate Redundancy (LBRR) encoding. Matches C: `silk_LBRR_encode_FIX`.
+/// Reuses all parameters from the current frame but encodes with lower bitrate
+/// for forward error correction.
+fn silk_lbrr_encode_fix(
+    ps_enc: &mut SilkEncoderStateFix,
+    ps_enc_ctrl: &mut SilkEncoderControl,
+    x16: &[i16],
+    cond_coding: i32,
+) {
+    // SILK_FIX_CONST(LBRR_SPEECH_ACTIVITY_THRES, 8) = (0.3 * 256 + 0.5) = 77
+    const LBRR_SPEECH_ACTIVITY_THRES_Q8: i32 = 77;
+
+    if ps_enc.s_cmn.lbrr_enabled == 0
+        || ps_enc.s_cmn.speech_activity_q8 <= LBRR_SPEECH_ACTIVITY_THRES_Q8
+    {
+        return;
+    }
+
+    let n_frames_encoded = ps_enc.s_cmn.n_frames_encoded as usize;
+    let nb_subfr = ps_enc.s_cmn.nb_subfr as usize;
+    let frame_length = ps_enc.s_cmn.frame_length as usize;
+
+    ps_enc.s_cmn.lbrr_flags[n_frames_encoded] = 1;
+
+    // Copy noise shaping quantizer state from regular encoding
+    let mut s_nsq_lbrr = ps_enc.s_cmn.s_nsq.clone();
+
+    // Copy quantization indices from regular encoding
+    let mut indices_lbrr = ps_enc.s_cmn.indices.clone();
+
+    // Save original gains
+    let temp_gains_q16: Vec<i32> = ps_enc_ctrl.gains_q16[..nb_subfr].to_vec();
+
+    if n_frames_encoded == 0 || ps_enc.s_cmn.lbrr_flags[n_frames_encoded - 1] == 0 {
+        // First frame in packet or previous frame not LBRR coded
+        ps_enc.s_cmn.lbrr_prev_last_gain_index = ps_enc.s_shape.last_gain_index;
+
+        // Increase gains to get target LBRR rate
+        indices_lbrr.gains_indices[0] = imin(
+            indices_lbrr.gains_indices[0] as i32 + ps_enc.s_cmn.lbrr_gain_increases,
+            N_LEVELS_QGAIN_I - 1,
+        ) as i8;
+    }
+
+    // Decode to get gains in sync with decoder
+    // Overwrite unquantized gains with quantized gains
+    silk_gains_dequant(
+        &mut ps_enc_ctrl.gains_q16,
+        &indices_lbrr.gains_indices,
+        &mut ps_enc.s_cmn.lbrr_prev_last_gain_index,
+        cond_coding == CODE_CONDITIONALLY,
+        nb_subfr,
+    );
+
+    // Noise shaping quantization
+    let mut pulses_lbrr = vec![0i8; frame_length];
+    if ps_enc.s_cmn.n_states_delayed_decision > 1 || ps_enc.s_cmn.warping_q16 > 0 {
+        silk_nsq_del_dec(
+            &ps_enc.s_cmn,
+            &mut s_nsq_lbrr,
+            &mut indices_lbrr,
+            x16,
+            &mut pulses_lbrr,
+            &ps_enc_ctrl.pred_coef_q12,
+            &ps_enc_ctrl.ltp_coef_q14,
+            &ps_enc_ctrl.ar_q13,
+            &ps_enc_ctrl.harm_shape_gain_q14,
+            &ps_enc_ctrl.tilt_q14,
+            &ps_enc_ctrl.lf_shp_q14,
+            &ps_enc_ctrl.gains_q16,
+            &ps_enc_ctrl.pitch_l,
+            ps_enc_ctrl.lambda_q10,
+            ps_enc_ctrl.ltp_scale_q14,
+        );
+    } else {
+        silk_nsq(
+            &ps_enc.s_cmn,
+            &mut s_nsq_lbrr,
+            &mut indices_lbrr,
+            x16,
+            &mut pulses_lbrr,
+            &ps_enc_ctrl.pred_coef_q12,
+            &ps_enc_ctrl.ltp_coef_q14,
+            &ps_enc_ctrl.ar_q13,
+            &ps_enc_ctrl.harm_shape_gain_q14,
+            &ps_enc_ctrl.tilt_q14,
+            &ps_enc_ctrl.lf_shp_q14,
+            &ps_enc_ctrl.gains_q16,
+            &ps_enc_ctrl.pitch_l,
+            ps_enc_ctrl.lambda_q10,
+            ps_enc_ctrl.ltp_scale_q14,
+        );
+    }
+
+    // Store LBRR indices and pulses
+    ps_enc.s_cmn.indices_lbrr[n_frames_encoded] = indices_lbrr;
+    ps_enc.s_cmn.pulses_lbrr[n_frames_encoded][..frame_length]
+        .copy_from_slice(&pulses_lbrr[..frame_length]);
+
+    // Restore original gains
+    ps_enc_ctrl.gains_q16[..nb_subfr].copy_from_slice(&temp_gains_q16);
+}
+
 /// Encode a single SILK frame. Matches C: `silk_encode_frame_FIX`.
 pub fn silk_encode_frame_fix(
     ps_enc: &mut SilkEncoderStateFix,
@@ -6961,9 +7064,11 @@ pub fn silk_encode_frame_fix(
         );
 
         // Noise shape analysis
-        // C does x_ptr = x - la_shape inside noise_shape_analysis, so pass
-        // x_buf starting la_shape samples before x_frame to match.
-        let x_frame_copy = ps_enc.x_buf[x_frame_offset - la_shape..].to_vec();
+        // C does x_ptr = x - psEnc->sCmn.la_shape inside noise_shape_analysis.
+        // Use the state variable la_shape (complexity-dependent), NOT the
+        // constant LA_SHAPE_MS * fs_kHz used for the copy offset.
+        let nsa_la_shape = ps_enc.s_cmn.la_shape as usize;
+        let x_frame_copy = ps_enc.x_buf[x_frame_offset - nsa_la_shape..].to_vec();
         silk_noise_shape_analysis_fix(
             ps_enc,
             &mut s_enc_ctrl,
@@ -6988,6 +7093,9 @@ pub fn silk_encode_frame_fix(
 
         // Process gains
         silk_process_gains_fix(ps_enc, &mut s_enc_ctrl, cond_coding);
+
+        // Low Bitrate Redundant Encoding (matches C encode_frame_FIX.c:172)
+        silk_lbrr_encode_fix(ps_enc, &mut s_enc_ctrl, &ps_enc.x_buf[x_frame_offset..x_frame_offset + frame_length].to_vec(), cond_coding);
 
         // Rate control loop: NSQ + encode (matches C encode_frame_FIX.c)
         let max_iter: i32 = 6;
@@ -7813,45 +7921,68 @@ pub fn silk_encode(
             }
 
             // --- LBRR encoding (first sub-frame only) ---
+            // Matches C enc_API.c:355-406
             if enc.state_fxx[0].s_cmn.n_frames_encoded == 0 {
+                // Create space at start of payload for VAD and FEC flags
                 let shift = ((n_frames_per_packet + 1) * n_channels_internal as i32) as u32;
                 let icdf = [(256u32 - (256u32 >> shift)) as u8, 0u8];
                 range_enc.encode_icdf(0, &icdf, 8);
                 let curr_n_bits_used_lbrr_start = range_enc.tell();
 
-                if enc.state_fxx[0].s_cmn.lbrr_enabled != 0 {
-                    if n_frames_per_packet > 1 {
-                        let mut flags = 0u32;
-                        for i in 0..n_frames_per_packet as usize {
-                            flags |= (enc.state_fxx[0].s_cmn.lbrr_flags[i] as u32) << i;
-                        }
+                // Encode LBRR flags for each channel (C enc_API.c:365-374)
+                for n in 0..n_channels_internal {
+                    let mut lbrr_symbol = 0u32;
+                    for i in 0..n_frames_per_packet as usize {
+                        lbrr_symbol |= (enc.state_fxx[n].s_cmn.lbrr_flags[i] as u32) << i;
+                    }
+                    enc.state_fxx[n].s_cmn.lbrr_flag = if lbrr_symbol > 0 { 1 } else { 0 };
+                    if lbrr_symbol != 0 && n_frames_per_packet > 1 {
                         range_enc.encode_icdf(
-                            flags,
+                            lbrr_symbol - 1,
                             SILK_LBRR_FLAGS_ICDF_PTR[(n_frames_per_packet - 2) as usize],
                             8,
                         );
                     }
+                }
 
-                    for i in 0..n_frames_per_packet as usize {
-                        if enc.state_fxx[0].s_cmn.lbrr_flags[i] != 0 {
+                // Code LBRR indices and excitation signals (C enc_API.c:377-400)
+                for i in 0..n_frames_per_packet as usize {
+                    for n in 0..n_channels_internal {
+                        if enc.state_fxx[n].s_cmn.lbrr_flags[i] != 0 {
+                            // Stereo prediction encoding (C enc_API.c:382-388)
+                            if n_channels_internal == 2 && n == 0 {
+                                silk_stereo_encode_pred(range_enc, &enc.s_stereo.pred_ix[i]);
+                                // For LBRR data there's no need to code the mid-only flag
+                                // if the side-channel LBRR flag is set
+                                if enc.state_fxx[1].s_cmn.lbrr_flags[i] == 0 {
+                                    silk_stereo_encode_mid_only(range_enc, enc.s_stereo.mid_only_flags[i]);
+                                }
+                            }
+                            // Use conditional coding if previous frame available (C enc_API.c:390-394)
+                            let cond_coding = if i > 0 && enc.state_fxx[n].s_cmn.lbrr_flags[i - 1] != 0 {
+                                CODE_CONDITIONALLY
+                            } else {
+                                CODE_INDEPENDENTLY
+                            };
                             silk_encode_indices(
-                                &enc.state_fxx[0].s_cmn,
+                                &enc.state_fxx[n].s_cmn,
                                 range_enc,
                                 i,
                                 true,
-                                CODE_INDEPENDENTLY,
+                                cond_coding,
                             );
                             silk_encode_pulses(
                                 range_enc,
-                                enc.state_fxx[0].s_cmn.indices_lbrr[i].signal_type as i32,
-                                enc.state_fxx[0].s_cmn.indices_lbrr[i].quant_offset_type as i32,
-                                &enc.state_fxx[0].s_cmn.pulses_lbrr[i],
-                                enc.state_fxx[0].s_cmn.frame_length as usize,
+                                enc.state_fxx[n].s_cmn.indices_lbrr[i].signal_type as i32,
+                                enc.state_fxx[n].s_cmn.indices_lbrr[i].quant_offset_type as i32,
+                                &enc.state_fxx[n].s_cmn.pulses_lbrr[i],
+                                enc.state_fxx[n].s_cmn.frame_length as usize,
                             );
                         }
                     }
                 }
 
+                // Reset LBRR flags (C enc_API.c:403-405)
                 for n in 0..n_channels_internal {
                     for flag in enc.state_fxx[n].s_cmn.lbrr_flags.iter_mut() {
                         *flag = 0;

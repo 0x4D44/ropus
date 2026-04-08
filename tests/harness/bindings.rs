@@ -277,6 +277,16 @@ unsafe extern "C" {
     pub fn debug_c_celt_rsqrt_norm32(x: opus_int32) -> opus_int32;
     pub fn debug_c_normalise_residual_g(ryy: opus_int32, gain: opus_int32) -> opus_int32;
     pub fn debug_c_opus_fast_int64() -> c_int;
+    pub fn debug_get_celt_preemph_mem(
+        dec: *mut OpusDecoder,
+        out_mem: *mut opus_int32,
+    );
+    pub fn debug_get_celt_decode_mem(
+        dec: *mut OpusDecoder,
+        offset: c_int,
+        count: c_int,
+        out: *mut opus_int32,
+    );
     pub fn debug_get_celt_old_band_e(
         dec: *mut OpusDecoder,
         out_buf: *mut opus_int32,
