@@ -2249,6 +2249,48 @@ mod tests {
     }
 
     #[test]
+    fn test_decode_transition_and_gain_paths_between_silk_and_celt_packets() {
+        let mut silk_enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(silk_enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        assert_eq!(silk_enc.set_force_mode(MODE_SILK_ONLY), OPUS_OK);
+        let silk_pcm = patterned_pcm_i16(960, 1, 317);
+        let mut silk_packet = vec![0u8; 1500];
+        let silk_capacity = silk_packet.len() as i32;
+        let silk_len = silk_enc
+            .encode(&silk_pcm, 960, &mut silk_packet, silk_capacity)
+            .unwrap();
+
+        let mut celt_enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(celt_enc.set_force_mode(MODE_CELT_ONLY), OPUS_OK);
+        let celt_pcm = patterned_pcm_i16(960, 1, 389);
+        let mut celt_packet = vec![0u8; 1500];
+        let celt_capacity = celt_packet.len() as i32;
+        let celt_len = celt_enc
+            .encode(&celt_pcm, 960, &mut celt_packet, celt_capacity)
+            .unwrap();
+
+        let silk_packet = &silk_packet[..silk_len as usize];
+        let celt_packet = &celt_packet[..celt_len as usize];
+
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut first = vec![0i16; 960];
+        assert_eq!(dec.decode(Some(silk_packet), &mut first, 960, false).unwrap(), 960);
+        assert_eq!(dec.prev_mode, MODE_SILK_ONLY);
+
+        assert_eq!(dec.set_gain(256), Ok(()));
+        let mut second = vec![0i16; 960];
+        assert_eq!(dec.decode(Some(celt_packet), &mut second, 960, false).unwrap(), 960);
+        assert_eq!(dec.prev_mode, MODE_CELT_ONLY);
+        assert!(second.iter().any(|&sample| sample != 0));
+        assert_ne!(dec.get_final_range(), 0);
+
+        let mut third = vec![0i16; 960];
+        assert_eq!(dec.decode(Some(silk_packet), &mut third, 960, false).unwrap(), 960);
+        assert_eq!(dec.prev_mode, MODE_SILK_ONLY);
+        assert!(third.iter().any(|&sample| sample != 0));
+    }
+
+    #[test]
     fn test_patterned_pcm_i16_stereo_branch_halves_odd_samples() {
         let pcm = patterned_pcm_i16(2, 2, 3);
         assert_eq!(pcm.len(), 4);

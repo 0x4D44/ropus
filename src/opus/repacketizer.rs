@@ -2623,6 +2623,92 @@ mod tests {
     }
 
     #[test]
+    fn test_out_range_single_frame_extension_and_padding_paths() {
+        let ext = OpusExtensionData {
+            id: 5,
+            frame: 0,
+            data: &[0x42],
+            len: 1,
+        };
+
+        let mut with_ext = [0u8; 16];
+        with_ext[..3].copy_from_slice(&[0x08, 0xAA, 0xBB]);
+        let ret = opus_packet_pad_impl(&mut with_ext, 3, 16, true, &[ext]);
+        assert_eq!(ret, 16);
+        assert_eq!(with_ext[0] & 0x3, 0x3);
+        assert_ne!(with_ext[1] & 0x40, 0);
+
+        let parsed = parse_packet(&with_ext, ret, false).unwrap();
+        assert_eq!(parsed.count, 1);
+        assert_eq!(parsed.frames[0], &[0xAA, 0xBB]);
+        assert!(parsed.padding_len > 0);
+
+        let mut padded = [0u8; 16];
+        padded[..3].copy_from_slice(&[0x08, 0xAA, 0xBB]);
+        let ret = opus_packet_pad_impl(&mut padded, 3, 16, true, &[]);
+        assert_eq!(ret, 16);
+        assert_eq!(padded[0] & 0x3, 0x3);
+        assert_ne!(padded[1] & 0x40, 0);
+        assert!(padded[ret as usize - 4..ret as usize].iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn test_out_range_impl_reemits_extensions_from_stored_padding() {
+        let pkt = [0x08u8, 0xAA];
+        let mut rp = OpusRepacketizer::new();
+        assert_eq!(rp.cat(&pkt, pkt.len() as i32), OPUS_OK);
+
+        let ext = OpusExtensionData {
+            id: 40,
+            frame: 0,
+            data: &[0x12, 0x34],
+            len: 2,
+        };
+        let padding_len = opus_packet_extensions_generate(None, 32, &[ext], 1, false);
+        assert!(padding_len > 0);
+
+        let mut padding = vec![0u8; padding_len as usize];
+        assert_eq!(
+            opus_packet_extensions_generate(Some(&mut padding), padding_len, &[ext], 1, false),
+            padding_len
+        );
+
+        rp.paddings[0] = &padding;
+        rp.padding_len[0] = padding_len;
+        rp.padding_nb_frames[0] = 1;
+
+        let mut out = [0u8; 64];
+        let ret = rp.out_range_impl(0, 1, &mut out, 64, false, false, &[]);
+        assert!(ret > 0);
+        assert_eq!(out[0] & 0x3, 0x3);
+
+        let parsed = parse_packet(&out[..ret as usize], ret, false).unwrap();
+        assert!(parsed.padding_len > 0);
+        assert_eq!(
+            opus_packet_extensions_count(parsed.padding, parsed.padding_len, parsed.count as i32),
+            1
+        );
+    }
+
+    #[test]
+    fn test_out_range_impl_rejects_partially_invalid_padding_extensions() {
+        let pkt = [0x08u8, 0xAA];
+        let mut rp = OpusRepacketizer::new();
+        assert_eq!(rp.cat(&pkt, pkt.len() as i32), OPUS_OK);
+
+        let invalid_padding = [0x0Bu8, 0x42, 0x03, 0x02];
+        rp.paddings[0] = &invalid_padding;
+        rp.padding_len[0] = invalid_padding.len() as i32;
+        rp.padding_nb_frames[0] = 2;
+
+        let mut out = [0u8; 64];
+        assert_eq!(
+            rp.out_range_impl(0, 1, &mut out, 64, false, false, &[]),
+            OPUS_INTERNAL_ERROR
+        );
+    }
+
+    #[test]
     fn test_parse_code3_cbr_packet() {
         // Construct a Code 3 CBR packet: TOC|0x03, count=3, then 3 frames of 2 bytes
         let mut pkt = vec![0x08u8 | 0x03, 3]; // TOC with code 3, count=3 (CBR, no P, no V)
@@ -2682,5 +2768,22 @@ mod tests {
         let ret = opus_multistream_packet_unpad(&mut buf, padded_len, 2);
         assert!(ret > 0);
         assert_eq!(ret, original_len);
+    }
+
+    #[test]
+    fn test_multistream_pad_and_unpad_require_additional_streams() {
+        let mut pad_buf = [0x08u8, 2, 0xAA, 0xBB];
+        let pad_len = pad_buf.len() as i32;
+        assert_eq!(
+            opus_multistream_packet_pad(&mut pad_buf, pad_len, 8, 3),
+            OPUS_INVALID_PACKET
+        );
+
+        let mut unpad_buf = [0x08u8, 2, 0xAA, 0xBB, 0x08u8, 0xCC, 0xDD];
+        let unpad_len = unpad_buf.len() as i32;
+        assert_eq!(
+            opus_multistream_packet_unpad(&mut unpad_buf, unpad_len, 3),
+            OPUS_INVALID_PACKET
+        );
     }
 }

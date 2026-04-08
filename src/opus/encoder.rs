@@ -3654,4 +3654,142 @@ mod tests {
             Err(OPUS_BAD_ARG)
         );
     }
+
+    #[test]
+    fn test_encode_multiframe_silk_special_frame_sizes() {
+        let mut enc = OpusEncoder::new(16000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_force_mode(MODE_SILK_ONLY), OPUS_OK);
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        assert_eq!(enc.set_bitrate(24000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(enc.set_signal(OPUS_SIGNAL_VOICE), OPUS_OK);
+
+        let mut packet = vec![0u8; 1500];
+        let capacity = packet.len() as i32;
+
+        let pcm_80 = patterned_pcm_i16((2 * enc.fs / 25) as usize, 1, 1401);
+        let len_80 = enc
+            .encode_multiframe(
+                &pcm_80,
+                2 * enc.fs / 25,
+                &mut packet,
+                capacity,
+                capacity,
+                16,
+                MODE_SILK_ONLY,
+                enc.bitrate_bps,
+                false,
+                false,
+                false,
+                0,
+                enc.bitrate_bps,
+                false,
+            )
+            .unwrap();
+        assert!(len_80 > 1);
+        assert_eq!(enc.nonfinal_frame, 0);
+
+        let pcm_120 = patterned_pcm_i16((3 * enc.fs / 25) as usize, 1, 1403);
+        let len_120 = enc
+            .encode_multiframe(
+                &pcm_120,
+                3 * enc.fs / 25,
+                &mut packet,
+                capacity,
+                capacity,
+                16,
+                MODE_SILK_ONLY,
+                enc.bitrate_bps,
+                false,
+                false,
+                false,
+                0,
+                enc.bitrate_bps,
+                false,
+            )
+            .unwrap();
+        assert!(len_120 > 1);
+        assert_eq!(enc.nonfinal_frame, 0);
+    }
+
+    #[test]
+    fn test_encode_stereo_voice_ratio_forced_mono_transition_path() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_force_mode(MODE_SILK_ONLY), OPUS_OK);
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        assert_eq!(enc.set_max_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        assert_eq!(enc.set_force_channels(1), OPUS_OK);
+        assert_eq!(enc.set_voice_ratio(80), OPUS_OK);
+        assert_eq!(enc.set_signal(OPUS_AUTO), OPUS_OK);
+        assert_eq!(enc.set_bitrate(20000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+
+        enc.prev_mode = MODE_SILK_ONLY;
+        enc.prev_channels = 2;
+        enc.stream_channels = 2;
+        enc.silk_mode.to_mono = 0;
+
+        let pcm = patterned_pcm_i16(960, 2, 1501);
+        let mut packet = vec![0u8; 1500];
+        let packet_capacity = packet.len() as i32;
+        let len = enc.encode(&pcm, 960, &mut packet, packet_capacity).unwrap();
+
+        assert!(len > 1);
+        assert_ne!(enc.get_mode(), MODE_CELT_ONLY);
+        assert_eq!(packet_mode_from_toc(&packet[..len as usize]), enc.get_mode());
+        assert_eq!(enc.silk_mode.to_mono, 1);
+        assert_eq!(enc.get_stream_channels(), 2);
+    }
+
+    #[test]
+    fn test_encode_frame_native_celt_resets_silk_bw_switch() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+        assert_eq!(enc.set_bitrate(32000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        enc.mode = MODE_CELT_ONLY;
+        enc.prev_mode = MODE_CELT_ONLY;
+        enc.bandwidth = OPUS_BANDWIDTH_FULLBAND;
+        enc.silk_bw_switch = 1;
+
+        let pcm = patterned_pcm_i16(960, 1, 1601);
+        let mut packet = vec![0u8; 1500];
+        let packet_capacity = packet.len() as i32;
+        let len = enc
+            .encode_frame_native(
+                &pcm,
+                960,
+                &mut packet,
+                packet_capacity,
+                packet_capacity,
+                false,
+                false,
+                false,
+                0,
+                enc.bitrate_bps,
+                false,
+            )
+            .unwrap();
+
+        assert!(len > 1);
+        assert_eq!(enc.silk_bw_switch, 0);
+        assert_eq!(packet_mode_from_toc(&packet[..len as usize]), MODE_CELT_ONLY);
+    }
+
+    #[test]
+    fn test_helper_noop_branches_and_phase_inversion_default() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        enc.celt_enc = None;
+        assert_eq!(enc.get_phase_inversion_disabled(), 0);
+
+        enc.encoder_buffer = 0;
+        enc.delay_buffer = vec![7, 8, 9];
+        enc.update_delay_buffer(&[1, 2, 3], 3);
+        enc.update_delay_buffer_from_pcm_buf(&[4, 5, 6], 3, 0);
+        assert_eq!(enc.delay_buffer, vec![7, 8, 9]);
+
+        enc.encoder_buffer = 4;
+        enc.delay_buffer = vec![11, 12, 13, 14];
+        enc.update_delay_buffer(&[1, 2], 6);
+        assert_eq!(enc.delay_buffer, vec![11, 12, 13, 14]);
+    }
 }
