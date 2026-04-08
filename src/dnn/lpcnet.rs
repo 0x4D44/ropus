@@ -2679,4 +2679,122 @@ mod tests {
         st.synthesize_tail_impl(&mut output, FRAME_SIZE, 0);
         assert!(output.iter().all(|&x| x == 0));
     }
+
+    #[test]
+    fn test_complex_helpers_match_expected_arithmetic() {
+        let a = Cpx { r: 2.0, i: 3.0 };
+        let b = Cpx { r: -1.0, i: 4.0 };
+
+        let mul = cmul(a, b);
+        assert!((mul.r + 14.0).abs() < 1e-6);
+        assert!((mul.i - 5.0).abs() < 1e-6);
+
+        let mulc = cmulc(a, b);
+        assert!((mulc.r - 10.0).abs() < 1e-6);
+        assert!((mulc.i + 11.0).abs() < 1e-6);
+
+        let add = cadd(a, b);
+        assert!((add.r - 1.0).abs() < 1e-6);
+        assert!((add.i - 7.0).abs() < 1e-6);
+
+        let sub = csub(a, b);
+        assert!((sub.r - 3.0).abs() < 1e-6);
+        assert!((sub.i + 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_compute_band_energy_inverse_for_single_bin_signal() {
+        let mut x = vec![Cpx::default(); FREQ_SIZE];
+        x[0] = Cpx { r: 2.0, i: 0.0 };
+
+        let mut inv = [0.0f32; NB_BANDS];
+        compute_band_energy_inverse(&mut inv, &x);
+
+        assert!(inv[0] > 0.0);
+        assert!(inv.iter().all(|v| v.is_finite() && *v >= 0.0));
+    }
+
+    #[test]
+    fn test_interp_band_gain_blends_between_neighboring_bands() {
+        let mut gains = [99.0f32; FREQ_SIZE];
+        let mut band_e = [0.0f32; NB_BANDS];
+        band_e[0] = 1.0;
+        band_e[1] = 3.0;
+        band_e[2] = 6.0;
+
+        interp_band_gain(&mut gains, &band_e);
+
+        assert_eq!(gains[0], 1.0);
+        assert!(gains[1] > gains[0]);
+        assert!(gains[1] < 3.0);
+        assert!(gains.iter().all(|v| v.is_finite() && *v >= 0.0));
+    }
+
+    #[test]
+    fn test_lpc_from_cepstrum_and_weighting_keep_coefficients_finite() {
+        let mut lpc = [0.0f32; LPC_ORDER];
+        let mut cepstrum = [0.0f32; NB_BANDS];
+        cepstrum[0] = 0.25;
+        cepstrum[1] = -0.5;
+        cepstrum[2] = 0.125;
+
+        let err = lpc_from_cepstrum(&mut lpc, &cepstrum);
+        assert!(err.is_finite());
+        assert!(lpc.iter().all(|v| v.is_finite()));
+
+        let weighted_before = lpc;
+        lpc_weighting(&mut lpc, 0.9);
+        assert!(lpc.iter().all(|v| v.is_finite()));
+        assert!(lpc
+            .iter()
+            .zip(weighted_before.iter())
+            .any(|(after, before)| after.abs() <= before.abs()));
+    }
+
+    #[test]
+    fn test_energy_inner_product_and_pitch_helpers_cover_remainder_paths() {
+        let x = [1.0f32, -2.0, 3.0, -4.0, 5.0];
+        let y = [0.5f32, 1.0, -1.5, 2.0, -2.5, 3.0, -3.5];
+
+        let energy = silk_energy_flp(&x, x.len());
+        assert!((energy - 55.0).abs() < 1e-9);
+
+        let inner = silk_inner_product_flp(&x, &y, x.len());
+        assert!((inner + 26.5).abs() < 1e-9);
+
+        let mut xcorr = [0.0f32; 3];
+        celt_pitch_xcorr_f32(&x[..3], &y, &mut xcorr, 3, 3);
+        assert!((xcorr[0] + 6.0).abs() < 1e-6);
+        assert!((xcorr[1] - 10.0).abs() < 1e-6);
+        assert!((xcorr[2] + 13.0).abs() < 1e-6);
+
+        let history = [1.0f32, -1.0, 0.5, 2.0, 3.0];
+        let num = [0.25f32, -0.5];
+        let mut out = [0.0f32; 3];
+        celt_fir_f32(&history, &num, &mut out, 3, 2);
+        assert!((out[0] + 0.25).abs() < 1e-6);
+        assert!((out[1] - 2.625).abs() < 1e-6);
+        assert!((out[2] - 3.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_preemphasis_and_biquad_update_state() {
+        let input = [1.0f32, -0.5, 0.25];
+        let mut pre = [0.0f32; 3];
+        let mut mem = 0.5f32;
+        preemphasis(&mut pre, &mut mem, &input, 0.85, input.len());
+        assert!((pre[0] - 1.5).abs() < 1e-6);
+        assert!((pre[1] + 1.35).abs() < 1e-6);
+        assert!((pre[2] - 0.675).abs() < 1e-6);
+        assert!((mem + 0.2125).abs() < 1e-6);
+
+        let mut out = [0.0f32; 3];
+        let mut biquad_mem = [0.0f32; 2];
+        let b = [0.3f32, -0.2];
+        let a = [0.1f32, 0.05];
+        biquad(&mut out, &mut biquad_mem, &input, &b, &a, input.len());
+        assert!(out.iter().all(|v| v.is_finite()));
+        assert!(biquad_mem.iter().all(|v| v.is_finite()));
+        assert!(biquad_mem.iter().any(|v| v.abs() > 0.0));
+    }
 }
