@@ -761,3 +761,25 @@ void debug_clt_mdct_backward(
     clt_mdct_backward(&mode->mdct, (kiss_fft_scalar *)in, out,
                        mode->window, overlap, shift, stride, 0);
 }
+
+/* Dump the C encoder's SILK stereo state to stderr.
+ * Called from Rust harness after each opus_encode frame. */
+void debug_dump_silk_stereo(OpusEncoder *enc)
+{
+    OpusEncoderOffsets *hdr = (OpusEncoderOffsets *)enc;
+    silk_encoder *psEnc = (silk_encoder *)((char *)enc + hdr->silk_enc_offset);
+    stereo_enc_state *st = &psEnc->sStereo;
+    int n = psEnc->state_Fxx[0].sCmn.nFramesEncoded;
+    fprintf(stderr, "[C_STEREO] nFramesEncoded=%d pred_ix=[%d,%d,%d],[%d,%d,%d] mid_only=%d "
+        "sMid=[%d,%d] sSide=[%d,%d] width_prev=%d smth_width=%d "
+        "pred_prev=[%d,%d] nChannelsInt=%d\n",
+        n,
+        (int)st->predIx[0][0][0], (int)st->predIx[0][0][1], (int)st->predIx[0][0][2],
+        (int)st->predIx[0][1][0], (int)st->predIx[0][1][1], (int)st->predIx[0][1][2],
+        (int)st->mid_only_flags[0],
+        (int)st->sMid[0], (int)st->sMid[1],
+        (int)st->sSide[0], (int)st->sSide[1],
+        (int)st->width_prev_Q14, (int)st->smth_width_Q14,
+        (int)st->pred_prev_Q13[0], (int)st->pred_prev_Q13[1],
+        psEnc->nChannelsInternal);
+}

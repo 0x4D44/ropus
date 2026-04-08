@@ -2174,9 +2174,19 @@ pub fn silk_decode(
         }
     }
 
-    // Mono→stereo transition
+    // Mono→stereo transition (C: dec_API.c line 177)
     if n_channels_internal > decoder.n_channels_internal {
         decoder.channel_state[1] = SilkDecoderState::new();
+    }
+
+    // C: dec_API.c line 218 — reset stereo state when transitioning to stereo
+    if dec_control.n_channels_api == 2
+        && n_channels_internal == 2
+        && (decoder.n_channels_api == 1 || decoder.n_channels_internal == 1)
+    {
+        decoder.s_stereo.pred_prev_q13 = [0; 2];
+        decoder.s_stereo.s_side = [0; 2];
+        decoder.channel_state[1].resampler_state = decoder.channel_state[0].resampler_state.clone();
     }
 
     // Configure frame geometry on first frame
@@ -2225,16 +2235,20 @@ pub fn silk_decode(
             );
         }
 
-        // Decode VAD flags and LBRR flags
+        // Decode VAD flags and LBRR flags (C: dec_API.c lines 234-254)
+        // C interleaves per-channel: VAD_flags + LBRR_flag for ch0, then ch1.
+        // LBRR_flags detail (icdf) comes in a second loop.
         if lost_flag != FLAG_PACKET_LOST {
+            // First loop: decode VAD flags and LBRR_flag per channel
             for n in 0..n_channels_internal {
                 for i in 0..decoder.channel_state[n].n_frames_per_packet {
                     decoder.channel_state[n].vad_flags[i] = rc.decode_bit_logp(1);
                 }
+                decoder.channel_state[n].lbrr_flag = rc.decode_bit_logp(1);
             }
 
+            // Second loop: decode LBRR_flags detail if LBRR_flag is set
             for n in 0..n_channels_internal {
-                decoder.channel_state[n].lbrr_flag = rc.decode_bit_logp(1);
                 if decoder.channel_state[n].lbrr_flag {
                     let nfpp = decoder.channel_state[n].n_frames_per_packet;
                     if nfpp == 1 {
@@ -2252,12 +2266,21 @@ pub fn silk_decode(
                 }
             }
 
-            // Skip LBRR data on normal decode
+            // Skip LBRR data on normal decode (C: dec_API.c lines 256-282)
+            // C iterates frames THEN channels (not channels then frames).
             if lost_flag == FLAG_DECODE_NORMAL {
-                for n in 0..n_channels_internal {
-                    let nfpp = decoder.channel_state[n].n_frames_per_packet;
-                    for i in 0..nfpp {
+                let nfpp = decoder.channel_state[0].n_frames_per_packet;
+                for i in 0..nfpp {
+                    for n in 0..n_channels_internal {
                         if decoder.channel_state[n].lbrr_flags[i] {
+                            // C: decode stereo pred/mid_only for LBRR data (lines 264-268)
+                            if n_channels_internal == 2 && n == 0 {
+                                let mut lbrr_pred = [0i16; 2];
+                                silk_stereo_decode_pred(rc, &mut lbrr_pred);
+                                if !decoder.channel_state[1].lbrr_flags[i] {
+                                    let _ = silk_stereo_decode_mid_only(rc);
+                                }
+                            }
                             let cond = if i > 0 && decoder.channel_state[n].lbrr_flags[i - 1] {
                                 CODE_CONDITIONALLY
                             } else {
@@ -2286,15 +2309,32 @@ pub fn silk_decode(
     if n_channels_internal == 2 {
         if lost_flag == FLAG_DECODE_NORMAL
             || (lost_flag == FLAG_DECODE_LBRR
-                && decoder.channel_state[1].lbrr_flags[decoder.channel_state[0].n_frames_decoded])
+                && decoder.channel_state[0].lbrr_flags[decoder.channel_state[0].n_frames_decoded])
         {
             silk_stereo_decode_pred(rc, &mut ms_pred_q13);
-            if n_channels_internal == 2 {
+            // C: dec_API.c lines 292-298 — only decode mid_only flag when
+            // the side channel's VAD/LBRR flag is 0 for the current frame
+            let n_dec = decoder.channel_state[0].n_frames_decoded;
+            if (lost_flag == FLAG_DECODE_NORMAL && !decoder.channel_state[1].vad_flags[n_dec])
+                || (lost_flag == FLAG_DECODE_LBRR && !decoder.channel_state[1].lbrr_flags[n_dec])
+            {
                 decode_only_middle = silk_stereo_decode_mid_only(rc);
+            } else {
+                decode_only_middle = false;
             }
         } else {
             ms_pred_q13 = decoder.s_stereo.pred_prev_q13;
         }
+    }
+
+    // C: dec_API.c lines 307-314 — reset side channel on mid-only→stereo transition
+    if n_channels_internal == 2 && !decode_only_middle && decoder.prev_decode_only_middle {
+        decoder.channel_state[1].out_buf.fill(0);
+        decoder.channel_state[1].s_lpc_q14_buf.fill(0);
+        decoder.channel_state[1].lag_prev = 100;
+        decoder.channel_state[1].last_gain_index = 10;
+        decoder.channel_state[1].prev_signal_type = TYPE_NO_VOICE_ACTIVITY;
+        decoder.channel_state[1].first_frame_after_reset = true;
     }
 
     let frame_length = decoder.channel_state[0].frame_length;
@@ -2305,8 +2345,18 @@ pub fn silk_decode(
     for n in 0..n_channels_internal {
         let should_decode = n == 0 || !decode_only_middle;
         if should_decode {
-            let cond = if decoder.channel_state[n].n_frames_decoded == 0 {
+            // C: FrameIndex = channel_state[0].nFramesDecoded - n
+            let frame_index = decoder.channel_state[0].n_frames_decoded as i32 - n as i32;
+            let cond = if frame_index <= 0 {
                 CODE_INDEPENDENTLY
+            } else if lost_flag == FLAG_DECODE_LBRR {
+                if decoder.channel_state[n].lbrr_flags[(frame_index - 1) as usize] {
+                    CODE_CONDITIONALLY
+                } else {
+                    CODE_INDEPENDENTLY
+                }
+            } else if n > 0 && decoder.prev_decode_only_middle {
+                CODE_INDEPENDENTLY_NO_LTP_SCALING
             } else {
                 CODE_CONDITIONALLY
             };

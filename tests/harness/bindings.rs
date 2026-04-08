@@ -347,6 +347,8 @@ unsafe extern "C" {
         frame_length: c_int,
     );
 
+    pub fn debug_dump_silk_stereo(enc: *mut OpusEncoder);
+
     pub fn debug_clt_mdct_backward(
         input: *const opus_int32,
         output: *mut opus_int32,

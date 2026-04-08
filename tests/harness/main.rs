@@ -1796,7 +1796,7 @@ fn cmd_rng_test() {
 // Per-frame decode comparison (diagnostic)
 // ---------------------------------------------------------------------------
 
-fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
+fn cmd_decode_framecompare(wav_path: &str, bitrate: i32, application: i32) {
     let wav = read_wav(Path::new(wav_path));
     println!(
         "Input: {} ({} Hz, {} ch, {} samples)",
@@ -1808,10 +1808,12 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32) {
 
     let sr = wav.sample_rate as i32;
     let ch = wav.channels as i32;
-    let complexity = 10;
 
-    // Encode with C reference
-    let c_encoded = c_encode(&wav.samples, sr, ch, bitrate, complexity);
+    // Encode with C reference using specified application
+    let mut cfg = EncodeConfig::new(sr, ch);
+    cfg.bitrate = bitrate;
+    cfg.application = application;
+    let c_encoded = c_encode_cfg(&wav.samples, &cfg);
     println!("C encoded: {} bytes", c_encoded.len());
 
     // Now decode frame-by-frame with both C and Rust, comparing each frame
@@ -6572,7 +6574,8 @@ fn main() {
                 process::exit(1);
             }
             let bitrate = parse_option(&args, "--bitrate", 64000);
-            cmd_decode_framecompare(&args[2], bitrate);
+            let application = parse_option(&args, "--application", bindings::OPUS_APPLICATION_AUDIO);
+            cmd_decode_framecompare(&args[2], bitrate, application);
         }
         "plc" => {
             if args.len() < 3 {

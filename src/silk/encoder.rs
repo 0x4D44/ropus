@@ -615,7 +615,7 @@ impl SilkEncoder {
             n_bits_exceeded: 0,
             n_channels_api: 1,
             n_channels_internal: 1,
-            n_prev_channels_internal: 1,
+            n_prev_channels_internal: 0,
             time_since_switch_allowed_ms: 0,
             allow_bandwidth_switch: 0,
             prev_decode_only_middle: 0,
@@ -7674,6 +7674,9 @@ pub fn silk_get_encoder_size(channels: usize) -> usize {
 
 /// Initialize the top-level encoder.
 /// Matches C: `silk_InitEncoder`.
+/// C sets nChannelsAPI=1, nChannelsInternal=1 regardless of actual channels.
+/// The actual channel count is communicated via encControl on each silk_encode call,
+/// and the mono→stereo transition is handled there.
 pub fn silk_init_encoder_top(enc: &mut SilkEncoder, channels: usize) -> i32 {
     let mut ret = 0i32;
     *enc = SilkEncoder::new();
@@ -7681,9 +7684,10 @@ pub fn silk_init_encoder_top(enc: &mut SilkEncoder, channels: usize) -> i32 {
     for n in 0..channels {
         ret += silk_init_encoder(&mut enc.state_fxx[n]);
     }
-    enc.n_channels_api = channels as i32;
-    enc.n_channels_internal = channels as i32;
-    enc.n_prev_channels_internal = channels as i32;
+    // C: psEnc->nChannelsAPI = 1; psEnc->nChannelsInternal = 1;
+    // nPrevChannelsInternal stays 0 from memset.
+    enc.n_channels_api = 1;
+    enc.n_channels_internal = 1;
 
     ret
 }
@@ -7741,15 +7745,24 @@ pub fn silk_encode(
 
     let n_channels_internal = enc_control.n_channels_internal as usize;
 
-    // Handle channel count transitions
-    if enc.n_prev_channels_internal != n_channels_internal as i32 {
-        if n_channels_internal > enc.n_prev_channels_internal as usize {
-            // Mono → stereo: init second channel
-            silk_init_encoder(&mut enc.state_fxx[1]);
+    // Handle channel count transitions (C: enc_API.c lines 190-205)
+    // C compares encControl->nChannelsInternal with psEnc->nChannelsInternal
+    if (n_channels_internal as i32) > enc.n_channels_internal {
+        // Mono → stereo transition: init state of second channel and stereo state
+        silk_init_encoder(&mut enc.state_fxx[1]);
+        // C: reset stereo prediction state
+        enc.s_stereo.pred_prev_q13 = [0; 2];
+        enc.s_stereo.s_side = [0; 2];
+        enc.s_stereo.mid_side_amp_q0 = [0, 1, 0, 1];
+        enc.s_stereo.width_prev_q14 = 0;
+        // C: smth_width_Q14 = SILK_FIX_CONST(1, 14) = 16384
+        enc.s_stereo.smth_width_q14 = 16384;
+        if enc_control.n_channels_api == 2 {
             // Copy resampler state from channel 0
             enc.state_fxx[1].s_cmn.resampler_state = enc.state_fxx[0].s_cmn.resampler_state.clone();
+            // Copy HP state from channel 0 (C: In_HP_State)
+            enc.state_fxx[1].s_cmn.s_lp.in_lp_state = enc.state_fxx[0].s_cmn.s_lp.in_lp_state;
         }
-        enc.n_prev_channels_internal = n_channels_internal as i32;
     }
 
     enc.n_channels_api = enc_control.n_channels_api;
@@ -8264,6 +8277,9 @@ pub fn silk_encode(
 
     // Query encoder status
     silk_query_encoder(enc, enc_control);
+
+    // C: psEnc->nPrevChannelsInternal = encControl->nChannelsInternal; (enc_API.c:580)
+    enc.n_prev_channels_internal = n_channels_internal as i32;
 
     // Set signal type and quantization offset for CELT (matches C enc_API.c:603-606)
     enc_control.signal_type = enc.state_fxx[0].s_cmn.indices.signal_type as i32;

@@ -2097,6 +2097,8 @@ impl OpusEncoder {
                 };
                 celt.ctl(CeltEncoderCtl::SetEndBand(endband));
                 celt.ctl(CeltEncoderCtl::SetChannels(self.stream_channels));
+                // C: opus_encoder.c:2286 — always set BITRATE_MAX before CELT encoding
+                celt.ctl(CeltEncoderCtl::SetBitrate(OPUS_BITRATE_MAX));
             }
 
             // --- Update delay buffer BEFORE CELT encoding ---
