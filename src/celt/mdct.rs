@@ -8,6 +8,8 @@
 //! 3. Post-rotation with twiddle factors (unfolds to real output)
 //! 4. Windowed overlap-add (TDAC mirror) with the synthesis window
 
+use crate::{uc, uc_set};
+
 use super::fft::{KissFftCpx, KissFftState, opus_fft_impl};
 use crate::celt::math_ops::{celt_ilog2, celt_zlog2};
 use crate::types::*;
@@ -90,8 +92,6 @@ pub fn clt_mdct_backward(
     let trig = &l.trig[trig_offset..];
 
     // ---- Fixed-point dynamic range analysis ----
-    // Determine pre_shift and post_shift to maximize precision while
-    // avoiding overflow in the FFT and post-rotation stages.
     let pre_shift: i32;
     let post_shift: i32;
     let fft_shift: i32;
@@ -101,12 +101,11 @@ pub fn clt_mdct_backward(
         let mut maxval: i32 = 0;
         for i in 0..n2 as usize {
             let idx = i * stride as usize;
-            let sample = if idx < input_len { input[idx] } else { 0 };
+            let sample = if idx < input_len { uc!(input, idx) } else { 0 };
             maxval = max32(maxval, abs32(sample));
             sumval = add32_ovflw(sumval, abs32(shr32(sample, 11)));
         }
         pre_shift = imax(0, 29 - celt_zlog2(1 + maxval));
-        // Worst-case where all the energy goes to a single sample.
         let ps = imax(0, 19 - celt_ilog2(abs32(sumval)));
         post_shift = imin(ps, pre_shift);
         fft_shift = pre_shift - post_shift;
@@ -124,26 +123,25 @@ pub fn clt_mdct_backward(
         // Note: xp1 and xp2 index into input[] with stride spacing
         // but the actual read positions are xp1_idx*stride and xp2_idx*stride
 
+        let bitrev = st.bitrev;
         for i in 0..n4 as usize {
-            let rev = st.bitrev[i] as usize;
+            let rev = uc!(bitrev, i) as usize;
             let idx1 = xp1_idx * stride as usize;
             let idx2 = xp2_idx * stride as usize;
-            let x1 = shl32_ovflw(if idx1 < input_len { input[idx1] } else { 0 }, pre_shift);
-            let x2 = shl32_ovflw(if idx2 < input_len { input[idx2] } else { 0 }, pre_shift);
+            let x1 = shl32_ovflw(if idx1 < input_len { uc!(input, idx1) } else { 0 }, pre_shift);
+            let x2 = shl32_ovflw(if idx2 < input_len { uc!(input, idx2) } else { 0 }, pre_shift);
 
             let yr = add32_ovflw(
-                s_mul(x2, trig[i] as i32),
-                s_mul(x1, trig[n4 as usize + i] as i32),
+                s_mul(x2, uc!(trig, i) as i32),
+                s_mul(x1, uc!(trig, n4 as usize + i) as i32),
             );
             let yi = sub32_ovflw(
-                s_mul(x1, trig[i] as i32),
-                s_mul(x2, trig[n4 as usize + i] as i32),
+                s_mul(x1, uc!(trig, i) as i32),
+                s_mul(x2, uc!(trig, n4 as usize + i) as i32),
             );
 
-            // We swap real and imag because we use an FFT instead of an IFFT.
-            // Storing in bit-reversed order directly.
-            output[half_ov + 2 * rev + 1] = yr;
-            output[half_ov + 2 * rev] = yi;
+            uc_set!(output, half_ov + 2 * rev + 1, yr);
+            uc_set!(output, half_ov + 2 * rev, yi);
 
             xp1_idx += 2;
             xp2_idx = xp2_idx.wrapping_sub(2);
@@ -162,17 +160,16 @@ pub fn clt_mdct_backward(
         let mut fft_buf: Vec<KissFftCpx> = Vec::with_capacity(fft_len);
         for j in 0..fft_len {
             fft_buf.push(KissFftCpx {
-                r: output[half_ov + 2 * j],
-                i: output[half_ov + 2 * j + 1],
+                r: uc!(output, half_ov + 2 * j),
+                i: uc!(output, half_ov + 2 * j + 1),
             });
         }
 
         opus_fft_impl(st, &mut fft_buf, fft_shift);
 
-        // Write back to output
         for j in 0..fft_len {
-            output[half_ov + 2 * j] = fft_buf[j].r;
-            output[half_ov + 2 * j + 1] = fft_buf[j].i;
+            uc_set!(output, half_ov + 2 * j, uc!(fft_buf, j).r);
+            uc_set!(output, half_ov + 2 * j + 1, uc!(fft_buf, j).i);
         }
     }
 
@@ -186,31 +183,28 @@ pub fn clt_mdct_backward(
         // Loop to (N4+1)>>1 to handle odd N4. When N4 is odd, the
         // middle pair will be computed twice.
         for i in 0..((n4 + 1) >> 1) as usize {
-            // We swap real and imag because we're using an FFT instead of an IFFT.
-            let re = output[yp0 + 1];
-            let im = output[yp0];
-            let t0 = trig[i] as i32;
-            let t1 = trig[n4 as usize + i] as i32;
+            let re = uc!(output, yp0 + 1);
+            let im = uc!(output, yp0);
+            let t0 = uc!(trig, i) as i32;
+            let t1 = uc!(trig, n4 as usize + i) as i32;
 
-            // We'd scale up by 2 here, but instead it's done when mixing the windows.
             let yr = pshr32_ovflw(add32_ovflw(s_mul(re, t0), s_mul(im, t1)), post_shift);
             let yi = pshr32_ovflw(sub32_ovflw(s_mul(re, t1), s_mul(im, t0)), post_shift);
 
-            // Read the other end before overwriting
-            let re2 = output[yp1 + 1];
-            let im2 = output[yp1];
+            let re2 = uc!(output, yp1 + 1);
+            let im2 = uc!(output, yp1);
 
-            output[yp0] = yr;
-            output[yp1 + 1] = yi;
+            uc_set!(output, yp0, yr);
+            uc_set!(output, yp1 + 1, yi);
 
-            let t0b = trig[(n4 as usize) - i - 1] as i32;
-            let t1b = trig[(n2 as usize) - i - 1] as i32;
+            let t0b = uc!(trig, (n4 as usize) - i - 1) as i32;
+            let t1b = uc!(trig, (n2 as usize) - i - 1) as i32;
 
             let yr2 = pshr32_ovflw(add32_ovflw(s_mul(re2, t0b), s_mul(im2, t1b)), post_shift);
             let yi2 = pshr32_ovflw(sub32_ovflw(s_mul(re2, t1b), s_mul(im2, t0b)), post_shift);
 
-            output[yp1] = yr2;
-            output[yp0 + 1] = yi2;
+            uc_set!(output, yp1, yr2);
+            uc_set!(output, yp0 + 1, yi2);
 
             yp0 += 2;
             yp1 -= 2;
@@ -220,20 +214,27 @@ pub fn clt_mdct_backward(
     // ---- Mirror on both sides for TDAC (windowed overlap-add) ----
     {
         let ov = overlap as usize;
-        let mut xp1 = ov - 1; // walks backward from end of overlap region
-        let mut yp1: usize = 0; // walks forward from start
-        let mut wp1: usize = 0; // window index, ascending
-        let mut wp2 = ov - 1; // window index, descending
+        #[cfg(feature = "simd")]
+        {
+            super::simd::mdct_window_simd(output, window, ov);
+        }
+        #[cfg(not(feature = "simd"))]
+        {
+            let mut xp1 = ov - 1;
+            let mut yp1: usize = 0;
+            let mut wp1: usize = 0;
+            let mut wp2 = ov - 1;
 
-        for _i in 0..ov / 2 {
-            let x1 = output[xp1];
-            let x2 = output[yp1];
-            output[yp1] = sub32_ovflw(s_mul(x2, window[wp2] as i32), s_mul(x1, window[wp1] as i32));
-            output[xp1] = add32_ovflw(s_mul(x2, window[wp1] as i32), s_mul(x1, window[wp2] as i32));
-            yp1 += 1;
-            xp1 -= 1;
-            wp1 += 1;
-            wp2 -= 1;
+            for _i in 0..ov / 2 {
+                let x1 = uc!(output, xp1);
+                let x2 = uc!(output, yp1);
+                uc_set!(output, yp1, sub32_ovflw(s_mul(x2, uc!(window, wp2) as i32), s_mul(x1, uc!(window, wp1) as i32)));
+                uc_set!(output, xp1, add32_ovflw(s_mul(x2, uc!(window, wp1) as i32), s_mul(x1, uc!(window, wp2) as i32)));
+                yp1 += 1;
+                xp1 -= 1;
+                wp1 += 1;
+                wp2 -= 1;
+            }
         }
     }
 }
@@ -775,7 +776,7 @@ mod tests {
 
         // Forward transform
         let fft_st = get_fft_state(shift);
-        let trig = &l.trig[..];
+        let trig = l.trig;
         let mut freq = vec![0i32; n2];
         clt_mdct_forward(
             &input,
@@ -987,7 +988,7 @@ mod tests {
         }
 
         let fft_st = get_fft_state(shift);
-        let trig = &l.trig[..];
+        let trig = l.trig;
 
         println!("=== Two-frame MDCT Roundtrip (decode_mem simulation) ===");
         println!(

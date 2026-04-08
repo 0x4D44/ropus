@@ -1694,7 +1694,8 @@ mod tests {
         assert!(size > 0);
 
         let mut buf = vec![0u8; (size + 8) as usize];
-        let ret = opus_packet_extensions_generate(Some(&mut buf), size + 8, &[ext0, ext1, ext2], 3, true);
+        let ret =
+            opus_packet_extensions_generate(Some(&mut buf), size + 8, &[ext0, ext1, ext2], 3, true);
         assert_eq!(ret, size + 8);
         assert!(buf[..8].iter().all(|&b| b == 0x01));
 
@@ -2464,15 +2465,15 @@ mod tests {
 
         // Stream 1: TOC=0x08 (SILK NB 10ms), self-delimited size=2, frame=[0xAA, 0xBB]
         // Self-delimited Code 0: [TOC][sd_size][frame_data]
-        let mut pkt = Vec::new();
-        pkt.push(0x08u8); // TOC (code 0)
-        pkt.push(2); // self-delimited size = 2
-        pkt.push(0xAA);
-        pkt.push(0xBB);
-        // Stream 2: [TOC][frame_data]
-        pkt.push(0x08u8);
-        pkt.push(0xCC);
-        pkt.push(0xDD);
+        let pkt = vec![
+            0x08u8, // TOC (code 0)
+            2,      // self-delimited size = 2
+            0xAA,
+            0xBB,
+            0x08u8, // Stream 2 TOC
+            0xCC,
+            0xDD,
+        ];
 
         let original_len = pkt.len() as i32;
         let padded_len = original_len + 20;

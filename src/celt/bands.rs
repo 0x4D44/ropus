@@ -258,12 +258,28 @@ pub fn denormalise_bands(
             }
         };
 
-        let mut j = j_start;
-        while j < band_end {
-            freq[f_idx] = pshr32(mult32_32_q31(shl32(x[x_idx], 30 - NORM_SHIFT), g), shift);
-            f_idx += 1;
-            x_idx += 1;
-            j += 1;
+        let band_len = (band_end - j_start) as usize;
+        #[cfg(feature = "simd")]
+        {
+            super::simd::denormalise_band_simd(
+                &x[x_idx..x_idx + band_len],
+                &mut freq[f_idx..f_idx + band_len],
+                band_len,
+                g,
+                shift,
+            );
+            x_idx += band_len;
+            f_idx += band_len;
+        }
+        #[cfg(not(feature = "simd"))]
+        {
+            let mut j = j_start;
+            while j < band_end {
+                freq[f_idx] = pshr32(mult32_32_q31(shl32(x[x_idx], 30 - NORM_SHIFT), g), shift);
+                f_idx += 1;
+                x_idx += 1;
+                j += 1;
+            }
         }
     }
 
@@ -2262,7 +2278,6 @@ mod tests {
 
     #[test]
     fn test_haar1() {
-        let sqrt_half = 1518500224;
         let mut x = [1 << 24, 1 << 24, 0, 0]; // Two pairs
         haar1(&mut x, 4, 1);
         // First pair: (a+b)/sqrt(2), (a-b)/sqrt(2)

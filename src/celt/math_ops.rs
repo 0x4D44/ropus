@@ -560,7 +560,8 @@ pub fn celt_maxabs16(x: &[i32]) -> i32 {
     max32(extend32(maxval), -extend32(minval))
 }
 
-/// Scalar implementation of celt_maxabs32 (always compiled, used as test oracle).
+/// Scalar implementation of celt_maxabs32 (used in the non-SIMD path and tests).
+#[cfg(any(test, not(feature = "simd")))]
 pub(crate) fn celt_maxabs32_scalar(x: &[i32]) -> i32 {
     let mut maxval: i32 = 0;
     let mut minval: i32 = 0;

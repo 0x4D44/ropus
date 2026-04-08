@@ -912,7 +912,12 @@ impl CeltDecoder {
 
     /// Handle a lost frame by generating concealment audio.
     /// Matches C `celt_decode_lost()`.
-    fn decode_lost(&mut self, n: i32, lm: i32, mut lpcnet: DnnPlcArg<'_>) {
+    fn decode_lost(&mut self, n: i32, lm: i32, lpcnet: DnnPlcArg<'_>) {
+        #[cfg(feature = "dnn")]
+        let mut lpcnet = lpcnet;
+        #[cfg(not(feature = "dnn"))]
+        let lpcnet = lpcnet;
+
         let mode = self.mode;
         let cc = self.channels;
         let c_stream = cc; // In non-hybrid mode, C == CC
@@ -924,7 +929,14 @@ impl CeltDecoder {
         let _buf_size_per_ch = self.buf_size();
 
         // Determine PLC strategy
+        #[cfg(feature = "dnn")]
         let mut curr_frame_type = if self.plc_duration >= 40 || start != 0 || self.skip_plc != 0 {
+            FRAME_PLC_NOISE
+        } else {
+            FRAME_PLC_PERIODIC
+        };
+        #[cfg(not(feature = "dnn"))]
+        let curr_frame_type = if self.plc_duration >= 40 || start != 0 || self.skip_plc != 0 {
             FRAME_PLC_NOISE
         } else {
             FRAME_PLC_PERIODIC

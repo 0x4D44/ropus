@@ -7098,12 +7098,8 @@ pub fn silk_encode_frame_fix(
         silk_process_gains_fix(ps_enc, &mut s_enc_ctrl, cond_coding);
 
         // Low Bitrate Redundant Encoding (matches C encode_frame_FIX.c:172)
-        silk_lbrr_encode_fix(
-            ps_enc,
-            &mut s_enc_ctrl,
-            &ps_enc.x_buf[x_frame_offset..x_frame_offset + frame_length].to_vec(),
-            cond_coding,
-        );
+        let lbrr_input = ps_enc.x_buf[x_frame_offset..x_frame_offset + frame_length].to_vec();
+        silk_lbrr_encode_fix(ps_enc, &mut s_enc_ctrl, &lbrr_input, cond_coding);
 
         // Rate control loop: NSQ + encode (matches C encode_frame_FIX.c)
         let max_iter: i32 = 6;

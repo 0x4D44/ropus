@@ -21,11 +21,12 @@ const SECOND_CHECK: [i32; 16] = [0, 0, 3, 2, 3, 2, 5, 2, 3, 2, 3, 2, 5, 2, 3, 2]
 // Inline correlation kernels (from pitch.h)
 // ===========================================================================
 
-/// Scalar implementation of xcorr_kernel (always compiled, used as test oracle).
+/// Scalar implementation of xcorr_kernel (used in the non-SIMD path and tests).
 ///
 /// The inner loop is unrolled 4x, maintaining a sliding window of y values.
 /// Preconditions: `len >= 3`, `x` has >= `len` elements, `y` has >= `len + 3` elements.
 #[inline(always)]
+#[cfg(any(test, not(feature = "simd")))]
 pub(crate) fn xcorr_kernel_scalar(x: &[i32], y: &[i32], sum: &mut [i32; 4], len: usize) {
     debug_assert!(len >= 3);
 

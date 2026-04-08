@@ -6377,7 +6377,6 @@ fn cmd_hp_cutoff_compare() {
 fn cmd_debug_decode_25ms() {
     // Debug: decode 2.5ms frames at 48k/1ch/64kbps AUDIO and compare per-frame
     use mdopus::opus::decoder::OpusDecoder as RustDecoder;
-    use mdopus::opus::encoder::OpusEncoder as RustEncoder;
 
     let sr = 48000;
     let ch = 1;
@@ -6891,10 +6890,10 @@ fn cmd_debug_stereo_voip() {
         let fl = 80usize; // 8kHz * 10ms = 80 samples (internal frame)
         let fs_khz = 8;
         // Use some non-trivial input data
-        let mut x1: Vec<i16> = (0..fl)
+        let x1: Vec<i16> = (0..fl)
             .map(|i| ((i as i32 * 1234 + 5678) % 20000 - 10000) as i16)
             .collect();
-        let mut x2: Vec<i16> = (0..fl)
+        let x2: Vec<i16> = (0..fl)
             .map(|i| ((i as i32 * 4321 + 8765) % 20000 - 10000) as i16)
             .collect();
 

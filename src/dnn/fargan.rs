@@ -1249,7 +1249,7 @@ mod tests {
         assert_eq!(result, 32767);
 
         // Negative saturation: -1.0 * 32768 = -32768 -> clamped to -32767
-        let val = 32768.0f32 * (-1.0);
+        let val = -32768.0f32;
         let clamped = val.max(-32767.0).min(32767.0);
         let result = (0.5f64 + clamped as f64).floor() as i16;
         assert_eq!(result, -32767);

@@ -11,26 +11,21 @@
 //! Fixed-point path (FIXED_POINT, non-RES24, non-QEXT).
 
 use crate::celt::bands::compute_band_energies;
-use crate::celt::encoder::{CeltEncoder, celt_preemphasis, clt_mdct_forward, get_fft_state};
+use crate::celt::encoder::{celt_preemphasis, clt_mdct_forward, get_fft_state};
 use crate::celt::math_ops::{celt_log2, isqrt32};
 use crate::celt::modes::{CELTMode, bitrate_to_bits, bits_to_bitrate, resampling_factor};
-use crate::celt::pitch::celt_inner_prod;
 use crate::celt::quant_bands::amp2log2;
 use crate::types::*;
 
 use super::decoder::{
     MODE_CELT_ONLY, OPUS_BAD_ARG, OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR, OPUS_INVALID_PACKET,
-    OPUS_OK, OPUS_UNIMPLEMENTED, OpusDecoder, opus_packet_get_nb_frames,
-    opus_packet_get_nb_samples, opus_packet_get_samples_per_frame,
+    OPUS_OK, OPUS_UNIMPLEMENTED, OpusDecoder, opus_packet_get_nb_samples,
 };
 use super::decoder::{
     OPUS_BANDWIDTH_FULLBAND, OPUS_BANDWIDTH_NARROWBAND, OPUS_BANDWIDTH_SUPERWIDEBAND,
     OPUS_BANDWIDTH_WIDEBAND,
 };
-use super::encoder::{
-    OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY, OPUS_APPLICATION_VOIP, OPUS_AUTO,
-    OPUS_BITRATE_MAX, OPUS_FRAMESIZE_ARG, OpusEncoder, frame_size_select,
-};
+use super::encoder::{OPUS_AUTO, OPUS_BITRATE_MAX, OPUS_FRAMESIZE_ARG, OpusEncoder, frame_size_select};
 use super::repacketizer::OpusRepacketizer;
 
 // ===========================================================================
@@ -653,19 +648,10 @@ fn parse_multistream_subpacket(data: &[u8], len: i32, self_delimited: bool) -> i
 
     // Determine number of frames from code
     let code = toc & 0x3;
-    let count: i32;
-    let mut cbr_frame_size: i32 = -1;
-
     match code {
-        0 => {
-            count = 1;
-        }
-        1 => {
-            count = 2;
-        }
-        2 => {
-            count = 2;
-        }
+        0 => {}
+        1 => {}
+        2 => {}
         3 => {
             // VBR/CBR code 3
             if remaining < 1 {
@@ -674,7 +660,7 @@ fn parse_multistream_subpacket(data: &[u8], len: i32, self_delimited: bool) -> i
             let ch = data[pos];
             pos += 1;
             remaining -= 1;
-            count = (ch & 0x3F) as i32;
+            let count = (ch & 0x3F) as i32;
             if count == 0 || (count > 48) {
                 return OPUS_INVALID_PACKET;
             }
@@ -752,7 +738,7 @@ fn parse_multistream_subpacket(data: &[u8], len: i32, self_delimited: bool) -> i
         }
     }
 
-    (pos as i32 + remaining)
+    pos as i32 + remaining
 }
 
 /// Parse a 1- or 2-byte size field.
@@ -871,8 +857,8 @@ impl OpusMSEncoder {
             return Err(OPUS_BAD_ARG);
         }
 
-        let mut streams: i32;
-        let mut coupled_streams: i32;
+        let streams: i32;
+        let coupled_streams: i32;
         let mut mapping = vec![0u8; channels as usize];
         let mut lfe_stream: i32 = -1;
         let mapping_type: MappingType;
@@ -1147,11 +1133,22 @@ impl OpusMSEncoder {
             if s_i32 < self.layout.nb_coupled_streams {
                 let left = get_left_channel(&self.layout, s_i32, -1) as usize;
                 let right = get_right_channel(&self.layout, s_i32, -1) as usize;
-                // Copy left channel to even positions, right to odd
-                for i in 0..frame_size as usize {
-                    buf[2 * i] = pcm[i * self.layout.nb_channels as usize + left];
-                    buf[2 * i + 1] = pcm[i * self.layout.nb_channels as usize + right];
-                }
+                copy_channel_in_short(
+                    &mut buf,
+                    2,
+                    pcm,
+                    self.layout.nb_channels as usize,
+                    left,
+                    frame_size as usize,
+                );
+                copy_channel_in_short(
+                    &mut buf[1..],
+                    2,
+                    pcm,
+                    self.layout.nb_channels as usize,
+                    right,
+                    frame_size as usize,
+                );
                 if self.mapping_type == MappingType::Surround {
                     for i in 0..21 {
                         band_log_e[i] = band_smr[21 * left + i];
@@ -1160,9 +1157,14 @@ impl OpusMSEncoder {
                 }
             } else {
                 let chan = get_mono_channel(&self.layout, s_i32, -1) as usize;
-                for i in 0..frame_size as usize {
-                    buf[i] = pcm[i * self.layout.nb_channels as usize + chan];
-                }
+                copy_channel_in_short(
+                    &mut buf,
+                    1,
+                    pcm,
+                    self.layout.nb_channels as usize,
+                    chan,
+                    frame_size as usize,
+                );
                 if self.mapping_type == MappingType::Surround {
                     for i in 0..21 {
                         band_log_e[i] = band_smr[21 * chan + i];
@@ -1377,10 +1379,15 @@ impl OpusMSEncoder {
     }
 
     pub fn set_application(&mut self, v: i32) -> i32 {
+        self.application = v;
         for enc in &mut self.encoders {
             enc.ms_set_application(v);
         }
         OPUS_OK
+    }
+
+    pub fn get_application(&self) -> i32 {
+        self.application
     }
 
     pub fn set_expert_frame_duration(&mut self, v: i32) {
@@ -1542,7 +1549,6 @@ impl OpusMSDecoder {
             } else {
                 Some(&data.unwrap()[data_offset..])
             };
-            let sub_len = if do_plc { 0 } else { remaining };
             let self_delimited = s_i32 != self.layout.nb_streams - 1;
 
             let dec = &mut self.decoders[s];
@@ -2141,6 +2147,7 @@ impl OpusProjectionDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::opus::encoder::OPUS_APPLICATION_AUDIO;
 
     fn patterned_pcm_i16(frame_size: usize, channels: usize, seed: i32) -> Vec<i16> {
         (0..frame_size * channels)
@@ -2341,7 +2348,7 @@ mod tests {
 
     #[test]
     fn test_surround_encode_and_muted_decode_paths() {
-        let (mut enc, streams, coupled, mapping) =
+        let (mut enc, streams, coupled, _mapping) =
             OpusMSEncoder::new_surround(48000, 6, 1, OPUS_APPLICATION_AUDIO).unwrap();
         assert_eq!(streams, 4);
         assert_eq!(coupled, 2);
@@ -2728,8 +2735,8 @@ mod tests {
         assert_eq!(get_streams_from_channels(4, 3), Ok((2, 2, 2)));
         assert_eq!(get_streams_from_channels(6, 3), Ok((3, 3, 2)));
 
-        assert!(matches!(get_mixing_matrix_for_order(2), Ok(_)));
-        assert!(matches!(get_demixing_matrix_for_order(3), Ok(_)));
+        assert!(get_mixing_matrix_for_order(2).is_ok());
+        assert!(get_demixing_matrix_for_order(3).is_ok());
         assert!(matches!(get_mixing_matrix_for_order(7), Err(OPUS_BAD_ARG)));
         assert!(matches!(
             get_demixing_matrix_for_order(7),
