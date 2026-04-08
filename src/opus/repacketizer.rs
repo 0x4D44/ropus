@@ -8,8 +8,8 @@
 //! - Extension parsing, iteration, and generation (Opus 1.4+)
 
 use crate::opus::decoder::{
-    OPUS_BAD_ARG, OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR, OPUS_INVALID_PACKET, OPUS_OK,
-    opus_packet_get_nb_frames, opus_packet_get_samples_per_frame,
+    opus_packet_get_nb_frames, opus_packet_get_samples_per_frame, OPUS_BAD_ARG,
+    OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR, OPUS_INVALID_PACKET, OPUS_OK,
 };
 
 /// Maximum frames per Opus packet (120ms / 2.5ms = 48).
@@ -1370,7 +1370,11 @@ pub(crate) fn opus_packet_pad_impl(
 /// Matches C `opus_packet_pad`.
 pub fn opus_packet_pad(data: &mut [u8], len: i32, new_len: i32) -> i32 {
     let ret = opus_packet_pad_impl(data, len, new_len, true, &[]);
-    if ret > 0 { OPUS_OK } else { ret }
+    if ret > 0 {
+        OPUS_OK
+    } else {
+        ret
+    }
 }
 
 /// Strip all padding from a packet in-place.
@@ -1612,6 +1616,91 @@ mod tests {
         assert_eq!(&out[2..4], &[0xAA, 0xBB]);
         assert_eq!(&out[4..7], &[0xCC, 0xDD, 0xEE]);
         assert_eq!(ret, 7);
+    }
+
+    #[test]
+    fn test_repacketizer_self_delimited_cbr_roundtrip() {
+        let pkt1 = [0x08u8, 0x11, 0x22];
+        let pkt2 = [0x08u8, 0x33, 0x44];
+
+        let mut rp = OpusRepacketizer::new();
+        assert_eq!(rp.cat(&pkt1, 3), OPUS_OK);
+        assert_eq!(rp.cat(&pkt2, 3), OPUS_OK);
+
+        let mut out = [0u8; 32];
+        let ret = rp.out_range_impl(0, 2, &mut out, 32, true, false, &[]);
+        assert_eq!(ret, 6);
+        assert_eq!(out[0] & 0x3, 0x1);
+        assert_eq!(out[1], 2);
+
+        let mut parsed = OpusRepacketizer::new();
+        assert_eq!(parsed.cat_impl(&out, ret, true), OPUS_OK);
+        assert_eq!(parsed.get_nb_frames(), 2);
+        assert_eq!(parsed.frames[0], &pkt1[1..]);
+        assert_eq!(parsed.frames[1], &pkt2[1..]);
+    }
+
+    #[test]
+    fn test_repacketizer_self_delimited_vbr_roundtrip() {
+        let pkt1 = [0x08u8, 0xAA, 0xBB];
+        let pkt2 = [0x08u8, 0xCC, 0xDD, 0xEE];
+
+        let mut rp = OpusRepacketizer::new();
+        assert_eq!(rp.cat(&pkt1, 3), OPUS_OK);
+        assert_eq!(rp.cat(&pkt2, 4), OPUS_OK);
+
+        let mut out = [0u8; 32];
+        let ret = rp.out_range_impl(0, 2, &mut out, 32, true, false, &[]);
+        assert_eq!(ret, 8);
+        assert_eq!(out[0] & 0x3, 0x2);
+        assert_eq!(out[1], 2);
+
+        let mut parsed = OpusRepacketizer::new();
+        assert_eq!(parsed.cat_impl(&out, ret, true), OPUS_OK);
+        assert_eq!(parsed.get_nb_frames(), 2);
+        assert_eq!(parsed.frames[0], &pkt1[1..]);
+        assert_eq!(parsed.frames[1], &pkt2[1..]);
+    }
+
+    #[test]
+    fn test_packet_pad_large_padding_roundtrip() {
+        let original = [0x08u8, 0xAA, 0xBB, 0xCC];
+        let mut buf = [0u8; 600];
+        buf[..original.len()].copy_from_slice(&original);
+
+        let ret = opus_packet_pad(&mut buf, original.len() as i32, 600);
+        assert_eq!(ret, OPUS_OK);
+        assert_eq!(buf[0] & 0x3, 0x3);
+        assert_ne!(buf[1] & 0x40, 0);
+        assert_eq!(buf[2], 255);
+        assert_eq!(buf[3], 255);
+
+        let unpadded = opus_packet_unpad(&mut buf, 600);
+        assert_eq!(unpadded, original.len() as i32);
+        assert_eq!(&buf[..original.len()], &original);
+    }
+
+    #[test]
+    fn test_repacketizer_rejects_invalid_packet_shapes() {
+        let mut rp = OpusRepacketizer::new();
+
+        // Code 1 with odd payload length must fail.
+        let odd_cbr = [0x09u8, 0xAA, 0xBB, 0xCC];
+        assert_eq!(rp.cat(&odd_cbr, odd_cbr.len() as i32), OPUS_INVALID_PACKET);
+
+        // Code 3 with a zero frame count must fail.
+        let bad_count = [0x0Bu8, 0x00];
+        assert_eq!(
+            rp.cat(&bad_count, bad_count.len() as i32),
+            OPUS_INVALID_PACKET
+        );
+
+        // Multistream pad requires self-delimited prefix streams; this one is not.
+        let mut multi = [0x08u8, 0xAA, 0xBB];
+        assert_eq!(
+            opus_multistream_packet_pad(&mut multi, 3, 12, 2),
+            OPUS_INVALID_PACKET
+        );
     }
 
     #[test]

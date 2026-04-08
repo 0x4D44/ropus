@@ -8367,6 +8367,38 @@ mod tests {
     }
 
     #[test]
+    fn test_check_control_input_invalid_sample_rate_relationship() {
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.desired_internal_sample_rate = 12000;
+        ctrl.min_internal_sample_rate = 16000;
+        assert_eq!(check_control_input(&ctrl), SILK_ENC_FS_NOT_SUPPORTED);
+    }
+
+    #[test]
+    fn test_check_control_input_invalid_dtx_setting() {
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.use_dtx = 2;
+        assert_eq!(check_control_input(&ctrl), SILK_ENC_INVALID_DTX_SETTING);
+    }
+
+    #[test]
+    fn test_check_control_input_invalid_cbr_setting() {
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.use_cbr = -1;
+        assert_eq!(check_control_input(&ctrl), SILK_ENC_INVALID_CBR_SETTING);
+    }
+
+    #[test]
+    fn test_check_control_input_invalid_in_band_fec_setting() {
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.use_in_band_fec = 2;
+        assert_eq!(
+            check_control_input(&ctrl),
+            SILK_ENC_INVALID_INBAND_FEC_SETTING
+        );
+    }
+
+    #[test]
     fn test_vad_init() {
         let mut vad = SilkVadState::default();
         assert_eq!(silk_vad_init(&mut vad), 0);
@@ -8394,6 +8426,16 @@ mod tests {
         silk_control_snr(&mut state, 3000);
         // Very low bitrate should give 0 SNR
         assert_eq!(state.snr_db_q7, 0);
+    }
+
+    #[test]
+    fn test_control_snr_uses_midband_table_for_two_subframes() {
+        let mut state = SilkEncoderState::default();
+        state.fs_khz = 12;
+        state.nb_subfr = 2;
+        silk_control_snr(&mut state, 10000);
+        assert_eq!(state.target_rate_bps, 10000);
+        assert_eq!(state.snr_db_q7, SILK_TARGET_RATE_MB_21[10] as i32 * 21);
     }
 
     #[test]
@@ -8438,6 +8480,96 @@ mod tests {
         let low_energy: i64 = out_l.iter().map(|&s| s as i64 * s as i64).sum();
         let high_energy: i64 = out_h.iter().map(|&s| s as i64 * s as i64).sum();
         assert!(low_energy > high_energy);
+    }
+
+    #[test]
+    fn test_hp_variable_cutoff_ignores_unvoiced_frames() {
+        let mut enc = SilkEncoderStateFix::default();
+        enc.s_cmn.prev_signal_type = TYPE_NO_VOICE_ACTIVITY;
+        enc.s_cmn.variable_hp_smth1_q15 = 12345;
+        enc.s_cmn.fs_khz = 16;
+        enc.s_cmn.prev_lag = 80;
+        enc.s_cmn.speech_activity_q8 = 128;
+        enc.s_cmn.input_quality_bands_q15[0] = 4000;
+
+        silk_hp_variable_cutoff(&mut enc);
+
+        assert_eq!(enc.s_cmn.variable_hp_smth1_q15, 12345);
+    }
+
+    #[test]
+    fn test_hp_variable_cutoff_tracks_voiced_frames() {
+        let mut enc = SilkEncoderStateFix::default();
+        enc.s_cmn.prev_signal_type = TYPE_VOICED;
+        enc.s_cmn.variable_hp_smth1_q15 = 120000;
+        enc.s_cmn.fs_khz = 16;
+        enc.s_cmn.prev_lag = 80;
+        enc.s_cmn.speech_activity_q8 = 128;
+        enc.s_cmn.input_quality_bands_q15[0] = 0;
+        let before = enc.s_cmn.variable_hp_smth1_q15;
+
+        silk_hp_variable_cutoff(&mut enc);
+
+        assert_ne!(enc.s_cmn.variable_hp_smth1_q15, before);
+        assert!(enc.s_cmn.variable_hp_smth1_q15 >= silk_lin2log(VARIABLE_HP_MIN_CUTOFF_HZ) << 8);
+        assert!(enc.s_cmn.variable_hp_smth1_q15 <= silk_lin2log(VARIABLE_HP_MAX_CUTOFF_HZ) << 8);
+    }
+
+    #[test]
+    fn test_lp_variable_cutoff_noop_when_disabled() {
+        let mut s_lp = SilkLpState::default();
+        let mut frame = [1000i16, -500, 750, -250, 500, -125, 250, -62];
+        let frame_len = frame.len();
+        let original = frame;
+
+        silk_lp_variable_cutoff(&mut s_lp, &mut frame, frame_len);
+
+        assert_eq!(frame, original);
+        assert_eq!(s_lp.transition_frame_no, 0);
+    }
+
+    #[test]
+    fn test_lp_variable_cutoff_applies_transition_when_enabled() {
+        let mut s_lp = SilkLpState {
+            mode: 1,
+            transition_frame_no: 0,
+            ..SilkLpState::default()
+        };
+        let mut frame = [1000i16, -1000, 500, -500, 250, -250, 125, -125];
+        let frame_len = frame.len();
+        let original = frame;
+
+        silk_lp_variable_cutoff(&mut s_lp, &mut frame, frame_len);
+
+        assert_ne!(frame, original);
+        assert_eq!(s_lp.transition_frame_no, 1);
+    }
+
+    #[test]
+    fn test_lp_interpolate_filter_taps_direct_copy_at_zero_fraction() {
+        let mut b_q28 = [0i32; TRANSITION_NB];
+        let mut a_q28 = [0i32; TRANSITION_NA];
+
+        silk_lp_interpolate_filter_taps(&mut b_q28, &mut a_q28, 2, 0);
+
+        assert_eq!(b_q28, SILK_TRANSITION_LP_B_Q28[2]);
+        assert_eq!(a_q28, SILK_TRANSITION_LP_A_Q28[2]);
+    }
+
+    #[test]
+    fn test_lp_interpolate_filter_taps_final_row_at_transition_end() {
+        let mut b_q28 = [0i32; TRANSITION_NB];
+        let mut a_q28 = [0i32; TRANSITION_NA];
+
+        silk_lp_interpolate_filter_taps(
+            &mut b_q28,
+            &mut a_q28,
+            (TRANSITION_INT_NUM - 1) as i32,
+            12345,
+        );
+
+        assert_eq!(b_q28, SILK_TRANSITION_LP_B_Q28[TRANSITION_INT_NUM - 1]);
+        assert_eq!(a_q28, SILK_TRANSITION_LP_A_Q28[TRANSITION_INT_NUM - 1]);
     }
 
     #[test]

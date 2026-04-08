@@ -3143,4 +3143,143 @@ mod tests {
         assert_eq!(decoded, 960);
         assert!(out.iter().any(|&sample| sample != 0));
     }
+
+    #[test]
+    fn test_encoder_controls_update_state_and_lookahead() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+
+        assert_eq!(enc.get_lookahead(), 312);
+        assert_eq!(enc.set_bitrate(0), OPUS_BAD_ARG);
+        assert_eq!(enc.set_bitrate(1), OPUS_OK);
+        assert_eq!(enc.get_bitrate(), 500);
+
+        assert_eq!(enc.set_force_channels(1), OPUS_OK);
+        assert_eq!(enc.get_force_channels(), 1);
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        assert_eq!(enc.set_max_bandwidth(OPUS_BANDWIDTH_SUPERWIDEBAND), OPUS_OK);
+        assert_eq!(enc.get_max_bandwidth(), OPUS_BANDWIDTH_SUPERWIDEBAND);
+        assert_eq!(enc.set_signal(OPUS_SIGNAL_MUSIC), OPUS_OK);
+        assert_eq!(enc.get_signal(), OPUS_SIGNAL_MUSIC);
+        assert_eq!(enc.set_inband_fec(2), OPUS_OK);
+        assert_eq!(enc.get_inband_fec(), 2);
+        assert_eq!(enc.silk_mode.use_in_band_fec, 1);
+        assert_eq!(enc.set_packet_loss_perc(12), OPUS_OK);
+        assert_eq!(enc.get_packet_loss_perc(), 12);
+        assert_eq!(enc.set_dtx(1), OPUS_OK);
+        assert_eq!(enc.get_dtx(), 1);
+        assert_eq!(enc.set_lsb_depth(16), OPUS_OK);
+        assert_eq!(enc.get_lsb_depth(), 16);
+        assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_20_MS), OPUS_OK);
+        assert_eq!(enc.get_expert_frame_duration(), OPUS_FRAMESIZE_20_MS);
+        assert_eq!(enc.set_prediction_disabled(1), OPUS_OK);
+        assert_eq!(enc.get_prediction_disabled(), 1);
+        assert_eq!(enc.set_voice_ratio(100), OPUS_OK);
+        assert_eq!(enc.get_voice_ratio(), 100);
+        assert_eq!(enc.set_force_mode(MODE_HYBRID), OPUS_OK);
+        assert_eq!(enc.user_forced_mode, MODE_HYBRID);
+        assert_eq!(enc.set_phase_inversion_disabled(1), OPUS_OK);
+        assert_eq!(enc.get_phase_inversion_disabled(), 1);
+
+        let lowdelay = OpusEncoder::new(48000, 2, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+        assert_eq!(lowdelay.get_lookahead(), 120);
+    }
+
+    #[test]
+    fn test_helper_branches_cover_mode_rate_fec_and_redundancy_math() {
+        assert_eq!(user_bitrate_to_bitrate(OPUS_AUTO, 1, 48000, 960, 1276), 51000);
+        assert_eq!(user_bitrate_to_bitrate(OPUS_BITRATE_MAX, 2, 48000, 960, 1276), 510400);
+        assert_eq!(user_bitrate_to_bitrate(64000, 2, 48000, 960, 1276), 64000);
+
+        assert_eq!(
+            compute_silk_rate_for_hybrid(18000, OPUS_BANDWIDTH_FULLBAND, false, 1, 0, 1),
+            14750
+        );
+        assert_eq!(
+            compute_silk_rate_for_hybrid(26000, OPUS_BANDWIDTH_FULLBAND, false, 1, 0, 2),
+            20750
+        );
+        assert_eq!(
+            compute_silk_rate_for_hybrid(70000, OPUS_BANDWIDTH_SUPERWIDEBAND, true, 0, 1, 1),
+            53400
+        );
+
+        assert_eq!(compute_redundancy_bytes(20, 4000, 50, 1), 0);
+        assert_eq!(compute_redundancy_bytes(1000, 64000, 50, 2), 74);
+
+        let mut bw = OPUS_BANDWIDTH_WIDEBAND;
+        assert_eq!(decide_fec(1, 25, 0, MODE_SILK_ONLY, &mut bw, 8000), 0);
+        assert_eq!(bw, OPUS_BANDWIDTH_WIDEBAND);
+
+        let mut bw = OPUS_BANDWIDTH_NARROWBAND;
+        assert_eq!(decide_fec(1, 25, 1, MODE_SILK_ONLY, &mut bw, 12000), 1);
+        assert_eq!(bw, OPUS_BANDWIDTH_NARROWBAND);
+
+        let mut bw = OPUS_BANDWIDTH_WIDEBAND;
+        assert_eq!(decide_fec(1, 25, 0, MODE_CELT_ONLY, &mut bw, 20000), 0);
+        assert_eq!(bw, OPUS_BANDWIDTH_WIDEBAND);
+    }
+
+    #[test]
+    fn test_decide_dtx_mode_thresholds() {
+        let mut no_activity = 0;
+        for _ in 0..10 {
+            assert!(!decide_dtx_mode(0, &mut no_activity, 40));
+        }
+        assert_eq!(no_activity, 400);
+        assert!(decide_dtx_mode(0, &mut no_activity, 40));
+        assert_eq!(no_activity, 440);
+
+        assert!(!decide_dtx_mode(1, &mut no_activity, 40));
+        assert_eq!(no_activity, 0);
+
+        no_activity = 1201;
+        assert!(!decide_dtx_mode(0, &mut no_activity, 40));
+        assert_eq!(no_activity, 400);
+    }
+
+    #[test]
+    fn test_encode_forced_mono_celt_and_dtx_branch_paths() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_force_mode(MODE_CELT_ONLY), OPUS_OK);
+        assert_eq!(enc.set_force_channels(1), OPUS_OK);
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        assert_eq!(enc.set_dtx(1), OPUS_OK);
+        assert_eq!(enc.set_phase_inversion_disabled(1), OPUS_OK);
+        assert_eq!(enc.get_phase_inversion_disabled(), 1);
+
+        let pcm = patterned_pcm_i16(960, 2, 901);
+        let mut active_packet = vec![0u8; 1500];
+        let active_capacity = active_packet.len() as i32;
+        let len = enc
+            .encode(&pcm, 960, &mut active_packet, active_capacity)
+            .unwrap();
+        let active_packet = &active_packet[..len as usize];
+
+        assert!(len > 1);
+        assert_eq!(enc.get_mode(), MODE_CELT_ONLY);
+        assert_eq!(enc.get_stream_channels(), 1);
+        assert_eq!(enc.get_bandwidth(), OPUS_BANDWIDTH_WIDEBAND);
+        assert_eq!(packet_mode_from_toc(active_packet), MODE_CELT_ONLY);
+
+        let silence = [0i16; 960 * 2];
+        let mut dtx_packet = vec![0u8; 1500];
+        let dtx_capacity = dtx_packet.len() as i32;
+        let mut len = enc
+            .encode(&silence, 960, &mut dtx_packet, dtx_capacity)
+            .unwrap();
+        assert!(len > 1);
+        for _ in 1..10 {
+            len = enc
+                .encode(&silence, 960, &mut dtx_packet, dtx_capacity)
+                .unwrap();
+            assert!(len > 1);
+        }
+
+        len = enc
+            .encode(&silence, 960, &mut dtx_packet, dtx_capacity)
+            .unwrap();
+        assert_eq!(len, 1);
+        assert_eq!(enc.get_final_range(), 0);
+        assert_ne!(dtx_packet[0], 0);
+    }
 }

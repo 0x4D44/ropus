@@ -1416,6 +1416,22 @@ impl OpusDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::opus::encoder::{
+        OpusEncoder, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
+    };
+
+    fn patterned_pcm_i16(frame_size: usize, channels: usize, seed: i32) -> Vec<i16> {
+        (0..frame_size * channels)
+            .map(|i| {
+                let base = ((i as i32 * 7919 + seed * 911) % 28000) - 14000;
+                if channels == 2 && i % 2 == 1 {
+                    (base / 2) as i16
+                } else {
+                    base as i16
+                }
+            })
+            .collect()
+    }
 
     // --- Packet utility tests ---
 
@@ -1532,6 +1548,10 @@ mod tests {
         // SILK 20ms mono, 1 frame at 48kHz → 960
         let packet = [0x08u8, 0x00]; // SILK, 20ms, code 0 (1 frame), + 1 byte payload
         assert_eq!(opus_packet_get_nb_samples(&packet, 48000), Ok(960));
+
+        // 60ms SILK with 3 frames exceeds the 120ms limit.
+        let invalid = [0x1Bu8, 0x03];
+        assert_eq!(opus_packet_get_nb_samples(&invalid, 48000), Err(OPUS_INVALID_PACKET));
     }
 
     #[test]
@@ -1624,6 +1644,74 @@ mod tests {
         assert_eq!(count, OPUS_INVALID_PACKET);
     }
 
+    #[test]
+    fn test_packet_parse_code3_self_delimited_paths() {
+        let pkt_cbr = [0x83u8, 0x03, 0x02, 0, 1, 2, 3, 4, 5];
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let mut packet_offset = 0i32;
+        let count = opus_packet_parse_impl(
+            &pkt_cbr,
+            pkt_cbr.len() as i32,
+            true,
+            &mut toc,
+            &mut sizes,
+            &mut offset,
+            Some(&mut packet_offset),
+        );
+        assert_eq!(count, 3);
+        assert_eq!(toc, 0x83);
+        assert_eq!(&sizes[..3], &[2, 2, 2]);
+        assert_eq!(offset, 3);
+        assert_eq!(packet_offset, pkt_cbr.len() as i32);
+
+        let pkt_vbr_with_pad = [0x83u8, 0xC2, 0x01, 0x02, 0x03, 0, 1, 2, 3, 4, 0];
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let mut packet_offset = 0i32;
+        let count = opus_packet_parse_impl(
+            &pkt_vbr_with_pad,
+            pkt_vbr_with_pad.len() as i32,
+            true,
+            &mut toc,
+            &mut sizes,
+            &mut offset,
+            Some(&mut packet_offset),
+        );
+        assert_eq!(count, 2);
+        assert_eq!(toc, 0x83);
+        assert_eq!(&sizes[..2], &[2, 3]);
+        assert_eq!(offset, 5);
+        assert_eq!(packet_offset, pkt_vbr_with_pad.len() as i32);
+
+        let invalid = [0x83u8, 0x82, 0x02, 0x05, 0, 1, 0];
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        assert_eq!(
+            opus_packet_parse_impl(
+                &invalid,
+                invalid.len() as i32,
+                true,
+                &mut toc,
+                &mut sizes,
+                &mut offset,
+                None,
+            ),
+            OPUS_INVALID_PACKET
+        );
+    }
+
+    #[test]
+    fn test_packet_has_lbrr_detects_flags_and_errors() {
+        assert_eq!(opus_packet_has_lbrr(&[0x80, 0x00], 2), Ok(false));
+        assert_eq!(opus_packet_has_lbrr(&[0x08, 0x40], 2), Ok(true));
+        assert_eq!(opus_packet_has_lbrr(&[0x0C, 0x10], 2), Ok(true));
+        assert_eq!(opus_packet_has_lbrr(&[0x03], 1), Err(OPUS_INVALID_PACKET));
+    }
+
     // --- Decoder construction tests ---
 
     #[test]
@@ -1697,6 +1785,108 @@ mod tests {
         let mut pcm = vec![0i16; 960];
         let ret = dec.decode(None, &mut pcm, 0, false);
         assert_eq!(ret, Err(OPUS_BAD_ARG));
+    }
+
+    #[test]
+    fn test_decode_native_fec_argument_and_fallback_paths() {
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut pcm = vec![0i16; 960];
+        let packet = [0x80u8, 0x00];
+        assert_eq!(
+            dec.decode_native(Some(&packet), &mut pcm, 121, true, false, None),
+            Err(OPUS_BAD_ARG)
+        );
+        assert_eq!(
+            dec.decode_native(None, &mut pcm, 121, false, false, None),
+            Err(OPUS_BAD_ARG)
+        );
+
+        let mut packet_offset = -1;
+        let decoded = dec
+            .decode_native(
+                Some(&packet),
+                &mut pcm,
+                960,
+                true,
+                false,
+                Some(&mut packet_offset),
+            )
+            .unwrap();
+        assert_eq!(decoded, 960);
+        assert_eq!(packet_offset, packet.len() as i32);
+        assert_eq!(dec.get_last_packet_duration(), 960);
+        assert!(pcm.iter().all(|&sample| sample == 0));
+    }
+
+    #[test]
+    fn test_decoder_misc_wrapper_paths() {
+        let mut dec = OpusDecoder::new(48000, 2).unwrap();
+        assert!(!dec.get_phase_inversion_disabled());
+        dec.set_phase_inversion_disabled(true);
+        assert!(dec.get_phase_inversion_disabled());
+        assert_eq!(dec.ms_get_phase_inversion_disabled(), 1);
+        dec.ms_set_phase_inversion_disabled(0);
+        assert!(!dec.get_phase_inversion_disabled());
+        assert_eq!(dec.ms_get_phase_inversion_disabled(), 0);
+
+        assert!(!dec.get_ignore_extensions());
+        dec.set_ignore_extensions(true);
+        assert!(dec.get_ignore_extensions());
+
+        dec.ms_set_gain(123);
+        assert_eq!(dec.ms_get_gain(), 123);
+        dec.ms_set_complexity(7);
+        assert_eq!(dec.ms_get_complexity(), 7);
+        assert_eq!(dec.get_complexity(), 7);
+
+        dec.bandwidth = OPUS_BANDWIDTH_FULLBAND;
+        dec.range_final = 77;
+        dec.last_packet_duration = 960;
+        assert_eq!(dec.ms_get_sample_rate(), 48000);
+        assert_eq!(dec.ms_get_bandwidth(), OPUS_BANDWIDTH_FULLBAND);
+        assert_eq!(dec.ms_get_range_final(), 77);
+        assert_eq!(dec.ms_get_last_packet_duration(), 960);
+
+        dec.ms_reset();
+        assert_eq!(dec.ms_get_bandwidth(), 0);
+        assert_eq!(dec.ms_get_range_final(), 0);
+        assert_eq!(dec.ms_get_last_packet_duration(), 0);
+        assert_eq!(dec.frame_size, 120);
+    }
+
+    #[test]
+    fn test_decode24_and_decode_float_roundtrip_shapes() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        let pcm = patterned_pcm_i16(960, 1, 91);
+        let mut packet_buf = vec![0u8; 1500];
+        let packet_capacity = packet_buf.len() as i32;
+        let len = enc
+            .encode(&pcm, 960, &mut packet_buf, packet_capacity)
+            .unwrap();
+        let packet = &packet_buf[..len as usize];
+
+        let mut dec24 = OpusDecoder::new(48000, 1).unwrap();
+        let mut pcm24 = vec![0i32; 960];
+        let decoded24 = dec24.decode24(Some(packet), &mut pcm24, 960, false).unwrap();
+        assert_eq!(decoded24, 960);
+        assert!(pcm24.iter().any(|&sample| sample != 0));
+
+        let mut decf = OpusDecoder::new(48000, 1).unwrap();
+        let mut pcmf = vec![0.0f32; 960];
+        let decodedf = decf.decode_float(Some(packet), &mut pcmf, 960, false).unwrap();
+        assert_eq!(decodedf, 960);
+        assert!(pcmf.iter().any(|sample| sample.abs() > 1e-4));
+
+        let mut lowdelay = OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+        let pcm = patterned_pcm_i16(480, 1, 123);
+        let mut lowdelay_packet = vec![0u8; 1500];
+        let len = lowdelay
+            .encode(&pcm, 480, &mut lowdelay_packet, packet_capacity)
+            .unwrap();
+        let packet = &lowdelay_packet[..len as usize];
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut pcm24 = vec![0i32; 480];
+        assert_eq!(dec.decode24(Some(packet), &mut pcm24, 480, false).unwrap(), 480);
     }
 
     #[test]

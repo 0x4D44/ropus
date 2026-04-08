@@ -2177,6 +2177,15 @@ impl LPCNetPLCState {
 mod tests {
     use super::*;
 
+    fn patterned_pcm(seed: i32) -> [i16; FRAME_SIZE] {
+        let mut pcm = [0i16; FRAME_SIZE];
+        for (i, sample) in pcm.iter_mut().enumerate() {
+            let v = ((i as i32 * 137 + seed * 29) % 32000) - 16000;
+            *sample = v as i16;
+        }
+        pcm
+    }
+
     #[test]
     fn test_kiss99_srand_and_rand() {
         let mut rng = Kiss99Ctx::default();
@@ -2360,7 +2369,9 @@ mod tests {
 
         let mut synthesized = [0i16; FRAME_SIZE];
         st.synthesize(&features, &mut synthesized, FRAME_SIZE);
-        assert!(synthesized.iter().all(|x| *x >= -32767 && *x <= 32767));
+        assert!(synthesized
+            .iter()
+            .all(|&x| (-32767..=32767).contains(&(x as i32))));
 
         let pcm_in = [123i16; FRAME_SIZE];
         let mut blended = [0i16; FRAME_SIZE];
@@ -2399,5 +2410,64 @@ mod tests {
         assert_eq!(plc.predict_pos, FRAME_SIZE - 1);
         assert_eq!(plc.loss_count, 0);
         assert_eq!(plc.blend, 0);
+    }
+
+    #[test]
+    fn test_plc_get_fec_or_pred_prefers_fec_and_falls_back() {
+        let mut plc = LPCNetPLCState::new();
+        plc.loaded = true;
+        plc.fec[0][0] = 0.75;
+        plc.fec[0][NB_FEATURES - 1] = -0.25;
+        plc.fec_fill_pos = 1;
+
+        let mut out = [0.0f32; NB_FEATURES];
+        assert!(plc.get_fec_or_pred(&mut out));
+        assert_eq!(out, plc.fec[0]);
+        assert_eq!(plc.fec_read_pos, 1);
+        assert_eq!(plc.fec_skip, 0);
+
+        let mut fallback = [0.0f32; NB_FEATURES];
+        assert!(!plc.get_fec_or_pred(&mut fallback));
+        assert_eq!(plc.fec_read_pos, 1);
+        assert_eq!(plc.fec_skip, 0);
+
+        plc.fec_skip = 2;
+        let mut skipped = [0.0f32; NB_FEATURES];
+        assert!(!plc.get_fec_or_pred(&mut skipped));
+        assert_eq!(plc.fec_skip, 1);
+        assert!(skipped.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn test_plc_update_advances_history_when_positions_are_live() {
+        let mut plc = LPCNetPLCState::new();
+        let pcm = patterned_pcm(11);
+
+        plc.analysis_gap = false;
+        plc.analysis_pos = FRAME_SIZE;
+        plc.predict_pos = FRAME_SIZE;
+        plc.loss_count = 5;
+        plc.blend = 3;
+
+        assert_eq!(plc.update(&pcm), 0);
+        assert!(!plc.analysis_gap);
+        assert_eq!(plc.analysis_pos, 0);
+        assert_eq!(plc.predict_pos, 0);
+        assert_eq!(plc.loss_count, 0);
+        assert_eq!(plc.blend, 0);
+        assert_eq!(plc.pcm[PLC_BUF_SIZE - FRAME_SIZE], pcm[0] as f32 / 32768.0);
+        assert_eq!(
+            plc.pcm[PLC_BUF_SIZE - 1],
+            pcm[FRAME_SIZE - 1] as f32 / 32768.0
+        );
+    }
+
+    #[test]
+    fn test_synthesize_tail_zero_fills_during_initial_delay() {
+        let mut st = LPCNetState::new();
+        st.frame_count = FEATURES_DELAY as i32;
+        let mut output = [99i16; FRAME_SIZE];
+        st.synthesize_tail_impl(&mut output, FRAME_SIZE, 0);
+        assert!(output.iter().all(|&x| x == 0));
     }
 }
