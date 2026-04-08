@@ -2732,6 +2732,18 @@ impl OpusEncoder {
     pub fn get_channels(&self) -> i32 {
         self.channels
     }
+
+    pub fn get_stream_channels(&self) -> i32 {
+        self.stream_channels
+    }
+
+    pub fn get_mode(&self) -> i32 {
+        self.mode
+    }
+
+    pub fn get_prev_mode(&self) -> i32 {
+        self.prev_mode
+    }
 }
 
 // ===========================================================================

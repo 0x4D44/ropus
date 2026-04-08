@@ -3489,9 +3489,12 @@ pub fn silk_stereo_lr_to_ms(
         x2[n] = sat16(silk_rshift_round(out, 8));
     }
 
-    // Copy mid to x1 (shifted by 1: x1[n] = mid[n+1])
+    // Copy mid to x1: x1[n] = mid[n+2] (skipping the overlap at mid[0..2])
+    // In C, mid = &x1[-2] so mid[n] writes to x1[n-2], and the encoder reads
+    // from inputBuf[1..1+fl] = {sMid[1], mid[2], mid[3], ...}. The caller
+    // writes x1 back to inputBuf[2..2+fl], so x1[n] must equal mid[n+2].
     for n in 0..frame_length {
-        x1[n] = mid[n + 1];
+        x1[n] = mid[n + 2];
     }
 
     // Save state
@@ -8066,8 +8069,11 @@ pub fn silk_encode(
 
                 enc.s_stereo.pred_ix[n_frames_enc] = pred_ix;
                 enc.s_stereo.mid_only_flags[n_frames_enc] = mid_only_flag;
+                // Write mid signal to inputBuf[2..2+fl] (encoder reads [1..1+fl])
                 enc.state_fxx[0].s_cmn.input_buf[2..2 + fl].copy_from_slice(&x1_buf);
-                enc.state_fxx[1].s_cmn.input_buf[2..2 + fl].copy_from_slice(&x2_buf);
+                // Write side signal to inputBuf[1..1+fl] — C writes x2[n-1] for
+                // n=0..fl, placing the first side sample at inputBuf[1], not [2].
+                enc.state_fxx[1].s_cmn.input_buf[1..1 + fl].copy_from_slice(&x2_buf);
                 // C: inputBuf[0..2] = old sMid (set in step 2 of silk_stereo_LR_to_MS)
                 enc.state_fxx[0].s_cmn.input_buf[0] = old_s_mid[0];
                 enc.state_fxx[0].s_cmn.input_buf[1] = old_s_mid[1];
@@ -8116,6 +8122,7 @@ pub fn silk_encode(
                 silk_encode_do_vad_fix(&mut enc.state_fxx[0], activity);
             }
 
+            // --- DEBUG: dump inputBuf for stereo comparison ---
             // --- Encode frame per channel (C enc_API.c:482-530) ---
             for n in 0..n_channels_internal {
                 // Rate constraints per block (C enc_API.c:487-497)

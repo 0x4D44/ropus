@@ -507,6 +507,20 @@ fn celt_synthesis(
                 downsample,
                 silence,
             );
+
+            // Debug: dump freq hash and overlap hash for shift=3
+            if shift == mode.max_lm {
+                let freq_hash: u64 = freq[..n as usize].iter().enumerate()
+                    .fold(0u64, |acc, (i, &v)| acc.wrapping_add((v as u64).wrapping_mul(i as u64 + 1)));
+                let out_off = out_syn_offsets[ch];
+                let overlap_hash: u64 = out_syn[out_off..out_off + overlap as usize].iter().enumerate()
+                    .fold(0u64, |acc, (i, &v)| acc.wrapping_add((v as u64).wrapping_mul(i as u64 + 1)));
+                eprintln!("[RUST SYNTH] shift={} n={} freq_hash={} overlap_hash={} freq[0..8]={:?} overlap[0..4]={:?}",
+                    shift, n, freq_hash, overlap_hash,
+                    &freq[..8.min(n as usize)],
+                    &out_syn[out_off..out_off + 4.min(overlap as usize)]);
+            }
+
             for b_idx in 0..b {
                 let out_off = out_syn_offsets[ch] + (nb * b_idx) as usize;
                 clt_mdct_backward(
@@ -1488,6 +1502,15 @@ impl CeltDecoder {
             );
         }
 
+        // Debug: dump x hash after quant_all_bands
+        if lm == 0 {
+            let x_hash: u64 = x[..x_len].iter().enumerate()
+                .fold(0u64, |acc, (i, &v)| acc.wrapping_add((v as u64).wrapping_mul(i as u64 + 1)));
+            eprintln!("[RUST QAB] lm={} x_hash={} x[0..8]={:?} old_band_e[0..4]={:?}",
+                lm, x_hash, &x[..8.min(x_len)],
+                &self.old_band_e[..4]);
+        }
+
         // Anti-collapse bit: read as raw bit from end (ec_dec_bits), NOT range coder!
         let mut anti_collapse_on = 0i32;
         if anti_collapse_rsv > 0 {
@@ -1795,6 +1818,11 @@ impl CeltDecoder {
     /// Get old_log_e2 (debug accessor).
     pub fn debug_old_log_e2(&self) -> &[i32] {
         &self.old_log_e2
+    }
+
+    /// Get a slice of decode_mem (debug accessor).
+    pub fn debug_get_decode_mem(&self, offset: usize, count: usize) -> &[i32] {
+        &self.decode_mem[offset..offset + count]
     }
 }
 

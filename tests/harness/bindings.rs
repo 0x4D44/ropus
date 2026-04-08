@@ -331,6 +331,31 @@ unsafe extern "C" {
         stream_channels_out: *mut opus_int32,
         bandwidth_out: *mut opus_int32,
     );
+
+    pub fn debug_c_stereo_lr_to_ms(
+        x1_in: *const opus_int16,
+        x2_in: *const opus_int16,
+        mid_out: *mut opus_int16,
+        side_out: *mut opus_int16,
+        pred_ix_out: *mut i8,
+        mid_only_out: *mut i8,
+        mid_side_rates_out: *mut opus_int32,
+        total_rate_bps: opus_int32,
+        prev_speech_act_q8: c_int,
+        to_mono: c_int,
+        fs_khz: c_int,
+        frame_length: c_int,
+    );
+
+    pub fn debug_clt_mdct_backward(
+        input: *const opus_int32,
+        output: *mut opus_int32,
+        overlap_buf: *const opus_int32,
+        overlap: c_int,
+        shift: c_int,
+        stride: c_int,
+        n_mdct: c_int,
+    );
 }
 
 // ---------------------------------------------------------------------------

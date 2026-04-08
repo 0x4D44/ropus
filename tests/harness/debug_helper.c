@@ -8,6 +8,7 @@
 #include "celt/modes.h"
 #include "celt/mathops.h"
 #include "celt/vq.h"
+#include "celt/mdct.h"
 
 #include <stdio.h>
 #include <stddef.h>
@@ -667,4 +668,96 @@ void debug_c_hp_cutoff_stereo(
 
     /* Use the stride2 function that the real C code uses for stereo */
     silk_biquad_alt_stride2(in, B_Q28, A_Q28, hp_mem, out, len, 0);
+}
+
+/* Run C silk_stereo_LR_to_MS and return the mid/side outputs for comparison.
+ * x1_in/x2_in: L/R input (frame_length samples each)
+ * mid_out/side_out: output buffers (frame_length+2 samples each)
+ * The first 2 elements of mid_out/side_out are the overlap (sMid/sSide state).
+ */
+void debug_c_stereo_lr_to_ms(
+    const opus_int16 *x1_in,
+    const opus_int16 *x2_in,
+    opus_int16 *mid_out,
+    opus_int16 *side_out,
+    opus_int8 *pred_ix_out,   /* 6 bytes: ix[2][3] */
+    opus_int8 *mid_only_out,
+    opus_int32 *mid_side_rates_out, /* 2 ints */
+    opus_int32 total_rate_bps,
+    opus_int prev_speech_act_Q8,
+    int to_mono,
+    int fs_kHz,
+    int frame_length)
+{
+    stereo_enc_state state;
+    opus_int16 x1_buf[500]; /* frame_length + 2 extra for overlap */
+    opus_int16 x2_buf[500];
+    opus_int8 ix[2][3];
+    opus_int8 mid_only_flag;
+    opus_int32 mid_side_rates[2];
+    int i;
+
+    silk_memset(&state, 0, sizeof(state));
+
+    /* Set up inputBuf layout: [overlap0, overlap1, frame_data...] */
+    x1_buf[0] = 0; x1_buf[1] = 0;
+    x2_buf[0] = 0; x2_buf[1] = 0;
+    for (i = 0; i < frame_length; i++) {
+        x1_buf[i + 2] = x1_in[i];
+        x2_buf[i + 2] = x2_in[i];
+    }
+
+    silk_stereo_LR_to_MS(&state, &x1_buf[2], &x2_buf[2], ix, &mid_only_flag,
+        mid_side_rates, total_rate_bps, prev_speech_act_Q8, to_mono, fs_kHz, frame_length);
+
+    /* After LR_to_MS: x1_buf[0..2] = sMid (from state), x1_buf[2..fl+2] = mid signal */
+    /* x2_buf[1..fl+1] = side signal (written at x2[n-1] for n=0..fl) */
+    for (i = 0; i < frame_length + 2; i++) {
+        mid_out[i] = x1_buf[i];
+    }
+    /* Side starts at x2_buf[1] */
+    for (i = 0; i < frame_length + 1; i++) {
+        side_out[i] = x2_buf[i];
+    }
+
+    for (i = 0; i < 6; i++) pred_ix_out[i] = ((opus_int8*)ix)[i];
+    *mid_only_out = mid_only_flag;
+    mid_side_rates_out[0] = mid_side_rates[0];
+    mid_side_rates_out[1] = mid_side_rates[1];
+}
+
+/* Wrapper around C MDCT backward for direct comparison.
+ * Uses the 48kHz mode (N=1920, shortMdctSize=120, overlap=120, maxLM=3).
+ * in: frequency-domain input (N2=N/2 >> shift values, strided)
+ * out: time-domain output buffer (N = 1920>>shift values)
+ * overlap_buf: initial overlap data to place in out[0..overlap] before MDCT
+ * overlap: overlap size (120)
+ * shift: 0..3
+ * stride: B (1 for long blocks, M for short)
+ */
+extern CELTMode *opus_custom_mode_create(opus_int32 Fs, int frame_size, int *error);
+
+void debug_clt_mdct_backward(
+    const opus_int32 *in,
+    opus_int32 *out,
+    const opus_int32 *overlap_buf,
+    int overlap,
+    int shift,
+    int stride,
+    int n_mdct)
+{
+    const CELTMode *mode = opus_custom_mode_create(48000, 960, NULL);
+    int i;
+
+    /* Copy overlap data into the output buffer before calling MDCT backward */
+    for (i = 0; i < overlap; i++) {
+        out[i] = overlap_buf[i];
+    }
+    /* Zero the rest of the output buffer */
+    for (i = overlap; i < n_mdct; i++) {
+        out[i] = 0;
+    }
+
+    clt_mdct_backward(&mode->mdct, (kiss_fft_scalar *)in, out,
+                       mode->window, overlap, shift, stride, 0);
 }

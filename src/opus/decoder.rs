@@ -1265,6 +1265,11 @@ impl OpusDecoder {
         self.celt_dec.preemph_mem_d
     }
 
+    /// Get a slice of the CELT decode_mem (debug accessor).
+    pub fn debug_get_decode_mem(&self, offset: usize, count: usize) -> &[i32] {
+        self.celt_dec.debug_get_decode_mem(offset, count)
+    }
+
     pub fn debug_get_postfilter(&self) -> (i32, i32, i32, i32, i32, i32) {
         (
             self.celt_dec.postfilter_period,

@@ -6032,6 +6032,57 @@ fn cmd_debug_decode_25ms() {
             } else {
                 println!("  old_band_e: MATCH after frame {}", frame_idx);
             }
+
+            // Compare decode_mem overlap region after frame 0
+            // DECODE_BUFFER_SIZE=2048, overlap=120
+            // out_syn_off = 2048 - 120 = 1928
+            // MDCT writes to [1928..2168] (240 elements)
+            // After frame, buffer shifts left by 120: old [1928..2168] -> [1808..2048]
+            // So after shift, the "future overlap" is at [1928..2048] (overlaps with new out_syn start)
+            // But that's the current frame's output. The new overlap is what the NEXT frame will see.
+            // After the shift, decode_mem[1928..2048] = old [2048..2168] = overlap tail from this frame.
+            // Let's read positions 2048..2168 BEFORE the shift (which already happened).
+            // Actually the shift already happened. So the "overlap tail" is now at positions
+            // 1928..2048 of the new buffer state.
+            // More precisely: after frame decode, the buffer was shifted.
+            // new[0..2048-120+120] = old[120..2168] = old[120..2168]
+            // So new[1928..2048] = old[2048..2168] = the MDCT's [120..240] output region
+            // Compare the full MDCT output region: [out_syn_off..out_syn_off+240]
+            // out_syn_off = DECODE_BUFFER_SIZE - N = 2048 - 120 = 1928
+            // But after the buffer shift (which happens before MDCT), the MDCT writes to [1928..2168].
+            // Let's read the full MDCT region.
+            let overlap_start = 1928usize;
+            let overlap_count = 240usize;
+            let mut c_overlap = vec![0i32; overlap_count];
+            unsafe {
+                bindings::debug_get_celt_decode_mem(
+                    c_dec, overlap_start as i32, overlap_count as i32,
+                    c_overlap.as_mut_ptr(),
+                );
+            }
+            let r_overlap = rust_dec.debug_get_decode_mem(overlap_start, overlap_count);
+            let mut ov_ndiff = 0;
+            let mut ov_max_diff = 0i32;
+            for i in 0..overlap_count {
+                let d = (c_overlap[i] - r_overlap[i]).abs();
+                if d != 0 {
+                    ov_ndiff += 1;
+                    if d > ov_max_diff { ov_max_diff = d; }
+                }
+            }
+            if ov_ndiff > 0 {
+                println!("  decode_mem overlap [{}-{}]: {} diffs, max_diff={}", overlap_start, overlap_start + overlap_count, ov_ndiff, ov_max_diff);
+                let mut shown = 0;
+                for i in 0..overlap_count {
+                    let d = c_overlap[i] - r_overlap[i];
+                    if d != 0 && shown < 20 {
+                        println!("    mem[{}]: C={} R={} (diff={})", overlap_start + i, c_overlap[i], r_overlap[i], d);
+                        shown += 1;
+                    }
+                }
+            } else {
+                println!("  decode_mem overlap [{}-{}]: MATCH", overlap_start, overlap_start + overlap_count);
+            }
         }
 
         if ndiff == 0 {
@@ -6056,6 +6107,391 @@ fn cmd_debug_decode_25ms() {
     }
 
     unsafe { bindings::opus_decoder_destroy(c_dec); }
+}
+
+fn cmd_debug_mdct_compare() {
+    use mdopus::celt::mdct::{clt_mdct_backward, MDCT_48000_960};
+    use mdopus::celt::modes::MODE_48000_960_120;
+
+    let mode = &MODE_48000_960_120;
+    let l = &MDCT_48000_960;
+    let overlap = 120i32;
+
+    // Test with shift=3 (the problematic case: LM=0, 2.5ms frames)
+    let shift = 3;
+    let stride = 1;
+    let n_mdct = 240; // 1920 >> 3
+    let n2 = 120; // N/2
+
+    // Generate a non-trivial frequency-domain input
+    let mut freq = vec![0i32; n2];
+    for i in 0..n2 {
+        freq[i] = ((i as i32 * 31337 + 12345) % 65536) - 32768;
+        freq[i] <<= 8; // Scale up to realistic signal levels
+    }
+
+    // Test 1: zero overlap (like frame 0)
+    {
+        let overlap_buf = vec![0i32; overlap as usize];
+        let mut c_out = vec![0i32; n_mdct];
+        let mut r_out = vec![0i32; n_mdct];
+
+        // C MDCT backward
+        unsafe {
+            bindings::debug_clt_mdct_backward(
+                freq.as_ptr(), c_out.as_mut_ptr(), overlap_buf.as_ptr(),
+                overlap, shift, stride, n_mdct as i32,
+            );
+        }
+
+        // Rust MDCT backward
+        for i in 0..overlap as usize { r_out[i] = overlap_buf[i]; }
+        clt_mdct_backward(l, &freq, &mut r_out, mode.window, overlap, shift, stride);
+
+        // Compare ALL positions (not just 0..120)
+        let mut ndiff = 0;
+        let mut max_diff = 0i32;
+        for i in 0..n_mdct {
+            let d = (c_out[i] - r_out[i]).abs();
+            if d != 0 {
+                ndiff += 1;
+                if d > max_diff { max_diff = d; }
+            }
+        }
+        println!("Test 1 (zero overlap, shift=3): {} diffs out of {}, max_diff={}", ndiff, n_mdct, max_diff);
+        if ndiff > 0 {
+            let mut shown = 0;
+            for i in 0..n_mdct {
+                let d = c_out[i] - r_out[i];
+                if d != 0 && shown < 20 {
+                    println!("  out[{}]: C={} R={} (diff={})", i, c_out[i], r_out[i], d);
+                    shown += 1;
+                }
+            }
+        }
+    }
+
+    // Test 2: non-zero overlap (like frame 1)
+    {
+        // Use the post-rotation tail from Test 1 as the overlap for Test 2
+        let mut overlap_buf = vec![0i32; overlap as usize];
+        // First run Rust MDCT to get frame 0's output, then extract overlap region
+        let mut frame0_out = vec![0i32; n_mdct];
+        clt_mdct_backward(l, &freq, &mut frame0_out, mode.window, overlap, shift, stride);
+        // The "future overlap" is positions [120..180]
+        for i in 0..60 {
+            overlap_buf[i] = frame0_out[120 + i];
+        }
+        // positions 60..120 would be zeros (as they would be in actual decode buffer)
+
+        // Generate different freq data for frame 1
+        let mut freq2 = vec![0i32; n2];
+        for i in 0..n2 {
+            freq2[i] = ((i as i32 * 54321 + 98765) % 65536) - 32768;
+            freq2[i] <<= 8;
+        }
+
+        let mut c_out = vec![0i32; n_mdct];
+        let mut r_out = vec![0i32; n_mdct];
+
+        // C MDCT backward with overlap
+        unsafe {
+            bindings::debug_clt_mdct_backward(
+                freq2.as_ptr(), c_out.as_mut_ptr(), overlap_buf.as_ptr(),
+                overlap, shift, stride, n_mdct as i32,
+            );
+        }
+
+        // Rust MDCT backward with overlap
+        for i in 0..overlap as usize { r_out[i] = overlap_buf[i]; }
+        clt_mdct_backward(l, &freq2, &mut r_out, mode.window, overlap, shift, stride);
+
+        // Compare ALL positions
+        let mut ndiff = 0;
+        let mut max_diff = 0i32;
+        for i in 0..n_mdct {
+            let d = (c_out[i] - r_out[i]).abs();
+            if d != 0 {
+                ndiff += 1;
+                if d > max_diff { max_diff = d; }
+            }
+        }
+        println!("Test 2 (non-zero overlap, shift=3): {} diffs out of {}, max_diff={}", ndiff, n_mdct, max_diff);
+        if ndiff > 0 {
+            let mut shown = 0;
+            for i in 0..n_mdct {
+                let d = c_out[i] - r_out[i];
+                if d != 0 && shown < 20 {
+                    println!("  out[{}]: C={} R={} (diff={})", i, c_out[i], r_out[i], d);
+                    shown += 1;
+                }
+            }
+        }
+    }
+
+    // Test 3: shift=0 (the working case) with non-zero overlap
+    {
+        let shift0 = 0;
+        let n_mdct0 = 1920;
+        let n2_0 = 960;
+
+        let mut freq0 = vec![0i32; n2_0];
+        for i in 0..n2_0 {
+            freq0[i] = ((i as i32 * 31337 + 12345) % 65536) - 32768;
+            freq0[i] <<= 8;
+        }
+
+        let overlap_buf = vec![12345i32; overlap as usize]; // non-zero overlap
+
+        let mut c_out = vec![0i32; n_mdct0];
+        let mut r_out = vec![0i32; n_mdct0];
+
+        // C MDCT backward
+        unsafe {
+            bindings::debug_clt_mdct_backward(
+                freq0.as_ptr(), c_out.as_mut_ptr(), overlap_buf.as_ptr(),
+                overlap, shift0, stride, n_mdct0 as i32,
+            );
+        }
+
+        // Rust MDCT backward
+        for i in 0..overlap as usize { r_out[i] = overlap_buf[i]; }
+        clt_mdct_backward(l, &freq0, &mut r_out, mode.window, overlap, shift0, stride);
+
+        let mut ndiff = 0;
+        let mut max_diff = 0i32;
+        for i in 0..n_mdct0 {
+            let d = (c_out[i] - r_out[i]).abs();
+            if d != 0 {
+                ndiff += 1;
+                if d > max_diff { max_diff = d; }
+            }
+        }
+        println!("Test 3 (non-zero overlap, shift=0): {} diffs out of {}, max_diff={}", ndiff, n_mdct0, max_diff);
+        if ndiff > 0 {
+            let mut shown = 0;
+            for i in 0..n_mdct0 {
+                let d = c_out[i] - r_out[i];
+                if d != 0 && shown < 20 {
+                    println!("  out[{}]: C={} R={} (diff={})", i, c_out[i], r_out[i], d);
+                    shown += 1;
+                }
+            }
+        }
+    }
+}
+
+fn cmd_debug_stereo_voip() {
+    use mdopus::opus::encoder::{OpusEncoder as RustEncoder, hp_cutoff_debug};
+
+    // First: test HP cutoff at 8kHz stereo
+    {
+        let wav_path = resolve_wav_path(8000, 2);
+        let wav = read_wav(Path::new(&wav_path));
+        let test_pcm = &wav.samples[..640]; // 160 samples * 2 channels = 320 interleaved
+        let len = 160;
+        let cutoff_hz = 60;
+        let fs = 8000;
+
+        let mut c_out = vec![0i16; test_pcm.len()];
+        let mut c_hp_mem = [0i32; 4];
+        unsafe {
+            bindings::debug_c_hp_cutoff_stereo(
+                test_pcm.as_ptr(), cutoff_hz, c_out.as_mut_ptr(),
+                c_hp_mem.as_mut_ptr(), len, fs,
+            );
+        }
+
+        let mut r_out = vec![0i16; test_pcm.len()];
+        let mut r_hp_mem = [0i32; 4];
+        hp_cutoff_debug(test_pcm, cutoff_hz, &mut r_out, &mut r_hp_mem, len as usize, 2, fs);
+
+        let ndiff = c_out.iter().zip(r_out.iter()).filter(|(a,b)| a != b).count();
+        if ndiff == 0 {
+            println!("HP cutoff 8kHz stereo: MATCH ({} samples)", test_pcm.len());
+        } else {
+            println!("HP cutoff 8kHz stereo: {} DIFFER", ndiff);
+            for i in 0..test_pcm.len().min(20) {
+                if c_out[i] != r_out[i] {
+                    println!("  sample[{}]: C={} R={}", i, c_out[i], r_out[i]);
+                }
+            }
+        }
+        if c_hp_mem != r_hp_mem {
+            println!("HP mem 8kHz: DIFFER C={:?} R={:?}", c_hp_mem, r_hp_mem);
+        } else {
+            println!("HP mem 8kHz: MATCH");
+        }
+    }
+
+    // Test LR_to_MS directly
+    {
+        use mdopus::silk::encoder::{StereoEncState, silk_stereo_lr_to_ms};
+        let fl = 80usize; // 8kHz * 10ms = 80 samples (internal frame)
+        let fs_khz = 8;
+        // Use some non-trivial input data
+        let mut x1: Vec<i16> = (0..fl).map(|i| ((i as i32 * 1234 + 5678) % 20000 - 10000) as i16).collect();
+        let mut x2: Vec<i16> = (0..fl).map(|i| ((i as i32 * 4321 + 8765) % 20000 - 10000) as i16).collect();
+
+        // C version
+        let mut c_mid = vec![0i16; fl + 2];
+        let mut c_side = vec![0i16; fl + 2];
+        let mut c_pred_ix = [0i8; 6];
+        let mut c_mid_only = 0i8;
+        let mut c_rates = [0i32; 2];
+        unsafe {
+            bindings::debug_c_stereo_lr_to_ms(
+                x1.as_ptr(), x2.as_ptr(),
+                c_mid.as_mut_ptr(), c_side.as_mut_ptr(),
+                c_pred_ix.as_mut_ptr(), &mut c_mid_only,
+                c_rates.as_mut_ptr(),
+                24000, 0, 0, fs_khz, fl as i32,
+            );
+        }
+
+        // Rust version
+        let mut r_state = StereoEncState::default();
+        let mut r_x1 = x1.clone();
+        let mut r_x2 = x2.clone();
+        let mut r_pred_ix = [[0i8; 3]; 2];
+        let mut r_mid_only = 0i8;
+        let mut r_rates = [0i32; 2];
+        silk_stereo_lr_to_ms(
+            &mut r_state, &mut r_x1, &mut r_x2,
+            &mut r_pred_ix, &mut r_mid_only, &mut r_rates,
+            24000, 0, false, fs_khz, fl,
+        );
+
+        // C returns mid in c_mid[0..fl+2] (inputBuf layout) and side in c_side[0..fl+1]
+        // The mid signal at inputBuf[2..fl+2] should match Rust x1[0..fl]
+        // The side signal at c_side[1..fl+1] should match Rust x2[0..fl]
+        let c_mid_signal = &c_mid[2..fl+2];
+        let c_side_signal = &c_side[1..fl+1];
+
+        let mid_ndiff = c_mid_signal.iter().zip(r_x1.iter()).filter(|(a,b)| a != b).count();
+        let side_ndiff = c_side_signal.iter().zip(r_x2.iter()).filter(|(a,b)| a != b).count();
+
+        println!("\nLR_to_MS comparison (fl={}, fs_kHz={}):", fl, fs_khz);
+        if mid_ndiff == 0 {
+            println!("  Mid signal: MATCH ({} samples)", fl);
+        } else {
+            println!("  Mid signal: {} DIFFER", mid_ndiff);
+            let mut shown = 0;
+            for i in 0..fl {
+                if c_mid_signal[i] != r_x1[i] && shown < 10 {
+                    println!("    mid[{}]: C={} R={}", i, c_mid_signal[i], r_x1[i]);
+                    shown += 1;
+                }
+            }
+        }
+        if side_ndiff == 0 {
+            println!("  Side signal: MATCH ({} samples)", fl);
+        } else {
+            println!("  Side signal: {} DIFFER", side_ndiff);
+            let mut shown = 0;
+            for i in 0..fl {
+                if c_side_signal[i] != r_x2[i] && shown < 10 {
+                    println!("    side[{}]: C={} R={}", i, c_side_signal[i], r_x2[i]);
+                    shown += 1;
+                }
+            }
+        }
+        println!("  C overlap: mid[0..2]={:?} side[0..2]={:?}", &c_mid[0..2], &c_side[0..2]);
+        println!("  R state: s_mid={:?} s_side={:?}", r_state.s_mid, r_state.s_side);
+        println!("  C pred_ix={:?} mid_only={}", c_pred_ix, c_mid_only);
+        println!("  R pred_ix={:?} mid_only={}", r_pred_ix, r_mid_only);
+        println!("  C rates={:?}", c_rates);
+        println!("  R rates={:?}", r_rates);
+    }
+
+    let sr = 8000i32;
+    let ch = 2i32;
+    let bitrate = 24000i32;
+    let frame_ms = 20.0f64;
+    let frame_size = (sr as f64 * frame_ms / 1000.0) as usize;
+    let samples_per_frame = frame_size * ch as usize;
+
+    let wav_path = resolve_wav_path(sr, ch);
+    let wav = read_wav(Path::new(&wav_path));
+    let pcm = wav.samples;
+
+    println!("\nDebug stereo VOIP: {}Hz {}ch {}bps frame_size={}", sr, ch, bitrate, frame_size);
+    println!("Total PCM samples: {}", pcm.len());
+
+    let c_enc = unsafe {
+        let mut error: i32 = 0;
+        let enc = bindings::opus_encoder_create(sr, ch, bindings::OPUS_APPLICATION_VOIP, &mut error);
+        assert!(!enc.is_null() && error == bindings::OPUS_OK);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, 10);
+        enc
+    };
+
+    let mut r_enc = RustEncoder::new(sr, ch, bindings::OPUS_APPLICATION_VOIP).unwrap();
+    r_enc.set_bitrate(bitrate);
+    r_enc.set_complexity(10);
+
+    let max_packet = 4000;
+    let mut c_pkt = vec![0u8; max_packet];
+    let mut r_pkt = vec![0u8; max_packet];
+
+    let mut pos = 0;
+    let mut frame_idx = 0;
+    while pos + samples_per_frame <= pcm.len() && frame_idx < 50 {
+        let frame_pcm = &pcm[pos..pos + samples_per_frame];
+
+        let c_ret = unsafe {
+            bindings::opus_encode(c_enc, frame_pcm.as_ptr(), frame_size as i32,
+                c_pkt.as_mut_ptr(), max_packet as i32)
+        };
+
+        let r_ret = r_enc.encode(frame_pcm, frame_size as i32, &mut r_pkt, max_packet as i32)
+            .unwrap_or_else(|e| { eprintln!("Rust encode error: {}", e); 0 });
+
+        let c_bytes = &c_pkt[..c_ret as usize];
+        let r_bytes = &r_pkt[..r_ret as usize];
+
+        // Get encoder state
+        let r_mode = r_enc.get_mode();
+        let r_stream_ch = r_enc.get_stream_channels();
+        let r_bw = r_enc.get_bandwidth();
+        let r_range = r_enc.get_final_range();
+        let c_range = unsafe {
+            let mut v: u32 = 0;
+            bindings::opus_encoder_ctl(c_enc, bindings::OPUS_GET_FINAL_RANGE_REQUEST, &mut v as *mut u32);
+            v
+        };
+        let c_bw = unsafe {
+            let mut v: i32 = 0;
+            bindings::opus_encoder_ctl(c_enc, bindings::OPUS_GET_BANDWIDTH_REQUEST, &mut v as *mut i32);
+            v
+        };
+
+        if c_bytes == r_bytes {
+            println!("  frame {}: MATCH ({} bytes) mode={} sch={} bw=C{}/R{}", frame_idx, c_ret, r_mode, r_stream_ch, c_bw, r_bw);
+        } else {
+            let ndiff = c_bytes.iter().zip(r_bytes.iter()).filter(|(a, b)| a != b).count();
+            println!("  frame {}: DIFFER c_len={} r_len={} byte_diffs={} mode={} sch={} bw=C{}/R{}", frame_idx, c_ret, r_ret, ndiff, r_mode, r_stream_ch, c_bw, r_bw);
+            println!("    TOC: C=0x{:02x} R=0x{:02x}", c_bytes[0], r_bytes[0]);
+            println!("    range: C=0x{:08x} R=0x{:08x}", c_range, r_range);
+            let min_len = (c_ret as usize).min(r_ret as usize);
+            let mut shown = 0;
+            for i in 1..min_len {
+                if c_bytes[i] != r_bytes[i] && shown < 5 {
+                    println!("    byte[{}]: C=0x{:02x} R=0x{:02x}", i, c_bytes[i], r_bytes[i]);
+                    shown += 1;
+                }
+            }
+            let r_hp_smth2 = r_enc.get_variable_hp_smth2();
+            println!("    Rust hp_smth2={}", r_hp_smth2);
+            break;
+        }
+
+        pos += samples_per_frame;
+        frame_idx += 1;
+    }
+
+    unsafe { bindings::opus_encoder_destroy(c_enc); }
 }
 
 fn main() {
@@ -6219,6 +6655,12 @@ fn main() {
         }
         "debug-decode-25ms" => {
             cmd_debug_decode_25ms();
+        }
+        "debug-stereo-voip" => {
+            cmd_debug_stereo_voip();
+        }
+        "debug-mdct-compare" => {
+            cmd_debug_mdct_compare();
         }
         "test-all" => {
             cmd_test_all();
