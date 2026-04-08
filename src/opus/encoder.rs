@@ -2861,8 +2861,13 @@ mod tests {
         assert_eq!(frame_size_select(960, OPUS_FRAMESIZE_10_MS, 48000), 480);
         // 2.5ms = 120
         assert_eq!(frame_size_select(960, OPUS_FRAMESIZE_2_5_MS, 48000), 120);
+        // 40ms and 120ms hit the long-frame branch.
+        assert_eq!(frame_size_select(1920, OPUS_FRAMESIZE_40_MS, 48000), 1920);
+        assert_eq!(frame_size_select(5760, OPUS_FRAMESIZE_120_MS, 48000), 5760);
         // Invalid: requested size > input
         assert_eq!(frame_size_select(480, OPUS_FRAMESIZE_20_MS, 48000), -1);
+        // Invalid duration selector.
+        assert_eq!(frame_size_select(960, 4999, 48000), -1);
     }
 
     #[test]
@@ -2877,10 +2882,22 @@ mod tests {
 
     #[test]
     fn test_compute_equiv_rate() {
-        // Basic: 64kbps, mono, 50fps, VBR, complexity 10
-        let equiv = compute_equiv_rate(64000, 1, 50, 1, 0, 10, 0);
-        assert!(equiv > 0);
-        assert!(equiv <= 64000);
+        assert_eq!(
+            compute_equiv_rate(64000, 1, 50, 1, MODE_SILK_ONLY, 10, 0),
+            64000
+        );
+        assert_eq!(
+            compute_equiv_rate(64000, 1, 100, 0, MODE_CELT_ONLY, 0, 0),
+            45292
+        );
+        assert_eq!(
+            compute_equiv_rate(64000, 1, 50, 1, 12345, 10, 10),
+            59429
+        );
+        assert_eq!(
+            compute_equiv_rate(64000, 1, 50, 1, MODE_SILK_ONLY, 1, 0),
+            46592
+        );
     }
 
     #[test]
@@ -2921,6 +2938,10 @@ mod tests {
             ),
             0
         );
+        // Low rate / high loss path walks bandwidth downward and restores the original value.
+        let mut bw = OPUS_BANDWIDTH_FULLBAND;
+        assert_eq!(decide_fec(1, 25, 0, MODE_SILK_ONLY, &mut bw, 0), 0);
+        assert_eq!(bw, OPUS_BANDWIDTH_FULLBAND);
     }
 
     #[test]
@@ -3231,6 +3252,7 @@ mod tests {
 
         assert_eq!(compute_redundancy_bytes(20, 4000, 50, 1), 0);
         assert_eq!(compute_redundancy_bytes(1000, 64000, 50, 2), 74);
+        assert_eq!(compute_redundancy_bytes(2000, 1_000_000, 50, 2), 257);
 
         let mut bw = OPUS_BANDWIDTH_WIDEBAND;
         assert_eq!(decide_fec(1, 25, 0, MODE_SILK_ONLY, &mut bw, 8000), 0);
@@ -3243,6 +3265,95 @@ mod tests {
         let mut bw = OPUS_BANDWIDTH_WIDEBAND;
         assert_eq!(decide_fec(1, 25, 0, MODE_CELT_ONLY, &mut bw, 20000), 0);
         assert_eq!(bw, OPUS_BANDWIDTH_WIDEBAND);
+    }
+
+    #[test]
+    fn test_frame_energy_and_stereo_width_branches() {
+        let mono = vec![2i16; 480];
+        assert_eq!(compute_frame_energy(&mono, 480, 1), 4);
+
+        let stereo = vec![2i16; 960];
+        assert_eq!(compute_frame_energy(&stereo, 480, 2), 4);
+
+        let silence = vec![0i16; 960];
+        assert_eq!(compute_frame_energy(&silence, 480, 2), 0);
+
+        let mut mem = StereoWidthState::default();
+        assert_eq!(compute_stereo_width(&silence, 480, 48000, &mut mem), 0);
+        assert_eq!(mem.smoothed_width, 0);
+
+        let stereo_identical = vec![100i16; 960];
+        let mut mem = StereoWidthState::default();
+        let width = compute_stereo_width(&stereo_identical, 480, 48000, &mut mem);
+        assert_eq!(width, 0);
+        assert!(mem.xx > 0 && mem.yy > 0);
+    }
+
+    #[test]
+    fn test_delay_buffer_update_branches() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        enc.encoder_buffer = 6;
+        enc.delay_buffer = vec![0; 6];
+
+        enc.update_delay_buffer(&[10, 11, 12, 13, 14, 15], 4);
+        assert_eq!(enc.delay_buffer, vec![0, 0, 10, 11, 12, 13]);
+
+        enc.encoder_buffer = 4;
+        enc.delay_buffer = vec![0; 4];
+        enc.update_delay_buffer(&[10, 11, 12, 13, 14, 15], 6);
+        assert_eq!(enc.delay_buffer, vec![12, 13, 14, 15]);
+
+        enc.encoder_buffer = 6;
+        enc.delay_buffer = vec![0; 6];
+        enc.update_delay_buffer_from_pcm_buf(&[20, 21, 22, 23, 24, 25], 4, 0);
+        assert_eq!(enc.delay_buffer, vec![0, 0, 20, 21, 22, 23]);
+
+        enc.encoder_buffer = 4;
+        enc.delay_buffer = vec![0; 4];
+        enc.update_delay_buffer_from_pcm_buf(&[20, 21, 22, 23, 24, 25], 6, 0);
+        assert_eq!(enc.delay_buffer, vec![22, 23, 24, 25]);
+    }
+
+    #[test]
+    fn test_mode_transition_prefill_paths() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_20_MS), OPUS_OK);
+        assert_eq!(enc.set_bitrate(64000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(enc.set_signal(OPUS_SIGNAL_VOICE), OPUS_OK);
+
+        let pcm = patterned_pcm_i16(960, 1, 511);
+        let mut packet = vec![0u8; 1500];
+        let packet_capacity = packet.len() as i32;
+
+        assert_eq!(enc.set_force_mode(MODE_CELT_ONLY), OPUS_OK);
+        let len_celt = enc.encode(&pcm, 960, &mut packet, packet_capacity).unwrap();
+        assert!(len_celt > 1);
+        assert_eq!(enc.get_mode(), MODE_CELT_ONLY);
+        assert_eq!(enc.get_prev_mode(), MODE_CELT_ONLY);
+        assert_eq!(packet_mode_from_toc(&packet[..len_celt as usize]), MODE_CELT_ONLY);
+
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        assert_eq!(enc.set_force_mode(MODE_SILK_ONLY), OPUS_OK);
+        let len_silk = enc.encode(&pcm, 960, &mut packet, packet_capacity).unwrap();
+        assert!(len_silk > 1);
+        assert_ne!(enc.get_mode(), MODE_CELT_ONLY);
+        assert_eq!(enc.get_prev_mode(), enc.get_mode());
+        assert_eq!(
+            packet_mode_from_toc(&packet[..len_silk as usize]),
+            enc.get_mode()
+        );
+
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        assert_eq!(enc.set_force_mode(MODE_CELT_ONLY), OPUS_OK);
+        let len_transition = enc.encode(&pcm, 960, &mut packet, packet_capacity).unwrap();
+        assert!(len_transition > 1);
+        assert_ne!(enc.get_mode(), MODE_CELT_ONLY);
+        assert_eq!(enc.get_prev_mode(), MODE_CELT_ONLY);
+        assert_eq!(
+            packet_mode_from_toc(&packet[..len_transition as usize]),
+            enc.get_mode()
+        );
     }
 
     #[test]
