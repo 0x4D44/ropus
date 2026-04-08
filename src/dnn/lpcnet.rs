@@ -2325,6 +2325,87 @@ mod tests {
         blob
     }
 
+    fn append_fargan_zero_weight_records(blob: &mut Vec<u8>) {
+        // Conditioning network.
+        append_float_record(blob, "cond_net_pembed_bias", 12);
+        append_float_record(blob, "cond_net_pembed_weights_float", 224 * 12);
+        append_float_record(blob, "cond_net_fdense1_bias", 64);
+        append_float_record(blob, "cond_net_fconv1_bias", 128);
+        append_int8_record(blob, "cond_net_fconv1_weights_int8", 64 * 3 * 128);
+        append_float_record(blob, "cond_net_fconv1_subias", 128);
+        append_float_record(blob, "cond_net_fconv1_scale", 128);
+        append_float_record(blob, "cond_net_fdense2_bias", 320);
+        append_int8_record(blob, "cond_net_fdense2_weights_int8", 128 * 320);
+        append_float_record(blob, "cond_net_fdense2_subias", 320);
+        append_float_record(blob, "cond_net_fdense2_scale", 320);
+
+        // Signal network.
+        append_float_record(blob, "sig_net_cond_gain_dense_bias", 1);
+        append_float_record(blob, "sig_net_fwc0_conv_bias", 192);
+        append_int8_record(blob, "sig_net_fwc0_conv_weights_int8", 164 * 2 * 192);
+        append_float_record(blob, "sig_net_fwc0_conv_subias", 192);
+        append_float_record(blob, "sig_net_fwc0_conv_scale", 192);
+        append_float_record(blob, "sig_net_fwc0_glu_gate_bias", 192);
+        append_int8_record(blob, "sig_net_fwc0_glu_gate_weights_int8", 192 * 192);
+        append_float_record(blob, "sig_net_fwc0_glu_gate_subias", 192);
+        append_float_record(blob, "sig_net_fwc0_glu_gate_scale", 192);
+        append_float_record(blob, "sig_net_gain_dense_out_bias", 4);
+        append_float_record(blob, "sig_net_gain_dense_out_weights_float", 192 * 4);
+
+        append_int8_record(blob, "sig_net_gru1_input_weights_int8", (192 + 80) * (3 * 160));
+        append_float_record(blob, "sig_net_gru1_input_subias", 3 * 160);
+        append_float_record(blob, "sig_net_gru1_input_scale", 3 * 160);
+        append_int8_record(blob, "sig_net_gru1_recurrent_weights_int8", 160 * (3 * 160));
+        append_float_record(blob, "sig_net_gru1_recurrent_subias", 3 * 160);
+        append_float_record(blob, "sig_net_gru1_recurrent_scale", 3 * 160);
+        append_int8_record(blob, "sig_net_gru1_glu_gate_weights_int8", 160 * 160);
+        append_float_record(blob, "sig_net_gru1_glu_gate_bias", 160);
+        append_float_record(blob, "sig_net_gru1_glu_gate_subias", 160);
+        append_float_record(blob, "sig_net_gru1_glu_gate_scale", 160);
+
+        append_int8_record(blob, "sig_net_gru2_input_weights_int8", (160 + 80) * (3 * 128));
+        append_float_record(blob, "sig_net_gru2_input_subias", 3 * 128);
+        append_float_record(blob, "sig_net_gru2_input_scale", 3 * 128);
+        append_int8_record(blob, "sig_net_gru2_recurrent_weights_int8", 128 * (3 * 128));
+        append_float_record(blob, "sig_net_gru2_recurrent_subias", 3 * 128);
+        append_float_record(blob, "sig_net_gru2_recurrent_scale", 3 * 128);
+        append_int8_record(blob, "sig_net_gru2_glu_gate_weights_int8", 128 * 128);
+        append_float_record(blob, "sig_net_gru2_glu_gate_bias", 128);
+        append_float_record(blob, "sig_net_gru2_glu_gate_subias", 128);
+        append_float_record(blob, "sig_net_gru2_glu_gate_scale", 128);
+
+        append_int8_record(blob, "sig_net_gru3_input_weights_int8", (128 + 80) * (3 * 128));
+        append_float_record(blob, "sig_net_gru3_input_subias", 3 * 128);
+        append_float_record(blob, "sig_net_gru3_input_scale", 3 * 128);
+        append_int8_record(blob, "sig_net_gru3_recurrent_weights_int8", 128 * (3 * 128));
+        append_float_record(blob, "sig_net_gru3_recurrent_subias", 3 * 128);
+        append_float_record(blob, "sig_net_gru3_recurrent_scale", 3 * 128);
+        append_int8_record(blob, "sig_net_gru3_glu_gate_weights_int8", 128 * 128);
+        append_float_record(blob, "sig_net_gru3_glu_gate_bias", 128);
+        append_float_record(blob, "sig_net_gru3_glu_gate_subias", 128);
+        append_float_record(blob, "sig_net_gru3_glu_gate_scale", 128);
+
+        append_float_record(blob, "sig_net_skip_dense_bias", 128);
+        append_int8_record(blob, "sig_net_skip_dense_weights_int8", 688 * 128);
+        append_float_record(blob, "sig_net_skip_dense_subias", 128);
+        append_float_record(blob, "sig_net_skip_dense_scale", 128);
+        append_float_record(blob, "sig_net_skip_glu_gate_bias", 128);
+        append_int8_record(blob, "sig_net_skip_glu_gate_weights_int8", 128 * 128);
+        append_float_record(blob, "sig_net_skip_glu_gate_subias", 128);
+        append_float_record(blob, "sig_net_skip_glu_gate_scale", 128);
+
+        append_int8_record(blob, "sig_net_sig_dense_out_weights_int8", 128 * 40);
+        append_float_record(blob, "sig_net_sig_dense_out_bias", 40);
+        append_float_record(blob, "sig_net_sig_dense_out_subias", 40);
+        append_float_record(blob, "sig_net_sig_dense_out_scale", 40);
+    }
+
+    fn make_plc_weight_blob() -> Vec<u8> {
+        let mut blob = make_pitchdnn_weight_blob();
+        append_fargan_zero_weight_records(&mut blob);
+        blob
+    }
+
     #[test]
     fn test_kiss99_srand_and_rand() {
         let mut rng = Kiss99Ctx::default();
@@ -2456,6 +2537,24 @@ mod tests {
         let g = silk_burg_analysis(&mut a, &x, 1.0, FRAME_SIZE, 1, LPC_ORDER);
         assert_eq!(g, 0.0);
         assert!(a.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn test_burg_cepstral_analysis_identical_halves_have_small_delta() {
+        let mut x = [0.0f32; FRAME_SIZE];
+        for i in 0..FRAME_SIZE / 2 {
+            let v = ((i * 19 + 7) % 67) as f32 / 67.0 - 0.5;
+            x[i] = v;
+            x[i + FRAME_SIZE / 2] = v;
+        }
+
+        let mut ceps = [0.0f32; 2 * NB_BANDS];
+        burg_cepstral_analysis(&mut ceps, &x);
+
+        assert!(ceps.iter().all(|v| v.is_finite()));
+        for i in 0..NB_BANDS {
+            assert!(ceps[NB_BANDS + i].abs() < 1e-4);
+        }
     }
 
     #[test]
@@ -2726,6 +2825,173 @@ mod tests {
     }
 
     #[test]
+    fn test_burg_cepstral_analysis_emits_finite_bands() {
+        let x = patterned_frame(19);
+        let mut ceps = [0.0f32; 2 * NB_BANDS];
+
+        burg_cepstral_analysis(&mut ceps, &x);
+
+        assert!(ceps.iter().all(|value| value.is_finite()));
+        assert!(ceps.iter().any(|&value| value != 0.0));
+    }
+
+    #[test]
+    fn test_recurrent_helpers_update_state_and_sample_edges() {
+        let recurrent = LinearLayer {
+            bias: Some(vec![0.5, -0.25, 0.75]),
+            float_weights: Some(vec![0.0; 3]),
+            nb_inputs: 1,
+            nb_outputs: 3,
+            ..Default::default()
+        };
+        let mut sparse_state = [0.25f32];
+        let sparse_input = [0.1f32, -0.2, 0.3];
+        compute_sparse_gru(&recurrent, &mut sparse_state, &sparse_input);
+        assert!(sparse_state[0].is_finite());
+        assert_ne!(sparse_state[0], 0.25);
+
+        let input_dense = LinearLayer {
+            bias: Some(vec![0.2]),
+            float_weights: Some(vec![0.0]),
+            nb_inputs: 1,
+            nb_outputs: 1,
+            ..Default::default()
+        };
+        let mut gru_input = vec![0.2f32, -0.1, 0.05];
+        let mut gru_b_state = vec![0.1f32];
+        compute_gru_b(
+            &recurrent,
+            &input_dense,
+            &mut gru_input,
+            &mut gru_b_state,
+            &[0.4],
+        );
+        assert!(gru_b_state[0].is_finite());
+        assert!(gru_input.iter().all(|value| value.is_finite()));
+
+        let force_zero = MDenseLayer {
+            fc1: LinearLayer {
+                bias: Some(vec![-1000.0; 256]),
+                nb_inputs: 0,
+                nb_outputs: 256,
+                ..Default::default()
+            },
+            fc2: LinearLayer {
+                bias: Some(vec![-1000.0; 256]),
+                nb_inputs: 0,
+                nb_outputs: 256,
+                ..Default::default()
+            },
+        };
+        let mut rng = Kiss99Ctx::default();
+        let fallback = sample_mdense(&force_zero, &[], &[-1000.0; 256], &mut rng);
+        assert_eq!(fallback, 255);
+
+        let force_first = MDenseLayer {
+            fc1: LinearLayer {
+                bias: Some(
+                    std::iter::once(1000.0)
+                        .chain(std::iter::repeat_n(-1000.0, 255))
+                        .collect(),
+                ),
+                nb_inputs: 0,
+                nb_outputs: 256,
+                ..Default::default()
+            },
+            fc2: LinearLayer {
+                bias: Some(
+                    std::iter::once(1000.0)
+                        .chain(std::iter::repeat_n(-1000.0, 255))
+                        .collect(),
+                ),
+                nb_inputs: 0,
+                nb_outputs: 256,
+                ..Default::default()
+            },
+        };
+        let mut rng = Kiss99Ctx::default();
+        let sampled = sample_mdense(&force_first, &[], &[0.0; 256], &mut rng);
+        assert_eq!(sampled, 0);
+    }
+
+    #[test]
+    fn test_compute_single_frame_feature_wrappers_and_sample_network_paths() {
+        let blob = make_pitchdnn_weight_blob();
+
+        let mut enc = LPCNetEncState::new();
+        assert_eq!(enc.load_model(&blob), 0);
+
+        let pcm_i16 = patterned_pcm(23);
+        let mut ceps_i16 = [0.0f32; NB_TOTAL_FEATURES];
+        assert_eq!(enc.compute_single_frame_features(&pcm_i16, &mut ceps_i16), 0);
+        assert!(ceps_i16.iter().all(|value| value.is_finite()));
+
+        let pcm_f32 = patterned_frame(29);
+        let mut ceps_f32 = [0.0f32; NB_TOTAL_FEATURES];
+        assert_eq!(
+            enc.compute_single_frame_features_float(&pcm_f32, &mut ceps_f32),
+            0
+        );
+        assert!(ceps_f32.iter().all(|value| value.is_finite()));
+
+        let mut st = LPCNetState::new();
+        assert_eq!(st.run_sample_network(0, 0, 0), 128);
+
+        st.nnet.gru_a_state = vec![0.0];
+        st.nnet.gru_b_state = vec![0.0];
+        st.gru_a_condition = vec![0.0; 3];
+        st.gru_b_condition = vec![0.0; 3];
+        st.model.gru_a_embed_sig.dim = 1;
+        st.model.gru_a_embed_sig.weights = vec![0.0];
+        st.model.gru_a_embed_pred.dim = 1;
+        st.model.gru_a_embed_pred.weights = vec![0.0];
+        st.model.gru_a_embed_exc.dim = 1;
+        st.model.gru_a_embed_exc.weights = vec![0.0];
+        st.model.sparse_gru_a = LinearLayer {
+            bias: Some(vec![1000.0, -1000.0, 1000.0]),
+            nb_inputs: 1,
+            nb_outputs: 3,
+            ..Default::default()
+        };
+        st.model.gru_b_recurrent = LinearLayer {
+            bias: Some(vec![1000.0, -1000.0, 1000.0]),
+            nb_inputs: 1,
+            nb_outputs: 3,
+            ..Default::default()
+        };
+        st.model.gru_b_input_dense = LinearLayer {
+            bias: Some(vec![0.0]),
+            nb_inputs: 1,
+            nb_outputs: 1,
+            ..Default::default()
+        };
+        st.model.dual_fc = MDenseLayer {
+            fc1: LinearLayer {
+                bias: Some(
+                    std::iter::once(1000.0)
+                        .chain(std::iter::repeat_n(-1000.0, 255))
+                        .collect(),
+                ),
+                nb_inputs: 1,
+                nb_outputs: 256,
+                ..Default::default()
+            },
+            fc2: LinearLayer {
+                bias: Some(
+                    std::iter::once(1000.0)
+                        .chain(std::iter::repeat_n(-1000.0, 255))
+                        .collect(),
+                ),
+                nb_inputs: 1,
+                nb_outputs: 256,
+                ..Default::default()
+            },
+        };
+
+        assert_eq!(st.run_sample_network(0, 0, 0), 0);
+    }
+
+    #[test]
     fn test_run_frame_network_caps_frame_count_at_1000() {
         let mut st = LPCNetState::new();
         st.frame_count = 1000;
@@ -2734,6 +3000,66 @@ mod tests {
         st.run_frame_network(&features);
 
         assert_eq!(st.frame_count, 1000);
+    }
+
+    #[test]
+    fn test_run_sample_network_executes_non_empty_gru_path() {
+        let mut st = LPCNetState::new();
+        st.nnet.gru_a_state = vec![0.25, -0.25];
+        st.nnet.gru_b_state = vec![0.10, -0.10];
+        st.gru_a_condition = vec![0.01, -0.01, 0.02, -0.02, 0.03, -0.03];
+        st.gru_b_condition = vec![0.04, -0.04, 0.05, -0.05, 0.06, -0.06];
+
+        st.model.gru_a_embed_sig = EmbeddingLayer {
+            weights: vec![0.10; 6],
+            dim: 6,
+        };
+        st.model.gru_a_embed_pred = EmbeddingLayer {
+            weights: vec![0.20; 6],
+            dim: 6,
+        };
+        st.model.gru_a_embed_exc = EmbeddingLayer {
+            weights: vec![-0.05; 6],
+            dim: 6,
+        };
+
+        st.model.sparse_gru_a = LinearLayer {
+            bias: Some(vec![0.1, -0.1, 0.2, -0.2, 0.3, -0.3]),
+            nb_inputs: 2,
+            nb_outputs: 6,
+            ..Default::default()
+        };
+        st.model.gru_b_recurrent = LinearLayer {
+            bias: Some(vec![0.05, -0.05, 0.15, -0.15, 0.25, -0.25]),
+            nb_inputs: 2,
+            nb_outputs: 6,
+            ..Default::default()
+        };
+        st.model.gru_b_input_dense = LinearLayer {
+            bias: Some(vec![0.30, -0.30]),
+            nb_inputs: 2,
+            nb_outputs: 2,
+            ..Default::default()
+        };
+        st.model.dual_fc.fc1 = LinearLayer {
+            nb_inputs: 2,
+            nb_outputs: 256,
+            ..Default::default()
+        };
+        st.model.dual_fc.fc2 = LinearLayer {
+            nb_inputs: 2,
+            nb_outputs: 256,
+            ..Default::default()
+        };
+        st.sampling_logit_table.fill(-100.0);
+        st.sampling_logit_table[13] = 0.0;
+
+        let sampled = st.run_sample_network(0, 0, 0);
+        assert_eq!(sampled, 13);
+        assert!(st.nnet.gru_a_state.iter().all(|v| v.is_finite()));
+        assert!(st.nnet.gru_b_state.iter().all(|v| v.is_finite()));
+        assert_ne!(st.nnet.gru_a_state, vec![0.25, -0.25]);
+        assert_ne!(st.nnet.gru_b_state, vec![0.10, -0.10]);
     }
 
     #[test]
@@ -2770,6 +3096,35 @@ mod tests {
         assert!(enc.prev_if.iter().any(|c| c.r != 0.0 || c.i != 0.0));
         assert!(enc.features[..NB_BANDS].iter().any(|&v| v != 0.0));
         assert!(enc.lpc.iter().any(|&v| v != 0.0));
+    }
+
+    #[test]
+    fn test_compute_single_frame_feature_wrappers_match_with_loaded_pitch_model() {
+        let blob = make_pitchdnn_weight_blob();
+
+        let mut enc_i16 = LPCNetEncState::new();
+        let mut enc_f32 = LPCNetEncState::new();
+        assert_eq!(enc_i16.load_model(&blob), 0);
+        assert_eq!(enc_f32.load_model(&blob), 0);
+
+        let pcm_i16 = patterned_pcm(17);
+        let pcm_f32 = pcm_i16.map(|s| s as f32);
+        let mut features_i16 = [0.0f32; NB_TOTAL_FEATURES];
+        let mut features_f32 = [0.0f32; NB_TOTAL_FEATURES];
+
+        assert_eq!(
+            enc_i16.compute_single_frame_features(&pcm_i16, &mut features_i16),
+            0
+        );
+        assert_eq!(
+            enc_f32.compute_single_frame_features_float(&pcm_f32, &mut features_f32),
+            0
+        );
+        assert!(features_i16.iter().all(|v| v.is_finite()));
+        assert!(features_f32.iter().all(|v| v.is_finite()));
+        for i in 0..NB_TOTAL_FEATURES {
+            assert!((features_i16[i] - features_f32[i]).abs() < 1e-4);
+        }
     }
 
     #[test]
@@ -2906,6 +3261,48 @@ mod tests {
             plc.pcm[PLC_BUF_SIZE - 1],
             pcm[FRAME_SIZE - 1] as f32 / 32768.0
         );
+    }
+
+    #[test]
+    fn test_plc_conceal_runs_analysis_fec_and_attenuation_paths() {
+        let blob = make_plc_weight_blob();
+        let mut plc = LPCNetPLCState::new();
+        assert_eq!(plc.load_model(&blob), 0);
+        assert!(plc.loaded);
+
+        for i in 0..PLC_BUF_SIZE {
+            plc.pcm[i] = ((i % 29) as f32 - 14.0) / 32.0;
+        }
+        plc.analysis_gap = false;
+        plc.analysis_pos = PLC_BUF_SIZE - FRAME_SIZE;
+        plc.predict_pos = PLC_BUF_SIZE - FRAME_SIZE;
+        plc.blend = 0;
+
+        let mut first = [0i16; FRAME_SIZE];
+        assert_eq!(plc.conceal(&mut first), 0);
+        assert_eq!(plc.blend, 1);
+        assert_eq!(plc.loss_count, 1);
+        assert_eq!(plc.analysis_pos, PLC_BUF_SIZE - FRAME_SIZE);
+        assert_eq!(plc.predict_pos, PLC_BUF_SIZE);
+        assert!(first
+            .iter()
+            .all(|&s| (-32767..=32767).contains(&(s as i32))));
+        assert!(plc.features.iter().all(|v| v.is_finite()));
+        assert!(plc.cont_features.iter().all(|v| v.is_finite()));
+
+        let fec = [0.25f32; NB_FEATURES];
+        plc.fec_add(Some(&fec));
+        plc.loss_count = 4;
+        let mut with_fec = [0i16; FRAME_SIZE];
+        assert_eq!(plc.conceal(&mut with_fec), 0);
+        assert_eq!(plc.loss_count, 0);
+
+        plc.fec_clear();
+        plc.loss_count = 9;
+        let mut no_fec = [0i16; FRAME_SIZE];
+        assert_eq!(plc.conceal(&mut no_fec), 0);
+        assert_eq!(plc.loss_count, 10);
+        assert!(plc.features[0] <= -3.0);
     }
 
     #[test]
@@ -3059,5 +3456,90 @@ mod tests {
         assert!(out.iter().all(|v| v.is_finite()));
         assert!(biquad_mem.iter().all(|v| v.is_finite()));
         assert!(biquad_mem.iter().any(|v| v.abs() > 0.0));
+    }
+
+    #[test]
+    fn test_gru_input_and_mdense_cover_uncovered_paths() {
+        let condition = [0.5f32, -0.5, 0.2, -0.2, 0.1, -0.1];
+        let mut gru_a_input = [0.0f32; 6];
+        let embed_sig = EmbeddingLayer {
+            weights: vec![0.1; 6],
+            dim: 6,
+        };
+        let embed_pred = EmbeddingLayer {
+            weights: vec![0.4; 6],
+            dim: 6,
+        };
+        let embed_exc = EmbeddingLayer {
+            weights: vec![-0.05; 6],
+            dim: 6,
+        };
+        compute_gru_a_input(
+            &mut gru_a_input,
+            &condition,
+            2,
+            &embed_sig,
+            0,
+            &embed_pred,
+            1,
+            &embed_exc,
+            0,
+        );
+        for i in 0..6 {
+            assert!((gru_a_input[i] - (condition[i] + 0.05)).abs() < 1e-6);
+        }
+
+        let recurrent = LinearLayer {
+            bias: Some(vec![0.0, 0.1, -0.1, 0.2, 0.3, -0.3]),
+            nb_inputs: 2,
+            nb_outputs: 6,
+            ..Default::default()
+        };
+        let mut sparse_state = vec![0.2f32, -0.1];
+        let sparse_input = [0.3f32, -0.3, 0.2, -0.2, 0.0, 0.0];
+        compute_sparse_gru(&recurrent, &mut sparse_state, &sparse_input);
+        assert!(sparse_state.iter().all(|v| v.is_finite()));
+        assert_ne!(sparse_state, vec![0.2, -0.1]);
+
+        let input_dense = LinearLayer {
+            bias: Some(vec![0.25, -0.25]),
+            nb_inputs: 2,
+            nb_outputs: 2,
+            ..Default::default()
+        };
+        let mut gru_input = vec![0.1f32, -0.1, 0.2, -0.2, 0.0, 0.0];
+        let mut gru_b_state = vec![0.4f32, -0.4];
+        let extra = [0.5f32, -0.5];
+        compute_gru_b(
+            &recurrent,
+            &input_dense,
+            &mut gru_input,
+            &mut gru_b_state,
+            &extra,
+        );
+        assert!(gru_b_state.iter().all(|v| v.is_finite()));
+        assert_ne!(gru_b_state, vec![0.4, -0.4]);
+
+        let mdense = MDenseLayer {
+            fc1: LinearLayer {
+                nb_inputs: 2,
+                nb_outputs: 256,
+                ..Default::default()
+            },
+            fc2: LinearLayer {
+                nb_inputs: 2,
+                nb_outputs: 256,
+                ..Default::default()
+            },
+        };
+        let state = [0.0f32, 0.0];
+        let mut logit_table = [-100.0f32; 256];
+        logit_table[7] = 0.0;
+        let mut rng = Kiss99Ctx::default();
+        assert_eq!(sample_mdense(&mdense, &state, &logit_table, &mut rng), 7);
+
+        let zero_sum_logits = [-100.0f32; 256];
+        let mut rng2 = Kiss99Ctx::default();
+        assert_eq!(sample_mdense(&mdense, &state, &zero_sum_logits, &mut rng2), 255);
     }
 }

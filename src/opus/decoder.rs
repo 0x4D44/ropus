@@ -1524,9 +1524,101 @@ impl OpusDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "dnn")]
+    use crate::dnn::core::{WEIGHT_BLOCK_SIZE, WEIGHT_BLOB_VERSION, WEIGHT_TYPE_FLOAT};
     use crate::opus::encoder::{
         OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY, OpusEncoder,
     };
+
+    #[cfg(feature = "dnn")]
+    fn append_float_record(blob: &mut Vec<u8>, name: &str, count: usize) {
+        let payload_len = count * 4;
+        let mut record = vec![0u8; WEIGHT_BLOCK_SIZE + payload_len];
+        record[4..8].copy_from_slice(&WEIGHT_BLOB_VERSION.to_ne_bytes());
+        record[8..12].copy_from_slice(&WEIGHT_TYPE_FLOAT.to_ne_bytes());
+        record[12..16].copy_from_slice(&(payload_len as i32).to_ne_bytes());
+        record[16..20].copy_from_slice(&(payload_len as i32).to_ne_bytes());
+        record[20..20 + name.len()].copy_from_slice(name.as_bytes());
+        blob.extend_from_slice(&record);
+    }
+
+    #[cfg(feature = "dnn")]
+    fn append_int8_record(blob: &mut Vec<u8>, name: &str, count: usize) {
+        let payload_len = count;
+        let mut record = vec![0u8; WEIGHT_BLOCK_SIZE + payload_len];
+        record[4..8].copy_from_slice(&WEIGHT_BLOB_VERSION.to_ne_bytes());
+        record[8..12].copy_from_slice(&crate::dnn::core::WEIGHT_TYPE_INT8.to_ne_bytes());
+        record[12..16].copy_from_slice(&(payload_len as i32).to_ne_bytes());
+        record[16..20].copy_from_slice(&(payload_len as i32).to_ne_bytes());
+        record[20..20 + name.len()].copy_from_slice(name.as_bytes());
+        blob.extend_from_slice(&record);
+    }
+
+    #[cfg(feature = "dnn")]
+    fn make_pitchdnn_weight_blob() -> Vec<u8> {
+        let mut blob = Vec::new();
+
+        for name in [
+            "dense_if_upsampler_1_bias",
+            "dense_if_upsampler_1_subias",
+            "dense_if_upsampler_1_scale",
+        ] {
+            append_float_record(&mut blob, name, 64);
+        }
+        append_int8_record(&mut blob, "dense_if_upsampler_1_weights_int8", 88 * 64);
+
+        for name in [
+            "dense_if_upsampler_2_bias",
+            "dense_if_upsampler_2_subias",
+            "dense_if_upsampler_2_scale",
+        ] {
+            append_float_record(&mut blob, name, 64);
+        }
+        append_int8_record(&mut blob, "dense_if_upsampler_2_weights_int8", 64 * 64);
+
+        append_float_record(&mut blob, "conv2d_1_bias", 4);
+        append_float_record(&mut blob, "conv2d_1_weight_float", 4 * 3 * 3);
+        append_float_record(&mut blob, "conv2d_2_bias", 1);
+        append_float_record(&mut blob, "conv2d_2_weight_float", 4 * 3 * 3);
+
+        for name in [
+            "dense_downsampler_bias",
+            "dense_downsampler_subias",
+            "dense_downsampler_scale",
+        ] {
+            append_float_record(&mut blob, name, 64);
+        }
+        append_int8_record(&mut blob, "dense_downsampler_weights_int8", 288 * 64);
+
+        for name in [
+            "gru_1_input_bias",
+            "gru_1_input_subias",
+            "gru_1_input_scale",
+        ] {
+            append_float_record(&mut blob, name, 3 * 64);
+        }
+        append_int8_record(&mut blob, "gru_1_input_weights_int8", 64 * 3 * 64);
+
+        for name in [
+            "gru_1_recurrent_bias",
+            "gru_1_recurrent_subias",
+            "gru_1_recurrent_scale",
+        ] {
+            append_float_record(&mut blob, name, 3 * 64);
+        }
+        append_int8_record(&mut blob, "gru_1_recurrent_weights_int8", 64 * 3 * 64);
+
+        for name in [
+            "dense_final_upsampler_bias",
+            "dense_final_upsampler_subias",
+            "dense_final_upsampler_scale",
+        ] {
+            append_float_record(&mut blob, name, 3 * 64);
+        }
+        append_int8_record(&mut blob, "dense_final_upsampler_weights_int8", 64 * 3 * 64);
+
+        blob
+    }
 
     fn patterned_pcm_i16(frame_size: usize, channels: usize, seed: i32) -> Vec<i16> {
         (0..frame_size * channels)
@@ -2154,6 +2246,51 @@ mod tests {
         let decoded = plc_dec.decode(Some(&[]), &mut plc_pcm, 120, false).unwrap();
         assert_eq!(decoded, 120);
         assert!(plc_pcm.iter().all(|&sample| sample == 0));
+    }
+
+    #[test]
+    fn test_patterned_pcm_i16_stereo_branch_halves_odd_samples() {
+        let pcm = patterned_pcm_i16(2, 2, 3);
+        assert_eq!(pcm.len(), 4);
+        assert_eq!(pcm[1] as i32 * 2, pcm[0] as i32 + 7919);
+        assert_eq!(pcm[3] as i32 * 2, pcm[2] as i32 + 7919);
+    }
+
+    #[test]
+    #[cfg(feature = "dnn")]
+    fn test_dred_and_debug_accessor_paths() {
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        assert_eq!(dec.set_dnn_blob(&[1, 2, 3]), Err(-1));
+
+        let blob = make_pitchdnn_weight_blob();
+        assert_eq!(dec.set_dnn_blob(&blob), Ok(()));
+
+        let dred = DredState {
+            fec_features: vec![0.5; crate::dnn::lpcnet::NB_FEATURES + 3],
+            nb_latents: 2,
+            dred_offset: 0,
+            process_stage: 0,
+        };
+        let mut pcm = vec![0i16; 120];
+        assert_eq!(
+            dec.decode_with_dred(None, &mut pcm, 120, Some(&dred), 0),
+            Ok(120)
+        );
+        dec.fec_clear();
+
+        assert_eq!(dec.get_final_range(), 0);
+        assert!(!dec.debug_get_old_band_e().is_empty());
+        assert!(!dec.debug_get_old_log_e().is_empty());
+        assert!(!dec.debug_get_old_log_e2().is_empty());
+        assert_eq!(dec.debug_get_preemph_mem(), [0, 0]);
+        assert_eq!(dec.debug_get_decode_mem(0, 4).len(), 4);
+        assert_eq!(dec.debug_get_postfilter(), (0, 0, 0, 0, 0, 0));
+
+        dec.prev_mode = MODE_CELT_ONLY;
+        assert_eq!(dec.get_pitch(), dec.celt_dec.get_pitch());
+        dec.prev_mode = MODE_SILK_ONLY;
+        dec.dec_control.prev_pitch_lag = 123;
+        assert_eq!(dec.get_pitch(), 123);
     }
 
     #[test]
