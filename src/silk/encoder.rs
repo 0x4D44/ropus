@@ -8584,6 +8584,110 @@ mod tests {
     }
 
     #[test]
+    fn test_setup_complexity_low_and_mid_branches() {
+        let mut low_state = SilkEncoderState::default();
+        low_state.fs_khz = 8;
+        low_state.predict_lpc_order = 10;
+        silk_setup_complexity(&mut low_state, 0);
+        assert_eq!(low_state.pitch_estimation_complexity, SILK_PE_MIN_COMPLEX);
+        assert_eq!(low_state.pitch_estimation_lpc_order, 6);
+        assert_eq!(low_state.shaping_lpc_order, 12);
+        assert_eq!(low_state.n_states_delayed_decision, 1);
+        assert_eq!(low_state.use_interpolated_nlsfs, 0);
+        assert_eq!(low_state.nlsf_msvq_survivors, 2);
+
+        let mut mid_state = SilkEncoderState::default();
+        mid_state.fs_khz = 12;
+        mid_state.predict_lpc_order = 16;
+        silk_setup_complexity(&mut mid_state, 5);
+        assert_eq!(mid_state.pitch_estimation_complexity, SILK_PE_MID_COMPLEX);
+        assert_eq!(mid_state.pitch_estimation_lpc_order, 10);
+        assert_eq!(mid_state.shaping_lpc_order, 16);
+        assert_eq!(mid_state.n_states_delayed_decision, 2);
+        assert_eq!(mid_state.use_interpolated_nlsfs, 1);
+        assert_eq!(mid_state.nlsf_msvq_survivors, 6);
+        assert!(mid_state.warping_q16 > 0);
+    }
+
+    #[test]
+    fn test_control_encoder_initializes_and_reuses_setup_state() {
+        let mut enc = SilkEncoderStateFix::default();
+        assert_eq!(silk_init_encoder(&mut enc), 0);
+
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.api_sample_rate = 16000;
+        ctrl.max_internal_sample_rate = 16000;
+        ctrl.min_internal_sample_rate = 8000;
+        ctrl.desired_internal_sample_rate = 8000;
+        ctrl.payload_size_ms = 10;
+        ctrl.complexity = 0;
+        ctrl.lbrr_coded = 1;
+        ctrl.packet_loss_percentage = 100;
+
+        assert_eq!(silk_control_encoder(&mut enc, &mut ctrl, 0, 0, 0), 0);
+        assert_eq!(enc.s_cmn.fs_khz, 8);
+        assert_eq!(enc.s_cmn.nb_subfr, 2);
+        assert_eq!(enc.s_cmn.frame_length, 80);
+        assert_eq!(enc.s_cmn.packet_size_ms, 10);
+        assert_eq!(enc.s_cmn.pitch_estimation_complexity, SILK_PE_MIN_COMPLEX);
+        assert_eq!(enc.s_cmn.lbrr_enabled, 1);
+        assert_eq!(enc.s_cmn.lbrr_gain_increases, 7);
+        assert_eq!(enc.s_cmn.controlled_since_last_payload, 1);
+
+        enc.s_cmn.packet_loss_perc = 100;
+        assert_eq!(silk_setup_lbrr(&mut enc.s_cmn, &ctrl), 0);
+        assert_eq!(enc.s_cmn.lbrr_gain_increases, 3);
+
+        assert_eq!(silk_setup_fs(&mut enc, 8, 20), 0);
+        assert_eq!(enc.s_cmn.packet_size_ms, 20);
+        assert_eq!(enc.s_cmn.nb_subfr, 4);
+        assert_eq!(enc.s_cmn.frame_length, 160);
+
+        assert_eq!(silk_control_encoder(&mut enc, &mut ctrl, 0, 0, 0), 0);
+        assert_eq!(enc.s_cmn.controlled_since_last_payload, 1);
+    }
+
+    #[test]
+    fn test_control_audio_bandwidth_switch_paths() {
+        let mut switch_up_ctrl = SilkEncControlStruct::default();
+        switch_up_ctrl.opus_can_switch = 1;
+
+        let mut switch_up_state = SilkEncoderState::default();
+        switch_up_state.fs_khz = 8;
+        switch_up_state.api_fs_hz = 48000;
+        switch_up_state.desired_internal_fs_hz = 16000;
+        switch_up_state.max_internal_fs_hz = 16000;
+        switch_up_state.min_internal_fs_hz = 8000;
+
+        assert_eq!(
+            silk_control_audio_bandwidth(&mut switch_up_state, &mut switch_up_ctrl),
+            12
+        );
+        assert_eq!(switch_up_state.s_lp.mode, 1);
+        assert_eq!(switch_up_state.s_lp.transition_frame_no, 0);
+
+        let mut switch_ready_ctrl = SilkEncControlStruct::default();
+        switch_ready_ctrl.max_bits = 1000;
+        switch_ready_ctrl.payload_size_ms = 20;
+
+        let mut switch_ready_state = SilkEncoderState::default();
+        switch_ready_state.fs_khz = 16;
+        switch_ready_state.api_fs_hz = 48000;
+        switch_ready_state.desired_internal_fs_hz = 8000;
+        switch_ready_state.max_internal_fs_hz = 16000;
+        switch_ready_state.min_internal_fs_hz = 8000;
+        switch_ready_state.allow_bandwidth_switch = 1;
+        switch_ready_state.s_lp.mode = -1;
+
+        assert_eq!(
+            silk_control_audio_bandwidth(&mut switch_ready_state, &mut switch_ready_ctrl),
+            16
+        );
+        assert_eq!(switch_ready_ctrl.switch_ready, 1);
+        assert_eq!(switch_ready_ctrl.max_bits, 800);
+    }
+
+    #[test]
     fn test_gains_quant_roundtrip() {
         let mut gains_q16 = [65536i32, 80000, 50000, 65536];
         let mut ind = [0i8; 4];

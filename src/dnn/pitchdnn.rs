@@ -404,6 +404,103 @@ impl PitchDnnState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dnn::core::{
+        WEIGHT_BLOB_VERSION, WEIGHT_BLOCK_SIZE, WEIGHT_TYPE_FLOAT, WEIGHT_TYPE_INT8,
+    };
+
+    fn zero_f32_array(name: &'static str, len: usize) -> WeightArray {
+        WeightArray {
+            name: name.to_string(),
+            weight_type: WEIGHT_TYPE_FLOAT,
+            size: len * 4,
+            data: vec![0u8; len * 4],
+        }
+    }
+
+    fn zero_i8_array(name: &'static str, len: usize) -> WeightArray {
+        WeightArray {
+            name: name.to_string(),
+            weight_type: WEIGHT_TYPE_INT8,
+            size: len,
+            data: vec![0u8; len],
+        }
+    }
+
+    fn valid_zero_weight_arrays() -> Vec<WeightArray> {
+        vec![
+            zero_f32_array("dense_if_upsampler_1_bias", DENSE_IF_UPSAMPLER_1_OUT_SIZE),
+            zero_f32_array("dense_if_upsampler_1_subias", DENSE_IF_UPSAMPLER_1_OUT_SIZE),
+            zero_i8_array(
+                "dense_if_upsampler_1_weights_int8",
+                PITCH_IF_FEATURES * DENSE_IF_UPSAMPLER_1_OUT_SIZE,
+            ),
+            zero_f32_array("dense_if_upsampler_1_scale", DENSE_IF_UPSAMPLER_1_OUT_SIZE),
+            zero_f32_array("dense_if_upsampler_2_bias", DENSE_IF_UPSAMPLER_2_OUT_SIZE),
+            zero_f32_array("dense_if_upsampler_2_subias", DENSE_IF_UPSAMPLER_2_OUT_SIZE),
+            zero_i8_array(
+                "dense_if_upsampler_2_weights_int8",
+                DENSE_IF_UPSAMPLER_1_OUT_SIZE * DENSE_IF_UPSAMPLER_2_OUT_SIZE,
+            ),
+            zero_f32_array("dense_if_upsampler_2_scale", DENSE_IF_UPSAMPLER_2_OUT_SIZE),
+            zero_f32_array("conv2d_1_bias", 4),
+            zero_f32_array("conv2d_1_weight_float", 4 * 3 * 3),
+            zero_f32_array("conv2d_2_bias", 1),
+            zero_f32_array("conv2d_2_weight_float", 4 * 3 * 3),
+            zero_f32_array("dense_downsampler_bias", DENSE_DOWNSAMPLER_OUT_SIZE),
+            zero_f32_array("dense_downsampler_subias", DENSE_DOWNSAMPLER_OUT_SIZE),
+            zero_i8_array(
+                "dense_downsampler_weights_int8",
+                DOWNSAMPLER_IN_SIZE * DENSE_DOWNSAMPLER_OUT_SIZE,
+            ),
+            zero_f32_array("dense_downsampler_scale", DENSE_DOWNSAMPLER_OUT_SIZE),
+            zero_f32_array("gru_1_input_bias", 3 * GRU_1_STATE_SIZE),
+            zero_f32_array("gru_1_input_subias", 3 * GRU_1_STATE_SIZE),
+            zero_i8_array(
+                "gru_1_input_weights_int8",
+                DENSE_DOWNSAMPLER_OUT_SIZE * 3 * GRU_1_STATE_SIZE,
+            ),
+            zero_f32_array("gru_1_input_scale", 3 * GRU_1_STATE_SIZE),
+            zero_f32_array("gru_1_recurrent_bias", 3 * GRU_1_STATE_SIZE),
+            zero_f32_array("gru_1_recurrent_subias", 3 * GRU_1_STATE_SIZE),
+            zero_i8_array(
+                "gru_1_recurrent_weights_int8",
+                GRU_1_STATE_SIZE * 3 * GRU_1_STATE_SIZE,
+            ),
+            zero_f32_array("gru_1_recurrent_scale", 3 * GRU_1_STATE_SIZE),
+            zero_f32_array("dense_final_upsampler_bias", DENSE_FINAL_UPSAMPLER_OUT_SIZE),
+            zero_f32_array("dense_final_upsampler_subias", DENSE_FINAL_UPSAMPLER_OUT_SIZE),
+            zero_i8_array(
+                "dense_final_upsampler_weights_int8",
+                GRU_1_STATE_SIZE * DENSE_FINAL_UPSAMPLER_OUT_SIZE,
+            ),
+            zero_f32_array("dense_final_upsampler_scale", DENSE_FINAL_UPSAMPLER_OUT_SIZE),
+        ]
+    }
+
+    fn make_weight_record(name: &str, weight_type: i32, payload: &[u8]) -> Vec<u8> {
+        let mut record = vec![0u8; WEIGHT_BLOCK_SIZE + payload.len()];
+        record[4..8].copy_from_slice(&WEIGHT_BLOB_VERSION.to_ne_bytes());
+        record[8..12].copy_from_slice(&weight_type.to_ne_bytes());
+        record[12..16].copy_from_slice(&(payload.len() as i32).to_ne_bytes());
+        record[16..20].copy_from_slice(&(payload.len() as i32).to_ne_bytes());
+        let name_bytes = name.as_bytes();
+        record[20..20 + name_bytes.len()].copy_from_slice(name_bytes);
+        record[20 + name_bytes.len()] = 0;
+        record[WEIGHT_BLOCK_SIZE..WEIGHT_BLOCK_SIZE + payload.len()].copy_from_slice(payload);
+        record
+    }
+
+    fn serialized_zero_weight_blob() -> Vec<u8> {
+        let mut blob = Vec::new();
+        for array in valid_zero_weight_arrays() {
+            blob.extend_from_slice(&make_weight_record(
+                &array.name,
+                array.weight_type,
+                &array.data,
+            ));
+        }
+        blob
+    }
 
     #[test]
     fn test_constants() {
@@ -629,6 +726,55 @@ mod tests {
         let state = PitchDnnState::new_empty();
         assert_eq!(state.model.conv2d_1.ktime, 0); // not yet initialized
         assert_eq!(state.model.dense_if_upsampler_1.nb_inputs, 0);
+    }
+
+    #[test]
+    fn test_init_and_new_with_zero_weights_cover_inference_path() {
+        let arrays = valid_zero_weight_arrays();
+        let model = init_pitchdnn(&arrays).expect("zero model");
+        assert_eq!(model.dense_if_upsampler_1.nb_inputs, PITCH_IF_FEATURES);
+        assert_eq!(model.dense_if_upsampler_2.nb_outputs, DENSE_IF_UPSAMPLER_2_OUT_SIZE);
+        assert_eq!(model.conv2d_1.float_weights.as_ref().unwrap().len(), 4 * 3 * 3);
+        assert_eq!(
+            model.dense_final_upsampler.weights.as_ref().unwrap().len(),
+            GRU_1_STATE_SIZE * DENSE_FINAL_UPSAMPLER_OUT_SIZE
+        );
+
+        let mut state = PitchDnnState::new(&arrays).expect("state from zero model");
+        let if_features = vec![0.25f32; PITCH_IF_FEATURES];
+        let xcorr_features: Vec<f32> = (0..NB_XCORR_FEATURES)
+            .map(|i| if i % 2 == 0 { 0.5 } else { -0.25 })
+            .collect();
+
+        let result = state.compute(&if_features, &xcorr_features);
+        let expected = (1.0f32 / 60.0f32) - 1.5;
+        assert!((result - expected).abs() < 1e-6, "got {result}");
+        assert!(state.gru_state.iter().all(|&x| x.abs() < 1e-6));
+        assert!(state.xcorr_mem1.iter().all(|x| x.is_finite()));
+        assert!(state.xcorr_mem2.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn test_load_model_zero_blob_and_missing_weight_failures() {
+        assert!(init_pitchdnn(&[]).is_err());
+        assert!(PitchDnnState::new(&[]).is_err());
+
+        let mut empty = PitchDnnState::new_empty();
+        assert_eq!(empty.load_model(&[]), Err(-1));
+
+        let mut state = PitchDnnState::new_empty();
+        let blob = serialized_zero_weight_blob();
+        state.load_model(&blob).expect("load zero blob");
+        assert_eq!(state.model.dense_downsampler.nb_inputs, DOWNSAMPLER_IN_SIZE);
+        assert_eq!(state.model.conv2d_2.out_channels, 1);
+
+        let if_features = vec![1.0f32; PITCH_IF_FEATURES];
+        let xcorr_features: Vec<f32> = (0..NB_XCORR_FEATURES)
+            .map(|i| i as f32 / NB_XCORR_FEATURES as f32 - 0.5)
+            .collect();
+        let result = state.compute(&if_features, &xcorr_features);
+        let expected = (1.0f32 / 60.0f32) - 1.5;
+        assert!((result - expected).abs() < 1e-6, "got {result}");
     }
 
     #[test]

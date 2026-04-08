@@ -2201,6 +2201,30 @@ mod tests {
     }
 
     #[test]
+    fn test_kiss99_srand_short_seeds_cover_tail_bytes() {
+        let mut empty = Kiss99Ctx::default();
+        empty.srand(&[]);
+
+        let mut one = Kiss99Ctx::default();
+        one.srand(b"A");
+        assert_ne!(one.z, empty.z);
+        assert_eq!(one.w, empty.w);
+        assert_eq!(one.jsr, empty.jsr);
+
+        let mut two = Kiss99Ctx::default();
+        two.srand(b"AB");
+        assert_ne!(two.z, empty.z);
+        assert_ne!(two.w, empty.w);
+        assert_eq!(two.jsr, empty.jsr);
+
+        let mut three = Kiss99Ctx::default();
+        three.srand(b"ABC");
+        assert_ne!(three.z, empty.z);
+        assert_ne!(three.w, empty.w);
+        assert_ne!(three.jsr, empty.jsr);
+    }
+
+    #[test]
     fn test_fft_roundtrip() {
         let mut x = [0.0f32; WINDOW_SIZE];
         x[0] = 1.0;
@@ -2284,6 +2308,37 @@ mod tests {
         let mut a = [0.0f32; LPC_ORDER];
         let g = silk_burg_analysis(&mut a, &x, 1e-3, 160, 1, LPC_ORDER);
         assert!(g >= 0.0, "Residual energy should be non-negative");
+    }
+
+    #[test]
+    fn test_burg_analysis_zero_signal_hits_gain_limit() {
+        let x = [0.0f32; FRAME_SIZE];
+        let mut a = [1.0f32; LPC_ORDER];
+        let g = silk_burg_analysis(&mut a, &x, 1.0, FRAME_SIZE, 1, LPC_ORDER);
+        assert_eq!(g, 0.0);
+        assert!(a.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn test_lpcn_lpc_zero_input_and_early_break() {
+        let mut lpc = [1.0f32; LPC_ORDER];
+        let mut rc = [1.0f32; LPC_ORDER];
+        let ac_zero = [0.0f32; LPC_ORDER + 1];
+        assert_eq!(lpcn_lpc(&mut lpc, &mut rc, &ac_zero, LPC_ORDER), 0.0);
+        assert!(lpc.iter().all(|&v| v == 0.0));
+        assert!(rc.iter().all(|&v| v == 0.0));
+
+        let mut lpc = [0.0f32; LPC_ORDER];
+        let mut rc = [0.0f32; LPC_ORDER];
+        let mut ac = [0.0f32; LPC_ORDER + 1];
+        ac[0] = 1.0;
+        ac[1] = 1.0;
+        let error = lpcn_lpc(&mut lpc, &mut rc, &ac, LPC_ORDER);
+        assert_eq!(error, 0.0);
+        assert_eq!(lpc[0], -1.0);
+        assert!(lpc[1..].iter().all(|&v| v == 0.0));
+        assert_eq!(rc[0], -1.0);
+        assert!(rc[1..].iter().all(|&v| v == 0.0));
     }
 
     #[test]
@@ -2439,6 +2494,21 @@ mod tests {
     }
 
     #[test]
+    fn test_plc_get_fec_or_pred_consumes_skip_with_pending_fec() {
+        let mut plc = LPCNetPLCState::new();
+        plc.loaded = true;
+        plc.fec_fill_pos = 1;
+        plc.fec[0][0] = 0.5;
+        plc.fec_skip = 1;
+
+        let mut out = [0.0f32; NB_FEATURES];
+        assert!(!plc.get_fec_or_pred(&mut out));
+        assert_eq!(plc.fec_read_pos, 0);
+        assert_eq!(plc.fec_skip, 0);
+        assert!(out.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
     fn test_plc_update_advances_history_when_positions_are_live() {
         let mut plc = LPCNetPLCState::new();
         let pcm = patterned_pcm(11);
@@ -2460,6 +2530,18 @@ mod tests {
             plc.pcm[PLC_BUF_SIZE - 1],
             pcm[FRAME_SIZE - 1] as f32 / 32768.0
         );
+    }
+
+    #[test]
+    fn test_synthesize_tail_impl_preload_and_clip() {
+        let mut st = LPCNetState::new();
+        st.frame_count = FEATURES_DELAY as i32 + 1;
+        st.lpc[0] = -2.0;
+
+        let mut output = [20000i16, 123i16];
+        st.synthesize_tail_impl(&mut output, 2, 1);
+        assert_eq!(output[0], 20000);
+        assert_eq!(output[1], 32767);
     }
 
     #[test]

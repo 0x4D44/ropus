@@ -2654,4 +2654,154 @@ mod tests {
         let state = StereoDecState::default();
         assert_eq!(state.pred_prev_q13, [0, 0]);
     }
+
+    #[test]
+    fn test_decoder_set_fs_reconfigures_tables_and_resampler() {
+        let mut dec = SilkDecoderState::new();
+
+        silk_decoder_set_fs(&mut dec, 8, 48_000);
+        assert_eq!(dec.fs_khz, 8);
+        assert_eq!(dec.subfr_length, SUB_FRAME_LENGTH_MS * 8);
+        assert_eq!(dec.frame_length, dec.nb_subfr * dec.subfr_length);
+        assert_eq!(dec.ltp_mem_length, LTP_MEM_LENGTH_MS * 8);
+        assert_eq!(dec.lpc_order, MIN_LPC_ORDER);
+        assert_eq!(dec.pitch_lag_low_bits_icdf, SILK_UNIFORM4_ICDF.as_slice());
+        assert_eq!(dec.pitch_contour_icdf, SILK_PITCH_CONTOUR_NB_ICDF.as_slice());
+        assert_eq!(dec.nlsf_cb.order, SILK_NLSF_CB_NB_MB.order);
+        assert_eq!(dec.nlsf_cb.cb1_icdf, SILK_NLSF_CB1_ICDF_NB_MB.as_slice());
+        assert_eq!(dec.nlsf_cb.ec_icdf, SILK_NLSF_CB2_ICDF_NB_MB.as_slice());
+        assert_eq!(dec.resampler_state.resampler_function, USE_SILK_RESAMPLER_IIR_FIR);
+        assert_eq!(dec.resampler_state.fs_in_khz, 8);
+        assert_eq!(dec.resampler_state.fs_out_khz, 48);
+        assert_eq!(dec.resampler_state.batch_size, 80);
+
+        dec.nb_subfr = 2;
+        silk_decoder_set_fs(&mut dec, 8, 44_100);
+        assert_eq!(dec.frame_length, 2 * dec.subfr_length);
+        assert_eq!(dec.pitch_contour_icdf, SILK_PITCH_CONTOUR_10_MS_NB_ICDF.as_slice());
+        assert_eq!(dec.fs_api_hz, 44_100);
+
+        dec.nb_subfr = MAX_NB_SUBFR;
+        silk_decoder_set_fs(&mut dec, 12, 48_000);
+        assert_eq!(dec.lpc_order, MIN_LPC_ORDER);
+        assert_eq!(dec.pitch_lag_low_bits_icdf, SILK_UNIFORM6_ICDF.as_slice());
+        assert_eq!(dec.pitch_contour_icdf, SILK_PITCH_CONTOUR_ICDF.as_slice());
+        assert_eq!(dec.nlsf_cb.order, SILK_NLSF_CB_NB_MB.order);
+        assert_eq!(dec.nlsf_cb.cb1_icdf, SILK_NLSF_CB1_ICDF_NB_MB.as_slice());
+        assert_eq!(dec.nlsf_cb.ec_icdf, SILK_NLSF_CB2_ICDF_NB_MB.as_slice());
+
+        silk_decoder_set_fs(&mut dec, 16, 48_000);
+        assert_eq!(dec.lpc_order, MAX_LPC_ORDER);
+        assert_eq!(dec.pitch_lag_low_bits_icdf, SILK_UNIFORM8_ICDF.as_slice());
+        assert_eq!(dec.pitch_contour_icdf, SILK_PITCH_CONTOUR_ICDF.as_slice());
+        assert_eq!(dec.nlsf_cb.order, SILK_NLSF_CB_WB.order);
+        assert_eq!(dec.nlsf_cb.cb1_icdf, SILK_NLSF_CB1_ICDF_WB.as_slice());
+        assert_eq!(dec.nlsf_cb.ec_icdf, SILK_NLSF_CB2_ICDF_WB.as_slice());
+    }
+
+    #[test]
+    fn test_plc_conceal_first_loss_voiced() {
+        let mut dec = SilkDecoderState::new();
+        dec.frame_length = 160;
+        dec.subfr_length = 40;
+        dec.nb_subfr = 4;
+        dec.lpc_order = 10;
+        dec.fs_khz = 8;
+        dec.loss_cnt = 0;
+        dec.prev_signal_type = TYPE_VOICED;
+        dec.exc_q14[..160].fill(1 << 14);
+        dec.s_lpc_q14_buf = [0; MAX_LPC_ORDER];
+        dec.s_plc.pitch_l_q8 = 8 << 8;
+        dec.s_plc.prev_ltp_scale_q14 = 1 << 14;
+        dec.s_plc.prev_gain_q16 = [1 << 16, 1 << 16];
+        dec.s_plc.ltp_coef_q14 = [0; LTP_ORDER];
+
+        let mut frame = [0i16; 160];
+        silk_plc_conceal(&mut dec, &mut frame);
+
+        assert!(frame.iter().any(|&x| x != 0));
+        assert!(dec.s_plc.rand_scale_q14 > 0);
+    }
+
+    #[test]
+    fn test_decode_frame_packet_lost_updates_plc_state() {
+        let mut dec = SilkDecoderState::new();
+        silk_decoder_set_fs(&mut dec, 8, 48_000);
+        dec.loss_cnt = 1;
+        dec.prev_signal_type = TYPE_NO_VOICE_ACTIVITY;
+        dec.exc_q14.fill(1 << 14);
+        dec.s_plc.rand_scale_q14 = 1 << 14;
+        dec.s_plc.pitch_l_q8 = 8 << 8;
+        dec.s_plc.prev_gain_q16 = [1 << 16, 1 << 16];
+
+        let rc_buf = [0x80u8];
+        let mut rc = RangeDecoder::new(&rc_buf);
+        let mut out = vec![0i16; dec.frame_length];
+        let mut n = 0usize;
+
+        silk_decode_frame(
+            &mut dec,
+            &mut rc,
+            &mut out,
+            &mut n,
+            FLAG_PACKET_LOST,
+            CODE_INDEPENDENTLY,
+        );
+
+        assert_eq!(n, dec.frame_length);
+        assert!(out.iter().any(|&x| x != 0));
+        assert_eq!(dec.s_plc.last_frame_lost, 1);
+        assert!(dec.s_plc.conc_energy > 0);
+    }
+
+    #[test]
+    fn test_plc_glue_frames_fades_in_after_loss() {
+        let mut dec = SilkDecoderState::new();
+        dec.loss_cnt = 0;
+        dec.s_plc.last_frame_lost = 1;
+
+        let mut frame = [100i16; 4];
+        let (new_energy, new_shift) = silk_sum_sqr_shift(&frame);
+        dec.s_plc.conc_energy = new_energy / 2;
+        dec.s_plc.conc_energy_shift = new_shift;
+
+        let len = frame.len();
+        silk_plc_glue_frames(&mut dec, &mut frame, len);
+
+        assert_ne!(frame, [100; 4]);
+        assert_eq!(dec.s_plc.last_frame_lost, 0);
+    }
+
+    #[test]
+    fn test_resampler_init_down_fir_ratio_selection() {
+        let mut rs = SilkResamplerState::default();
+        silk_resampler_init(&mut rs, 48_000, 8_000, false);
+
+        assert_eq!(rs.resampler_function, USE_SILK_RESAMPLER_DOWN_FIR);
+        assert_eq!(rs.fs_in_khz, 48);
+        assert_eq!(rs.fs_out_khz, 8);
+        assert_eq!(rs.fir_fracs, 1);
+        assert_eq!(rs.fir_order, RESAMPLER_DOWN_ORDER_FIR2 as i32);
+        assert!(matches!(rs.coefs, ResamplerCoefs::Ratio1_6));
+        assert_eq!(rs.batch_size, 480);
+    }
+
+    #[test]
+    fn test_resampler_copy_path_preserves_delay_and_tail() {
+        let mut rs = SilkResamplerState::default();
+        rs.resampler_function = USE_SILK_RESAMPLER_COPY;
+        rs.fs_in_khz = 4;
+        rs.fs_out_khz = 4;
+        rs.input_delay = 2;
+        for (i, sample) in rs.delay_buf.iter_mut().enumerate() {
+            *sample = (100 + i as i32) as i16;
+        }
+
+        let input = [1i16, 2, 3, 4, 5, 6];
+        let mut out = [0i16; 6];
+        silk_resampler(&mut rs, &mut out, &input, input.len());
+
+        assert_eq!(out, [100, 101, 1, 2, 3, 4]);
+        assert_eq!(&rs.delay_buf[..2], &[5, 6]);
+    }
 }

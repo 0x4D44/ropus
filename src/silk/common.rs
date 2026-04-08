@@ -1625,4 +1625,117 @@ mod tests {
             assert!(lag <= PITCH_EST_MAX_LAG_MS as i32 * 16);
         }
     }
+
+    #[test]
+    fn test_fixed_point_helpers_cover_boundaries() {
+        assert_eq!(silk_clz32(0), 32);
+        assert_eq!(silk_clz32(1), 31);
+        assert_eq!(silk_clz32(-1), 0);
+        assert_eq!(silk_ror32(0x1234_5678, 8), 0x7812_3456);
+
+        assert_eq!(silk_add_sat32(i32::MAX - 1, 10), i32::MAX);
+        assert_eq!(silk_sub_sat32(i32::MIN + 1, 10), i32::MIN);
+        assert_eq!(silk_add_sat16(32_760, 10), 32_767);
+        assert_eq!(silk_lshift_sat32(3, 2), 12);
+        assert_eq!(silk_lshift_sat32(i32::MAX, 1), 2_147_483_646);
+        assert_eq!(silk_rshift_round(7, 0), 7);
+        assert_eq!(silk_rshift_round(7, 1), 4);
+        assert_eq!(silk_rshift_round(7, 32), 0);
+        assert_eq!(silk_rshift_round64(7, 0), 7);
+        assert_eq!(silk_rshift_round64(7, 1), 4);
+
+        assert_eq!(silk_add_pos_sat32(100, 23), 123);
+        assert_eq!(silk_add_pos_sat32(i32::MAX - 1, 10), i32::MAX);
+        assert_eq!(silk_limit(5, 0, 10), 5);
+        assert_eq!(silk_limit(-5, 0, 10), 0);
+        assert_eq!(silk_limit(15, 0, 10), 10);
+        assert_eq!(silk_abs_int32(-5), 5);
+        assert_eq!(silk_check_fit32(4_294_967_297i64), 1);
+        assert_eq!(silk_check_fit16(65_537), 1);
+        assert_eq!(silk_sat16(40_000), 32_767);
+        assert_eq!(silk_sat16(-40_000), -32_768);
+        assert_eq!(silk_div32_16(12, 3), 4);
+        assert_eq!(silk_clz64_fn(0), 64);
+        assert_eq!(silk_clz64_fn(1), 63);
+    }
+
+    #[test]
+    fn test_fixed_point_mac_helpers_exact() {
+        assert_eq!(silk_mul(3, -4), -12);
+        assert_eq!(silk_lshift32(3, 4), 48);
+        assert_eq!(silk_rshift32(-8, 1), -4);
+        assert_eq!(silk_lshift64(3, 4), 48);
+        assert_eq!(silk_rshift64(-8, 1), -4);
+        assert_eq!(silk_smull(3, -4), -12);
+        assert_eq!(silk_smulbb(0x0001_0002, 0x0003_0004), 8);
+        assert_eq!(silk_smulwb(65_536, 2), 2);
+        assert_eq!(silk_smulwb_i32(65_536, 2), 2);
+        assert_eq!(silk_smlawb(10, 65_536, 2), 12);
+        assert_eq!(silk_smlawb_i32(10, 65_536, 2), 12);
+        assert_eq!(silk_smlawt(10, 65_536, 2 << 16), 12);
+        assert_eq!(silk_smulww(65_536, 65_536), 65_536);
+        assert_eq!(silk_smlabb(10, 3, 4), 22);
+        assert_eq!(silk_mla(10, 3, 4), 22);
+        assert_eq!(silk_add_lshift32(10, 3, 4), 58);
+        assert_eq!(silk_add_rshift32(10, 32, 1), 26);
+        assert_eq!(silk_sub_rshift32(10, 32, 1), -6);
+        assert_eq!(silk_smmul(1 << 30, 1 << 2), 1);
+        assert_eq!(silk_smlaww(10, 65_536, 2), 12);
+        assert_eq!(silk_smlabb_ovflw(i32::MAX, 1, 1), i32::MIN);
+    }
+
+    #[test]
+    fn test_sum_sqr_shift_i32_and_inner_products_exact() {
+        assert_eq!(silk_sum_sqr_shift_i32(&[3, 4], 0), (25, 0));
+
+        let (energy, shift) = silk_sum_sqr_shift_i32(&[i32::MAX, i32::MAX], 0);
+        assert!(energy > 0);
+        assert!(shift > 0);
+
+        assert_eq!(silk_inner_prod16(&[], &[], 0), 0);
+        assert_eq!(silk_inner_prod16(&[1, -2, 3], &[-4, 5, 6], 3), 4);
+        assert_eq!(silk_inner_prod_aligned(&[1, 2, 3], &[4, 5, 6], 3), 32);
+    }
+
+    #[test]
+    fn test_lpc_analysis_filters_exact() {
+        let s = [1, 2, 3, 4];
+        let a_q12 = [4_096, 0];
+
+        let mut out = [99i16; 4];
+        silk_lpc_analysis_filter(&mut out, &s, &a_q12, 4, 2);
+        assert_eq!(out, [0, 0, 1, 1]);
+
+        let mut out_hist = [0i32; 2];
+        silk_lpc_analysis_filter_with_history(&mut out_hist, &s, 1, &a_q12, 2, 2);
+        assert_eq!(out_hist, [1, 1]);
+    }
+
+    #[test]
+    fn test_nlsf_residual_dequant_and_stabilize_paths() {
+        let mut residual = [0i16; 3];
+        let indices = [1, 0, -1];
+        let pred = [0u8; 3];
+        silk_nlsf_residual_dequant(&mut residual, &indices, &pred, 65_536, 3);
+        assert_eq!(residual, [922, 0, -922]);
+
+        let mut nlsf_low = [50i16];
+        let delta_low = [100i16, 200i16];
+        silk_nlsf_stabilize(&mut nlsf_low, &delta_low, 1);
+        assert_eq!(nlsf_low, [100]);
+
+        let mut nlsf_high = [32_600i16];
+        silk_nlsf_stabilize(&mut nlsf_high, &delta_low, 1);
+        assert_eq!(nlsf_high, [32_568]);
+
+        let mut nlsf_middle = [1_000i16, 1_050i16];
+        let delta_middle = [100i16, 200i16, 100i16];
+        silk_nlsf_stabilize(&mut nlsf_middle, &delta_middle, 2);
+        assert_eq!(nlsf_middle, [925, 1_125]);
+
+        let mut nlsf_fallback = [50i16];
+        let delta_fallback = [20_000i16, 20_000i16];
+        silk_nlsf_stabilize(&mut nlsf_fallback, &delta_fallback, 1);
+        assert_eq!(nlsf_fallback, [12_768]);
+    }
 }
