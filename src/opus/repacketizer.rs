@@ -2152,6 +2152,50 @@ mod tests {
     }
 
     #[test]
+    fn test_extension_iterator_reset_and_zero_increment_separator() {
+        let data = [0x03u8, 0x00, 0x0Bu8, 0xAA];
+        let mut iter = OpusExtensionIterator::new(&data, data.len() as i32, 2);
+
+        let (ret, ext) = iter.next_ext();
+        assert_eq!(ret, 1);
+        assert_eq!(ext.id, 5);
+        assert_eq!(ext.frame, 0);
+        assert_eq!(ext.len, 1);
+        assert_eq!(ext.data, &[0xAA]);
+
+        iter.reset();
+        let (ret, ext) = iter.next_ext();
+        assert_eq!(ret, 1);
+        assert_eq!(ext.id, 5);
+        assert_eq!(ext.frame, 0);
+        assert_eq!(ext.len, 1);
+        assert_eq!(ext.data, &[0xAA]);
+    }
+
+    #[test]
+    fn test_write_extension_payload_short_zero_and_long_laced() {
+        let short = OpusExtensionData {
+            id: 5,
+            frame: 0,
+            data: &[],
+            len: 0,
+        };
+        let mut buf = [0u8; 260];
+        assert_eq!(write_extension_payload(&mut buf, false, 260, 0, &short, false), 0);
+
+        let payload: Vec<u8> = (0..256u16).map(|v| v as u8).collect();
+        let long = OpusExtensionData {
+            id: 40,
+            frame: 0,
+            data: &payload,
+            len: payload.len() as i32,
+        };
+        assert_eq!(write_extension_payload(&mut buf, false, 260, 0, &long, false), 258);
+        assert_eq!(&buf[..2], &[255, 1]);
+        assert_eq!(&buf[2..258], payload.as_slice());
+    }
+
+    #[test]
     fn test_extension_count_no_extensions() {
         let count = opus_packet_extensions_count(&[], 0, 1);
         assert_eq!(count, 0);

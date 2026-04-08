@@ -2310,6 +2310,18 @@ mod tests {
     }
 
     #[test]
+    fn decode_with_ec_short_packet_triggers_plc_path() {
+        let mut dec = CeltDecoder::new(48000, 1).unwrap();
+        let mut pcm = vec![7i16; 960];
+
+        let result = dec.decode_with_ec(Some(&[0]), &mut pcm, 960, None, false, plc_arg());
+        assert_eq!(result, Ok(960));
+        assert!(pcm.iter().any(|&sample| sample != 7));
+        assert!(dec.loss_duration > 0);
+        assert!(dec.plc_duration > 0);
+    }
+
+    #[test]
     fn decode_lost_noise_path_updates_state() {
         let mut dec = CeltDecoder::new(48000, 2).unwrap();
         dec.prefilter_and_fold = true;
@@ -2325,6 +2337,29 @@ mod tests {
         assert_eq!(dec.last_frame_type, FRAME_PLC_NOISE);
         assert_eq!(dec.skip_plc, 1);
         assert!(dec.loss_duration > 0);
+        assert!(dec.plc_duration > 0);
+    }
+
+    #[test]
+    fn decode_lost_noise_path_forced_by_skip_plc_keeps_state_updates() {
+        let mut dec = CeltDecoder::new(48000, 1).unwrap();
+        dec.skip_plc = 1;
+        dec.plc_duration = 0;
+        dec.loss_duration = 1;
+        dec.prefilter_and_fold = false;
+        dec.postfilter_period_old = 24;
+        dec.postfilter_period = 24;
+        dec.postfilter_gain_old = qconst16(0.25, 15);
+        dec.postfilter_gain = qconst16(0.25, 15);
+        dec.postfilter_tapset_old = 1;
+        dec.postfilter_tapset = 1;
+
+        dec.decode_lost(dec.mode.short_mdct_size, 0, plc_arg());
+
+        assert_eq!(dec.last_frame_type, FRAME_PLC_NOISE);
+        assert_eq!(dec.skip_plc, 1);
+        assert!(!dec.prefilter_and_fold);
+        assert_eq!(dec.loss_duration, 2);
         assert!(dec.plc_duration > 0);
     }
 
