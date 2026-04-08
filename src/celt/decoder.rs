@@ -2317,6 +2317,54 @@ mod tests {
     }
 
     #[test]
+    fn decode_lost_noise_path_forced_by_start_offset_keeps_prefilter_disabled() {
+        let mut dec = CeltDecoder::new(48000, 2).unwrap();
+        dec.start = 1;
+        dec.skip_plc = 0;
+        dec.plc_duration = 0;
+        dec.loss_duration = 1;
+        dec.prefilter_and_fold = false;
+        dec.postfilter_period_old = 24;
+        dec.postfilter_period = 24;
+        dec.postfilter_gain_old = qconst16(0.25, 15);
+        dec.postfilter_gain = qconst16(0.25, 15);
+        dec.postfilter_tapset_old = 1;
+        dec.postfilter_tapset = 1;
+
+        dec.decode_lost(dec.mode.short_mdct_size, 0, plc_arg());
+
+        assert_eq!(dec.last_frame_type, FRAME_PLC_NOISE);
+        assert_eq!(dec.skip_plc, 1);
+        assert!(!dec.prefilter_and_fold);
+        assert_eq!(dec.loss_duration, 2);
+        assert!(dec.plc_duration > 0);
+    }
+
+    #[test]
+    fn decode_lost_noise_path_forced_by_duration_threshold_keeps_decay_branch() {
+        let mut dec = CeltDecoder::new(48000, 1).unwrap();
+        dec.start = 0;
+        dec.skip_plc = 0;
+        dec.plc_duration = 40;
+        dec.loss_duration = 1;
+        dec.prefilter_and_fold = false;
+        dec.postfilter_period_old = 24;
+        dec.postfilter_period = 24;
+        dec.postfilter_gain_old = qconst16(0.25, 15);
+        dec.postfilter_gain = qconst16(0.25, 15);
+        dec.postfilter_tapset_old = 1;
+        dec.postfilter_tapset = 1;
+
+        dec.decode_lost(dec.mode.short_mdct_size, 0, plc_arg());
+
+        assert_eq!(dec.last_frame_type, FRAME_PLC_NOISE);
+        assert_eq!(dec.skip_plc, 1);
+        assert!(!dec.prefilter_and_fold);
+        assert_eq!(dec.loss_duration, 2);
+        assert!(dec.plc_duration > 40);
+    }
+
+    #[test]
     fn prefilter_and_fold_mutates_overlap_region() {
         let mode = &MODE_48000_960_120;
         let overlap = mode.overlap as usize;

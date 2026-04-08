@@ -8716,6 +8716,141 @@ mod tests {
     }
 
     #[test]
+    fn test_schur_helpers_cover_scaling_and_guard_branches() {
+        let mut rc_q15 = [123i16; MAX_SHAPE_LPC_ORDER];
+        let corr_sat = [i32::MAX, i32::MAX, 0];
+        let err_sat = silk_schur(&mut rc_q15, &corr_sat, 2);
+        assert!(err_sat >= 1);
+        assert_ne!(rc_q15[0], 123);
+        assert_eq!(rc_q15[1], 0);
+
+        let mut rc_scaled = [0i16; MAX_SHAPE_LPC_ORDER];
+        let corr_scaled = [1 << 20, 1 << 18, 1 << 17];
+        let err_scaled = silk_schur(&mut rc_scaled, &corr_scaled, 2);
+        assert!(err_scaled >= 1);
+
+        let mut rc_q16_zero = [77i32; MAX_SHAPE_LPC_ORDER];
+        let corr_zero = [0, 1, 2];
+        assert_eq!(silk_schur64(&mut rc_q16_zero, &corr_zero, 2), 0);
+        assert_eq!(rc_q16_zero[..2], [0, 0]);
+
+        let mut rc_q16_sat = [0i32; MAX_SHAPE_LPC_ORDER];
+        let corr_q16_sat = [10_000, 10_000, 0];
+        let err_q16_sat = silk_schur64(&mut rc_q16_sat, &corr_q16_sat, 2);
+        assert!(err_q16_sat >= 1);
+        assert_ne!(rc_q16_sat[0], 0);
+        assert_eq!(rc_q16_sat[1], 0);
+    }
+
+    #[test]
+    fn test_query_encoder_reports_wb_mode_flag() {
+        let mut enc = SilkEncoder::new();
+        assert_eq!(silk_init_encoder_top(&mut enc, 1), 0);
+        enc.allow_bandwidth_switch = 1;
+        enc.state_fxx[0].s_cmn.fs_khz = 16;
+        enc.state_fxx[0].s_cmn.s_lp.mode = 0;
+
+        let mut status = SilkEncControlStruct::default();
+        silk_query_encoder(&enc, &mut status);
+        assert_eq!(status.internal_sample_rate, 16_000);
+        assert_eq!(status.allow_bandwidth_switch, 1);
+        assert_eq!(status.in_wb_mode_without_variable_lp, 1);
+
+        enc.state_fxx[0].s_cmn.s_lp.mode = 1;
+        silk_query_encoder(&enc, &mut status);
+        assert_eq!(status.in_wb_mode_without_variable_lp, 0);
+    }
+
+    #[test]
+    fn test_silk_encode_reduced_dependency_marks_reset_before_validation_error() {
+        let mut enc = SilkEncoder::new();
+        assert_eq!(silk_init_encoder_top(&mut enc, 1), 0);
+        enc.state_fxx[0].s_cmn.first_frame_after_reset = 0;
+        enc.state_fxx[0].s_cmn.n_frames_encoded = 7;
+
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.reduced_dependency = 1;
+        ctrl.api_sample_rate = 11_025;
+
+        let mut payload = [0u8; 8];
+        let mut range_enc = RangeEncoder::new(&mut payload);
+        let mut n_bytes_out = 0;
+
+        assert_eq!(
+            silk_encode(
+                &mut enc,
+                &mut ctrl,
+                &[],
+                0,
+                &mut range_enc,
+                &mut n_bytes_out,
+                0,
+                0,
+            ),
+            SILK_ENC_FS_NOT_SUPPORTED
+        );
+        assert_eq!(enc.state_fxx[0].s_cmn.first_frame_after_reset, 1);
+        assert_eq!(enc.state_fxx[0].s_cmn.n_frames_encoded, 0);
+    }
+
+    #[test]
+    fn test_silk_encode_stereo_transition_without_input_copies_state() {
+        let mut enc = SilkEncoder::new();
+        assert_eq!(silk_init_encoder_top(&mut enc, 2), 0);
+        enc.state_fxx[0].s_cmn.resampler_state.input_delay = 7;
+        enc.state_fxx[0].s_cmn.s_lp.in_lp_state = [3, 4];
+
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.n_channels_api = 2;
+        ctrl.n_channels_internal = 2;
+        ctrl.api_sample_rate = 16_000;
+        ctrl.max_internal_sample_rate = 16_000;
+        ctrl.min_internal_sample_rate = 8_000;
+        ctrl.desired_internal_sample_rate = 16_000;
+        ctrl.payload_size_ms = 20;
+        ctrl.bit_rate = 25_000;
+        ctrl.max_bits = 1_000;
+        ctrl.reduced_dependency = 1;
+
+        let mut payload = [0u8; 16];
+        let mut range_enc = RangeEncoder::new(&mut payload);
+        let mut n_bytes_out = 0;
+
+        assert_eq!(
+            silk_encode(
+                &mut enc,
+                &mut ctrl,
+                &[],
+                0,
+                &mut range_enc,
+                &mut n_bytes_out,
+                0,
+                0,
+            ),
+            SILK_NO_ERROR
+        );
+        assert_eq!(enc.n_channels_api, 2);
+        assert_eq!(enc.n_channels_internal, 2);
+        assert_eq!(enc.n_prev_channels_internal, 2);
+        assert_eq!(enc.s_stereo.pred_prev_q13, [0, 0]);
+        assert_eq!(enc.s_stereo.s_side, [0, 0]);
+        assert_eq!(enc.s_stereo.mid_side_amp_q0, [0, 1, 0, 1]);
+        assert_eq!(enc.s_stereo.smth_width_q14, 16_384);
+        assert_eq!(
+            enc.state_fxx[1].s_cmn.resampler_state.input_delay,
+            enc.state_fxx[0].s_cmn.resampler_state.input_delay
+        );
+        assert_eq!(
+            enc.state_fxx[1].s_cmn.s_lp.in_lp_state,
+            enc.state_fxx[0].s_cmn.s_lp.in_lp_state
+        );
+        assert_eq!(ctrl.internal_sample_rate, 16_000);
+        assert_eq!(ctrl.allow_bandwidth_switch, enc.allow_bandwidth_switch);
+        assert_eq!(ctrl.in_wb_mode_without_variable_lp, 1);
+        assert_eq!(n_bytes_out, 0);
+    }
+
+    #[test]
     fn test_control_audio_bandwidth_initializes_from_zero_state() {
         let mut ctrl = SilkEncControlStruct::default();
         let mut state = SilkEncoderState::default();

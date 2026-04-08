@@ -2302,6 +2302,85 @@ mod tests {
     }
 
     #[test]
+    fn test_surround_family_zero_one_and_constructor_guards() {
+        let (enc0, streams0, coupled0, mapping0) =
+            OpusMSEncoder::new_surround(48000, 1, 0, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(streams0, 1);
+        assert_eq!(coupled0, 0);
+        assert_eq!(mapping0[0], 0);
+        assert_eq!(enc0.nb_streams(), 1);
+
+        let (enc1, streams1, coupled1, mapping1) =
+            OpusMSEncoder::new_surround(48000, 1, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(streams1, 1);
+        assert_eq!(coupled1, 0);
+        assert_eq!(mapping1[0], 0);
+        assert_eq!(enc1.nb_streams(), 1);
+
+        assert!(matches!(
+            OpusMSEncoder::new_surround(48000, 4, 3, OPUS_APPLICATION_AUDIO),
+            Err(OPUS_UNIMPLEMENTED)
+        ));
+        assert!(matches!(
+            OpusMSEncoder::new(48000, 2, 0, 0, &[0, 1], OPUS_APPLICATION_AUDIO),
+            Err(OPUS_BAD_ARG)
+        ));
+        assert!(matches!(
+            OpusMSEncoder::new(48000, 256, 1, 0, &vec![0u8; 256], OPUS_APPLICATION_AUDIO),
+            Err(OPUS_BAD_ARG)
+        ));
+        assert!(matches!(
+            OpusMSDecoder::new(48000, 0, 1, 0, &[0]),
+            Err(OPUS_BAD_ARG)
+        ));
+        assert!(matches!(
+            OpusMSDecoder::new(48000, 2, 0, 0, &[0, 255]),
+            Err(OPUS_BAD_ARG)
+        ));
+    }
+
+    #[test]
+    fn test_surround_encode_and_muted_decode_paths() {
+        let (mut enc, streams, coupled, mapping) =
+            OpusMSEncoder::new_surround(48000, 6, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(streams, 4);
+        assert_eq!(coupled, 2);
+
+        assert_eq!(enc.set_vbr(0), OPUS_OK);
+        assert_eq!(enc.set_bitrate(24_000), OPUS_OK);
+
+        let pcm = patterned_pcm_i16(480, 6, 17);
+        let mut packet = vec![0u8; 4000];
+        let len = enc.encode(&pcm, 480, &mut packet, 4000).unwrap();
+        assert!(len > 0);
+        assert_ne!(enc.get_final_range(), 0);
+
+        let mono_pcm = patterned_pcm_i16(960, 1, 23);
+        let mut mono_enc = OpusMSEncoder::new(48000, 1, 1, 0, &[0], OPUS_APPLICATION_AUDIO)
+            .unwrap();
+        let mut mono_packet = vec![0u8; 4000];
+        let mono_len = mono_enc
+            .encode(&mono_pcm, 960, &mut mono_packet, 4000)
+            .unwrap();
+        assert!(mono_len > 0);
+
+        let mut muted_dec = OpusMSDecoder::new(48000, 2, 1, 0, &[0, 255]).unwrap();
+        let mut muted_out = vec![123i16; 960 * 2];
+        let muted_decoded = muted_dec
+            .decode(
+                Some(&mono_packet[..mono_len as usize]),
+                mono_len,
+                &mut muted_out,
+                960,
+                false,
+            )
+            .unwrap();
+        assert_eq!(muted_decoded, 960);
+        assert!(muted_out.iter().step_by(2).any(|&sample| sample != 123));
+        assert!(muted_out.iter().skip(1).step_by(2).all(|&sample| sample == 0));
+    }
+
+    #[test]
     fn test_mapping_matrix_multiply_identity() {
         // 2x2 identity matrix (Q15)
         let data: [i16; 4] = [32767, 0, 0, 32767]; // column-major
@@ -2618,11 +2697,18 @@ mod tests {
         assert_eq!(parse_multistream_subpacket(&[0x03, 0x03, 0x00], 3, true), 3);
 
         // Padding branch, code 3 CBR path.
-        assert_eq!(parse_multistream_subpacket(&[0x03, 0x43, 0x01, 0xAA, 0xBB], 5, false), 4);
+        assert_eq!(
+            parse_multistream_subpacket(&[0x03, 0x43, 0x01, 0xAA, 0xBB], 5, false),
+            4
+        );
 
         // VBR branch, code 3 with two size fields and no self-delimiting size.
         assert_eq!(
-            parse_multistream_subpacket(&[0x03, 0x83, 0x01, 0x01, 0x01, 0xAA, 0xBB, 0xCC], 8, false),
+            parse_multistream_subpacket(
+                &[0x03, 0x83, 0x01, 0x01, 0x01, 0xAA, 0xBB, 0xCC],
+                8,
+                false
+            ),
             6
         );
 
@@ -2645,7 +2731,10 @@ mod tests {
         assert!(matches!(get_mixing_matrix_for_order(2), Ok(_)));
         assert!(matches!(get_demixing_matrix_for_order(3), Ok(_)));
         assert!(matches!(get_mixing_matrix_for_order(7), Err(OPUS_BAD_ARG)));
-        assert!(matches!(get_demixing_matrix_for_order(7), Err(OPUS_BAD_ARG)));
+        assert!(matches!(
+            get_demixing_matrix_for_order(7),
+            Err(OPUS_BAD_ARG)
+        ));
 
         let (enc, streams, coupled, mapping) =
             OpusMSEncoder::new_surround(48000, 4, 2, OPUS_APPLICATION_AUDIO).unwrap();
