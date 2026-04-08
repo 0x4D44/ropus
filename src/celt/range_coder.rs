@@ -655,6 +655,14 @@ impl<'a> RangeDecoder<'a> {
         self.nbits_total
     }
 
+    /// Adjust nbits_total by a delta. Used for silence frames where we
+    /// need to pretend all remaining bits were consumed.
+    /// Matches C: `dec->nbits_total += delta`.
+    #[inline(always)]
+    pub fn add_nbits_total(&mut self, delta: i32) {
+        self.nbits_total += delta;
+    }
+
     /// Returns the internal error flag as raw integer.
     #[inline(always)]
     pub fn get_error(&self) -> i32 {

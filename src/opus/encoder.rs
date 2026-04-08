@@ -588,16 +588,15 @@ fn decide_dtx_mode(activity: i32, nb_no_activity_ms_q1: &mut i32, frame_size_ms_
 // HP / DC Filters
 // ===========================================================================
 
-/// Biquad filter for HP cutoff (fixed-point).
-/// Matches C `silk_biquad_res` in opus_encoder.c (fixed-point path).
-fn silk_biquad_res(
+/// Biquad filter for HP cutoff, stride-1 (mono) fixed-point path.
+/// Matches C `silk_biquad_alt_stride1` in silk/biquad_alt.c.
+fn silk_biquad_alt_stride1(
     input: &[i16],
     b_q28: &[i32; 3],
     a_q28: &[i32; 2],
     state: &mut [i32; 2],
     output: &mut [i16],
     len: usize,
-    stride: usize,
 ) {
     let a0_l = (-a_q28[0]) & 0x3FFF;
     let a0_u = (-a_q28[0]) >> 14;
@@ -605,7 +604,7 @@ fn silk_biquad_res(
     let a1_u = (-a_q28[1]) >> 14;
 
     for k in 0..len {
-        let inval = input[k * stride] as i32;
+        let inval = input[k] as i32;
 
         // out32_Q14 = (S[0] + SMULWB(B[0], inval)) << 2
         let out32_q14 = (state[0].wrapping_add(silk_smulwb(b_q28[0], inval))) << 2;
@@ -621,9 +620,57 @@ fn silk_biquad_res(
             .wrapping_add(silk_smulwb(out32_q14, a1_u))
             .wrapping_add(silk_smulwb(b_q28[2], inval));
 
-        // Output: ceiling-shift Q14→Q0, saturate to i16
-        // C uses: silk_SAT16(silk_RSHIFT(out32_Q14 + (1<<14) - 1, 14))
-        output[k * stride] = silk_sat16((out32_q14 + (1 << 14) - 1) >> 14) as i16;
+        // Output: ceiling-shift Q14->Q0, saturate to i16
+        output[k] = silk_sat16((out32_q14 + (1 << 14) - 1) >> 14) as i16;
+    }
+}
+
+/// Biquad filter for HP cutoff, stride-2 (stereo interleaved) fixed-point path.
+/// Matches C `silk_biquad_alt_stride2_c` in silk/biquad_alt.c.
+/// Input/output are interleaved: [L0, R0, L1, R1, ...].
+/// State vector has 4 elements: S[0],S[1] for left, S[2],S[3] for right.
+fn silk_biquad_alt_stride2(
+    input: &[i16],
+    b_q28: &[i32; 3],
+    a_q28: &[i32; 2],
+    state: &mut [i32; 4],
+    output: &mut [i16],
+    len: usize,
+) {
+    let a0_l = (-a_q28[0]) & 0x3FFF;
+    let a0_u = (-a_q28[0]) >> 14;
+    let a1_l = (-a_q28[1]) & 0x3FFF;
+    let a1_u = (-a_q28[1]) >> 14;
+
+    for k in 0..len {
+        let in_l = input[2 * k] as i32;
+        let in_r = input[2 * k + 1] as i32;
+
+        // Compute output Q14 for both channels
+        let out32_q14_l = (state[0].wrapping_add(silk_smulwb(b_q28[0], in_l))) << 2;
+        let out32_q14_r = (state[2].wrapping_add(silk_smulwb(b_q28[0], in_r))) << 2;
+
+        // Update S[0] (left) and S[2] (right)
+        state[0] = state[1]
+            .wrapping_add(silk_rshift_round(silk_smulwb(out32_q14_l, a0_l), 14))
+            .wrapping_add(silk_smulwb(out32_q14_l, a0_u))
+            .wrapping_add(silk_smulwb(b_q28[1], in_l));
+        state[2] = state[3]
+            .wrapping_add(silk_rshift_round(silk_smulwb(out32_q14_r, a0_l), 14))
+            .wrapping_add(silk_smulwb(out32_q14_r, a0_u))
+            .wrapping_add(silk_smulwb(b_q28[1], in_r));
+
+        // Update S[1] (left) and S[3] (right)
+        state[1] = silk_rshift_round(silk_smulwb(out32_q14_l, a1_l), 14)
+            .wrapping_add(silk_smulwb(out32_q14_l, a1_u))
+            .wrapping_add(silk_smulwb(b_q28[2], in_l));
+        state[3] = silk_rshift_round(silk_smulwb(out32_q14_r, a1_l), 14)
+            .wrapping_add(silk_smulwb(out32_q14_r, a1_u))
+            .wrapping_add(silk_smulwb(b_q28[2], in_r));
+
+        // Output: ceiling-shift Q14->Q0, saturate to i16
+        output[2 * k] = silk_sat16((out32_q14_l + (1 << 14) - 1) >> 14) as i16;
+        output[2 * k + 1] = silk_sat16((out32_q14_r + (1 << 14) - 1) >> 14) as i16;
     }
 }
 
@@ -670,22 +717,14 @@ fn hp_cutoff(
         silk_smulww(r_q22, r_q22),
     ];
 
-    // Apply per channel
-    for c in 0..channels as usize {
-        let mut state = [hp_mem[2 * c], hp_mem[2 * c + 1]];
-
-        // Build strided input/output slices
-        let in_ch: Vec<i16> = (0..len).map(|i| input[i * channels as usize + c]).collect();
-        let mut out_ch = vec![0i16; len];
-
-        silk_biquad_res(&in_ch, &b_q28, &a_q28, &mut state, &mut out_ch, len, 1);
-
-        // Write back
-        for i in 0..len {
-            output[i * channels as usize + c] = out_ch[i];
-        }
-        hp_mem[2 * c] = state[0];
-        hp_mem[2 * c + 1] = state[1];
+    // Apply filter: stride1 for mono, stride2 for stereo (matches C reference)
+    if channels == 1 {
+        let mut state = [hp_mem[0], hp_mem[1]];
+        silk_biquad_alt_stride1(input, &b_q28, &a_q28, &mut state, output, len);
+        hp_mem[0] = state[0];
+        hp_mem[1] = state[1];
+    } else {
+        silk_biquad_alt_stride2(input, &b_q28, &a_q28, hp_mem, output, len);
     }
 }
 

@@ -508,19 +508,6 @@ fn celt_synthesis(
                 silence,
             );
 
-            // Debug: dump freq hash and overlap hash for shift=3
-            if shift == mode.max_lm {
-                let freq_hash: u64 = freq[..n as usize].iter().enumerate()
-                    .fold(0u64, |acc, (i, &v)| acc.wrapping_add((v as u64).wrapping_mul(i as u64 + 1)));
-                let out_off = out_syn_offsets[ch];
-                let overlap_hash: u64 = out_syn[out_off..out_off + overlap as usize].iter().enumerate()
-                    .fold(0u64, |acc, (i, &v)| acc.wrapping_add((v as u64).wrapping_mul(i as u64 + 1)));
-                eprintln!("[RUST SYNTH] shift={} n={} freq_hash={} overlap_hash={} freq[0..8]={:?} overlap[0..4]={:?}",
-                    shift, n, freq_hash, overlap_hash,
-                    &freq[..8.min(n as usize)],
-                    &out_syn[out_off..out_off + 4.min(overlap as usize)]);
-            }
-
             for b_idx in 0..b {
                 let out_off = out_syn_offsets[ch] + (nb * b_idx) as usize;
                 clt_mdct_backward(
@@ -659,7 +646,7 @@ impl CeltDecoder {
             loss_duration: 0,
             plc_duration: 0,
             last_frame_type: FRAME_NONE,
-            skip_plc: 0,
+            skip_plc: 1,
             postfilter_period: 0,
             postfilter_period_old: 0,
             postfilter_gain: 0,
@@ -688,7 +675,7 @@ impl CeltDecoder {
         self.loss_duration = 0;
         self.plc_duration = 0;
         self.last_frame_type = FRAME_NONE;
-        self.skip_plc = 0;
+        self.skip_plc = 1;
         self.postfilter_period = 0;
         self.postfilter_period_old = 0;
         self.postfilter_gain = 0;
@@ -1239,8 +1226,9 @@ impl CeltDecoder {
             silence = dec.decode_bit_logp(15);
         }
         if silence {
-            // Pretend all bits consumed
+            // Pretend all bits consumed (matches C: dec->nbits_total += tell - ec_tell(dec))
             tell = total_bits;
+            dec.add_nbits_total(tell - dec.tell());
         }
 
         // --- Postfilter parameters ---
@@ -1500,15 +1488,6 @@ impl CeltDecoder {
                 0, // complexity
                 self.disable_inv,
             );
-        }
-
-        // Debug: dump x hash after quant_all_bands
-        if lm == 0 {
-            let x_hash: u64 = x[..x_len].iter().enumerate()
-                .fold(0u64, |acc, (i, &v)| acc.wrapping_add((v as u64).wrapping_mul(i as u64 + 1)));
-            eprintln!("[RUST QAB] lm={} x_hash={} x[0..8]={:?} old_band_e[0..4]={:?}",
-                lm, x_hash, &x[..8.min(x_len)],
-                &self.old_band_e[..4]);
         }
 
         // Anti-collapse bit: read as raw bit from end (ec_dec_bits), NOT range coder!

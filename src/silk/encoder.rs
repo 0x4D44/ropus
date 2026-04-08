@@ -8149,27 +8149,28 @@ pub fn silk_encode(
                     max_bits -= enc_control.max_bits / (tot_blocks * 2);
                 }
 
-                let cond_coding = if enc.state_fxx[0].s_cmn.n_frames_encoded.wrapping_sub(n as i32) <= 0 {
-                    CODE_INDEPENDENTLY
-                } else if n > 0 && enc.prev_decode_only_middle != 0 {
-                    CODE_INDEPENDENTLY_NO_LTP_SCALING
-                } else {
-                    CODE_CONDITIONALLY
-                };
-
                 if channel_rate > 0 {
                     silk_control_snr(&mut enc.state_fxx[n].s_cmn, channel_rate);
-                }
 
-                let mut frame_n_bytes = 0i32;
-                ret = silk_encode_frame_fix(
-                    &mut enc.state_fxx[n],
-                    &mut frame_n_bytes,
-                    range_enc,
-                    cond_coding,
-                    max_bits,
-                    use_cbr,
-                );
+                    // Use independent coding if no previous frame available
+                    let cond_coding = if enc.state_fxx[0].s_cmn.n_frames_encoded.wrapping_sub(n as i32) <= 0 {
+                        CODE_INDEPENDENTLY
+                    } else if n > 0 && enc.prev_decode_only_middle != 0 {
+                        CODE_INDEPENDENTLY_NO_LTP_SCALING
+                    } else {
+                        CODE_CONDITIONALLY
+                    };
+
+                    let mut frame_n_bytes = 0i32;
+                    ret = silk_encode_frame_fix(
+                        &mut enc.state_fxx[n],
+                        &mut frame_n_bytes,
+                        range_enc,
+                        cond_coding,
+                        max_bits,
+                        use_cbr,
+                    );
+                }
 
                 enc.state_fxx[n].s_cmn.controlled_since_last_payload = 0;
                 enc.state_fxx[n].s_cmn.input_buf_ix = 0;
