@@ -1557,6 +1557,163 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_size_branch_matrix() {
+        let buf = [251u8];
+        assert_eq!(parse_size(&buf, 1), (1, 251));
+
+        let buf = [252u8, 1u8];
+        assert_eq!(parse_size(&buf, 2), (2, 256));
+
+        let buf = [252u8];
+        assert_eq!(parse_size(&buf, 1), (-1, -1));
+
+        let buf = [0u8];
+        assert_eq!(parse_size(&buf, 0), (-1, -1));
+    }
+
+    #[test]
+    fn test_parse_packet_branch_matrix() {
+        let code0 = [0x08u8, 0xAA, 0xBB];
+        let parsed = parse_packet(&code0, code0.len() as i32, false).unwrap();
+        assert_eq!(parsed.count, 1);
+        assert_eq!(parsed.sizes[0], 2);
+        assert_eq!(parsed.frames[0], &[0xAA, 0xBB]);
+        assert_eq!(parsed.packet_offset, 3);
+
+        let code1 = [0x09u8, 0xCC, 0xDD];
+        let parsed = parse_packet(&code1, code1.len() as i32, false).unwrap();
+        assert_eq!(parsed.count, 2);
+        assert_eq!(parsed.sizes[0], 1);
+        assert_eq!(parsed.sizes[1], 1);
+        assert_eq!(parsed.frames[0], &[0xCC]);
+        assert_eq!(parsed.frames[1], &[0xDD]);
+
+        let code2 = [0x0Au8, 0x01, 0xEE, 0xFF, 0x11];
+        let parsed = parse_packet(&code2, code2.len() as i32, false).unwrap();
+        assert_eq!(parsed.count, 2);
+        assert_eq!(parsed.sizes[0], 1);
+        assert_eq!(parsed.sizes[1], 2);
+        assert_eq!(parsed.frames[0], &[0xEE]);
+        assert_eq!(parsed.frames[1], &[0xFF, 0x11]);
+
+        let code3_cbr = [0x0Bu8, 0x02, 0xAA, 0xBB, 0xCC, 0xDD];
+        let parsed = parse_packet(&code3_cbr, code3_cbr.len() as i32, false).unwrap();
+        assert_eq!(parsed.count, 2);
+        assert_eq!(parsed.sizes[0], 2);
+        assert_eq!(parsed.sizes[1], 2);
+        assert_eq!(parsed.frames[0], &[0xAA, 0xBB]);
+        assert_eq!(parsed.frames[1], &[0xCC, 0xDD]);
+
+        let code3_vbr_pad = [0x0Bu8, 0xC2, 0x01, 0x01, 0xAA, 0xBB, 0xCC, 0xEE];
+        let parsed = parse_packet(&code3_vbr_pad, code3_vbr_pad.len() as i32, false).unwrap();
+        assert_eq!(parsed.count, 2);
+        assert_eq!(parsed.sizes[0], 1);
+        assert_eq!(parsed.sizes[1], 2);
+        assert_eq!(parsed.frames[0], &[0xAA]);
+        assert_eq!(parsed.frames[1], &[0xBB, 0xCC]);
+        assert_eq!(parsed.padding_len, 1);
+        assert_eq!(parsed.padding, &[0xEE]);
+        assert_eq!(parsed.packet_offset, 8);
+
+        assert!(matches!(
+            parse_packet(&[0x09u8, 0xAA], 2, false),
+            Err(OPUS_INVALID_PACKET)
+        ));
+        assert!(matches!(
+            parse_packet(&[0x0Au8, 0x04, 0xAA, 0xBB], 4, false),
+            Err(OPUS_INVALID_PACKET)
+        ));
+        assert!(matches!(
+            parse_packet(&[0x0Bu8, 0x00], 2, false),
+            Err(OPUS_INVALID_PACKET)
+        ));
+    }
+
+    #[test]
+    fn test_skip_extension_payload_branch_matrix() {
+        let mut pos = 0usize;
+        let mut header_size = 7;
+        assert_eq!(
+            skip_extension_payload(&[], &mut pos, 0, &mut header_size, 0x01, 0),
+            0
+        );
+        assert_eq!(pos, 0);
+        assert_eq!(header_size, 0);
+
+        let short = [0xABu8];
+        let mut pos = 0usize;
+        let mut header_size = 0;
+        assert_eq!(
+            skip_extension_payload(&short, &mut pos, 1, &mut header_size, 0x0B, 0),
+            0
+        );
+        assert_eq!(pos, 1);
+        assert_eq!(header_size, 0);
+
+        let mut pos = 0usize;
+        let mut header_size = 0;
+        let mut long = vec![0u8; 258];
+        long[0] = 255;
+        long[1] = 1;
+        assert_eq!(
+            skip_extension_payload(&long, &mut pos, 258, &mut header_size, 0x41, 0),
+            0
+        );
+        assert_eq!(pos, 258);
+        assert_eq!(header_size, 2);
+
+        let mut pos = 0usize;
+        let mut header_size = 0;
+        assert_eq!(skip_extension(&[], &mut pos, 0, &mut header_size), 0);
+        assert_eq!(pos, 0);
+        assert_eq!(header_size, 0);
+    }
+
+    #[test]
+    fn test_extension_generation_repeat_and_padding() {
+        let ext0 = OpusExtensionData {
+            id: 5,
+            frame: 0,
+            data: &[0x11],
+            len: 1,
+        };
+        let ext1 = OpusExtensionData {
+            id: 5,
+            frame: 1,
+            data: &[0x11],
+            len: 1,
+        };
+        let ext2 = OpusExtensionData {
+            id: 5,
+            frame: 2,
+            data: &[0x11],
+            len: 1,
+        };
+
+        let size = opus_packet_extensions_generate(None, 256, &[ext0, ext1, ext2], 3, false);
+        assert!(size > 0);
+
+        let mut buf = vec![0u8; (size + 8) as usize];
+        let ret = opus_packet_extensions_generate(Some(&mut buf), size + 8, &[ext0, ext1, ext2], 3, true);
+        assert_eq!(ret, size + 8);
+        assert!(buf[..8].iter().all(|&b| b == 0x01));
+
+        let mut parsed = [OpusExtensionData::EMPTY; 4];
+        let mut nb = 4;
+        assert_eq!(
+            opus_packet_extensions_parse(&buf[8..8 + size as usize], size, &mut parsed, &mut nb, 3),
+            0
+        );
+        assert_eq!(nb, 3);
+        assert_eq!(parsed[0].frame, 0);
+        assert_eq!(parsed[1].frame, 1);
+        assert_eq!(parsed[2].frame, 2);
+        assert_eq!(parsed[0].data, &[0x11]);
+        assert_eq!(parsed[1].data, &[0x11]);
+        assert_eq!(parsed[2].data, &[0x11]);
+    }
+
+    #[test]
     fn test_repacketizer_single_frame() {
         // Code 0 SILK-only packet: TOC 0x08 = SILK narrowband 10ms, 1 frame
         let packet = [0x08u8, 0xAA, 0xBB, 0xCC];
