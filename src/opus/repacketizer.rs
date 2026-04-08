@@ -2468,11 +2468,8 @@ mod tests {
         let pkt = vec![
             0x08u8, // TOC (code 0)
             2,      // self-delimited size = 2
-            0xAA,
-            0xBB,
-            0x08u8, // Stream 2 TOC
-            0xCC,
-            0xDD,
+            0xAA, 0xBB, 0x08u8, // Stream 2 TOC
+            0xCC, 0xDD,
         ];
 
         let original_len = pkt.len() as i32;

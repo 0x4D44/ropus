@@ -2212,7 +2212,7 @@ impl LPCNetPLCState {
 mod tests {
     use super::*;
     use crate::dnn::core;
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     fn patterned_pcm(seed: i32) -> [i16; FRAME_SIZE] {
         let mut pcm = [0i16; FRAME_SIZE];
@@ -2612,9 +2612,11 @@ mod tests {
 
         let mut synthesized = [0i16; FRAME_SIZE];
         st.synthesize(&features, &mut synthesized, FRAME_SIZE);
-        assert!(synthesized
-            .iter()
-            .all(|&x| (-32767..=32767).contains(&(x as i32))));
+        assert!(
+            synthesized
+                .iter()
+                .all(|&x| (-32767..=32767).contains(&(x as i32)))
+        );
 
         let pcm_in = [123i16; FRAME_SIZE];
         let mut blended = [0i16; FRAME_SIZE];
@@ -2871,10 +2873,11 @@ mod tests {
         let weighted_before = lpc;
         lpc_weighting(&mut lpc, 0.9);
         assert!(lpc.iter().all(|v| v.is_finite()));
-        assert!(lpc
-            .iter()
-            .zip(weighted_before.iter())
-            .any(|(after, before)| after.abs() <= before.abs()));
+        assert!(
+            lpc.iter()
+                .zip(weighted_before.iter())
+                .any(|(after, before)| after.abs() <= before.abs())
+        );
     }
 
     #[test]

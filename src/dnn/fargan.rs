@@ -1000,6 +1000,8 @@ impl FarganState {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::field_reassign_with_default)]
+
     use super::*;
     use crate::dnn::core::{WEIGHT_TYPE_FLOAT, WEIGHT_TYPE_INT8, WeightArray};
 

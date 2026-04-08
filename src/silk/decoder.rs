@@ -2551,6 +2551,8 @@ pub fn silk_decode(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::field_reassign_with_default)]
+
     use super::*;
 
     fn encode_icdf_stream(symbols: &[(u32, &[u8])]) -> Vec<u8> {
@@ -2845,11 +2847,7 @@ mod tests {
         silk_stereo_ms_to_lr(&mut state, &mut x1, &mut x2, &pred_q13, 8, frame_length);
 
         assert_eq!(state.pred_prev_q13, pred_q13);
-        assert!(
-            x1[1..=frame_length]
-                .iter()
-                .any(|&sample| sample == i16::MAX)
-        );
+        assert!(x1[1..=frame_length].contains(&i16::MAX));
         assert!(
             x2[1..=frame_length]
                 .iter()
@@ -3042,11 +3040,24 @@ mod tests {
         assert_eq!(decoder.s_stereo.pred_prev_q13, [0, 0]);
         assert_eq!(decoder.s_stereo.s_side, [0, 0]);
         assert_eq!(decoder.channel_state[1].resampler_state.input_delay, 7);
-        assert!(decoder.channel_state[1].out_buf.iter().all(|&sample| sample == 0));
-        assert!(decoder.channel_state[1].s_lpc_q14_buf.iter().all(|&sample| sample == 0));
+        assert!(
+            decoder.channel_state[1]
+                .out_buf
+                .iter()
+                .all(|&sample| sample == 0)
+        );
+        assert!(
+            decoder.channel_state[1]
+                .s_lpc_q14_buf
+                .iter()
+                .all(|&sample| sample == 0)
+        );
         assert_eq!(decoder.channel_state[1].lag_prev, 100);
         assert_eq!(decoder.channel_state[1].last_gain_index, 10);
-        assert_eq!(decoder.channel_state[1].prev_signal_type, TYPE_NO_VOICE_ACTIVITY);
+        assert_eq!(
+            decoder.channel_state[1].prev_signal_type,
+            TYPE_NO_VOICE_ACTIVITY
+        );
         assert!(decoder.channel_state[1].first_frame_after_reset);
         assert_eq!(decoder.n_channels_api, 2);
         assert_eq!(decoder.n_channels_internal, 2);

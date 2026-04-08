@@ -75,13 +75,11 @@ macro_rules! uc {
 /// Write `$slice[$idx] = $val` without bounds check (when feature enabled).
 #[cfg(feature = "unchecked-indexing")]
 macro_rules! uc_set {
-    ($slice:expr, $idx:expr, $val:expr) => {
-        {
-            let uc_idx = $idx;
-            let uc_val = $val;
-            unsafe { *$slice.get_unchecked_mut(uc_idx) = uc_val }
-        }
-    };
+    ($slice:expr, $idx:expr, $val:expr) => {{
+        let uc_idx = $idx;
+        let uc_val = $val;
+        unsafe { *$slice.get_unchecked_mut(uc_idx) = uc_val }
+    }};
 }
 
 #[cfg(not(feature = "unchecked-indexing"))]

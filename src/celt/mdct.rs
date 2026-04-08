@@ -128,8 +128,22 @@ pub fn clt_mdct_backward(
             let rev = uc!(bitrev, i) as usize;
             let idx1 = xp1_idx * stride as usize;
             let idx2 = xp2_idx * stride as usize;
-            let x1 = shl32_ovflw(if idx1 < input_len { uc!(input, idx1) } else { 0 }, pre_shift);
-            let x2 = shl32_ovflw(if idx2 < input_len { uc!(input, idx2) } else { 0 }, pre_shift);
+            let x1 = shl32_ovflw(
+                if idx1 < input_len {
+                    uc!(input, idx1)
+                } else {
+                    0
+                },
+                pre_shift,
+            );
+            let x2 = shl32_ovflw(
+                if idx2 < input_len {
+                    uc!(input, idx2)
+                } else {
+                    0
+                },
+                pre_shift,
+            );
 
             let yr = add32_ovflw(
                 s_mul(x2, uc!(trig, i) as i32),
@@ -228,8 +242,22 @@ pub fn clt_mdct_backward(
             for _i in 0..ov / 2 {
                 let x1 = uc!(output, xp1);
                 let x2 = uc!(output, yp1);
-                uc_set!(output, yp1, sub32_ovflw(s_mul(x2, uc!(window, wp2) as i32), s_mul(x1, uc!(window, wp1) as i32)));
-                uc_set!(output, xp1, add32_ovflw(s_mul(x2, uc!(window, wp1) as i32), s_mul(x1, uc!(window, wp2) as i32)));
+                uc_set!(
+                    output,
+                    yp1,
+                    sub32_ovflw(
+                        s_mul(x2, uc!(window, wp2) as i32),
+                        s_mul(x1, uc!(window, wp1) as i32)
+                    )
+                );
+                uc_set!(
+                    output,
+                    xp1,
+                    add32_ovflw(
+                        s_mul(x2, uc!(window, wp1) as i32),
+                        s_mul(x1, uc!(window, wp2) as i32)
+                    )
+                );
                 yp1 += 1;
                 xp1 -= 1;
                 wp1 += 1;

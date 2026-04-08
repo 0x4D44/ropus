@@ -25,7 +25,9 @@ use super::decoder::{
     OPUS_BANDWIDTH_FULLBAND, OPUS_BANDWIDTH_NARROWBAND, OPUS_BANDWIDTH_SUPERWIDEBAND,
     OPUS_BANDWIDTH_WIDEBAND,
 };
-use super::encoder::{OPUS_AUTO, OPUS_BITRATE_MAX, OPUS_FRAMESIZE_ARG, OpusEncoder, frame_size_select};
+use super::encoder::{
+    OPUS_AUTO, OPUS_BITRATE_MAX, OPUS_FRAMESIZE_ARG, OpusEncoder, frame_size_select,
+};
 use super::repacketizer::OpusRepacketizer;
 
 // ===========================================================================
@@ -2363,8 +2365,8 @@ mod tests {
         assert_ne!(enc.get_final_range(), 0);
 
         let mono_pcm = patterned_pcm_i16(960, 1, 23);
-        let mut mono_enc = OpusMSEncoder::new(48000, 1, 1, 0, &[0], OPUS_APPLICATION_AUDIO)
-            .unwrap();
+        let mut mono_enc =
+            OpusMSEncoder::new(48000, 1, 1, 0, &[0], OPUS_APPLICATION_AUDIO).unwrap();
         let mut mono_packet = vec![0u8; 4000];
         let mono_len = mono_enc
             .encode(&mono_pcm, 960, &mut mono_packet, 4000)
@@ -2384,7 +2386,13 @@ mod tests {
             .unwrap();
         assert_eq!(muted_decoded, 960);
         assert!(muted_out.iter().step_by(2).any(|&sample| sample != 123));
-        assert!(muted_out.iter().skip(1).step_by(2).all(|&sample| sample == 0));
+        assert!(
+            muted_out
+                .iter()
+                .skip(1)
+                .step_by(2)
+                .all(|&sample| sample == 0)
+        );
     }
 
     #[test]

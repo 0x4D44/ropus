@@ -7,7 +7,11 @@
     clippy::unnecessary_cast,
     clippy::collapsible_if,
     clippy::identity_op,
-    clippy::manual_is_variant_and
+    clippy::manual_is_variant_and,
+    clippy::manual_memcpy,
+    clippy::items_after_test_module,
+    clippy::single_match,
+    clippy::unnecessary_unwrap
 )]
 
 #[path = "bindings.rs"]
