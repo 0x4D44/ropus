@@ -4,6 +4,10 @@
 __pycache__
 *.pyc
 .claude/
+.codex-home/
+.codex-tmp/
+.wrk_validate/
+.wrk_validate*.patch
 
 # Debug trace/output artifacts
 /*.txt
