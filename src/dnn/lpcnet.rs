@@ -2438,9 +2438,9 @@ mod tests {
     }
 
     #[test]
-    fn test_plc_load_model_returns_zero_for_stubbed_loaders() {
+    fn test_plc_load_model_invalid_blob_returns_error() {
         let mut plc = LPCNetPLCState::new();
-        assert_eq!(plc.load_model(&[1, 2, 3]), 0);
+        assert_eq!(plc.load_model(&[1, 2, 3]), -1);
         assert!(!plc.loaded);
     }
 
