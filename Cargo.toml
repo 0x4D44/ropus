@@ -10,6 +10,7 @@ autotests = false
 [features]
 default = []
 simd = ["wide"]
+dnn = []
 
 [dependencies]
 wide = { version = "0.7", optional = true }

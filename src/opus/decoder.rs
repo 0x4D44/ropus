@@ -9,6 +9,16 @@ use crate::celt::range_coder::RangeDecoder;
 use crate::silk::decoder::{SilkDecControl, SilkDecoder, silk_decode};
 use crate::types::*;
 
+/// Create a no-op CELT DNN PLC argument (None when dnn is enabled, () when disabled).
+/// Used for CELT decode calls that always have data (redundancy, silence frames).
+#[inline(always)]
+fn celt_lpcnet_noop<'a>() -> crate::celt::decoder::DnnPlcArg<'a> {
+    #[cfg(feature = "dnn")]
+    { None }
+    #[cfg(not(feature = "dnn"))]
+    { () }
+}
+
 // ===========================================================================
 // Constants
 // ===========================================================================
@@ -414,6 +424,21 @@ fn smooth_fade(
 }
 
 // ===========================================================================
+// DRED FEC state (stub — full DRED decoder not yet ported)
+// ===========================================================================
+
+/// Placeholder for DRED (Deep REDundancy) state.
+/// Full DRED decoding requires the rdovae module which is not yet ported.
+/// This struct provides the API surface for future integration.
+#[cfg(feature = "dnn")]
+pub struct DredState {
+    pub fec_features: Vec<f32>,
+    pub nb_latents: i32,
+    pub dred_offset: i32,
+    pub process_stage: i32,
+}
+
+// ===========================================================================
 // OpusDecoder struct
 // ===========================================================================
 
@@ -447,6 +472,10 @@ pub struct OpusDecoder {
     prev_redundancy: bool,
     last_packet_duration: i32,
     range_final: u32,
+
+    // --- DNN neural PLC state (behind feature flag) ---
+    #[cfg(feature = "dnn")]
+    lpcnet: crate::dnn::lpcnet::LPCNetPLCState,
 }
 
 // ===========================================================================
@@ -476,6 +505,8 @@ impl OpusDecoder {
             internal_sample_rate: 0,
             payload_size_ms: 0,
             prev_pitch_lag: 0,
+            #[cfg(feature = "dnn")]
+            enable_deep_plc: false,
         };
 
         let mut dec = Self {
@@ -495,6 +526,8 @@ impl OpusDecoder {
             prev_redundancy: false,
             last_packet_duration: 0,
             range_final: 0,
+            #[cfg(feature = "dnn")]
+            lpcnet: crate::dnn::lpcnet::LPCNetPLCState::new(),
         };
 
         // CELT signalling off (Opus handles framing)
@@ -517,6 +550,66 @@ impl OpusDecoder {
 
         self.celt_dec.reset();
         self.silk_dec.init();
+        #[cfg(feature = "dnn")]
+        self.lpcnet.reset();
+    }
+
+    /// Load DNN model weights for neural PLC.
+    /// Matches C `OPUS_SET_DNN_BLOB_REQUEST` CTL.
+    /// Returns `Ok(())` on success, `Err(error_code)` on failure.
+    #[cfg(feature = "dnn")]
+    pub fn set_dnn_blob(&mut self, data: &[u8]) -> Result<(), i32> {
+        let ret = self.lpcnet.load_model(data);
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(ret)
+        }
+    }
+
+    /// Decode with DRED FEC support.
+    /// When DRED features are available and the packet is missing, feeds FEC
+    /// features to the LPCNet PLC before the decode/PLC path.
+    /// Matches C `opus_decode_native` with DRED support.
+    ///
+    /// Note: Full DRED support requires the DRED decoder (rdovae), which is
+    /// not yet ported. This method provides the API wiring for future use.
+    #[cfg(feature = "dnn")]
+    pub fn decode_with_dred(
+        &mut self,
+        data: Option<&[u8]>,
+        pcm: &mut [i16],
+        frame_size: i32,
+        dred: Option<&DredState>,
+        _dred_offset: i32,
+    ) -> Result<i32, i32> {
+        // If DRED state is provided and the packet is missing, feed FEC features
+        if data.is_none() {
+            if let Some(dred) = dred {
+                // Feed DRED FEC features to LPCNet PLC
+                let nb_features = dred.nb_latents as usize;
+                for i in 0..nb_features {
+                    let start = i * crate::dnn::lpcnet::NB_FEATURES;
+                    let end = start + crate::dnn::lpcnet::NB_FEATURES;
+                    if end <= dred.fec_features.len() {
+                        self.lpcnet
+                            .fec_add(Some(&dred.fec_features[start..end]));
+                    }
+                }
+            }
+        }
+
+        // Delegate to the normal decode path.
+        // Note: fec_clear() is NOT called here. FEC features are consumed
+        // incrementally via fec_read_pos during PLC. The caller is responsible
+        // for clearing stale FEC data when a good packet arrives.
+        self.decode(data, pcm, frame_size, false)
+    }
+
+    /// Clear DRED FEC buffer.
+    #[cfg(feature = "dnn")]
+    pub fn fec_clear(&mut self) {
+        self.lpcnet.fec_clear();
     }
 
     // -----------------------------------------------------------------------
@@ -699,6 +792,12 @@ impl OpusDecoder {
                     &mut pcm[silk_ptr_offset..]
                 };
 
+                #[cfg(feature = "dnn")]
+                let silk_lpcnet: crate::silk::decoder::DnnPlcArg<'_> =
+                    Some(&mut self.lpcnet);
+                #[cfg(not(feature = "dnn"))]
+                let silk_lpcnet: crate::silk::decoder::DnnPlcArg<'_> = ();
+
                 let silk_ret = silk_decode(
                     &mut self.silk_dec,
                     &mut self.dec_control,
@@ -707,6 +806,7 @@ impl OpusDecoder {
                     &mut dec,
                     silk_output,
                     &mut silk_frame_size,
+                    silk_lpcnet,
                 );
                 if silk_ret != 0 {
                     if lost_flag != 0 {
@@ -824,6 +924,7 @@ impl OpusDecoder {
                 f5,
                 None,
                 false,
+                celt_lpcnet_noop(),
             );
             redundant_rng = self.celt_dec.rng;
         }
@@ -841,12 +942,20 @@ impl OpusDecoder {
             }
             // Decode CELT (pass None for data when doing FEC)
             let celt_data = if decode_fec { None } else { data };
+            // Pass lpcnet for CELT PLC (neural concealment on lost frames).
+            #[cfg(feature = "dnn")]
+            let celt_lpcnet: crate::celt::decoder::DnnPlcArg<'_> =
+                Some(&mut self.lpcnet);
+            #[cfg(not(feature = "dnn"))]
+            let celt_lpcnet: crate::celt::decoder::DnnPlcArg<'_> = ();
+
             celt_ret = self.celt_dec.decode_with_ec(
                 celt_data,
                 &mut pcm[..celt_frame_size as usize * self.channels as usize],
                 celt_frame_size,
                 Some(&mut dec),
                 celt_accum,
+                celt_lpcnet,
             );
             self.range_final = self.celt_dec.rng;
         } else {
@@ -869,6 +978,7 @@ impl OpusDecoder {
                     f2_5,
                     None,
                     celt_accum,
+                    celt_lpcnet_noop(),
                 );
             }
             self.range_final = dec.get_rng();
@@ -890,6 +1000,7 @@ impl OpusDecoder {
                 f5,
                 None,
                 false,
+                celt_lpcnet_noop(),
             );
             redundant_rng = self.celt_dec.rng;
 

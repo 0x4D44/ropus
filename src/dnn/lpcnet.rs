@@ -1147,12 +1147,47 @@ pub struct PLCNetState {
 // External module interfaces (PitchDNN, FARGAN)
 // ===========================================================================
 
-/// PitchDNN state. Actual implementation in the pitchdnn module.
+/// PitchDNN state — delegates to real `pitchdnn::PitchDnnState` when the
+/// `dnn` feature is enabled; returns 0.0 (no-op) otherwise.
+#[cfg(feature = "dnn")]
+#[derive(Clone, Debug)]
+pub struct PitchDNNState {
+    inner: super::pitchdnn::PitchDnnState,
+}
+
+#[cfg(feature = "dnn")]
+impl Default for PitchDNNState {
+    fn default() -> Self {
+        Self {
+            inner: super::pitchdnn::PitchDnnState::new_empty(),
+        }
+    }
+}
+
+#[cfg(feature = "dnn")]
+impl PitchDNNState {
+    pub fn init(&mut self) {
+        // inner is already initialized via new_empty()
+    }
+    pub fn load_model(&mut self, data: &[u8]) -> i32 {
+        match self.inner.load_model(data) {
+            Ok(()) => 0,
+            Err(e) => e,
+        }
+    }
+    pub fn compute(&mut self, if_features: &[f32], xcorr_features: &[f32]) -> f32 {
+        self.inner.compute(if_features, xcorr_features)
+    }
+}
+
+/// PitchDNN stub — always returns 0.0 when the `dnn` feature is disabled.
+#[cfg(not(feature = "dnn"))]
 #[derive(Clone, Debug, Default)]
 pub struct PitchDNNState {
     _initialized: bool,
 }
 
+#[cfg(not(feature = "dnn"))]
 impl PitchDNNState {
     pub fn init(&mut self) {
         self._initialized = true;
@@ -1161,7 +1196,7 @@ impl PitchDNNState {
         let _ = data;
         0
     }
-    pub fn compute(&self, _if_features: &[f32], _xcorr_features: &[f32]) -> f32 {
+    pub fn compute(&mut self, _if_features: &[f32], _xcorr_features: &[f32]) -> f32 {
         0.0
     }
 }

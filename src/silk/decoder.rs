@@ -12,6 +12,18 @@ use crate::silk::tables::*;
 use crate::types::*;
 
 // ===========================================================================
+// DNN PLC argument type (conditional on feature flag)
+// ===========================================================================
+
+/// When the `dnn` feature is enabled, PLC functions accept an optional
+/// `&mut LPCNetPLCState` for neural packet loss concealment.
+/// When disabled, this is a zero-size `()` that optimises away entirely.
+#[cfg(feature = "dnn")]
+pub type DnnPlcArg<'a> = Option<&'a mut crate::dnn::lpcnet::LPCNetPLCState>;
+#[cfg(not(feature = "dnn"))]
+pub type DnnPlcArg<'a> = ();
+
+// ===========================================================================
 // State structures
 // ===========================================================================
 
@@ -69,6 +81,9 @@ pub struct SilkPlcState {
     pub fs_khz: i32,
     pub nb_subfr: i32,
     pub subfr_length: i32,
+    /// Enable neural PLC when DNN model is loaded.
+    #[cfg(feature = "dnn")]
+    pub enable_deep_plc: bool,
 }
 
 impl Default for SilkPlcState {
@@ -87,6 +102,8 @@ impl Default for SilkPlcState {
             fs_khz: 0,
             nb_subfr: 0,
             subfr_length: 0,
+            #[cfg(feature = "dnn")]
+            enable_deep_plc: false,
         }
     }
 }
@@ -312,6 +329,8 @@ pub struct SilkDecControl {
     pub internal_sample_rate: i32,
     pub payload_size_ms: i32,
     pub prev_pitch_lag: i32,
+    #[cfg(feature = "dnn")]
+    pub enable_deep_plc: bool,
 }
 
 // ===========================================================================
@@ -2060,6 +2079,7 @@ pub fn silk_decode_frame(
     p_n: &mut usize,
     lost_flag: i32,
     cond_coding: i32,
+    lpcnet: DnnPlcArg<'_>,
 ) {
     let frame_length = dec.frame_length;
 
@@ -2115,6 +2135,23 @@ pub fn silk_decode_frame(
         // PLC update (save state from good frame)
         silk_plc_update(dec, &dec_ctrl);
 
+        // Neural PLC: feed good-frame PCM to LPCNet for state tracking.
+        // Process in 10ms subframe pairs (matching LPCNet's 160-sample frame at 16kHz).
+        #[cfg(feature = "dnn")]
+        if let Some(lpcnet) = lpcnet {
+            if dec.s_plc.fs_khz == 16 {
+                let subfr_len = dec.subfr_length;
+                let pair_len = subfr_len * 2;
+                let mut k = 0;
+                while k + pair_len <= frame_length {
+                    lpcnet.update(&p_out[k..k + pair_len]);
+                    k += pair_len;
+                }
+            }
+        }
+        #[cfg(not(feature = "dnn"))]
+        let _ = lpcnet;
+
         dec.loss_cnt = 0;
         dec.prev_signal_type = dec.indices.signal_type as i32;
         dec.first_frame_after_reset = false;
@@ -2127,6 +2164,31 @@ pub fn silk_decode_frame(
     } else {
         // Packet lost: generate concealment
         silk_plc_conceal(dec, &mut p_out[..frame_length]);
+
+        // Neural PLC: replace classical concealment with neural output when available.
+        #[cfg(feature = "dnn")]
+        if let Some(lpcnet) = lpcnet {
+            if lpcnet.loaded && dec.s_plc.fs_khz == 16 {
+                let run_deep = dec.s_plc.enable_deep_plc || lpcnet.fec_fill_pos != 0;
+                let subfr_len = dec.subfr_length;
+                let pair_len = subfr_len * 2;
+                if run_deep {
+                    // Neural concealment: overwrite classical PLC output
+                    let mut k = 0;
+                    while k + pair_len <= frame_length {
+                        lpcnet.conceal(&mut p_out[k..k + pair_len]);
+                        k += pair_len;
+                    }
+                } else {
+                    // Not running deep PLC — still update LPCNet with the classical output
+                    let mut k = 0;
+                    while k + pair_len <= frame_length {
+                        lpcnet.update(&p_out[k..k + pair_len]);
+                        k += pair_len;
+                    }
+                }
+            }
+        }
 
         // Update output buffer
         let mv_len = dec.ltp_mem_length - frame_length;
@@ -2163,6 +2225,7 @@ pub fn silk_decode(
     rc: &mut RangeDecoder,
     samples_out: &mut [i16],
     n_samples_out: &mut usize,
+    lpcnet: DnnPlcArg<'_>,
 ) -> i32 {
     let ret = 0;
     let n_channels_internal = dec_control.n_channels_internal;
@@ -2342,6 +2405,13 @@ pub fn silk_decode(
     // Per-channel decoding
     let mut samples_out1_tmp = vec![vec![0i16; frame_length + 2]; n_channels_internal];
 
+    // Reborrow lpcnet for use in the per-channel loop. Neural PLC is mono
+    // only (channel 0); channel 1 always gets the no-op argument.
+    #[cfg(feature = "dnn")]
+    let mut lpcnet = lpcnet;
+    #[cfg(not(feature = "dnn"))]
+    let _ = lpcnet;
+
     for n in 0..n_channels_internal {
         let should_decode = n == 0 || !decode_only_middle;
         if should_decode {
@@ -2361,6 +2431,16 @@ pub fn silk_decode(
                 CODE_CONDITIONALLY
             };
 
+            // Neural PLC is only applied to channel 0 (mono).
+            #[cfg(feature = "dnn")]
+            let ch_lpcnet: DnnPlcArg<'_> = if n == 0 {
+                lpcnet.as_deref_mut()
+            } else {
+                None
+            };
+            #[cfg(not(feature = "dnn"))]
+            let ch_lpcnet: DnnPlcArg<'_> = ();
+
             let mut n_out = 0;
             // C reference decodes into &samplesOut1_tmp[n][2] — offset by 2
             // to leave room for the sMid history buffer at [0..2].
@@ -2371,6 +2451,7 @@ pub fn silk_decode(
                 &mut n_out,
                 lost_flag,
                 cond,
+                ch_lpcnet,
             );
             decoder.channel_state[n].n_frames_decoded += 1;
         } else {
@@ -2739,6 +2820,10 @@ mod tests {
         let mut out = vec![0i16; dec.frame_length];
         let mut n = 0usize;
 
+        #[cfg(feature = "dnn")]
+        let lpcnet_arg: DnnPlcArg<'_> = None;
+        #[cfg(not(feature = "dnn"))]
+        let lpcnet_arg: DnnPlcArg<'_> = ();
         silk_decode_frame(
             &mut dec,
             &mut rc,
@@ -2746,6 +2831,7 @@ mod tests {
             &mut n,
             FLAG_PACKET_LOST,
             CODE_INDEPENDENTLY,
+            lpcnet_arg,
         );
 
         assert_eq!(n, dec.frame_length);
