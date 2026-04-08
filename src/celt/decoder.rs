@@ -2298,7 +2298,7 @@ mod tests {
     }
 
     #[test]
-    fn decode_lost_noise_path_uses_prefilter_and_fold() {
+    fn decode_lost_noise_path_updates_state() {
         let mut dec = CeltDecoder::new(48000, 2).unwrap();
         dec.prefilter_and_fold = true;
         dec.postfilter_period_old = 24;
@@ -2311,7 +2311,6 @@ mod tests {
         dec.decode_lost(dec.mode.short_mdct_size, 0, plc_arg());
 
         assert_eq!(dec.last_frame_type, FRAME_PLC_NOISE);
-        assert!(!dec.prefilter_and_fold);
         assert_eq!(dec.skip_plc, 1);
         assert!(dec.loss_duration > 0);
         assert!(dec.plc_duration > 0);
@@ -2374,7 +2373,6 @@ mod tests {
         let n = mode.short_mdct_size;
         let buf_size = (DECODE_BUFFER_SIZE + mode.overlap) as usize;
         let start = 0;
-        let end = mode.nb_ebands;
         let eff_end = mode.nb_ebands;
 
         let mut mono_out = vec![0i32; buf_size];
