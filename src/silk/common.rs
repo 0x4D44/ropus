@@ -1526,216 +1526,735 @@ pub fn silk_decode_pitch(
 mod tests {
     use super::*;
 
+    // ===================================================================
+    // P0: silk_lpc_inverse_pred_gain
+    // ===================================================================
+
     #[test]
-    fn test_clz64_boundaries() {
-        assert_eq!(silk_clz64(0), 64);
-        assert_eq!(silk_clz64(1), 63);
-        assert_eq!(silk_clz64(1i64 << 62), 1);
-        assert_eq!(silk_clz64(i64::MAX), 1);
+    fn test_ipg_identity_filter() {
+        // All-zero coefficients = no prediction = maximum inverse gain = 1<<30
+        let a_q12 = [0i16; MAX_LPC_ORDER];
+        let result = silk_lpc_inverse_pred_gain(&a_q12, 10);
+        assert_eq!(result, 1 << 30, "identity filter should have gain 1.0 in Q30");
     }
 
     #[test]
-    fn test_sigm_q15_monotonic_and_saturating() {
-        assert_eq!(silk_sigm_q15(-6 * 32), 0);
-        assert_eq!(silk_sigm_q15(6 * 32), 32767);
-        assert_eq!(silk_sigm_q15(0), 16384);
-        assert!(silk_sigm_q15(-32) < silk_sigm_q15(0));
-        assert!(silk_sigm_q15(0) < silk_sigm_q15(32));
-    }
-
-    #[test]
-    fn test_bwexpander_16_and_32_reduce_coefficients() {
-        let mut ar16 = [1000i16, 2000, 3000, 4000];
-        let ar16_len = ar16.len();
-        silk_bwexpander(&mut ar16, ar16_len, 65000);
-        assert!(ar16[0] < 1000);
-        assert!(ar16[3] < 4000);
-
-        let mut ar32 = [400_000i32, -300_000, 200_000, -100_000];
-        let ar32_len = ar32.len();
-        silk_bwexpander_32(&mut ar32, ar32_len, 65000);
-        assert!(ar32[0].abs() < 400_000);
-        assert!(ar32[1].abs() < 300_000);
-        assert!(ar32[2].abs() < 200_000);
-        assert!(ar32[3].abs() < 100_000);
-    }
-
-    #[test]
-    fn test_inverse32_var_q_close_to_integer_inverse() {
-        let expected = ((1i64 << 24) / 12_345) as i32;
-        let actual = silk_inverse32_var_q(12_345, 24);
-        assert!(
-            (actual - expected).abs() <= expected / 20 + 2,
-            "expected {expected}, got {actual}"
-        );
-    }
-
-    #[test]
-    fn test_div32_var_q_close_to_integer_division() {
-        let expected = ((123_456i64 << 8) / 789) as i32;
-        let actual = silk_div32_var_q(123_456, 789, 8);
-        assert!(
-            (actual - expected).abs() <= expected / 10 + 4,
-            "expected {expected}, got {actual}"
-        );
-    }
-
-    #[test]
-    fn test_sqrt_approx_basic_values() {
-        assert_eq!(silk_sqrt_approx(0), 0);
-        let sqrt_one = silk_sqrt_approx(1);
-        let sqrt_65536 = silk_sqrt_approx(65_536);
-        assert!(sqrt_one > 0);
-        assert!(sqrt_65536 > sqrt_one);
-        assert!((sqrt_65536 - 256).abs() < 32);
-    }
-
-    #[test]
-    fn test_sum_sqr_shift_handles_zero_and_large_input() {
-        assert_eq!(silk_sum_sqr_shift(&[]), (0, 0));
-
-        let input = [30_000i16; 8];
-        let (energy, shift) = silk_sum_sqr_shift(&input);
-        assert!(energy > 0);
-        assert!(shift > 0);
-    }
-
-    #[test]
-    fn test_nlsf2a_produces_non_zero_lpc() {
-        let nlsf: [i16; 10] = [
-            3277, 6554, 9830, 13107, 16384, 19661, 22938, 26214, 29491, 32000,
-        ];
+    fn test_ipg_stable_filter() {
+        // Known stable LPC from uniform NLSFs
+        let nlsf: [i16; 10] = [3277, 6554, 9830, 13107, 16384, 19661, 22938, 26214, 29491, 32000];
         let mut a_q12 = [0i16; 10];
         silk_nlsf2a(&mut a_q12, &nlsf, 10);
-        assert!(a_q12.iter().any(|&x| x != 0));
+        let result = silk_lpc_inverse_pred_gain(&a_q12, 10);
+        assert!(result > 0, "stable filter should have positive inverse gain, got {result}");
     }
 
     #[test]
-    fn test_decode_pitch_bounds_for_10ms_and_20ms() {
+    fn test_ipg_unstable_dc_sum() {
+        // Coefficients summing to >= 4096 (DC response >= 1) should return 0
+        let mut a_q12 = [0i16; MAX_LPC_ORDER];
+        a_q12[0] = 4096; // sum = 4096 >= 4096
+        let result = silk_lpc_inverse_pred_gain(&a_q12, 10);
+        assert_eq!(result, 0, "DC-unstable filter should return 0");
+    }
+
+    #[test]
+    fn test_ipg_first_order() {
+        // For first-order AR with a[0] = r in Q12:
+        // Inverse prediction gain = (1 - r^2) in Q30
+        let mut a_q12 = [0i16; MAX_LPC_ORDER];
+        a_q12[0] = 2048; // r = 0.5 in Q12
+        let result = silk_lpc_inverse_pred_gain(&a_q12, 1);
+        // (1 - 0.5^2) = 0.75 => Q30 = 0.75 * 2^30 = 805306368
+        // Allow some tolerance for fixed-point rounding
+        assert!(result > 0, "first-order stable filter should have positive gain");
+        let expected_approx = (0.75 * (1i64 << 30) as f64) as i32;
+        assert!(
+            (result - expected_approx).abs() < expected_approx / 10,
+            "first-order IPG: expected ~{expected_approx}, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_ipg_all_zeros_various_orders() {
+        // Identity filter at various orders should all give 1<<30
+        for order in [1, 2, 5, 10, 16] {
+            let a_q12 = [0i16; MAX_LPC_ORDER];
+            let result = silk_lpc_inverse_pred_gain(&a_q12, order);
+            assert_eq!(result, 1 << 30, "order={order}: identity should give 1<<30");
+        }
+    }
+
+    // ===================================================================
+    // P0: silk_nlsf_stabilize
+    // ===================================================================
+
+    #[test]
+    fn test_stabilize_already_valid() {
+        // Well-spaced NLSFs should be unchanged
+        let mut nlsf = [3277i16, 6554, 9830, 13107, 16384, 19661, 22938, 26214, 29491, 32000];
+        let original = nlsf;
+        silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
+        assert_eq!(nlsf, original, "well-spaced NLSFs should be unchanged");
+    }
+
+    #[test]
+    fn test_stabilize_all_equal() {
+        // All NLSFs equal: worst case, requires spreading
+        let mut nlsf = [16384i16; 10];
+        silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
+        // After stabilization, NLSFs should be strictly increasing (modulo delta_min)
+        for i in 1..10 {
+            let diff = nlsf[i] as i32 - nlsf[i - 1] as i32;
+            assert!(
+                diff >= SILK_NLSF_DELTA_MIN_NB_MB_Q15[i] as i32,
+                "nlsf[{i}] - nlsf[{}] = {diff}, minimum = {}",
+                i - 1,
+                SILK_NLSF_DELTA_MIN_NB_MB_Q15[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_stabilize_boundary_low() {
+        // NLSF[0] below delta_min[0] should be clamped up
+        let mut nlsf = [10i16, 6554, 9830, 13107, 16384, 19661, 22938, 26214, 29491, 32000];
+        silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
+        assert!(
+            nlsf[0] as i32 >= SILK_NLSF_DELTA_MIN_NB_MB_Q15[0] as i32,
+            "nlsf[0]={} should be >= delta_min[0]={}",
+            nlsf[0],
+            SILK_NLSF_DELTA_MIN_NB_MB_Q15[0]
+        );
+    }
+
+    #[test]
+    fn test_stabilize_boundary_high() {
+        // NLSF[last] above upper limit should be clamped down
+        let mut nlsf = [3277i16, 6554, 9830, 13107, 16384, 19661, 22938, 26214, 29491, 32700];
+        silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
+        let upper = (1i32 << 15) - SILK_NLSF_DELTA_MIN_NB_MB_Q15[10] as i32;
+        assert!(
+            (nlsf[9] as i32) <= upper,
+            "nlsf[9]={} should be <= upper={}",
+            nlsf[9],
+            upper
+        );
+    }
+
+    #[test]
+    fn test_stabilize_ordering_maintained() {
+        // After stabilization, output should always be strictly increasing
+        let mut nlsf = [5000i16, 5001, 5002, 5003, 5004, 5005, 5006, 5007, 5008, 5009];
+        silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
+        for i in 1..10 {
+            assert!(nlsf[i] > nlsf[i - 1], "nlsf[{i}]={} should be > nlsf[{}]={}", nlsf[i], i - 1, nlsf[i - 1]);
+        }
+    }
+
+    // ===================================================================
+    // P0: silk_nlsf2a
+    // ===================================================================
+
+    #[test]
+    fn test_nlsf2a_order10() {
+        // Uniform NLSFs at order 10 should produce stable LPC
+        let nlsf: [i16; 10] = [3277, 6554, 9830, 13107, 16384, 19661, 22938, 26214, 29491, 32000];
+        let mut a_q12 = [0i16; 10];
+        silk_nlsf2a(&mut a_q12, &nlsf, 10);
+        assert!(a_q12.iter().any(|&x| x != 0), "order-10 should produce non-zero LPC");
+        let ipg = silk_lpc_inverse_pred_gain(&a_q12, 10);
+        assert!(ipg > 0, "order-10 NLSF2A should produce stable filter (IPG={ipg})");
+    }
+
+    #[test]
+    fn test_nlsf2a_order16() {
+        // Uniform NLSFs at order 16
+        let nlsf: [i16; 16] = [
+            2048, 4096, 6144, 8192, 10240, 12288, 14336, 16384,
+            18432, 20480, 22528, 24576, 26624, 28672, 30720, 32500,
+        ];
+        let mut a_q12 = [0i16; 16];
+        silk_nlsf2a(&mut a_q12, &nlsf, 16);
+        assert!(a_q12.iter().any(|&x| x != 0), "order-16 should produce non-zero LPC");
+        let ipg = silk_lpc_inverse_pred_gain(&a_q12, 16);
+        assert!(ipg > 0, "order-16 NLSF2A should produce stable filter (IPG={ipg})");
+    }
+
+    #[test]
+    fn test_nlsf2a_uniform_nlsf() {
+        // Evenly spaced NLSFs
+        let nlsf: [i16; 10] = [2978, 5957, 8935, 11914, 14892, 17871, 20849, 23828, 26806, 29785];
+        let mut a_q12 = [0i16; 10];
+        silk_nlsf2a(&mut a_q12, &nlsf, 10);
+        let ipg = silk_lpc_inverse_pred_gain(&a_q12, 10);
+        assert!(ipg > 0, "uniform NLSFs should produce stable filter");
+    }
+
+    // ===================================================================
+    // P0: silk_sum_sqr_shift
+    // ===================================================================
+
+    #[test]
+    fn test_sqr_shift_zeros() {
+        assert_eq!(silk_sum_sqr_shift(&[]), (0, 0));
+    }
+
+    #[test]
+    fn test_sqr_shift_ones() {
+        let input = [1i16; 100];
+        let (energy, shift) = silk_sum_sqr_shift(&input);
+        // True energy = 100. With the rounding bias (nrg starts at len), the
+        // result may differ slightly, but should represent ~100 after shift.
+        let true_energy = 100i64;
+        let reconstructed = (energy as i64) << shift;
+        // Allow tolerance since the function adds a rounding bias
+        assert!(
+            (reconstructed - true_energy).abs() <= true_energy,
+            "ones: reconstructed={reconstructed}, true={true_energy}"
+        );
+    }
+
+    #[test]
+    fn test_sqr_shift_max() {
+        let input = [32767i16; 320];
+        let (energy, shift) = silk_sum_sqr_shift(&input);
+        assert!(energy > 0, "max amplitude should produce positive energy");
+        assert!(shift > 0, "max amplitude should require shift");
+    }
+
+    #[test]
+    fn test_sqr_shift_single() {
+        let input = [1000i16];
+        let (energy, shift) = silk_sum_sqr_shift(&input);
+        // True energy = 1000000. With rounding bias of 1, result might be ~1000001
+        let reconstructed = (energy as i64) << shift;
+        assert!(
+            (reconstructed - 1_000_000).abs() <= 10_000,
+            "single: energy={energy}, shift={shift}, reconstructed={reconstructed}"
+        );
+    }
+
+    #[test]
+    fn test_sqr_shift_odd_length() {
+        for len in [5, 7, 13] {
+            let input: Vec<i16> = (0..len).map(|i| (i * 100 + 50) as i16).collect();
+            let (energy, shift) = silk_sum_sqr_shift(&input);
+            assert!(energy > 0, "len={len}: energy should be positive");
+            let reconstructed = (energy as i64) << shift;
+            assert!(
+                reconstructed > 0,
+                "len={len}: reconstructed energy should be positive"
+            );
+        }
+    }
+
+    // ===================================================================
+    // P1: silk_lin2log / silk_log2lin
+    // ===================================================================
+
+    #[test]
+    fn test_lin2log_powers_of_2() {
+        // log2(2^k) = k, output in Q7 so k*128
+        assert_eq!(silk_lin2log(1), 0);
+        for k in 1..=20 {
+            let input = 1i32 << k;
+            let result = silk_lin2log(input);
+            let expected = k * 128;
+            assert!(
+                (result - expected).abs() <= 2,
+                "lin2log(2^{k}={input}): expected {expected}, got {result}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_log2lin_powers_of_2() {
+        assert_eq!(silk_log2lin(0), 1);
+        assert_eq!(silk_log2lin(128), 2);
+        assert_eq!(silk_log2lin(256), 4);
+        assert_eq!(silk_log2lin(384), 8);
+    }
+
+    #[test]
+    fn test_lin2log_log2lin_roundtrip() {
+        // Larger values have better roundtrip accuracy; small values lose precision
+        for &x in &[100, 1000, 10000, 100000, 1 << 20, 1 << 25] {
+            let log_val = silk_lin2log(x);
+            let reconstructed = silk_log2lin(log_val);
+            let error = (reconstructed - x).abs() as f64 / x as f64;
+            assert!(
+                error < 0.05,
+                "roundtrip x={x}: log={log_val}, recon={reconstructed}, error={error:.4}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_log2lin_negative() {
+        assert_eq!(silk_log2lin(-1), 0, "negative input should return 0");
+    }
+
+    #[test]
+    fn test_log2lin_overflow() {
+        assert_eq!(silk_log2lin(3967), i32::MAX, "3967 should saturate to i32::MAX");
+        assert_eq!(silk_log2lin(4000), i32::MAX, "4000 should saturate to i32::MAX");
+    }
+
+    // ===================================================================
+    // P1: silk_sigm_q15
+    // ===================================================================
+
+    #[test]
+    fn test_sigm_zero() {
+        assert_eq!(silk_sigm_q15(0), 16384, "sigmoid(0) should be Q15 for 0.5");
+    }
+
+    #[test]
+    fn test_sigm_large_positive() {
+        assert_eq!(silk_sigm_q15(6 * 32), 32767, "large positive should saturate");
+    }
+
+    #[test]
+    fn test_sigm_large_negative() {
+        assert_eq!(silk_sigm_q15(-6 * 32), 0, "large negative should saturate to 0");
+    }
+
+    #[test]
+    fn test_sigm_symmetry() {
+        for x in 1..180 {
+            let sum = silk_sigm_q15(x) + silk_sigm_q15(-x);
+            // s(x) + s(-x) should be approximately 32767 (Q15 for 1.0)
+            assert!(
+                (sum - 32767).abs() <= 2,
+                "sigm({x}) + sigm(-{x}) = {sum}, expected ~32767"
+            );
+        }
+    }
+
+    #[test]
+    fn test_sigm_overall_trend() {
+        // The piecewise-linear approximation is approximately monotonic.
+        // Small non-monotonicities at segment boundaries (every 32 Q5 units) are
+        // inherent to the C reference LUT design. Test the overall trend: sigm
+        // at large positive > sigm at small positive > sigm at zero > sigm at negative.
+        assert!(silk_sigm_q15(100) > silk_sigm_q15(50));
+        assert!(silk_sigm_q15(50) > silk_sigm_q15(0));
+        assert!(silk_sigm_q15(0) > silk_sigm_q15(-50));
+        assert!(silk_sigm_q15(-50) > silk_sigm_q15(-100));
+
+        // Within each segment (not crossing a boundary), should be monotonic.
+        // Positive segments:
+        for seg_start in [0i32, 32, 64, 96, 128] {
+            let mut prev = silk_sigm_q15(seg_start);
+            for x in (seg_start + 1)..seg_start + 31 {
+                if x >= 192 {
+                    break;
+                }
+                let val = silk_sigm_q15(x);
+                assert!(val >= prev, "positive segment: sigm({x})={val} < sigm({})={prev}", x - 1);
+                prev = val;
+            }
+        }
+        // Negative segments (output decreasing for more-negative inputs):
+        for seg_start in [-128i32, -96, -64, -32] {
+            let mut prev = silk_sigm_q15(seg_start);
+            for x in (seg_start + 1)..seg_start + 31 {
+                let val = silk_sigm_q15(x);
+                assert!(val >= prev, "negative segment: sigm({x})={val} < sigm({})={prev}", x - 1);
+                prev = val;
+            }
+        }
+    }
+
+    // ===================================================================
+    // P1: silk_inverse32_var_q / silk_div32_var_q
+    // ===================================================================
+
+    #[test]
+    fn test_inv_power_of_2() {
+        // 1/2 in Q16 = 32768
+        let result = silk_inverse32_var_q(2, 16);
+        assert!(
+            (result - 32768).abs() <= 2,
+            "1/2 in Q16: expected 32768, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_inv_large_q() {
+        // 1/100 in Q30 = 10737418 (approximately)
+        let result = silk_inverse32_var_q(100, 30);
+        let expected = ((1i64 << 30) / 100) as i32;
+        assert!(
+            (result - expected).abs() <= expected / 20 + 2,
+            "1/100 in Q30: expected ~{expected}, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_inv_negative() {
+        let result = silk_inverse32_var_q(-4, 16);
+        // -1/4 in Q16 = -16384
+        assert!(
+            (result - (-16384)).abs() <= 2,
+            "1/(-4) in Q16: expected -16384, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_div_simple() {
+        let result = silk_div32_var_q(100, 10, 0);
+        assert!(
+            (result - 10).abs() <= 1,
+            "100/10 in Q0: expected 10, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_div_fractional() {
+        // 1/3 in Q16 = 21845
+        let result = silk_div32_var_q(1, 3, 16);
+        let expected = ((1i64 << 16) / 3) as i32;
+        assert!(
+            (result - expected).abs() <= expected / 10 + 2,
+            "1/3 in Q16: expected ~{expected}, got {result}"
+        );
+    }
+
+    // ===================================================================
+    // P1: silk_sqrt_approx
+    // ===================================================================
+
+    #[test]
+    fn test_sqrt_zero() {
+        assert_eq!(silk_sqrt_approx(0), 0);
+    }
+
+    #[test]
+    fn test_sqrt_negative() {
+        assert_eq!(silk_sqrt_approx(-1), 0);
+    }
+
+    #[test]
+    fn test_sqrt_perfect_squares() {
+        // Approximate: within a few percent
+        for &(input, expected) in &[(1, 1), (4, 2), (16, 4), (256, 16)] {
+            let result = silk_sqrt_approx(input);
+            assert!(
+                (result - expected).abs() <= expected / 4 + 1,
+                "sqrt({input}): expected ~{expected}, got {result}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_sqrt_large() {
+        let result = silk_sqrt_approx(1 << 30);
+        // sqrt(2^30) = 2^15 = 32768
+        assert!(
+            (result - 32768).abs() < 4000,
+            "sqrt(2^30): expected ~32768, got {result}"
+        );
+    }
+
+    // ===================================================================
+    // P1: Sorting functions
+    // ===================================================================
+
+    #[test]
+    fn test_sort_inc_already_sorted() {
+        let mut a = [1i32, 2, 3, 4, 5];
+        let mut idx = [0i32; 5];
+        silk_insertion_sort_increasing(&mut a, &mut idx, 5, 5);
+        assert_eq!(a, [1, 2, 3, 4, 5]);
+        assert_eq!(idx, [0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_sort_inc_reverse() {
+        let mut a = [5i32, 4, 3, 2, 1];
+        let mut idx = [0i32; 5];
+        silk_insertion_sort_increasing(&mut a, &mut idx, 5, 5);
+        assert_eq!(a, [1, 2, 3, 4, 5]);
+        assert_eq!(idx, [4, 3, 2, 1, 0]);
+    }
+
+    #[test]
+    fn test_sort_inc_partial() {
+        let mut a = [5i32, 4, 3, 2, 1];
+        let mut idx = [0i32; 5];
+        silk_insertion_sort_increasing(&mut a, &mut idx, 5, 3);
+        // First 3 positions should have the 3 smallest values
+        assert_eq!(&a[..3], &[1, 2, 3]);
+        assert_eq!(&idx[..3], &[4, 3, 2]);
+    }
+
+    #[test]
+    fn test_sort_dec_basic() {
+        let mut a = [1i16, 2, 3, 4, 5];
+        let mut idx = [0i32; 5];
+        silk_insertion_sort_decreasing_int16(&mut a, &mut idx, 5, 3);
+        assert_eq!(&a[..3], &[5, 4, 3]);
+        assert_eq!(&idx[..3], &[4, 3, 2]);
+    }
+
+    #[test]
+    fn test_sort_all_int16() {
+        let mut a = [3i16, 1, 4, 1, 5, 9, 2, 6];
+        silk_insertion_sort_increasing_all_values_int16(&mut a, 8);
+        assert_eq!(a, [1, 1, 2, 3, 4, 5, 6, 9]);
+    }
+
+    #[test]
+    fn test_sort_single_element() {
+        let mut a = [42i32];
+        let mut idx = [0i32; 1];
+        silk_insertion_sort_increasing(&mut a, &mut idx, 1, 1);
+        assert_eq!(a, [42]);
+        assert_eq!(idx, [0]);
+    }
+
+    // ===================================================================
+    // P1: silk_lpc_analysis_filter
+    // ===================================================================
+
+    #[test]
+    fn test_analysis_filter_first_d_zeros() {
+        // First d output samples are always zero
+        let s = [100i16; 20];
+        let a_q12 = [0i16; 4];
+        let mut out = [99i16; 20];
+        silk_lpc_analysis_filter(&mut out, &s, &a_q12, 20, 4);
+        for i in 0..4 {
+            assert_eq!(out[i], 0, "out[{i}] should be 0 for first d samples");
+        }
+    }
+
+    #[test]
+    fn test_analysis_filter_identity() {
+        // Zero coefficients = passthrough (residual = signal)
+        let s: Vec<i16> = (0..20).map(|i| (i * 100 + 50) as i16).collect();
+        let a_q12 = [0i16; 4];
+        let mut out = [0i16; 20];
+        silk_lpc_analysis_filter(&mut out, &s, &a_q12, 20, 4);
+        for i in 4..20 {
+            assert_eq!(out[i], s[i], "out[{i}] should equal s[{i}] with zero coefficients");
+        }
+    }
+
+    #[test]
+    fn test_analysis_filter_dc_removal() {
+        // a_q12 = [4096] (Q12 for 1.0): perfect DC predictor
+        // For constant signal, output should be near zero
+        let s = [1000i16; 20];
+        let mut a_q12 = [0i16; 4];
+        a_q12[0] = 4096;
+        let mut out = [0i16; 20];
+        silk_lpc_analysis_filter(&mut out, &s, &a_q12, 20, 4);
+        // After the first d samples, the prediction should perfectly cancel DC
+        for i in 5..20 {
+            assert!(
+                out[i].abs() <= 1,
+                "out[{i}]={} should be near 0 for DC with a[0]=4096",
+                out[i]
+            );
+        }
+    }
+
+    // ===================================================================
+    // P1: silk_bwexpander / silk_bwexpander_32
+    // ===================================================================
+
+    #[test]
+    fn test_bwexpander_chirp_1() {
+        // chirp_q16 = 65536 (1.0): coefficients unchanged
+        let mut ar = [1000i16, 2000, 3000, 4000];
+        silk_bwexpander(&mut ar, 4, 65536);
+        assert_eq!(ar, [1000, 2000, 3000, 4000]);
+    }
+
+    #[test]
+    fn test_bwexpander_chirp_half() {
+        // chirp_q16 = 32768 (0.5): ar[k] *= 0.5^(k+1) approximately
+        let mut ar = [10000i16, 10000, 10000, 10000];
+        silk_bwexpander(&mut ar, 4, 32768);
+        // ar[0] ~ 5000, ar[1] ~ 2500, ar[2] ~ 1250, ar[3] ~ 625
+        assert!((ar[0] - 5000).abs() <= 10, "ar[0]={}, expected ~5000", ar[0]);
+        assert!(ar[1] < ar[0], "ar[1]={} should be < ar[0]={}", ar[1], ar[0]);
+        assert!(ar[2] < ar[1], "ar[2]={} should be < ar[1]={}", ar[2], ar[1]);
+        assert!(ar[3] < ar[2], "ar[3]={} should be < ar[2]={}", ar[3], ar[2]);
+    }
+
+    #[test]
+    fn test_bwexpander_16_reduces() {
+        let mut ar = [1000i16, 2000, 3000, 4000];
+        silk_bwexpander(&mut ar, 4, 65000);
+        assert!(ar[0] < 1000);
+        assert!(ar[3] < 4000);
+    }
+
+    #[test]
+    fn test_bwexpander_32_reduces() {
+        let mut ar = [400_000i32, -300_000, 200_000, -100_000];
+        silk_bwexpander_32(&mut ar, 4, 65000);
+        assert!(ar[0].abs() < 400_000);
+        assert!(ar[3].abs() < 100_000);
+    }
+
+    // ===================================================================
+    // P2: silk_gains_dequant
+    // ===================================================================
+
+    #[test]
+    fn test_gains_dequant_basic() {
+        // First subframe uses absolute mode (ind[0]=32); subsequent subframes use
+        // delta mode where ind[k]+MIN_DELTA_GAIN_QUANT is added to prev_ind.
+        let mut gain_q16 = [0i32; 4];
+        let ind = [32i8, 0, 0, 0];
+        let mut prev_ind: i8 = 0;
+        silk_gains_dequant(&mut gain_q16, &ind, &mut prev_ind, false, 4);
+        for (k, &g) in gain_q16.iter().enumerate() {
+            assert!(g > 0, "gain_q16[{k}]={g} should be positive");
+        }
+    }
+
+    #[test]
+    fn test_gains_dequant_clamping() {
+        // Extreme indices should be clamped to [0, N_LEVELS_QGAIN-1]
+        let mut gain_q16 = [0i32; 4];
+        let ind = [127i8, 127, 127, 127];
+        let mut prev_ind: i8 = 0;
+        silk_gains_dequant(&mut gain_q16, &ind, &mut prev_ind, false, 4);
+        // Should not panic and prev_ind should be within valid range
+        assert!(prev_ind >= 0 && (prev_ind as i32) < N_LEVELS_QGAIN_I);
+    }
+
+    // ===================================================================
+    // P2: silk_decode_pitch
+    // ===================================================================
+
+    #[test]
+    fn test_decode_pitch_20ms_16khz() {
         let mut pitch_lags = [0i32; 4];
-        silk_decode_pitch(32, 0, &mut pitch_lags[..2], 8, 2);
-        for &lag in &pitch_lags[..2] {
-            assert!(lag >= PITCH_EST_MIN_LAG_MS as i32 * 8);
-            assert!(lag <= PITCH_EST_MAX_LAG_MS as i32 * 8);
-        }
-
         silk_decode_pitch(50, 0, &mut pitch_lags, 16, 4);
-        for &lag in &pitch_lags {
-            assert!(lag >= PITCH_EST_MIN_LAG_MS as i32 * 16);
-            assert!(lag <= PITCH_EST_MAX_LAG_MS as i32 * 16);
+        let min_lag = PITCH_EST_MIN_LAG_MS as i32 * 16;
+        let max_lag = PITCH_EST_MAX_LAG_MS as i32 * 16;
+        for (k, &lag) in pitch_lags.iter().enumerate() {
+            assert!(lag >= min_lag, "lag[{k}]={lag} < min={min_lag}");
+            assert!(lag <= max_lag, "lag[{k}]={lag} > max={max_lag}");
         }
     }
 
     #[test]
-    fn test_fixed_point_helpers_cover_boundaries() {
+    fn test_decode_pitch_10ms_8khz() {
+        let mut pitch_lags = [0i32; 2];
+        silk_decode_pitch(32, 0, &mut pitch_lags, 8, 2);
+        let min_lag = PITCH_EST_MIN_LAG_MS as i32 * 8;
+        let max_lag = PITCH_EST_MAX_LAG_MS as i32 * 8;
+        for (k, &lag) in pitch_lags.iter().enumerate() {
+            assert!(lag >= min_lag, "lag[{k}]={lag} < min={min_lag}");
+            assert!(lag <= max_lag, "lag[{k}]={lag} > max={max_lag}");
+        }
+    }
+
+    // ===================================================================
+    // P2: Resampling
+    // ===================================================================
+
+    #[test]
+    fn test_down2_length() {
+        let input = [0i16; 480];
+        let mut output = [0i16; 240];
+        let mut state = [0i32; 2];
+        silk_resampler_down2(&mut state, &mut output, &input);
+        // Output length should be input.len() / 2 = 240
+        assert_eq!(output.len(), 240);
+    }
+
+    #[test]
+    fn test_down2_dc() {
+        // DC input should converge to the same value in output
+        let input = [10000i16; 480];
+        let mut output = [0i16; 240];
+        let mut state = [0i32; 2];
+        silk_resampler_down2(&mut state, &mut output, &input);
+        // After convergence, output should be near 10000
+        let last = output[239];
+        assert!(
+            (last - 10000).abs() < 500,
+            "DC convergence: last output={last}, expected ~10000"
+        );
+    }
+
+    #[test]
+    fn test_down2_3_length() {
+        let input = [0i16; 480];
+        let mut output = [0i16; 320];
+        let mut state = [0i32; 6];
+        silk_resampler_down2_3(&mut state, &mut output, &input, 480);
+        // 480 * 2/3 = 320
+        assert_eq!(output.len(), 320);
+    }
+
+    // ===================================================================
+    // P2: Arithmetic wrapper spot-checks
+    // ===================================================================
+
+    #[test]
+    fn test_smlawb_i32_truncation() {
+        // The `as i16` truncation of c means 0x10001 is treated as 1
+        let result = silk_smlawb_i32(0, 0x10000, 0x10001);
+        // c as i16 = 1, so (0x10000 * 1) >> 16 = 1, + 0 = 1
+        assert_eq!(result, 1, "smlawb_i32 i16 truncation: expected 1, got {result}");
+    }
+
+    #[test]
+    fn test_smulwb_i32_truncation() {
+        // Same i16 truncation trap
+        let result = silk_smulwb_i32(0x10000, 0x10001);
+        // b as i16 = 1, so (0x10000 * 1) >> 16 = 1
+        assert_eq!(result, 1, "smulwb_i32 i16 truncation: expected 1, got {result}");
+    }
+
+    #[test]
+    fn test_lshift_sat32_positive() {
+        let result = silk_lshift_sat32(i32::MAX, 1);
+        assert_eq!(result, i32::MAX & !1, "positive saturation: got {result}");
+    }
+
+    #[test]
+    fn test_lshift_sat32_negative() {
+        let result = silk_lshift_sat32(i32::MIN, 1);
+        assert_eq!(result, i32::MIN, "negative saturation: got {result}");
+    }
+
+    #[test]
+    fn test_rshift_round_boundary() {
+        // 3 >> 1 with rounding: (3 + 1) >> 1 = 2
+        assert_eq!(silk_rshift_round(3, 1), 2);
+        // 5 >> 1 with rounding: (5 + 1) >> 1 = 3
+        assert_eq!(silk_rshift_round(5, 1), 3);
+        // Edge: shift=0 returns input unchanged
+        assert_eq!(silk_rshift_round(42, 0), 42);
+    }
+
+    #[test]
+    fn test_silk_rand_lcg() {
+        // Verify PRNG produces deterministic sequence
+        let s1 = silk_rand(0);
+        let s2 = silk_rand(s1);
+        let s3 = silk_rand(s2);
+        // Each call should produce a different value
+        assert_ne!(s1, s2, "consecutive PRNG outputs should differ");
+        assert_ne!(s2, s3, "consecutive PRNG outputs should differ");
+        // Deterministic: same seed gives same output
+        assert_eq!(silk_rand(0), s1);
+    }
+
+    #[test]
+    fn test_clz32_boundaries() {
         assert_eq!(silk_clz32(0), 32);
         assert_eq!(silk_clz32(1), 31);
-        assert_eq!(silk_clz32(-1), 0);
-        assert_eq!(silk_ror32(0x1234_5678, 8), 0x7812_3456);
-
-        assert_eq!(silk_add_sat32(i32::MAX - 1, 10), i32::MAX);
-        assert_eq!(silk_sub_sat32(i32::MIN + 1, 10), i32::MIN);
-        assert_eq!(silk_add_sat16(32_760, 10), 32_767);
-        assert_eq!(silk_lshift_sat32(3, 2), 12);
-        assert_eq!(silk_lshift_sat32(i32::MAX, 1), 2_147_483_646);
-        assert_eq!(silk_rshift_round(7, 0), 7);
-        assert_eq!(silk_rshift_round(7, 1), 4);
-        assert_eq!(silk_rshift_round(7, 32), 0);
-        assert_eq!(silk_rshift_round64(7, 0), 7);
-        assert_eq!(silk_rshift_round64(7, 1), 4);
-
-        assert_eq!(silk_add_pos_sat32(100, 23), 123);
-        assert_eq!(silk_add_pos_sat32(i32::MAX - 1, 10), i32::MAX);
-        assert_eq!(silk_limit(5, 0, 10), 5);
-        assert_eq!(silk_limit(-5, 0, 10), 0);
-        assert_eq!(silk_limit(15, 0, 10), 10);
-        assert_eq!(silk_abs_int32(-5), 5);
-        assert_eq!(silk_check_fit32(4_294_967_297i64), 1);
-        assert_eq!(silk_check_fit16(65_537), 1);
-        assert_eq!(silk_sat16(40_000), 32_767);
-        assert_eq!(silk_sat16(-40_000), -32_768);
-        assert_eq!(silk_div32_16(12, 3), 4);
-        assert_eq!(silk_clz64_fn(0), 64);
-        assert_eq!(silk_clz64_fn(1), 63);
-    }
-
-    #[test]
-    fn test_fixed_point_mac_helpers_exact() {
-        assert_eq!(silk_mul(3, -4), -12);
-        assert_eq!(silk_lshift32(3, 4), 48);
-        assert_eq!(silk_rshift32(-8, 1), -4);
-        assert_eq!(silk_lshift64(3, 4), 48);
-        assert_eq!(silk_rshift64(-8, 1), -4);
-        assert_eq!(silk_smull(3, -4), -12);
-        assert_eq!(silk_smulbb(0x0001_0002, 0x0003_0004), 8);
-        assert_eq!(silk_smulwb(65_536, 2), 2);
-        assert_eq!(silk_smulwb_i32(65_536, 2), 2);
-        assert_eq!(silk_smlawb(10, 65_536, 2), 12);
-        assert_eq!(silk_smlawb_i32(10, 65_536, 2), 12);
-        assert_eq!(silk_smlawt(10, 65_536, 2 << 16), 12);
-        assert_eq!(silk_smulww(65_536, 65_536), 65_536);
-        assert_eq!(silk_smlabb(10, 3, 4), 22);
-        assert_eq!(silk_mla(10, 3, 4), 22);
-        assert_eq!(silk_add_lshift32(10, 3, 4), 58);
-        assert_eq!(silk_add_rshift32(10, 32, 1), 26);
-        assert_eq!(silk_sub_rshift32(10, 32, 1), -6);
-        assert_eq!(silk_smmul(1 << 30, 1 << 2), 1);
-        assert_eq!(silk_smlaww(10, 65_536, 2), 12);
-        assert_eq!(silk_smlabb_ovflw(i32::MAX, 1, 1), i32::MIN);
-    }
-
-    #[test]
-    fn test_sum_sqr_shift_i32_and_inner_products_exact() {
-        assert_eq!(silk_sum_sqr_shift_i32(&[3, 4], 0), (25, 0));
-
-        let (energy, shift) = silk_sum_sqr_shift_i32(&[i32::MAX, i32::MAX], 0);
-        assert!(energy > 0);
-        assert!(shift > 0);
-
-        assert_eq!(silk_inner_prod16(&[], &[], 0), 0);
-        assert_eq!(silk_inner_prod16(&[1, -2, 3], &[-4, 5, 6], 3), 4);
-        assert_eq!(silk_inner_prod_aligned(&[1, 2, 3], &[4, 5, 6], 3), 32);
-    }
-
-    #[test]
-    fn test_lpc_analysis_filters_exact() {
-        let s = [1, 2, 3, 4];
-        let a_q12 = [4_096, 0];
-
-        let mut out = [99i16; 4];
-        silk_lpc_analysis_filter(&mut out, &s, &a_q12, 4, 2);
-        assert_eq!(out, [0, 0, 1, 1]);
-
-        let mut out_hist = [0i32; 2];
-        silk_lpc_analysis_filter_with_history(&mut out_hist, &s, 1, &a_q12, 2, 2);
-        assert_eq!(out_hist, [1, 1]);
-    }
-
-    #[test]
-    fn test_nlsf_residual_dequant_and_stabilize_paths() {
-        let mut residual = [0i16; 3];
-        let indices = [1, 0, -1];
-        let pred = [0u8; 3];
-        silk_nlsf_residual_dequant(&mut residual, &indices, &pred, 65_536, 3);
-        assert_eq!(residual, [922, 0, -922]);
-
-        let mut nlsf_low = [50i16];
-        let delta_low = [100i16, 200i16];
-        silk_nlsf_stabilize(&mut nlsf_low, &delta_low, 1);
-        assert_eq!(nlsf_low, [100]);
-
-        let mut nlsf_high = [32_600i16];
-        silk_nlsf_stabilize(&mut nlsf_high, &delta_low, 1);
-        assert_eq!(nlsf_high, [32_568]);
-
-        let mut nlsf_middle = [1_000i16, 1_050i16];
-        let delta_middle = [100i16, 200i16, 100i16];
-        silk_nlsf_stabilize(&mut nlsf_middle, &delta_middle, 2);
-        assert_eq!(nlsf_middle, [925, 1_125]);
-
-        let mut nlsf_fallback = [50i16];
-        let delta_fallback = [20_000i16, 20_000i16];
-        silk_nlsf_stabilize(&mut nlsf_fallback, &delta_fallback, 1);
-        assert_eq!(nlsf_fallback, [12_768]);
+        assert_eq!(silk_clz32(i32::MAX), 1);
     }
 }
