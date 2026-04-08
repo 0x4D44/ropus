@@ -14,9 +14,13 @@ use crate::types::*;
 #[inline(always)]
 fn celt_lpcnet_noop<'a>() -> crate::celt::decoder::DnnPlcArg<'a> {
     #[cfg(feature = "dnn")]
-    { None }
+    {
+        None
+    }
     #[cfg(not(feature = "dnn"))]
-    { () }
+    {
+        ()
+    }
 }
 
 // ===========================================================================
@@ -560,11 +564,7 @@ impl OpusDecoder {
     #[cfg(feature = "dnn")]
     pub fn set_dnn_blob(&mut self, data: &[u8]) -> Result<(), i32> {
         let ret = self.lpcnet.load_model(data);
-        if ret == 0 {
-            Ok(())
-        } else {
-            Err(ret)
-        }
+        if ret == 0 { Ok(()) } else { Err(ret) }
     }
 
     /// Decode with DRED FEC support.
@@ -592,8 +592,7 @@ impl OpusDecoder {
                     let start = i * crate::dnn::lpcnet::NB_FEATURES;
                     let end = start + crate::dnn::lpcnet::NB_FEATURES;
                     if end <= dred.fec_features.len() {
-                        self.lpcnet
-                            .fec_add(Some(&dred.fec_features[start..end]));
+                        self.lpcnet.fec_add(Some(&dred.fec_features[start..end]));
                     }
                 }
             }
@@ -793,8 +792,7 @@ impl OpusDecoder {
                 };
 
                 #[cfg(feature = "dnn")]
-                let silk_lpcnet: crate::silk::decoder::DnnPlcArg<'_> =
-                    Some(&mut self.lpcnet);
+                let silk_lpcnet: crate::silk::decoder::DnnPlcArg<'_> = Some(&mut self.lpcnet);
                 #[cfg(not(feature = "dnn"))]
                 let silk_lpcnet: crate::silk::decoder::DnnPlcArg<'_> = ();
 
@@ -944,8 +942,7 @@ impl OpusDecoder {
             let celt_data = if decode_fec { None } else { data };
             // Pass lpcnet for CELT PLC (neural concealment on lost frames).
             #[cfg(feature = "dnn")]
-            let celt_lpcnet: crate::celt::decoder::DnnPlcArg<'_> =
-                Some(&mut self.lpcnet);
+            let celt_lpcnet: crate::celt::decoder::DnnPlcArg<'_> = Some(&mut self.lpcnet);
             #[cfg(not(feature = "dnn"))]
             let celt_lpcnet: crate::celt::decoder::DnnPlcArg<'_> = ();
 
@@ -1528,7 +1525,7 @@ impl OpusDecoder {
 mod tests {
     use super::*;
     use crate::opus::encoder::{
-        OpusEncoder, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
+        OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY, OpusEncoder,
     };
 
     fn patterned_pcm_i16(frame_size: usize, channels: usize, seed: i32) -> Vec<i16> {
@@ -1662,7 +1659,10 @@ mod tests {
 
         // 60ms SILK with 3 frames exceeds the 120ms limit.
         let invalid = [0x1Bu8, 0x03];
-        assert_eq!(opus_packet_get_nb_samples(&invalid, 48000), Err(OPUS_INVALID_PACKET));
+        assert_eq!(
+            opus_packet_get_nb_samples(&invalid, 48000),
+            Err(OPUS_INVALID_PACKET)
+        );
     }
 
     #[test]
@@ -1978,17 +1978,22 @@ mod tests {
 
         let mut dec24 = OpusDecoder::new(48000, 1).unwrap();
         let mut pcm24 = vec![0i32; 960];
-        let decoded24 = dec24.decode24(Some(packet), &mut pcm24, 960, false).unwrap();
+        let decoded24 = dec24
+            .decode24(Some(packet), &mut pcm24, 960, false)
+            .unwrap();
         assert_eq!(decoded24, 960);
         assert!(pcm24.iter().any(|&sample| sample != 0));
 
         let mut decf = OpusDecoder::new(48000, 1).unwrap();
         let mut pcmf = vec![0.0f32; 960];
-        let decodedf = decf.decode_float(Some(packet), &mut pcmf, 960, false).unwrap();
+        let decodedf = decf
+            .decode_float(Some(packet), &mut pcmf, 960, false)
+            .unwrap();
         assert_eq!(decodedf, 960);
         assert!(pcmf.iter().any(|sample| sample.abs() > 1e-4));
 
-        let mut lowdelay = OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+        let mut lowdelay =
+            OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
         let pcm = patterned_pcm_i16(480, 1, 123);
         let mut lowdelay_packet = vec![0u8; 1500];
         let len = lowdelay
@@ -1997,7 +2002,62 @@ mod tests {
         let packet = &lowdelay_packet[..len as usize];
         let mut dec = OpusDecoder::new(48000, 1).unwrap();
         let mut pcm24 = vec![0i32; 480];
-        assert_eq!(dec.decode24(Some(packet), &mut pcm24, 480, false).unwrap(), 480);
+        assert_eq!(
+            dec.decode24(Some(packet), &mut pcm24, 480, false).unwrap(),
+            480
+        );
+    }
+
+    #[test]
+    fn test_get_nb_frames_and_samples_error_edges() {
+        assert_eq!(opus_packet_get_nb_frames(&[]), Err(OPUS_BAD_ARG));
+        assert_eq!(opus_packet_get_nb_frames(&[0x83]), Err(OPUS_INVALID_PACKET));
+
+        // CELT-only, 20 ms per frame, code 3 with 7 frames => 140 ms > 120 ms max.
+        assert_eq!(opus_packet_get_nb_samples(&[0x9B, 7], 48000), Err(OPUS_INVALID_PACKET));
+    }
+
+    #[test]
+    fn test_decode_frame_plc_chunking_and_one_byte_dtx_paths() {
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        dec.prev_mode = MODE_CELT_ONLY;
+        dec.frame_size = 1200;
+
+        let mut plc_pcm = vec![0i16; 1200];
+        let decoded = dec.decode_frame(None, &mut plc_pcm, 1200, false).unwrap();
+        assert_eq!(decoded, 1200);
+
+        let mut dtx_dec = OpusDecoder::new(48000, 1).unwrap();
+        dtx_dec.frame_size = 480;
+        let mut dtx_pcm = vec![7i16; 960];
+        let decoded = dtx_dec.decode_frame(Some(&[0x80]), &mut dtx_pcm, 960, false).unwrap();
+        assert_eq!(decoded, 480);
+        assert!(dtx_pcm[..480].iter().all(|&sample| sample == 0));
+    }
+
+    #[test]
+    fn test_decode_wrapper_empty_packet_and_small_buffer_error() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        let pcm = patterned_pcm_i16(960, 1, 211);
+        let mut packet_buf = vec![0u8; 1500];
+        let packet_capacity = packet_buf.len() as i32;
+        let len = enc
+            .encode(&pcm, 960, &mut packet_buf, packet_capacity)
+            .unwrap();
+        let packet = &packet_buf[..len as usize];
+
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut too_small = vec![0i16; 120];
+        assert_eq!(
+            dec.decode_native(Some(packet), &mut too_small, 120, false, false, None),
+            Err(OPUS_BUFFER_TOO_SMALL)
+        );
+
+        let mut plc_dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut plc_pcm = vec![1i16; 120];
+        let decoded = plc_dec.decode(Some(&[]), &mut plc_pcm, 120, false).unwrap();
+        assert_eq!(decoded, 120);
+        assert!(plc_pcm.iter().all(|&sample| sample == 0));
     }
 
     #[test]
