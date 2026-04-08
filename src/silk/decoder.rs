@@ -2433,11 +2433,7 @@ pub fn silk_decode(
 
             // Neural PLC is only applied to channel 0 (mono).
             #[cfg(feature = "dnn")]
-            let ch_lpcnet: DnnPlcArg<'_> = if n == 0 {
-                lpcnet.as_deref_mut()
-            } else {
-                None
-            };
+            let ch_lpcnet: DnnPlcArg<'_> = if n == 0 { lpcnet.as_deref_mut() } else { None };
             #[cfg(not(feature = "dnn"))]
             let ch_lpcnet: DnnPlcArg<'_> = ();
 
@@ -2556,6 +2552,19 @@ pub fn silk_decode(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn encode_icdf_stream(symbols: &[(u32, &[u8])]) -> Vec<u8> {
+        let mut buf = vec![0u8; 64];
+        {
+            let mut enc = crate::celt::range_coder::RangeEncoder::new(&mut buf);
+            for (symbol, icdf) in symbols {
+                enc.encode_icdf(*symbol, icdf, 8);
+            }
+            enc.done();
+            assert!(!enc.error());
+        }
+        buf
+    }
 
     #[test]
     fn test_silk_rand() {
@@ -2737,6 +2746,109 @@ mod tests {
     }
 
     #[test]
+    fn test_stereo_decode_pred_decodes_expected_predictors() {
+        let symbols = [
+            (4u32, SILK_STEREO_PRED_JOINT_ICDF.as_slice()),
+            (2u32, SILK_UNIFORM3_ICDF.as_slice()),
+            (4u32, SILK_UNIFORM5_ICDF.as_slice()),
+            (1u32, SILK_UNIFORM3_ICDF.as_slice()),
+            (0u32, SILK_UNIFORM5_ICDF.as_slice()),
+        ];
+        let buf = encode_icdf_stream(&symbols);
+        let mut rc = RangeDecoder::new(&buf);
+        let mut pred_q13 = [0i16; 2];
+
+        silk_stereo_decode_pred(&mut rc, &mut pred_q13);
+
+        let mut ix = [[0i32; 3]; 2];
+        ix[0][2] = 4 / 5;
+        ix[1][2] = 4 - 5 * ix[0][2];
+        ix[0][0] = 2;
+        ix[0][1] = 4;
+        ix[1][0] = 1;
+        ix[1][1] = 0;
+
+        let mut expected = [0i16; 2];
+        for n_ch in 0..2 {
+            ix[n_ch][0] += 3 * ix[n_ch][2];
+            let idx = ix[n_ch][0] as usize;
+            let low_q13 = SILK_STEREO_PRED_QUANT_Q13[idx] as i32;
+            let step_q13 = if idx + 1 < STEREO_QUANT_TAB_SIZE {
+                ((SILK_STEREO_PRED_QUANT_Q13[idx + 1] as i32 - low_q13) * 6554) >> 16
+            } else {
+                0
+            };
+            expected[n_ch] = (low_q13 + step_q13 * (2 * ix[n_ch][1] + 1)) as i16;
+        }
+        expected[0] = (expected[0] as i32 - expected[1] as i32) as i16;
+
+        assert_eq!(pred_q13, expected);
+    }
+
+    #[test]
+    fn test_stereo_decode_mid_only_flag_variants() {
+        let false_buf = encode_icdf_stream(&[(0u32, SILK_STEREO_ONLY_CODE_MID_ICDF.as_slice())]);
+        let true_buf = encode_icdf_stream(&[(1u32, SILK_STEREO_ONLY_CODE_MID_ICDF.as_slice())]);
+
+        let mut rc = RangeDecoder::new(&false_buf);
+        assert!(!silk_stereo_decode_mid_only(&mut rc));
+
+        let mut rc = RangeDecoder::new(&true_buf);
+        assert!(silk_stereo_decode_mid_only(&mut rc));
+    }
+
+    #[test]
+    fn test_stereo_ms_to_lr_updates_state_for_short_frame() {
+        let mut state = StereoDecState::default();
+        state.s_mid = [10, 20];
+        state.s_side = [-10, -20];
+        state.pred_prev_q13 = [100, -50];
+
+        let frame_length = 8usize;
+        let mut x1 = vec![0i16; frame_length + 2];
+        let mut x2 = vec![0i16; frame_length + 2];
+        for i in 0..frame_length {
+            x1[i + 2] = (100 + i as i16 * 5) as i16;
+            x2[i + 2] = (-30 + i as i16 * 3) as i16;
+        }
+        let original_mid = x1.clone();
+        let original_side = x2.clone();
+        let pred_q13 = [800, -400];
+
+        silk_stereo_ms_to_lr(&mut state, &mut x1, &mut x2, &pred_q13, 16, frame_length);
+
+        assert_eq!(state.pred_prev_q13, pred_q13);
+        assert_eq!(state.s_mid, [original_mid[frame_length], original_mid[frame_length + 1]]);
+        assert_eq!(
+            state.s_side,
+            [original_side[frame_length], original_side[frame_length + 1]]
+        );
+        assert_ne!(&x1[1..=frame_length], &original_mid[1..=frame_length]);
+        assert_ne!(&x2[1..=frame_length], &original_side[1..=frame_length]);
+    }
+
+    #[test]
+    fn test_stereo_ms_to_lr_hits_steady_state_and_saturates() {
+        let mut state = StereoDecState::default();
+        state.s_mid = [30000, 30000];
+        state.s_side = [30000, -30000];
+        state.pred_prev_q13 = [0, 0];
+
+        let frame_length = 40usize;
+        let mut x1 = vec![30000i16; frame_length + 2];
+        let mut x2 = vec![30000i16; frame_length + 2];
+        let pred_q13 = [i16::MAX, i16::MAX];
+
+        silk_stereo_ms_to_lr(&mut state, &mut x1, &mut x2, &pred_q13, 8, frame_length);
+
+        assert_eq!(state.pred_prev_q13, pred_q13);
+        assert!(x1[1..=frame_length].iter().any(|&sample| sample == i16::MAX));
+        assert!(x2[1..=frame_length]
+            .iter()
+            .all(|&sample| (i16::MIN..=i16::MAX).contains(&sample)));
+    }
+
+    #[test]
     fn test_decoder_set_fs_reconfigures_tables_and_resampler() {
         let mut dec = SilkDecoderState::new();
 
@@ -2747,11 +2859,17 @@ mod tests {
         assert_eq!(dec.ltp_mem_length, LTP_MEM_LENGTH_MS * 8);
         assert_eq!(dec.lpc_order, MIN_LPC_ORDER);
         assert_eq!(dec.pitch_lag_low_bits_icdf, SILK_UNIFORM4_ICDF.as_slice());
-        assert_eq!(dec.pitch_contour_icdf, SILK_PITCH_CONTOUR_NB_ICDF.as_slice());
+        assert_eq!(
+            dec.pitch_contour_icdf,
+            SILK_PITCH_CONTOUR_NB_ICDF.as_slice()
+        );
         assert_eq!(dec.nlsf_cb.order, SILK_NLSF_CB_NB_MB.order);
         assert_eq!(dec.nlsf_cb.cb1_icdf, SILK_NLSF_CB1_ICDF_NB_MB.as_slice());
         assert_eq!(dec.nlsf_cb.ec_icdf, SILK_NLSF_CB2_ICDF_NB_MB.as_slice());
-        assert_eq!(dec.resampler_state.resampler_function, USE_SILK_RESAMPLER_IIR_FIR);
+        assert_eq!(
+            dec.resampler_state.resampler_function,
+            USE_SILK_RESAMPLER_IIR_FIR
+        );
         assert_eq!(dec.resampler_state.fs_in_khz, 8);
         assert_eq!(dec.resampler_state.fs_out_khz, 48);
         assert_eq!(dec.resampler_state.batch_size, 80);
@@ -2759,7 +2877,10 @@ mod tests {
         dec.nb_subfr = 2;
         silk_decoder_set_fs(&mut dec, 8, 44_100);
         assert_eq!(dec.frame_length, 2 * dec.subfr_length);
-        assert_eq!(dec.pitch_contour_icdf, SILK_PITCH_CONTOUR_10_MS_NB_ICDF.as_slice());
+        assert_eq!(
+            dec.pitch_contour_icdf,
+            SILK_PITCH_CONTOUR_10_MS_NB_ICDF.as_slice()
+        );
         assert_eq!(dec.fs_api_hz, 44_100);
 
         dec.nb_subfr = MAX_NB_SUBFR;
@@ -2889,5 +3010,69 @@ mod tests {
 
         assert_eq!(out, [100, 101, 1, 2, 3, 4]);
         assert_eq!(&rs.delay_buf[..2], &[5, 6]);
+    }
+
+    #[test]
+    fn test_resampler_private_down_fir_interpol_all_orders() {
+        let buf: Vec<i32> = (0..64).map(|i| ((i as i32 % 7) - 3) * 256).collect();
+
+        let fir0 = &get_down_fir_coefs(ResamplerCoefs::Ratio3_4)[2..];
+        let mut out0 = [0i16; 8];
+        let written0 = silk_resampler_private_down_fir_interpol(
+            &mut out0,
+            0,
+            &buf,
+            fir0,
+            RESAMPLER_DOWN_ORDER_FIR0,
+            3,
+            2 << 16,
+            1 << 16,
+        );
+        assert_eq!(written0, 2);
+        assert!(out0[..written0].iter().any(|&sample| sample != 0));
+
+        let fir1 = &get_down_fir_coefs(ResamplerCoefs::Ratio1_2)[2..];
+        let mut out1 = [0i16; 8];
+        let written1 = silk_resampler_private_down_fir_interpol(
+            &mut out1,
+            1,
+            &buf,
+            fir1,
+            RESAMPLER_DOWN_ORDER_FIR1,
+            1,
+            2 << 16,
+            1 << 16,
+        );
+        assert_eq!(written1, 2);
+        assert!(out1[1..1 + written1].iter().any(|&sample| sample != 0));
+
+        let fir2 = &get_down_fir_coefs(ResamplerCoefs::Ratio1_6)[2..];
+        let mut out2 = [0i16; 8];
+        let written2 = silk_resampler_private_down_fir_interpol(
+            &mut out2,
+            0,
+            &buf,
+            fir2,
+            RESAMPLER_DOWN_ORDER_FIR2,
+            1,
+            2 << 16,
+            1 << 16,
+        );
+        assert_eq!(written2, 2);
+        assert!(out2[..written2]
+            .iter()
+            .all(|&sample| (i16::MIN..=i16::MAX).contains(&sample)));
+    }
+
+    #[test]
+    fn test_resampler_private_down_fir_interpol_ignores_unknown_order() {
+        let buf = vec![0i32; 16];
+        let fir = &get_down_fir_coefs(ResamplerCoefs::Ratio1_2)[2..];
+        let mut out = [123i16; 4];
+        let written =
+            silk_resampler_private_down_fir_interpol(&mut out, 0, &buf, fir, 5, 1, 1 << 16, 1 << 16);
+
+        assert_eq!(written, 0);
+        assert_eq!(out, [123; 4]);
     }
 }
