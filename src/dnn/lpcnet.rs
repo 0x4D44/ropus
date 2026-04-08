@@ -2232,6 +2232,14 @@ mod tests {
         input
     }
 
+    fn zero_linear(nb_inputs: usize, nb_outputs: usize) -> LinearLayer {
+        LinearLayer {
+            nb_inputs,
+            nb_outputs,
+            ..Default::default()
+        }
+    }
+
     fn append_weight_record(blob: &mut Vec<u8>, name: &str, weight_type: i32, payload_len: usize) {
         let mut record = vec![0u8; core::WEIGHT_BLOCK_SIZE + payload_len];
         record[4..8].copy_from_slice(&core::WEIGHT_BLOB_VERSION.to_ne_bytes());
@@ -2451,6 +2459,18 @@ mod tests {
     }
 
     #[test]
+    fn test_burg_cepstral_analysis_produces_finite_split_features() {
+        let x = patterned_frame(23);
+        let mut ceps = [0.0f32; 2 * NB_BANDS];
+
+        burg_cepstral_analysis(&mut ceps, &x);
+
+        assert!(ceps.iter().all(|v| v.is_finite()));
+        assert!(ceps[..NB_BANDS].iter().any(|&v| v != 0.0));
+        assert!(ceps[NB_BANDS..].iter().any(|&v| v != 0.0));
+    }
+
+    #[test]
     fn test_lpcn_lpc_zero_input_and_early_break() {
         let mut lpc = [1.0f32; LPC_ORDER];
         let mut rc = [1.0f32; LPC_ORDER];
@@ -2470,6 +2490,120 @@ mod tests {
         assert!(lpc[1..].iter().all(|&v| v == 0.0));
         assert_eq!(rc[0], -1.0);
         assert!(rc[1..].iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn test_compute_gru_helpers_cover_state_updates_and_embedding_paths() {
+        let recurrent = zero_linear(2, 6);
+        let input_dense = LinearLayer {
+            bias: Some(vec![0.0, 0.0]),
+            float_weights: Some(vec![1.0, 0.0, 0.0, 1.0]),
+            nb_inputs: 2,
+            nb_outputs: 2,
+            ..Default::default()
+        };
+
+        let mut sparse_state = [0.25f32, -0.25];
+        let sparse_input = [4.0f32, -4.0, 1.0, -1.0, 0.5, -0.5];
+        compute_sparse_gru(&recurrent, &mut sparse_state, &sparse_input);
+        assert!(sparse_state.iter().all(|v| v.is_finite()));
+        assert_ne!(sparse_state, [0.25, -0.25]);
+
+        let mut gru_input = vec![1.0f32, -1.0, 0.5, -0.5, -0.25, 0.25];
+        let mut gru_state = vec![0.5f32, -0.5];
+        let extra = [2.0f32, -3.0];
+        compute_gru_b(
+            &recurrent,
+            &input_dense,
+            &mut gru_input,
+            &mut gru_state,
+            &extra,
+        );
+        assert!(gru_state.iter().all(|v| v.is_finite()));
+        assert_ne!(gru_state, vec![0.5, -0.5]);
+
+        let embed_sig = EmbeddingLayer {
+            weights: vec![10.0, 20.0, 30.0, 40.0],
+            dim: 2,
+        };
+        let embed_pred = EmbeddingLayer {
+            weights: vec![-1.0, -2.0, -3.0, -4.0],
+            dim: 2,
+        };
+        let embed_exc = EmbeddingLayer {
+            weights: vec![0.5, 1.5, 2.5, 3.5],
+            dim: 2,
+        };
+        let condition = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let mut output = [0.0f32; 6];
+        compute_gru_a_input(
+            &mut output,
+            &condition,
+            2,
+            &embed_sig,
+            1,
+            &embed_pred,
+            0,
+            &embed_exc,
+            0,
+        );
+        assert_eq!(output, [30.5, 41.5, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_sample_mdense_covers_sampling_and_fallback_paths() {
+        let layer = MDenseLayer {
+            fc1: zero_linear(1, 256),
+            fc2: zero_linear(1, 256),
+        };
+        let state = [0.0f32];
+        let mut rng = Kiss99Ctx::default();
+        rng.srand(b"LPCNet");
+
+        let mut uniform_logits = [0.0f32; 256];
+        let sample = sample_mdense(&layer, &state, &uniform_logits, &mut rng);
+        assert!((0..=255).contains(&sample));
+
+        uniform_logits.fill(-1000.0);
+        let fallback = sample_mdense(&layer, &state, &uniform_logits, &mut rng);
+        assert_eq!(fallback, 255);
+    }
+
+    #[test]
+    fn test_compute_single_frame_feature_wrappers_match_for_loaded_pitchdnn() {
+        let blob = make_pitchdnn_weight_blob();
+        let pcm_i16 = patterned_pcm(31);
+        let mut pcm_f32 = [0.0f32; FRAME_SIZE];
+        for (dst, src) in pcm_f32.iter_mut().zip(pcm_i16) {
+            *dst = src as f32;
+        }
+
+        let mut enc_i16 = LPCNetEncState::new();
+        let mut enc_f32 = LPCNetEncState::new();
+        assert_eq!(enc_i16.load_model(&blob), 0);
+        assert_eq!(enc_f32.load_model(&blob), 0);
+
+        let mut features_i16 = [0.0f32; NB_TOTAL_FEATURES];
+        let mut features_f32 = [0.0f32; NB_TOTAL_FEATURES];
+        assert_eq!(
+            enc_i16.compute_single_frame_features(&pcm_i16, &mut features_i16),
+            0
+        );
+        assert_eq!(
+            enc_f32.compute_single_frame_features_float(&pcm_f32, &mut features_f32),
+            0
+        );
+
+        for i in 0..NB_TOTAL_FEATURES {
+            assert!(
+                (features_i16[i] - features_f32[i]).abs() < 1e-4,
+                "feature {} mismatch: {} vs {}",
+                i,
+                features_i16[i],
+                features_f32[i]
+            );
+        }
+        assert!(features_i16.iter().any(|&v| v != 0.0));
     }
 
     #[test]
