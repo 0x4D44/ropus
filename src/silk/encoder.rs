@@ -8281,6 +8281,13 @@ pub fn silk_encode(
     // C: psEnc->nPrevChannelsInternal = encControl->nChannelsInternal; (enc_API.c:580)
     enc.n_prev_channels_internal = n_channels_internal as i32;
 
+    // Write back stereo width from SILK encoder state (C enc_API.c:585)
+    enc_control.stereo_width_q14 = if enc_control.to_mono != 0 {
+        0
+    } else {
+        enc.s_stereo.smth_width_q14 as i32
+    };
+
     // Set signal type and quantization offset for CELT (matches C enc_API.c:603-606)
     enc_control.signal_type = enc.state_fxx[0].s_cmn.indices.signal_type as i32;
     enc_control.offset = SILK_QUANTIZATION_OFFSETS_Q10

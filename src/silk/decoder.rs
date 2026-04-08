@@ -1403,7 +1403,7 @@ pub fn silk_stereo_decode_pred(rc: &mut RangeDecoder, pred_q13: &mut [i16; 2]) {
         let low_q13 = SILK_STEREO_PRED_QUANT_Q13[idx] as i32;
         let step_q13 = if idx + 1 < STEREO_QUANT_TAB_SIZE {
             ((SILK_STEREO_PRED_QUANT_Q13[idx + 1] as i32 - low_q13) as i64
-                * 26214 // SILK_FIX_CONST(0.5/STEREO_QUANT_SUB_STEPS, 16)
+                * 6554 // SILK_FIX_CONST(0.5/STEREO_QUANT_SUB_STEPS, 16) = (0.1 * 65536 + 0.5) = 6554
                 >> 16) as i32
         } else {
             0

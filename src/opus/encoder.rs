@@ -1918,14 +1918,12 @@ impl OpusEncoder {
                         self.silk_mode.lbrr_coded,
                         self.stream_channels,
                     );
-                    // HB gain attenuation
+                    // HB gain attenuation — always computed in hybrid mode.
                     // C: HB_gain = Q15ONE - SHR32(celt_exp2(-celt_rate * QCONST16(1.f/1024, 10)), 1)
-                    // QCONST16(1.f/1024, 10) = round(1/1024 * 2^10) = 1, so argument is -celt_rate (Q10)
+                    // QCONST16(1.f/1024, 10) = round(1/1024 * 2^10) = 1, so argument is -celt_rate
                     let celt_rate = total_bit_rate - self.silk_mode.bit_rate;
-                    if celt_rate > 0 {
-                        hb_gain = Q15ONE - shr32(celt_exp2(-celt_rate), 1);
-                        hb_gain = imax(0, hb_gain);
-                    }
+                    hb_gain = Q15ONE - shr32(celt_exp2(-celt_rate), 1);
+                    hb_gain = imax(0, hb_gain);
                 } else {
                     self.silk_mode.bit_rate = total_bit_rate;
                 }
