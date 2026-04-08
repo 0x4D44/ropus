@@ -8383,6 +8383,16 @@ mod tests {
     }
 
     #[test]
+    fn test_check_control_input_bad_internal_channel_range() {
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.n_channels_internal = ENCODER_NUM_CHANNELS as i32 + 1;
+        assert_eq!(
+            check_control_input(&ctrl),
+            SILK_ENC_INVALID_NUMBER_OF_CHANNELS_ERROR
+        );
+    }
+
+    #[test]
     fn test_check_control_input_bad_complexity() {
         let mut ctrl = SilkEncControlStruct::default();
         ctrl.complexity = 11;
@@ -8432,6 +8442,44 @@ mod tests {
         assert!(vad.noise_level_bias[0] > vad.noise_level_bias[1]);
         assert_eq!(vad.counter, 15);
         assert_eq!(vad.nrg_ratio_smth_q8[0], 25600); // 100 * 256
+    }
+
+    #[test]
+    fn test_vad_noise_levels_cover_counter_and_coef_branches() {
+        let mut vad = SilkVadState::default();
+        silk_vad_init(&mut vad);
+        vad.counter = 1000;
+        vad.nl = [100, 100, 100, 100];
+        vad.inv_nl = [10_000, 10_000, 10_000, 10_000];
+        vad.noise_level_bias = [0; VAD_N_BANDS];
+
+        silk_vad_get_noise_levels(&[900, 50, 100, 850], &mut vad);
+
+        assert_eq!(vad.counter, 1000);
+        assert!(vad.nl.iter().all(|&nl| (1..=0x00FF_FFFF).contains(&nl)));
+        assert!(vad.inv_nl.iter().all(|&inv| inv > 0));
+    }
+
+    #[test]
+    fn test_vad_get_sa_q8_covers_power_scaling_paths() {
+        let mut short = SilkEncoderState::default();
+        short.fs_khz = 16;
+        short.frame_length = 10 * short.fs_khz;
+        silk_vad_init(&mut short.s_vad);
+        short.s_vad.counter = 1000;
+        short.s_vad.nl = [0; VAD_N_BANDS];
+        short.s_vad.inv_nl = [1; VAD_N_BANDS];
+        let low_level = vec![8i16; short.frame_length as usize];
+        assert_eq!(silk_vad_get_sa_q8(&mut short, &low_level), 0);
+        assert!(short.speech_activity_q8 > 0);
+
+        let mut long = SilkEncoderState::default();
+        long.fs_khz = 16;
+        long.frame_length = 20 * long.fs_khz;
+        silk_vad_init(&mut long.s_vad);
+        let silence = vec![0i16; long.frame_length as usize];
+        assert_eq!(silk_vad_get_sa_q8(&mut long, &silence), 0);
+        assert!(long.speech_activity_q8 <= 128);
     }
 
     #[test]
@@ -8596,6 +8644,19 @@ mod tests {
 
         assert_eq!(b_q28, SILK_TRANSITION_LP_B_Q28[TRANSITION_INT_NUM - 1]);
         assert_eq!(a_q28, SILK_TRANSITION_LP_A_Q28[TRANSITION_INT_NUM - 1]);
+    }
+
+    #[test]
+    fn test_lp_interpolate_filter_taps_reverse_interpolation_branch() {
+        let mut b_q28 = [0i32; TRANSITION_NB];
+        let mut a_q28 = [0i32; TRANSITION_NA];
+
+        silk_lp_interpolate_filter_taps(&mut b_q28, &mut a_q28, 1, (1 << 16) + 8192);
+
+        assert_ne!(b_q28, SILK_TRANSITION_LP_B_Q28[1]);
+        assert_ne!(b_q28, SILK_TRANSITION_LP_B_Q28[2]);
+        assert_ne!(a_q28, SILK_TRANSITION_LP_A_Q28[1]);
+        assert_ne!(a_q28, SILK_TRANSITION_LP_A_Q28[2]);
     }
 
     #[test]
@@ -8937,6 +8998,143 @@ mod tests {
         assert_ne!(&nsq.s_lpc_q14[..4], &[100, 200, 300, 400]);
         assert_ne!(&nsq.s_ar2_q14[..4], &[11, 22, 33, 44]);
         assert_ne!(&s_ltp_q15[4..8], &[1_000; 4]);
+    }
+
+    #[test]
+    fn test_noise_shape_quantizer_covers_voiced_lag_and_unvoiced_paths() {
+        let mut voiced = NsqState::default();
+        voiced.s_ltp_buf_idx = 8;
+        voiced.s_ltp_shp_buf_idx = 8;
+        voiced.rand_seed = 1;
+        let voiced_base = NSQ_LPC_BUF_LENGTH - 1;
+        voiced.s_lpc_q14[voiced_base - 1..=voiced_base].copy_from_slice(&[2_000, -1_000]);
+        voiced.s_ar2_q14[..2].copy_from_slice(&[500, -250]);
+        for i in 0..16 {
+            voiced.s_ltp_shp_q14[i] = 100 + i as i32 * 10;
+        }
+
+        let mut voiced_pulses = [0i8; 4];
+        let mut voiced_ltp = [2_000i32; 16];
+        silk_noise_shape_quantizer(
+            &mut voiced,
+            TYPE_VOICED,
+            &[12 << 10, 0, -(7 << 10), -(18 << 10)],
+            &mut voiced_pulses,
+            0,
+            &mut voiced_ltp,
+            &[1_024, -512],
+            &[16_384, 8_192, 0, 0, 0],
+            &[768, -384],
+            2,
+            1 << 14,
+            512,
+            256,
+            1 << 16,
+            3_072,
+            128,
+            4,
+            2,
+            2,
+        );
+
+        assert!(voiced_pulses.iter().any(|&pulse| pulse != 0));
+        assert!(voiced.xq[..4].iter().any(|&sample| sample != 0));
+        assert!(voiced.s_ltp_shp_q14[8..12].iter().any(|&sample| sample != 0));
+        assert!(voiced_ltp[8..12].iter().any(|&sample| sample != 2_000));
+
+        let mut unvoiced = NsqState::default();
+        unvoiced.s_ltp_buf_idx = 6;
+        unvoiced.s_ltp_shp_buf_idx = 6;
+        unvoiced.rand_seed = -3;
+        let unvoiced_base = NSQ_LPC_BUF_LENGTH - 1;
+        unvoiced.s_lpc_q14[unvoiced_base - 1..=unvoiced_base].copy_from_slice(&[-512, 256]);
+        unvoiced.s_ar2_q14[..2].copy_from_slice(&[64, -32]);
+
+        let mut unvoiced_pulses = [0i8; 4];
+        let mut unvoiced_ltp = [321i32; 12];
+        silk_noise_shape_quantizer(
+            &mut unvoiced,
+            TYPE_NO_VOICE_ACTIVITY,
+            &[-(5 << 10), -256, 0, 6 << 10],
+            &mut unvoiced_pulses,
+            0,
+            &mut unvoiced_ltp,
+            &[512, -256],
+            &[0; LTP_ORDER],
+            &[256, -128],
+            0,
+            0,
+            0,
+            0,
+            1 << 16,
+            1_024,
+            0,
+            4,
+            2,
+            2,
+        );
+
+        assert!(unvoiced_pulses.iter().any(|&pulse| pulse != 0));
+        assert!(unvoiced.xq[..4].iter().any(|&sample| sample != 0));
+        assert!(unvoiced_ltp[6..10].iter().any(|&sample| sample != 321));
+    }
+
+    #[test]
+    fn test_silk_nsq_standard_path_rewhitens_and_updates_buffers() {
+        let mut ps_enc = SilkEncoderState::default();
+        ps_enc.nb_subfr = 2;
+        ps_enc.subfr_length = 4;
+        ps_enc.frame_length = 8;
+        ps_enc.ltp_mem_length = 32;
+        ps_enc.predict_lpc_order = 4;
+        ps_enc.shaping_lpc_order = 4;
+
+        let mut nsq = NsqState::default();
+        for i in 0..48 {
+            nsq.xq[i] = i as i16 - 20;
+        }
+
+        let mut indices = SideInfoIndices::default();
+        indices.signal_type = TYPE_VOICED as i8;
+        indices.nlsf_interp_coef_q2 = 0;
+        indices.seed = 7;
+
+        let x16 = [120i16, -180, 240, -300, 360, -420, 480, -540];
+        let mut pulses = [0i8; 8];
+        let mut pred_coef_q12 = [[0i16; MAX_LPC_ORDER]; 2];
+        pred_coef_q12[0][..4].copy_from_slice(&[512, -256, 128, -64]);
+        pred_coef_q12[1][..4].copy_from_slice(&[384, -192, 96, -48]);
+        let ltp_coef_q14 = [0i16; LTP_ORDER * MAX_NB_SUBFR];
+        let ar_q13 = [0i16; MAX_NB_SUBFR * MAX_SHAPE_LPC_ORDER];
+        let harm_shape_gain_q14 = [512, 256, 0, 0];
+        let tilt_q14 = [128, 64, 0, 0];
+        let lf_shp_q14 = [256, 128, 0, 0];
+        let gains_q16 = [65_536, 49_152, 0, 0];
+        let pitch_l = [4, 4, 0, 0];
+
+        silk_nsq(
+            &ps_enc,
+            &mut nsq,
+            &mut indices,
+            &x16,
+            &mut pulses,
+            &pred_coef_q12,
+            &ltp_coef_q14,
+            &ar_q13,
+            &harm_shape_gain_q14,
+            &tilt_q14,
+            &lf_shp_q14,
+            &gains_q16,
+            &pitch_l,
+            1_536,
+            16_384,
+        );
+
+        assert!(pulses.iter().any(|&pulse| pulse != 0));
+        assert_eq!(nsq.lag_prev, 4);
+        assert_eq!(nsq.s_ltp_buf_idx, ps_enc.ltp_mem_length);
+        assert_eq!(nsq.s_ltp_shp_buf_idx, ps_enc.ltp_mem_length);
+        assert!(nsq.xq[..ps_enc.ltp_mem_length as usize].iter().any(|&sample| sample != 0));
     }
 
     #[test]
@@ -9286,6 +9484,19 @@ mod tests {
         for g in &gains_q16 {
             assert!(*g > 0);
         }
+    }
+
+    #[test]
+    fn test_gains_quant_large_delta_step_branch() {
+        let mut gains_q16 = [65536i32, 1 << 28, 1 << 28, 65536];
+        let mut ind = [0i8; 4];
+        let mut prev_ind = 0i8;
+
+        silk_gains_quant(&mut ind, &mut gains_q16, &mut prev_ind, false, 4);
+
+        assert!(ind[1] > 0);
+        assert!(prev_ind > 0);
+        assert!(gains_q16.iter().all(|&gain| gain > 0));
     }
 
     #[test]
