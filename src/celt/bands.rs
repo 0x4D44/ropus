@@ -2277,6 +2277,16 @@ mod tests {
     }
 
     #[test]
+    fn test_hysteresis_decision_prev_lower_and_upper_retain_paths() {
+        let thresholds = [100, 200, 300];
+        let hysteresis = [10, 10, 10];
+
+        assert_eq!(hysteresis_decision(195, &thresholds, &hysteresis, 3, 2), 2);
+        assert_eq!(hysteresis_decision(150, &thresholds, &hysteresis, 3, 2), 1);
+        assert_eq!(hysteresis_decision(320, &thresholds, &hysteresis, 3, 2), 3);
+    }
+
+    #[test]
     fn test_haar1() {
         let mut x = [1 << 24, 1 << 24, 0, 0]; // Two pairs
         haar1(&mut x, 4, 1);
@@ -2315,6 +2325,25 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_band_energies_and_normalise_nonzero_signal_paths() {
+        let mode = mode_create(48000, 960).unwrap();
+        let n = mode.short_mdct_size as usize;
+        let mut freq = vec![0i32; n];
+        freq[0] = 1 << 20;
+        freq[1] = -(1 << 20);
+        freq[2] = 1 << 18;
+        freq[3] = -(1 << 18);
+
+        let mut band_e = vec![0i32; mode.nb_ebands as usize];
+        compute_band_energies(mode, &freq, &mut band_e, 1, 1, 0);
+        assert!(band_e[0] > EPSILON);
+
+        let mut norm = freq.clone();
+        normalise_bands(mode, &freq, &mut norm, &band_e, 1, 1, 1);
+        assert!(norm[..mode.ebands[1] as usize].iter().any(|&sample| sample != 0));
+    }
+
+    #[test]
     fn test_denormalise_bands_zeroing_and_downsample_boundaries() {
         let mode = mode_create(48000, 960).unwrap();
         let n = mode.short_mdct_size as usize;
@@ -2334,6 +2363,24 @@ mod tests {
         freq.fill(7);
         denormalise_bands(mode, &x, &mut freq, &band_log_e, 1, 3, 1, 1, true);
         assert!(freq.iter().all(|&sample| sample == 0));
+    }
+
+    #[test]
+    fn test_denormalise_bands_extreme_gain_branches() {
+        let mode = mode_create(48000, 960).unwrap();
+        let n = mode.short_mdct_size as usize;
+        let x = vec![1 << NORM_SHIFT; n];
+        let mut freq = vec![0i32; n];
+        let mut band_log_e = vec![0i32; mode.nb_ebands as usize];
+
+        band_log_e[0] = -20 << DB_SHIFT;
+        denormalise_bands(mode, &x, &mut freq, &band_log_e, 0, 1, 1, 1, false);
+        assert!(freq[..mode.ebands[1] as usize].iter().all(|&sample| sample == 0));
+
+        band_log_e[0] = 40 << DB_SHIFT;
+        freq.fill(0);
+        denormalise_bands(mode, &x, &mut freq, &band_log_e, 0, 1, 1, 1, false);
+        assert!(freq[..mode.ebands[1] as usize].iter().any(|&sample| sample != 0));
     }
 
     #[test]
@@ -2378,5 +2425,57 @@ mod tests {
         );
         assert_eq!(tapset, 2);
         assert_eq!(decision, SPREAD_NONE);
+    }
+
+    #[test]
+    fn test_spreading_decision_update_hf_tapset_edges() {
+        let mode = mode_create(48000, 960).unwrap();
+        let n = mode.short_mdct_size as usize;
+        let x = vec![i32::MAX; n];
+        let spread_weight = vec![1i32; mode.nb_ebands as usize];
+
+        let mut average = 0;
+        let mut hf_average = 64;
+        let mut tapset = 2;
+        let decision = spreading_decision(
+            mode,
+            &x,
+            &mut average,
+            SPREAD_NONE,
+            &mut hf_average,
+            &mut tapset,
+            true,
+            mode.nb_ebands,
+            1,
+            1,
+            &spread_weight,
+        );
+        assert_eq!(tapset, 2);
+        assert!(matches!(
+            decision,
+            SPREAD_NONE | SPREAD_LIGHT | SPREAD_NORMAL | SPREAD_AGGRESSIVE
+        ));
+
+        let mut average = 0;
+        let mut hf_average = 48;
+        let mut tapset = 0;
+        let decision = spreading_decision(
+            mode,
+            &x,
+            &mut average,
+            SPREAD_NONE,
+            &mut hf_average,
+            &mut tapset,
+            true,
+            mode.nb_ebands,
+            1,
+            1,
+            &spread_weight,
+        );
+        assert!(tapset <= 2);
+        assert!(matches!(
+            decision,
+            SPREAD_NONE | SPREAD_LIGHT | SPREAD_NORMAL | SPREAD_AGGRESSIVE
+        ));
     }
 }
