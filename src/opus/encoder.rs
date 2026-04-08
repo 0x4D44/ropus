@@ -3483,4 +3483,175 @@ mod tests {
         assert_eq!(enc.get_final_range(), 0);
         assert_ne!(dtx_packet[0], 0);
     }
+
+    #[test]
+    fn test_multistream_accessors_reset_and_public_getters() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+
+        enc.ms_set_user_bitrate(54321);
+        enc.ms_set_bandwidth(OPUS_BANDWIDTH_WIDEBAND);
+        enc.ms_set_max_bandwidth(OPUS_BANDWIDTH_SUPERWIDEBAND);
+        enc.ms_set_force_mode(MODE_CELT_ONLY);
+        enc.ms_set_force_channels(1);
+        enc.ms_set_lfe(1);
+        enc.ms_set_variable_duration(OPUS_FRAMESIZE_10_MS);
+        enc.ms_set_lsb_depth(12);
+        enc.ms_set_complexity(7);
+        enc.ms_set_vbr(0);
+        enc.ms_set_vbr_constraint(1);
+        enc.ms_set_signal(OPUS_SIGNAL_MUSIC);
+        enc.ms_set_inband_fec(1);
+        enc.ms_set_packet_loss_perc(17);
+        enc.ms_set_dtx(1);
+        enc.ms_set_prediction_disabled(1);
+        enc.ms_set_phase_inversion_disabled(1);
+        enc.ms_set_application(OPUS_APPLICATION_RESTRICTED_LOWDELAY);
+        enc.ms_set_application(12345);
+
+        enc.hp_mem = [1, 2, 3, 4];
+        enc.variable_hp_smth2_q15 = 123456;
+        enc.range_final = 0x1357_9BDF;
+        enc.mode = MODE_CELT_ONLY;
+        enc.prev_mode = MODE_SILK_ONLY;
+        enc.stream_channels = 1;
+
+        assert_eq!(enc.ms_get_vbr(), 0);
+        assert_eq!(enc.ms_get_bitrate(), enc.bitrate_bps);
+        assert_eq!(enc.ms_get_variable_duration(), OPUS_FRAMESIZE_10_MS);
+        assert_eq!(enc.ms_get_lsb_depth(), 12);
+        assert_eq!(enc.ms_get_complexity(), 7);
+        assert_eq!(enc.ms_get_lookahead(), enc.delay_compensation);
+        assert!(enc.ms_get_celt_mode().is_some());
+        assert_eq!(enc.get_hp_mem(), [1, 2, 3, 4]);
+        assert_eq!(enc.get_variable_hp_smth2(), 123456);
+        assert_eq!(enc.get_sample_rate(), 48000);
+        assert_eq!(enc.get_final_range(), 0x1357_9BDF);
+        assert_eq!(enc.get_application(), OPUS_APPLICATION_RESTRICTED_LOWDELAY);
+        assert_eq!(enc.get_channels(), 2);
+        assert_eq!(enc.get_stream_channels(), 1);
+        assert_eq!(enc.get_mode(), MODE_CELT_ONLY);
+        assert_eq!(enc.get_prev_mode(), MODE_SILK_ONLY);
+
+        enc.reset();
+        assert_eq!(enc.get_stream_channels(), 2);
+        assert_eq!(enc.get_mode(), MODE_HYBRID);
+        assert_eq!(enc.get_prev_mode(), 0);
+        assert_eq!(enc.get_final_range(), 0);
+        assert_eq!(enc.get_hp_mem(), [0; 4]);
+    }
+
+    #[test]
+    fn test_ms_helper_accessors_cover_none_and_some_celt_paths() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+
+        enc.celt_enc = None;
+        enc.ms_set_complexity(4);
+        enc.ms_set_packet_loss_perc(9);
+        enc.ms_set_prediction_disabled(1);
+        enc.ms_set_phase_inversion_disabled(1);
+        enc.ms_set_application(12_345);
+        assert_eq!(enc.ms_get_complexity(), 4);
+        assert_eq!(enc.silk_mode.packet_loss_percentage, 9);
+        assert_eq!(enc.get_application(), OPUS_APPLICATION_AUDIO);
+
+        enc.celt_enc = Some(CeltEncoder::new(48000, 2).unwrap());
+        enc.bitrate_bps = 48_000;
+        enc.ms_set_user_bitrate(64_321);
+        enc.ms_set_bandwidth(OPUS_BANDWIDTH_WIDEBAND);
+        enc.ms_set_max_bandwidth(OPUS_BANDWIDTH_FULLBAND);
+        enc.ms_set_force_mode(MODE_CELT_ONLY);
+        enc.ms_set_force_channels(1);
+        enc.ms_set_lfe(1);
+        enc.ms_set_variable_duration(OPUS_FRAMESIZE_10_MS);
+        enc.ms_set_lsb_depth(14);
+        enc.ms_set_complexity(8);
+        enc.ms_set_vbr(0);
+        enc.ms_set_vbr_constraint(1);
+        enc.ms_set_signal(OPUS_SIGNAL_MUSIC);
+        enc.ms_set_inband_fec(2);
+        enc.ms_set_packet_loss_perc(17);
+        enc.ms_set_dtx(1);
+        enc.ms_set_prediction_disabled(1);
+        enc.ms_set_phase_inversion_disabled(1);
+        enc.ms_set_application(OPUS_APPLICATION_RESTRICTED_LOWDELAY);
+
+        assert_eq!(enc.ms_get_vbr(), 0);
+        assert_eq!(enc.ms_get_bitrate(), 48_000);
+        assert_eq!(enc.ms_get_variable_duration(), OPUS_FRAMESIZE_10_MS);
+        assert_eq!(enc.ms_get_lsb_depth(), 14);
+        assert_eq!(enc.ms_get_complexity(), 8);
+        assert_eq!(enc.user_bitrate_bps, 64_321);
+        assert_eq!(enc.user_bandwidth, OPUS_BANDWIDTH_WIDEBAND);
+        assert_eq!(enc.max_bandwidth, OPUS_BANDWIDTH_FULLBAND);
+        assert_eq!(enc.user_forced_mode, MODE_CELT_ONLY);
+        assert_eq!(enc.force_channels, 1);
+        assert_eq!(enc.lfe, 1);
+        assert_eq!(enc.signal_type, OPUS_SIGNAL_MUSIC);
+        assert_eq!(enc.fec_config, 2);
+        assert_eq!(enc.use_dtx, 1);
+        assert_eq!(enc.get_application(), OPUS_APPLICATION_RESTRICTED_LOWDELAY);
+
+        let celt = enc.celt_enc.as_ref().unwrap();
+        assert_eq!(celt.complexity, 8);
+        assert_eq!(celt.loss_rate, 17);
+        assert_eq!(celt.disable_pf, 1);
+        assert_eq!(celt.disable_inv, 1);
+    }
+
+    #[test]
+    fn test_encode_wrappers_reject_invalid_selected_frame_size() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+        enc.ms_set_variable_duration(12_345);
+
+        let pcm_i16 = patterned_pcm_i16(960, 2, 77);
+        let pcm_f32 = patterned_pcm_f32(960, 2, 77);
+        let mut packet = [0u8; 16];
+
+        assert_eq!(enc.encode(&pcm_i16, 960, &mut packet, 16), Err(OPUS_BAD_ARG));
+        assert_eq!(
+            enc.encode_float(&pcm_f32, 960, &mut packet, 16),
+            Err(OPUS_BAD_ARG)
+        );
+    }
+
+    #[test]
+    fn test_public_getters_cover_runtime_state_snapshots() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        enc.hp_mem = [11, 22, 33, 44];
+        enc.variable_hp_smth2_q15 = 55_555;
+        enc.range_final = 0x2468_ACE0;
+        enc.mode = MODE_CELT_ONLY;
+        enc.prev_mode = MODE_HYBRID;
+        enc.stream_channels = 1;
+
+        assert_eq!(enc.get_hp_mem(), [11, 22, 33, 44]);
+        assert_eq!(enc.get_variable_hp_smth2(), 55_555);
+        assert_eq!(enc.get_sample_rate(), 48_000);
+        assert_eq!(enc.get_final_range(), 0x2468_ACE0);
+        assert_eq!(enc.get_application(), OPUS_APPLICATION_VOIP);
+        assert_eq!(enc.get_channels(), 1);
+        assert_eq!(enc.get_stream_channels(), 1);
+        assert_eq!(enc.get_mode(), MODE_CELT_ONLY);
+        assert_eq!(enc.get_prev_mode(), MODE_HYBRID);
+    }
+
+    #[test]
+    fn test_encode_multiframe_cbr_padding_and_wrapper_errors() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_vbr(0), OPUS_OK);
+        assert_eq!(enc.set_bitrate(32000), OPUS_OK);
+
+        let pcm = patterned_pcm_i16(3840, 1, 1201);
+        let mut packet = vec![0u8; 400];
+        let len = enc.encode(&pcm, 3840, &mut packet, 200).unwrap();
+        assert_eq!(len, 200);
+        assert!(enc.get_prev_mode() > 0);
+        assert!(enc.get_final_range() != 0);
+
+        let pcmf = patterned_pcm_f32(960, 1, 1203);
+        assert_eq!(
+            enc.encode_float(&pcmf, -1, &mut packet, 200),
+            Err(OPUS_BAD_ARG)
+        );
+    }
 }
