@@ -2145,6 +2145,16 @@ impl CeltDecoder {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "dnn")]
+    fn plc_arg<'a>() -> DnnPlcArg<'a> {
+        None
+    }
+
+    #[cfg(not(feature = "dnn"))]
+    fn plc_arg<'a>() -> DnnPlcArg<'a> {
+        ()
+    }
+
     #[test]
     fn decoder_new_mono() {
         let dec = CeltDecoder::new(48000, 1).unwrap();
@@ -2241,6 +2251,201 @@ mod tests {
         let result = dec.decode_with_ec(None, &mut pcm, 960, None, false, lpcnet_arg);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 960);
+    }
+
+    #[test]
+    fn ctl_error_paths_and_sticky_error_clear() {
+        let mut dec = CeltDecoder::new(48000, 1).unwrap();
+
+        dec.error = 9;
+        assert_eq!(dec.get_and_clear_error(), 9);
+        assert_eq!(dec.get_and_clear_error(), 0);
+
+        assert!(dec.set_complexity(-1).is_err());
+        assert!(dec.set_complexity(11).is_err());
+        assert!(dec.set_start_band(-1).is_err());
+        assert!(dec.set_start_band(dec.mode.nb_ebands + 1).is_err());
+        assert!(dec.set_end_band(0).is_err());
+        assert!(dec.set_end_band(dec.mode.nb_ebands + 1).is_err());
+        assert!(dec.set_channels(0).is_err());
+        assert!(dec.set_channels(3).is_err());
+
+        assert!(dec.set_channels(2).is_ok());
+        assert_eq!(dec.stream_channels, 2);
+
+        dec.set_signalling(false);
+        dec.set_phase_inversion_disabled(true);
+        assert!(!dec.signalling);
+        assert!(dec.get_phase_inversion_disabled());
+    }
+
+    #[test]
+    fn decode_with_ec_rejects_invalid_frame_size_and_accumulates_plc_output() {
+        let mut dec = CeltDecoder::new(16000, 1).unwrap();
+
+        let mut pcm = vec![0i16; 160];
+        assert_eq!(
+            dec.decode_with_ec(Some(&[0]), &mut pcm, 123, None, false, plc_arg()),
+            Err(-1)
+        );
+
+        let mut pcm = vec![7i16; 160];
+        let decoded = dec
+            .decode_with_ec(Some(&[0]), &mut pcm, 160, None, true, plc_arg())
+            .unwrap();
+        assert_eq!(decoded, 160);
+        assert!(pcm.iter().any(|&sample| sample != 7));
+    }
+
+    #[test]
+    fn decode_lost_noise_path_uses_prefilter_and_fold() {
+        let mut dec = CeltDecoder::new(48000, 2).unwrap();
+        dec.prefilter_and_fold = true;
+        dec.postfilter_period_old = 24;
+        dec.postfilter_period = 24;
+        dec.postfilter_gain_old = qconst16(0.25, 15);
+        dec.postfilter_gain = qconst16(0.25, 15);
+        dec.postfilter_tapset_old = 1;
+        dec.postfilter_tapset = 1;
+
+        dec.decode_lost(dec.mode.short_mdct_size, 0, plc_arg());
+
+        assert_eq!(dec.last_frame_type, FRAME_PLC_NOISE);
+        assert!(!dec.prefilter_and_fold);
+        assert_eq!(dec.skip_plc, 1);
+        assert!(dec.loss_duration > 0);
+        assert!(dec.plc_duration > 0);
+    }
+
+    #[test]
+    fn prefilter_and_fold_mutates_overlap_region() {
+        let mode = &MODE_48000_960_120;
+        let overlap = mode.overlap as usize;
+        let n = mode.short_mdct_size;
+        let buf_size = (DECODE_BUFFER_SIZE + mode.overlap) as usize;
+        let mut buf = vec![1i32; buf_size];
+        let before = buf.clone();
+        let offsets = [0usize];
+
+        prefilter_and_fold(
+            &mut buf,
+            &offsets,
+            1,
+            mode.overlap,
+            n,
+            24,
+            24,
+            qconst16(0.25, 15),
+            qconst16(0.25, 15),
+            1,
+            1,
+            mode.window,
+        );
+
+        let fold_start = DECODE_BUFFER_SIZE as usize - n as usize;
+        assert_ne!(
+            &buf[fold_start..fold_start + overlap],
+            &before[fold_start..fold_start + overlap]
+        );
+    }
+
+    #[test]
+    fn decode_lost_periodic_path_reuses_pitch_index() {
+        let mut dec = CeltDecoder::new(48000, 1).unwrap();
+        dec.skip_plc = 0;
+        dec.plc_duration = 0;
+        dec.prefilter_and_fold = false;
+
+        dec.decode_lost(dec.mode.short_mdct_size, 0, plc_arg());
+        let pitch_index = dec.last_pitch_index;
+
+        assert_eq!(dec.last_frame_type, FRAME_PLC_PERIODIC);
+        assert!(pitch_index > 0);
+
+        dec.decode_lost(dec.mode.short_mdct_size, 0, plc_arg());
+        assert_eq!(dec.last_frame_type, FRAME_PLC_PERIODIC);
+        assert_eq!(dec.last_pitch_index, pitch_index);
+        assert!(dec.loss_duration >= 2);
+    }
+
+    #[test]
+    fn celt_synthesis_covers_channel_layout_branches() {
+        let mode = &MODE_48000_960_120;
+        let n = mode.short_mdct_size;
+        let buf_size = (DECODE_BUFFER_SIZE + mode.overlap) as usize;
+        let start = 0;
+        let end = mode.nb_ebands;
+        let eff_end = mode.nb_ebands;
+
+        let mut mono_out = vec![0i32; buf_size];
+        let mut mono_x = vec![0i32; n as usize];
+        let mono_band_e = vec![0i32; mode.nb_ebands as usize];
+        celt_synthesis(
+            mode,
+            &mut mono_x,
+            &mut mono_out,
+            &[0],
+            &mono_band_e,
+            start,
+            eff_end,
+            1,
+            1,
+            false,
+            0,
+            1,
+            true,
+        );
+        assert!(mono_out.iter().all(|&sample| sample == 0));
+
+        let mut mono_to_stereo_out = vec![0i32; 2 * buf_size];
+        let mut mono_to_stereo_x = vec![0i32; n as usize];
+        celt_synthesis(
+            mode,
+            &mut mono_to_stereo_x,
+            &mut mono_to_stereo_out,
+            &[0, buf_size],
+            &mono_band_e,
+            start,
+            eff_end,
+            1,
+            2,
+            false,
+            0,
+            1,
+            true,
+        );
+        assert!(mono_to_stereo_out.iter().all(|&sample| sample == 0));
+
+        let mut stereo_to_mono_out = vec![0i32; buf_size];
+        let mut stereo_x = vec![0i32; (2 * n) as usize];
+        let stereo_band_e = vec![0i32; (2 * mode.nb_ebands) as usize];
+        celt_synthesis(
+            mode,
+            &mut stereo_x,
+            &mut stereo_to_mono_out,
+            &[0],
+            &stereo_band_e,
+            start,
+            eff_end,
+            2,
+            1,
+            false,
+            0,
+            1,
+            true,
+        );
+        assert!(stereo_to_mono_out.iter().all(|&sample| sample == 0));
+    }
+
+    #[test]
+    fn tf_decode_transient_select_branch() {
+        let mut dec = RangeDecoder::new(&[0x55, 0xaa, 0x33, 0xcc]);
+        let mut tf_res = [0i32; NB_EBANDS];
+        let tf_select = tf_decode(0, 4, true, &mut tf_res, 2, &mut dec);
+
+        assert!(tf_select == 0 || tf_select == 1);
+        assert!(tf_res[..4].iter().all(|&band| (-3..=3).contains(&band)));
+        assert!(dec.tell() > 0);
     }
 
     #[test]
