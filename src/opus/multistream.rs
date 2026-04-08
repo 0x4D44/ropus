@@ -2562,6 +2562,101 @@ mod tests {
     }
 
     #[test]
+    fn test_layout_helper_branches_and_encoder_constructor_errors() {
+        let mut layout = ChannelLayout::new();
+        layout.nb_channels = 4;
+        layout.nb_streams = 2;
+        layout.nb_coupled_streams = 1;
+        layout.mapping[0] = 0;
+        layout.mapping[1] = 0;
+        layout.mapping[2] = 1;
+        layout.mapping[3] = 2;
+
+        assert!(validate_layout(&layout));
+        assert!(validate_encoder_layout(&layout));
+        assert_eq!(get_left_channel(&layout, 0, -1), 0);
+        assert_eq!(get_left_channel(&layout, 0, 0), 1);
+        assert_eq!(get_right_channel(&layout, 0, -1), 2);
+        assert_eq!(get_right_channel(&layout, 0, 2), -1);
+        assert_eq!(get_mono_channel(&layout, 1, -1), 3);
+        assert_eq!(get_mono_channel(&layout, 1, 3), -1);
+
+        let mut missing_left = layout.clone();
+        missing_left.mapping[0] = 1;
+        missing_left.mapping[1] = 1;
+        assert!(!validate_encoder_layout(&missing_left));
+
+        let mut missing_right = layout.clone();
+        missing_right.mapping[2] = 2;
+        assert!(!validate_encoder_layout(&missing_right));
+
+        let mut missing_mono = layout.clone();
+        missing_mono.mapping[3] = 255;
+        assert!(!validate_encoder_layout(&missing_mono));
+
+        let mut too_many_channels = layout.clone();
+        too_many_channels.nb_channels = 256;
+        too_many_channels.nb_streams = 200;
+        too_many_channels.nb_coupled_streams = 56;
+        assert!(!validate_layout(&too_many_channels));
+
+        assert!(matches!(
+            OpusMSEncoder::new(12345, 1, 1, 0, &[0], OPUS_APPLICATION_AUDIO),
+            Err(OPUS_BAD_ARG)
+        ));
+        assert!(matches!(
+            OpusMSEncoder::new(48000, 2, 1, 1, &[0, 255], OPUS_APPLICATION_AUDIO),
+            Err(OPUS_BAD_ARG)
+        ));
+    }
+
+    #[test]
+    fn test_parse_multistream_subpacket_branch_matrix() {
+        assert_eq!(parse_multistream_subpacket(&[0x00, 0x00], 2, true), 2);
+        assert_eq!(parse_multistream_subpacket(&[0x01, 0x00], 2, true), 2);
+        assert_eq!(parse_multistream_subpacket(&[0x02, 0x00, 0x00], 3, true), 3);
+        assert_eq!(parse_multistream_subpacket(&[0x03, 0x03, 0x00], 3, true), 3);
+
+        // Padding branch, code 3 CBR path.
+        assert_eq!(parse_multistream_subpacket(&[0x03, 0x43, 0x01, 0xAA, 0xBB], 5, false), 4);
+
+        // VBR branch, code 3 with two size fields and no self-delimiting size.
+        assert_eq!(
+            parse_multistream_subpacket(&[0x03, 0x83, 0x01, 0x01, 0x01, 0xAA, 0xBB, 0xCC], 8, false),
+            6
+        );
+
+        // Self-delimited code 2 path parses the explicit last frame size.
+        assert_eq!(parse_multistream_subpacket(&[0x02, 0x00, 0x00], 3, true), 3);
+    }
+
+    #[test]
+    fn test_projection_helper_branches_and_family2_constructor() {
+        assert_eq!(get_order_plus_one_from_channels(0), Err(OPUS_BAD_ARG));
+        assert_eq!(get_order_plus_one_from_channels(4), Ok(2));
+        assert_eq!(get_order_plus_one_from_channels(6), Ok(2));
+        assert_eq!(get_order_plus_one_from_channels(13), Err(OPUS_BAD_ARG));
+        assert_eq!(get_order_plus_one_from_channels(228), Err(OPUS_BAD_ARG));
+
+        assert_eq!(get_streams_from_channels(4, 2), Err(OPUS_BAD_ARG));
+        assert_eq!(get_streams_from_channels(4, 3), Ok((2, 2, 2)));
+        assert_eq!(get_streams_from_channels(6, 3), Ok((3, 3, 2)));
+
+        assert!(matches!(get_mixing_matrix_for_order(2), Ok(_)));
+        assert!(matches!(get_demixing_matrix_for_order(3), Ok(_)));
+        assert!(matches!(get_mixing_matrix_for_order(7), Err(OPUS_BAD_ARG)));
+        assert!(matches!(get_demixing_matrix_for_order(7), Err(OPUS_BAD_ARG)));
+
+        let (enc, streams, coupled, mapping) =
+            OpusMSEncoder::new_surround(48000, 4, 2, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(streams, 4);
+        assert_eq!(coupled, 0);
+        assert_eq!(&mapping[..4], &[0, 1, 2, 3]);
+        assert_eq!(enc.nb_streams(), 4);
+        assert_eq!(enc.nb_coupled_streams(), 0);
+    }
+
+    #[test]
     fn test_ms_decoder_rejects_invalid_lengths_and_small_frames() {
         let (mut enc, streams, coupled, mapping) =
             OpusMSEncoder::new_surround(48000, 6, 1, OPUS_APPLICATION_AUDIO)
