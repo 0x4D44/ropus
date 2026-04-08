@@ -144,3 +144,73 @@ impl<'a> EcCoder for RangeDecoder<'a> {
         self.decode_bit_logp(logp)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_trait_dispatch_roundtrip_for_encoder_and_decoder() {
+        let mut buffer = [0u8; 64];
+        let buffer_len = buffer.len();
+        {
+            let mut enc = RangeEncoder::new(&mut buffer);
+
+            assert_eq!(EcCoder::ec_tell(&enc), enc.tell());
+            assert_eq!(EcCoder::ec_tell_frac(&enc), enc.tell_frac());
+            assert_eq!(EcCoder::ec_range_bytes(&enc), enc.range_bytes());
+            assert_eq!(EcCoder::ec_storage_usize(&enc), buffer_len);
+            assert_eq!(EcCoder::ec_buffer(&enc).len(), buffer_len);
+            assert_eq!(EcCoder::ec_buffer_mut(&mut enc).len(), buffer_len);
+
+            EcCoder::ec_encode(&mut enc, 1, 2, 4);
+            EcCoder::ec_enc_uint(&mut enc, 257, 1000);
+            EcCoder::ec_enc_bits(&mut enc, 0b10101, 5);
+            EcCoder::ec_enc_bit_logp(&mut enc, true, 1);
+
+            let snapshot = EcCoder::ec_snapshot(&enc);
+
+            EcCoder::ec_enc_uint(&mut enc, 7, 9);
+            EcCoder::ec_restore(&mut enc, &snapshot);
+            EcCoder::ec_enc_uint(&mut enc, 3, 9);
+
+            enc.done();
+        }
+
+        let mut dec = RangeDecoder::new(&buffer);
+        assert_eq!(EcCoder::ec_tell(&dec), dec.tell());
+        assert_eq!(EcCoder::ec_tell_frac(&dec), dec.tell_frac());
+        assert_eq!(EcCoder::ec_range_bytes(&dec), dec.range_bytes());
+
+        let symbol = EcCoder::ec_decode(&mut dec, 4);
+        assert_eq!(symbol, 1);
+        EcCoder::ec_dec_update(&mut dec, 1, 2, 4);
+        assert_eq!(EcCoder::ec_dec_uint(&mut dec, 1000), 257);
+        assert_eq!(EcCoder::ec_dec_bits(&mut dec, 5), 0b10101);
+        assert!(EcCoder::ec_dec_bit_logp(&mut dec, 1));
+        assert_eq!(EcCoder::ec_dec_uint(&mut dec, 9), 3);
+        assert!(!dec.error());
+    }
+
+    #[test]
+    #[should_panic(expected = "ec_decode called on encoder")]
+    fn test_encoder_panics_on_decode_only_method() {
+        let mut buffer = [0u8; 8];
+        let mut enc = RangeEncoder::new(&mut buffer);
+        let _ = enc.ec_decode(2);
+    }
+
+    #[test]
+    #[should_panic(expected = "ec_encode called on decoder")]
+    fn test_decoder_panics_on_encode_only_method() {
+        let mut dec = RangeDecoder::new(&[0x80u8]);
+        dec.ec_encode(0, 1, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "encoder-only")]
+    fn test_decoder_panics_on_encoder_snapshot_helpers() {
+        let dec = RangeDecoder::new(&[0x80u8]);
+        let _ = dec.ec_snapshot();
+    }
+}

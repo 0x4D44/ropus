@@ -2313,4 +2313,72 @@ mod tests {
         lpcn_compute_band_energy(&mut e, &x);
         assert!(e[0] > 0.0, "DC energy should be positive");
     }
+
+    #[test]
+    fn test_lpcnet_state_load_model_invalid_blob() {
+        let mut st = LPCNetState::new();
+        assert_eq!(st.load_model(&[1, 2, 3]), -1);
+    }
+
+    #[test]
+    fn test_run_frame_network_updates_state_and_deferred_flush() {
+        let mut st = LPCNetState::new();
+        let mut features = [0.0f32; NB_FEATURES];
+        features[NB_BANDS] = 0.25;
+
+        st.run_frame_network(&features);
+        assert_eq!(st.frame_count, 1);
+        assert!(st.lpc.iter().all(|x| x.is_finite()));
+        assert!(st.old_lpc[0].iter().all(|x| x.is_finite()));
+
+        st.run_frame_network_deferred(&features);
+        st.run_frame_network_deferred(&features);
+        assert_eq!(st.feature_buffer_fill, 2);
+        st.run_frame_network_flush();
+        assert_eq!(st.feature_buffer_fill, 0);
+        assert!(st.frame_count >= 3);
+    }
+
+    #[test]
+    fn test_synthesize_and_blend_with_default_model() {
+        let mut st = LPCNetState::new();
+        let features = [0.0f32; NB_FEATURES];
+        for _ in 0..=FEATURES_DELAY {
+            st.run_frame_network(&features);
+        }
+
+        let mut synthesized = [0i16; FRAME_SIZE];
+        st.synthesize(&features, &mut synthesized, FRAME_SIZE);
+        assert!(synthesized.iter().all(|x| *x >= -32767 && *x <= 32767));
+
+        let pcm_in = [123i16; FRAME_SIZE];
+        let mut blended = [0i16; FRAME_SIZE];
+        st.synthesize_blend(&pcm_in, &mut blended, FRAME_SIZE);
+        assert_eq!(blended, pcm_in);
+    }
+
+    #[test]
+    fn test_plc_state_bookkeeping_and_concealment_smoke() {
+        let mut plc = LPCNetPLCState::new();
+        let pcm = [0i16; FRAME_SIZE];
+        let features = [0.0f32; NB_FEATURES];
+
+        plc.fec_add(Some(&features));
+        plc.fec_add(None);
+        assert_eq!(plc.fec_fill_pos, 1);
+        assert_eq!(plc.fec_skip, 1);
+        plc.fec_clear();
+        assert_eq!(plc.fec_fill_pos, 0);
+        assert_eq!(plc.fec_skip, 0);
+
+        assert_eq!(plc.update(&pcm), 0);
+        assert_eq!(plc.blend, 0);
+
+        plc.loaded = true;
+        plc.fec_add(Some(&features));
+        let mut concealed = [0i16; FRAME_SIZE];
+        assert_eq!(plc.conceal(&mut concealed), 0);
+        assert_eq!(plc.blend, 1);
+        assert!(concealed.iter().all(|x| *x >= -32767 && *x <= 32767));
+    }
 }

@@ -47,3 +47,6 @@ pub mod dnn;
 pub mod opus;
 pub mod silk;
 pub mod types;
+
+#[cfg(test)]
+mod coverage_tests;

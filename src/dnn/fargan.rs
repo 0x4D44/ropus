@@ -1138,4 +1138,53 @@ mod tests {
         let period = decode_pitch_period(&features);
         assert!(period > 0, "period should be positive");
     }
+
+    #[test]
+    fn test_new_rejects_missing_weights() {
+        assert!(FarganState::new(&[]).is_err());
+    }
+
+    #[test]
+    fn test_load_model_invalid_blob_fails() {
+        let mut st = FarganState::new_empty();
+        assert_eq!(st.load_model(&[1, 2, 3, 4]), -1);
+    }
+
+    #[test]
+    fn test_cont_primes_state_from_pcm_history() {
+        let mut st = FarganState::new_empty();
+        let pcm0: Vec<f32> = (0..FARGAN_CONT_SAMPLES)
+            .map(|i| (i as f32 / FARGAN_CONT_SAMPLES as f32) - 0.5)
+            .collect();
+        let features0 = vec![0.0f32; 5 * NB_FEATURES];
+
+        st.cont(&pcm0, &features0);
+
+        assert!(st.cont_initialized);
+        assert!((st.deemph_mem - pcm0[FARGAN_CONT_SAMPLES - 1]).abs() < 1e-6);
+        assert!(st.pitch_buf.iter().any(|&x| x != 0.0));
+        assert!(st.cond_conv1_state.iter().all(|x| x.is_finite()));
+        assert!(st.gru1_state.iter().all(|x| x.is_finite()));
+        assert!(st.gru2_state.iter().all(|x| x.is_finite()));
+        assert!(st.gru3_state.iter().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn test_synthesize_updates_last_period_and_outputs_finite_samples() {
+        let mut st = FarganState::new_empty();
+        let pcm0 = vec![0.0f32; FARGAN_CONT_SAMPLES];
+        let mut features = [0.0f32; NB_FEATURES];
+        features[NB_BANDS] = 0.25;
+
+        st.cont(&pcm0, &vec![0.0f32; 5 * NB_FEATURES]);
+
+        let mut pcm = [0.0f32; FARGAN_FRAME_SIZE];
+        st.synthesize(&mut pcm, &features);
+        assert!(pcm.iter().all(|x| x.is_finite()));
+        assert_eq!(st.last_period, decode_pitch_period(&features));
+
+        let mut pcm_i16 = [0i16; LPCNET_FRAME_SIZE];
+        st.synthesize_int(&mut pcm_i16, &features);
+        assert!(pcm_i16.iter().all(|x| *x >= -32767 && *x <= 32767));
+    }
 }

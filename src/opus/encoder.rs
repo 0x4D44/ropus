@@ -2792,6 +2792,37 @@ impl OpusEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::opus::decoder::{OpusDecoder, opus_packet_has_lbrr};
+
+    fn patterned_pcm_i16(frame_size: usize, channels: usize, seed: i32) -> Vec<i16> {
+        (0..frame_size * channels)
+            .map(|i| {
+                let base = ((i as i32 * 7919 + seed * 911) % 28000) - 14000;
+                if channels == 2 && i % 2 == 1 {
+                    (base / 2) as i16
+                } else {
+                    base as i16
+                }
+            })
+            .collect()
+    }
+
+    fn patterned_pcm_f32(frame_size: usize, channels: usize, seed: i32) -> Vec<f32> {
+        patterned_pcm_i16(frame_size, channels, seed)
+            .into_iter()
+            .map(|sample| sample as f32 / 32768.0)
+            .collect()
+    }
+
+    fn packet_mode_from_toc(packet: &[u8]) -> i32 {
+        if packet[0] & 0x80 != 0 {
+            MODE_CELT_ONLY
+        } else if (packet[0] & 0x60) == 0x60 {
+            MODE_HYBRID
+        } else {
+            MODE_SILK_ONLY
+        }
+    }
 
     #[test]
     fn test_gen_toc() {
@@ -2939,5 +2970,177 @@ mod tests {
         let recovered = bits_to_bitrate(bits, fs, frame_size);
         // Should be approximately equal (rounding)
         assert!((recovered - bitrate).abs() < 100);
+    }
+
+    #[test]
+    fn test_encode_emits_toc_only_packet_for_tiny_budget() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        let pcm = patterned_pcm_i16(960, 1, 7);
+        let mut packet = [0u8; 2];
+
+        let len = enc.encode(&pcm, 960, &mut packet, 2).unwrap();
+
+        assert_eq!(len, 1);
+        assert_ne!(packet[0], 0);
+        assert_eq!(enc.get_final_range(), 0);
+    }
+
+    #[test]
+    fn test_encode_rejects_one_byte_100ms_packet() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        let pcm = patterned_pcm_i16(4800, 1, 19);
+        let mut packet = [0u8; 1];
+
+        assert_eq!(
+            enc.encode(&pcm, 4800, &mut packet, 1),
+            Err(OPUS_BUFFER_TOO_SMALL)
+        );
+    }
+
+    #[test]
+    fn test_encode_decode_silk_only_multiframe_with_fec() {
+        let mut enc = OpusEncoder::new(16000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_force_mode(MODE_SILK_ONLY), OPUS_OK);
+        assert_eq!(enc.set_bitrate(40000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(enc.set_inband_fec(1), OPUS_OK);
+        assert_eq!(enc.set_packet_loss_perc(25), OPUS_OK);
+        assert_eq!(enc.set_dtx(1), OPUS_OK);
+        assert_eq!(enc.set_signal(OPUS_SIGNAL_VOICE), OPUS_OK);
+        assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_40_MS), OPUS_OK);
+
+        let mut dec = OpusDecoder::new(16000, 1).unwrap();
+        let mut saw_lbrr = false;
+
+        for frame_idx in 0..4 {
+            let pcm = patterned_pcm_i16(640, 1, 101 + frame_idx * 17);
+            let mut packet = vec![0u8; 1500];
+            let packet_capacity = packet.len() as i32;
+
+            let len = enc.encode(&pcm, 640, &mut packet, packet_capacity).unwrap();
+            let packet = &packet[..len as usize];
+
+            assert!(len > 1);
+            assert_eq!(enc.get_mode(), MODE_SILK_ONLY);
+            assert_eq!(packet_mode_from_toc(packet), MODE_SILK_ONLY);
+
+            let has_lbrr = opus_packet_has_lbrr(packet, len).unwrap();
+            saw_lbrr |= has_lbrr;
+
+            let mut out = vec![0i16; 640];
+            let decoded = dec.decode(Some(packet), &mut out, 640, false).unwrap();
+            assert_eq!(decoded, 640);
+            assert!(out.iter().any(|&sample| sample != 0));
+        }
+
+        assert!(
+            saw_lbrr,
+            "expected at least one packet with in-band FEC/LBRR for this configuration"
+        );
+
+        let mut plc = vec![0i16; 640];
+        assert_eq!(dec.decode(None, &mut plc, 640, false).unwrap(), 640);
+    }
+
+    #[test]
+    fn test_encode_float_lowdelay_celt_roundtrip() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+        assert_eq!(enc.set_vbr(0), OPUS_OK);
+        assert_eq!(enc.set_complexity(10), OPUS_OK);
+        assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_5_MS), OPUS_OK);
+        assert_eq!(enc.set_phase_inversion_disabled(1), OPUS_OK);
+
+        let pcm = patterned_pcm_f32(240, 2, 43);
+        let mut packet = vec![0u8; 1500];
+        let packet_capacity = packet.len() as i32;
+        let len = enc
+            .encode_float(&pcm, 240, &mut packet, packet_capacity)
+            .unwrap();
+        let packet = &packet[..len as usize];
+
+        assert!(len > 0);
+        assert_eq!(enc.get_mode(), MODE_CELT_ONLY);
+        assert_eq!(packet_mode_from_toc(packet), MODE_CELT_ONLY);
+
+        let mut dec = OpusDecoder::new(48000, 2).unwrap();
+        dec.set_phase_inversion_disabled(true);
+
+        let mut out = vec![0f32; 240 * 2];
+        let decoded = dec.decode_float(Some(packet), &mut out, 240, false).unwrap();
+        assert_eq!(decoded, 240);
+        assert!(out.iter().any(|sample| sample.abs() > 1e-4));
+    }
+
+    #[test]
+    fn test_decode24_and_fec_fallback_for_celt_packet() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+        assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_10_MS), OPUS_OK);
+
+        let pcm = patterned_pcm_i16(480, 1, 77);
+        let mut packet = vec![0u8; 1500];
+        let packet_capacity = packet.len() as i32;
+        let len = enc.encode(&pcm, 480, &mut packet, packet_capacity).unwrap();
+        let packet = &packet[..len as usize];
+
+        let mut dec24 = OpusDecoder::new(48000, 1).unwrap();
+        let mut pcm24 = vec![0i32; 480];
+        let decoded24 = dec24.decode24(Some(packet), &mut pcm24, 480, false).unwrap();
+        assert_eq!(decoded24, 480);
+        assert!(pcm24.iter().any(|&sample| sample != 0));
+
+        let mut plc_dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut warmup = vec![0i16; 480];
+        assert_eq!(plc_dec.decode(Some(packet), &mut warmup, 480, false).unwrap(), 480);
+
+        let mut fec_pcm = vec![0i16; 480];
+        let decoded_fec = plc_dec.decode(Some(packet), &mut fec_pcm, 480, true).unwrap();
+        assert_eq!(decoded_fec, 480);
+        assert!(fec_pcm.iter().any(|&sample| sample != 0));
+    }
+
+    #[test]
+    fn test_encoder_rejects_invalid_ctl_ranges() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+
+        assert_eq!(enc.set_vbr(2), OPUS_BAD_ARG);
+        assert_eq!(enc.set_vbr_constraint(-1), OPUS_BAD_ARG);
+        assert_eq!(enc.set_force_channels(3), OPUS_BAD_ARG);
+        assert_eq!(enc.set_bandwidth(12345), OPUS_BAD_ARG);
+        assert_eq!(enc.set_max_bandwidth(12345), OPUS_BAD_ARG);
+        assert_eq!(enc.set_signal(12345), OPUS_BAD_ARG);
+        assert_eq!(enc.set_inband_fec(3), OPUS_BAD_ARG);
+        assert_eq!(enc.set_packet_loss_perc(101), OPUS_BAD_ARG);
+        assert_eq!(enc.set_dtx(2), OPUS_BAD_ARG);
+        assert_eq!(enc.set_lsb_depth(7), OPUS_BAD_ARG);
+        assert_eq!(enc.set_expert_frame_duration(4999), OPUS_BAD_ARG);
+        assert_eq!(enc.set_prediction_disabled(2), OPUS_BAD_ARG);
+        assert_eq!(enc.set_voice_ratio(101), OPUS_BAD_ARG);
+        assert_eq!(enc.set_force_mode(12345), OPUS_BAD_ARG);
+    }
+
+    #[test]
+    fn test_encode_decode_forced_hybrid_stereo_roundtrip() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_force_mode(MODE_HYBRID), OPUS_OK);
+        assert_eq!(enc.set_bitrate(96000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(enc.set_signal(OPUS_SIGNAL_VOICE), OPUS_OK);
+        assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_20_MS), OPUS_OK);
+
+        let pcm = patterned_pcm_i16(960, 2, 303);
+        let mut packet = vec![0u8; 1500];
+        let packet_capacity = packet.len() as i32;
+        let len = enc.encode(&pcm, 960, &mut packet, packet_capacity).unwrap();
+        let packet = &packet[..len as usize];
+
+        assert!(len > 1);
+        assert_eq!(enc.get_mode(), MODE_HYBRID);
+        assert_eq!(packet_mode_from_toc(packet), MODE_HYBRID);
+
+        let mut dec = OpusDecoder::new(48000, 2).unwrap();
+        let mut out = vec![0i16; 960 * 2];
+        let decoded = dec.decode(Some(packet), &mut out, 960, false).unwrap();
+        assert_eq!(decoded, 960);
+        assert!(out.iter().any(|&sample| sample != 0));
     }
 }

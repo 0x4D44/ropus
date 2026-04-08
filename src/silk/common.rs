@@ -1521,3 +1521,108 @@ pub fn silk_decode_pitch(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clz64_boundaries() {
+        assert_eq!(silk_clz64(0), 64);
+        assert_eq!(silk_clz64(1), 63);
+        assert_eq!(silk_clz64(1i64 << 62), 1);
+        assert_eq!(silk_clz64(i64::MAX), 1);
+    }
+
+    #[test]
+    fn test_sigm_q15_monotonic_and_saturating() {
+        assert_eq!(silk_sigm_q15(-6 * 32), 0);
+        assert_eq!(silk_sigm_q15(6 * 32), 32767);
+        assert_eq!(silk_sigm_q15(0), 16384);
+        assert!(silk_sigm_q15(-32) < silk_sigm_q15(0));
+        assert!(silk_sigm_q15(0) < silk_sigm_q15(32));
+    }
+
+    #[test]
+    fn test_bwexpander_16_and_32_reduce_coefficients() {
+        let mut ar16 = [1000i16, 2000, 3000, 4000];
+        let ar16_len = ar16.len();
+        silk_bwexpander(&mut ar16, ar16_len, 65000);
+        assert!(ar16[0] < 1000);
+        assert!(ar16[3] < 4000);
+
+        let mut ar32 = [400_000i32, -300_000, 200_000, -100_000];
+        let ar32_len = ar32.len();
+        silk_bwexpander_32(&mut ar32, ar32_len, 65000);
+        assert!(ar32[0].abs() < 400_000);
+        assert!(ar32[1].abs() < 300_000);
+        assert!(ar32[2].abs() < 200_000);
+        assert!(ar32[3].abs() < 100_000);
+    }
+
+    #[test]
+    fn test_inverse32_var_q_close_to_integer_inverse() {
+        let expected = ((1i64 << 24) / 12_345) as i32;
+        let actual = silk_inverse32_var_q(12_345, 24);
+        assert!(
+            (actual - expected).abs() <= expected / 20 + 2,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn test_div32_var_q_close_to_integer_division() {
+        let expected = ((123_456i64 << 8) / 789) as i32;
+        let actual = silk_div32_var_q(123_456, 789, 8);
+        assert!(
+            (actual - expected).abs() <= expected / 10 + 4,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn test_sqrt_approx_basic_values() {
+        assert_eq!(silk_sqrt_approx(0), 0);
+        let sqrt_one = silk_sqrt_approx(1);
+        let sqrt_65536 = silk_sqrt_approx(65_536);
+        assert!(sqrt_one > 0);
+        assert!(sqrt_65536 > sqrt_one);
+        assert!((sqrt_65536 - 256).abs() < 32);
+    }
+
+    #[test]
+    fn test_sum_sqr_shift_handles_zero_and_large_input() {
+        assert_eq!(silk_sum_sqr_shift(&[]), (0, 0));
+
+        let input = [30_000i16; 8];
+        let (energy, shift) = silk_sum_sqr_shift(&input);
+        assert!(energy > 0);
+        assert!(shift > 0);
+    }
+
+    #[test]
+    fn test_nlsf2a_produces_non_zero_lpc() {
+        let nlsf: [i16; 10] = [
+            3277, 6554, 9830, 13107, 16384, 19661, 22938, 26214, 29491, 32000,
+        ];
+        let mut a_q12 = [0i16; 10];
+        silk_nlsf2a(&mut a_q12, &nlsf, 10);
+        assert!(a_q12.iter().any(|&x| x != 0));
+    }
+
+    #[test]
+    fn test_decode_pitch_bounds_for_10ms_and_20ms() {
+        let mut pitch_lags = [0i32; 4];
+        silk_decode_pitch(32, 0, &mut pitch_lags[..2], 8, 2);
+        for &lag in &pitch_lags[..2] {
+            assert!(lag >= PITCH_EST_MIN_LAG_MS as i32 * 8);
+            assert!(lag <= PITCH_EST_MAX_LAG_MS as i32 * 8);
+        }
+
+        silk_decode_pitch(50, 0, &mut pitch_lags, 16, 4);
+        for &lag in &pitch_lags {
+            assert!(lag >= PITCH_EST_MIN_LAG_MS as i32 * 16);
+            assert!(lag <= PITCH_EST_MAX_LAG_MS as i32 * 16);
+        }
+    }
+}

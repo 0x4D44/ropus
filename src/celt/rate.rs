@@ -618,3 +618,119 @@ pub fn clt_compute_allocation<EC: EcCoder>(
 
     coded_bands
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::celt::modes::mode_create;
+    use crate::celt::range_coder::{RangeDecoder, RangeEncoder};
+
+    #[test]
+    fn get_pulses_matches_expected_progression() {
+        assert_eq!(get_pulses(0), 0);
+        assert_eq!(get_pulses(7), 7);
+        assert_eq!(get_pulses(8), 8);
+        assert_eq!(get_pulses(9), 9);
+        assert_eq!(get_pulses(15), 15);
+        assert_eq!(get_pulses(16), 16);
+        assert_eq!(get_pulses(17), 18);
+    }
+
+    #[test]
+    fn bits_and_pulses_are_monotonic_for_static_mode() {
+        let mode = mode_create(48000, 960).expect("static mode");
+        let band = 8;
+        let lm = 0;
+
+        let mut prev_q = 0;
+        for bits in [0, 8, 16, 24, 32, 48, 64, 96, 128] {
+            let q = bits2pulses(mode, band, lm, bits);
+            assert!(q >= prev_q, "bits={bits} produced q={q} after {prev_q}");
+            assert_eq!(pulses2bits(mode, band, lm, 0), 0);
+            if q > 0 {
+                assert!(pulses2bits(mode, band, lm, q) >= 0);
+            }
+            prev_q = q;
+        }
+    }
+
+    #[test]
+    fn clt_compute_allocation_roundtrips_control_decisions() {
+        let mode = mode_create(48000, 960).expect("static mode");
+        let mut buf = [0u8; 256];
+        let offsets = [0i32; NB_EBANDS];
+        let cap = [4096i32; NB_EBANDS];
+
+        let mut encoded_pulses = [0i32; NB_EBANDS];
+        let mut encoded_ebits = [0i32; NB_EBANDS];
+        let mut encoded_priority = [0i32; NB_EBANDS];
+        let mut encoded_intensity = NB_EBANDS as i32;
+        let mut encoded_dual_stereo = 1;
+        let mut encoded_balance = 0;
+
+        let encoded_bands = {
+            let mut enc = RangeEncoder::new(&mut buf);
+            let coded = clt_compute_allocation(
+                mode,
+                0,
+                NB_EBANDS as i32,
+                &offsets,
+                &cap,
+                7,
+                &mut encoded_intensity,
+                &mut encoded_dual_stereo,
+                700 << BITRES,
+                &mut encoded_balance,
+                &mut encoded_pulses,
+                &mut encoded_ebits,
+                &mut encoded_priority,
+                2,
+                0,
+                &mut enc,
+                true,
+                NB_EBANDS as i32,
+                NB_EBANDS as i32,
+            );
+            enc.done();
+            coded
+        };
+
+        let mut decoded_pulses = [0i32; NB_EBANDS];
+        let mut decoded_ebits = [0i32; NB_EBANDS];
+        let mut decoded_priority = [0i32; NB_EBANDS];
+        let mut decoded_intensity = 0;
+        let mut decoded_dual_stereo = 0;
+        let mut decoded_balance = 0;
+
+        let mut dec = RangeDecoder::new(&buf);
+        let decoded_bands = clt_compute_allocation(
+            mode,
+            0,
+            NB_EBANDS as i32,
+            &offsets,
+            &cap,
+            7,
+            &mut decoded_intensity,
+            &mut decoded_dual_stereo,
+            700 << BITRES,
+            &mut decoded_balance,
+            &mut decoded_pulses,
+            &mut decoded_ebits,
+            &mut decoded_priority,
+            2,
+            0,
+            &mut dec,
+            false,
+            NB_EBANDS as i32,
+            NB_EBANDS as i32,
+        );
+
+        assert_eq!(decoded_bands, encoded_bands);
+        assert_eq!(decoded_intensity, encoded_intensity);
+        assert_eq!(decoded_dual_stereo, encoded_dual_stereo);
+        assert_eq!(decoded_balance, encoded_balance);
+        assert_eq!(decoded_pulses, encoded_pulses);
+        assert_eq!(decoded_ebits, encoded_ebits);
+        assert_eq!(decoded_priority, encoded_priority);
+    }
+}
