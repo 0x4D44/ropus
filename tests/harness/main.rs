@@ -5795,6 +5795,91 @@ fn cmd_test_all() {
     println!("========================================");
 }
 
+#[cfg(test)]
+mod coverage_smoke_tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn harness_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn smoke_core_harness_commands() {
+        let _guard = harness_lock().lock().unwrap();
+
+        cmd_api();
+        cmd_packets("tests/vectors/48000hz_mono_noise.wav");
+        cmd_decode_formats("tests/vectors/48000hz_mono_noise.wav");
+        cmd_repacketizer("tests/vectors/48000hz_mono_noise.wav");
+    }
+
+    #[test]
+    fn smoke_resilience_and_multistream_commands() {
+        let _guard = harness_lock().lock().unwrap();
+
+        let wav = read_wav(Path::new("tests/vectors/48000hz_mono_noise.wav"));
+        let sr = wav.sample_rate as i32;
+        let ch = wav.channels as i32;
+        let frame_size = (sr / 50) as usize;
+
+        let mut plc_cfg = EncodeConfig::new(sr, ch);
+        plc_cfg.bitrate = 64000;
+        let plc_packets = parse_packets(&c_encode_cfg(&wav.samples, &plc_cfg));
+        let plc_output = plc_decode_rust(sr, ch, frame_size, &plc_packets, &[5, 15, 25]);
+        assert!(
+            !plc_output.is_empty(),
+            "PLC smoke path should conceal dropped packets"
+        );
+
+        let mut fec_cfg = EncodeConfig::new(sr, ch);
+        fec_cfg.bitrate = 64000;
+        fec_cfg.fec = 1;
+        fec_cfg.packet_loss_pct = 20;
+        let fec_packets = parse_packets(&c_encode_cfg(&wav.samples, &fec_cfg));
+        let fec_output = fec_decode_rust(sr, ch, frame_size, &fec_packets, &[5, 15, 25]);
+        assert!(
+            !fec_output.is_empty(),
+            "FEC smoke path should recover dropped packets"
+        );
+
+        let dtx_signal = generate_dtx_signal(16000, 1, 1.0, 42);
+        let mut dtx_cfg = EncodeConfig::new(16000, 1);
+        dtx_cfg.bitrate = 24000;
+        dtx_cfg.application = bindings::OPUS_APPLICATION_VOIP;
+        dtx_cfg.dtx = 1;
+        let dtx_encoded = rust_encode_cfg(&dtx_signal, &dtx_cfg);
+        assert!(
+            !dtx_encoded.is_empty(),
+            "DTX smoke path should produce encoded output"
+        );
+        let dtx_decoded = rust_decode_cfg(&dtx_encoded, &dtx_cfg);
+        assert!(!dtx_decoded.is_empty(), "DTX smoke path should decode output");
+
+        cmd_multistream();
+        cmd_quality("tests/vectors/48000hz_mono_sine440.wav");
+    }
+
+    #[test]
+    fn smoke_targeted_sweep_matrix() {
+        let _guard = harness_lock().lock().unwrap();
+
+        for filter in [
+            "SILK 8k/1ch CBR 12kbps 20ms cx10 VOIP",
+            "SILK 8k/1ch CBR 24kbps 20ms cx10 VOIP FEC+5%loss",
+            "Hybrid 16k/1ch CBR 32kbps 20ms cx10 AUDIO",
+            "Hybrid 16k/1ch CVBR 24kbps 20ms cx10 AUDIO",
+            "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO",
+            "CELT 48k/1ch CBR 64kbps 20ms cx10 VOIP DTX",
+            "CELT 48k/2ch CBR 128kbps 20ms cx10 AUDIO forcestereo",
+            "CELT 48k/1ch CBR 64kbps 2.5ms cx10 LOWDELAY",
+        ] {
+            cmd_sweep(Some(filter), true);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
