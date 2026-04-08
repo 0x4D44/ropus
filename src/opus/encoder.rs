@@ -2890,10 +2890,7 @@ mod tests {
             compute_equiv_rate(64000, 1, 100, 0, MODE_CELT_ONLY, 0, 0),
             45292
         );
-        assert_eq!(
-            compute_equiv_rate(64000, 1, 50, 1, 12345, 10, 10),
-            59429
-        );
+        assert_eq!(compute_equiv_rate(64000, 1, 50, 1, 12345, 10, 10), 59429);
         assert_eq!(
             compute_equiv_rate(64000, 1, 50, 1, MODE_SILK_ONLY, 1, 0),
             46592
@@ -3160,6 +3157,70 @@ mod tests {
     }
 
     #[test]
+    fn test_encoder_bitrate_and_ctl_special_values() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+
+        assert_eq!(enc.set_bitrate(OPUS_AUTO), OPUS_OK);
+        assert_eq!(enc.user_bitrate_bps, OPUS_AUTO);
+
+        assert_eq!(enc.set_bitrate(OPUS_BITRATE_MAX), OPUS_OK);
+        assert_eq!(enc.user_bitrate_bps, OPUS_BITRATE_MAX);
+
+        assert_eq!(enc.set_bitrate(400), OPUS_OK);
+        assert_eq!(enc.user_bitrate_bps, 500);
+
+        assert_eq!(enc.set_bitrate(2_000_000), OPUS_OK);
+        assert_eq!(enc.user_bitrate_bps, 1_500_000);
+
+        assert_eq!(enc.set_vbr_constraint(0), OPUS_OK);
+        assert_eq!(enc.get_vbr_constraint(), 0);
+        assert_eq!(enc.set_vbr_constraint(1), OPUS_OK);
+        assert_eq!(enc.get_vbr_constraint(), 1);
+
+        assert_eq!(enc.set_force_channels(OPUS_AUTO), OPUS_OK);
+        assert_eq!(enc.get_force_channels(), OPUS_AUTO);
+        assert_eq!(enc.set_bandwidth(OPUS_AUTO), OPUS_OK);
+        assert_eq!(enc.user_bandwidth, OPUS_AUTO);
+        assert_eq!(enc.set_signal(OPUS_AUTO), OPUS_OK);
+        assert_eq!(enc.get_signal(), OPUS_AUTO);
+        assert_eq!(enc.set_max_bandwidth(OPUS_BANDWIDTH_FULLBAND), OPUS_OK);
+        assert_eq!(enc.get_max_bandwidth(), OPUS_BANDWIDTH_FULLBAND);
+        assert_eq!(enc.set_voice_ratio(-1), OPUS_OK);
+        assert_eq!(enc.get_voice_ratio(), -1);
+    }
+
+    #[test]
+    fn test_encode_native_argument_and_silence_paths() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        let mut empty: [u8; 0] = [];
+        assert_eq!(
+            enc.encode_native(&[], 0, &mut empty, 0, 16),
+            Err(OPUS_BAD_ARG)
+        );
+
+        let pcm = patterned_pcm_i16(4800, 1, 19);
+        let mut tiny_packet = [0u8; 1];
+        assert_eq!(
+            enc.encode_native(&pcm, 4800, &mut tiny_packet, 1, 16),
+            Err(OPUS_BUFFER_TOO_SMALL)
+        );
+
+        assert_eq!(enc.set_vbr(0), OPUS_OK);
+        assert_eq!(enc.set_bitrate(64000), OPUS_OK);
+
+        let silence = [0i16; 960];
+        let mut packet = vec![0u8; 1500];
+        let packet_len = packet.len() as i32;
+        let len = enc
+            .encode_native(&silence, 960, &mut packet, packet_len, 16)
+            .unwrap();
+
+        assert!(len > 1);
+        assert_eq!(enc.peak_signal_energy, 0);
+        assert_eq!(enc.voice_ratio, -1);
+    }
+
+    #[test]
     fn test_encode_decode_forced_hybrid_stereo_roundtrip() {
         let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_VOIP).unwrap();
         assert_eq!(enc.set_force_mode(MODE_HYBRID), OPUS_OK);
@@ -3331,7 +3392,10 @@ mod tests {
         assert!(len_celt > 1);
         assert_eq!(enc.get_mode(), MODE_CELT_ONLY);
         assert_eq!(enc.get_prev_mode(), MODE_CELT_ONLY);
-        assert_eq!(packet_mode_from_toc(&packet[..len_celt as usize]), MODE_CELT_ONLY);
+        assert_eq!(
+            packet_mode_from_toc(&packet[..len_celt as usize]),
+            MODE_CELT_ONLY
+        );
 
         assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
         assert_eq!(enc.set_force_mode(MODE_SILK_ONLY), OPUS_OK);

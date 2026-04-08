@@ -2175,6 +2175,72 @@ mod tests {
     }
 
     // ===================================================================
+    // P2: scalar wrappers and small helpers
+    // ===================================================================
+
+    #[test]
+    fn test_scalar_helpers_cover_edge_branches() {
+        assert_eq!(silk_clz64(0), 64);
+        assert_eq!(silk_clz64(1), 63);
+        assert_eq!(silk_clz64_fn(0), 64);
+        assert_eq!(silk_clz64_fn(1), 63);
+
+        assert_eq!(silk_ror32(0x1234_5678, 8), 0x7812_3456u32 as i32);
+        assert_eq!(silk_add_pos_sat32(10, 20), 30);
+        assert_eq!(silk_add_pos_sat32(i32::MAX - 1, 10), i32::MAX);
+
+        assert_eq!(silk_sat16(123), 123);
+        assert_eq!(silk_sat16(40000), i16::MAX as i32);
+        assert_eq!(silk_sat16(-40000), i16::MIN as i32);
+        assert_eq!(silk_add_sat16(1000, 2000), 3000);
+        assert_eq!(silk_add_sat16(30000, 30000), i16::MAX);
+        assert_eq!(silk_add_sat16(-30000, -30000), i16::MIN);
+
+        assert_eq!(silk_limit(5, 1, 10), 5);
+        assert_eq!(silk_limit(0, 1, 10), 1);
+        assert_eq!(silk_limit(11, 1, 10), 10);
+
+        assert_eq!(silk_check_fit32(0x1_0000_0001), 1);
+        assert_eq!(silk_check_fit16(0x12345), 0x2345i16);
+
+        assert_eq!(silk_rshift_round_fn(42, 0), 42);
+        assert_eq!(silk_rshift_round_fn(3, 1), 2);
+
+        assert_eq!(silk_add_lshift32(5, 3, 2), 17);
+        assert_eq!(silk_sub_rshift32(10, 8, 1), 6);
+        assert_eq!(silk_rshift64(16, 2), 4);
+        assert_eq!(silk_lshift64(4, 3), 32);
+        assert_eq!(silk_mul(6, -7), -42);
+        assert_eq!(silk_smull(6, -7), -42);
+        assert_eq!(silk_smmul(1 << 16, 1 << 16), 1 << 0);
+        assert_eq!(silk_smulww(1 << 16, 1 << 16), 1 << 16);
+        assert_eq!(silk_smulbb(0x10001, 0x20002), 2);
+        assert_eq!(silk_smlabb(10, 0x10001, 0x20002), 12);
+        assert_eq!(silk_smlawt(10, 1 << 16, 1 << 16), 11);
+        assert_eq!(silk_smlabb_ovflw(i32::MAX, 1, 1), i32::MIN);
+        assert_eq!(silk_div32_16(9, 3), 3);
+    }
+
+    #[test]
+    fn test_history_filter_and_shifted_energy_helpers() {
+        let mut out = [0i32; 2];
+        let s = [10i16, 20, 30, 40, 50];
+        let a_q12 = [4096i16, 0, 0];
+        silk_lpc_analysis_filter_with_history(&mut out, &s, 1, &a_q12, 2, 3);
+        assert_eq!(out, [10, 10]);
+
+        let (energy, shift) = silk_sum_sqr_shift_i32(&[i32::MAX, i32::MAX], 0);
+        assert!(energy > 0);
+        assert!(shift > 0);
+    }
+
+    #[test]
+    fn test_inverse_and_div32_saturation_branches() {
+        assert!(silk_inverse32_var_q(1, 40) > 0);
+        assert!(silk_div32_var_q(1, 1, 40) > 0);
+    }
+
+    // ===================================================================
     // P2: silk_gains_dequant
     // ===================================================================
 
@@ -2202,6 +2268,16 @@ mod tests {
         assert!(prev_ind >= 0 && (prev_ind as i32) < N_LEVELS_QGAIN_I);
     }
 
+    #[test]
+    fn test_gains_dequant_double_step_branch() {
+        let mut gain_q16 = [0i32; 4];
+        let ind = [0i8, 127, 127, 127];
+        let mut prev_ind: i8 = 0;
+        silk_gains_dequant(&mut gain_q16, &ind, &mut prev_ind, true, 4);
+        assert!(gain_q16.iter().all(|&g| g > 0));
+        assert!(prev_ind >= 0 && (prev_ind as i32) < N_LEVELS_QGAIN_I);
+    }
+
     // ===================================================================
     // P2: silk_decode_pitch
     // ===================================================================
@@ -2222,6 +2298,30 @@ mod tests {
     fn test_decode_pitch_10ms_8khz() {
         let mut pitch_lags = [0i32; 2];
         silk_decode_pitch(32, 0, &mut pitch_lags, 8, 2);
+        let min_lag = PITCH_EST_MIN_LAG_MS as i32 * 8;
+        let max_lag = PITCH_EST_MAX_LAG_MS as i32 * 8;
+        for (k, &lag) in pitch_lags.iter().enumerate() {
+            assert!(lag >= min_lag, "lag[{k}]={lag} < min={min_lag}");
+            assert!(lag <= max_lag, "lag[{k}]={lag} > max={max_lag}");
+        }
+    }
+
+    #[test]
+    fn test_decode_pitch_10ms_16khz_stage3() {
+        let mut pitch_lags = [0i32; 2];
+        silk_decode_pitch(32, 7, &mut pitch_lags, 16, 2);
+        let min_lag = PITCH_EST_MIN_LAG_MS as i32 * 16;
+        let max_lag = PITCH_EST_MAX_LAG_MS as i32 * 16;
+        for (k, &lag) in pitch_lags.iter().enumerate() {
+            assert!(lag >= min_lag, "lag[{k}]={lag} < min={min_lag}");
+            assert!(lag <= max_lag, "lag[{k}]={lag} > max={max_lag}");
+        }
+    }
+
+    #[test]
+    fn test_decode_pitch_20ms_8khz_stage2() {
+        let mut pitch_lags = [0i32; 4];
+        silk_decode_pitch(32, 7, &mut pitch_lags, 8, 4);
         let min_lag = PITCH_EST_MIN_LAG_MS as i32 * 8;
         let max_lag = PITCH_EST_MAX_LAG_MS as i32 * 8;
         for (k, &lag) in pitch_lags.iter().enumerate() {
@@ -2267,6 +2367,16 @@ mod tests {
         silk_resampler_down2_3(&mut state, &mut output, &input, 480);
         // 480 * 2/3 = 320
         assert_eq!(output.len(), 320);
+    }
+
+    #[test]
+    fn test_down2_3_tail_copy_branch() {
+        let input = [1i16; 481];
+        let mut output = [0i16; 321];
+        let mut state = [0i32; 6];
+        silk_resampler_down2_3(&mut state, &mut output, &input, input.len());
+        assert!(output.iter().any(|&sample| sample != 0));
+        assert!(state.iter().any(|&sample| sample != 0));
     }
 
     // ===================================================================

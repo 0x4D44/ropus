@@ -2818,7 +2818,10 @@ mod tests {
         silk_stereo_ms_to_lr(&mut state, &mut x1, &mut x2, &pred_q13, 16, frame_length);
 
         assert_eq!(state.pred_prev_q13, pred_q13);
-        assert_eq!(state.s_mid, [original_mid[frame_length], original_mid[frame_length + 1]]);
+        assert_eq!(
+            state.s_mid,
+            [original_mid[frame_length], original_mid[frame_length + 1]]
+        );
         assert_eq!(
             state.s_side,
             [original_side[frame_length], original_side[frame_length + 1]]
@@ -2842,10 +2845,16 @@ mod tests {
         silk_stereo_ms_to_lr(&mut state, &mut x1, &mut x2, &pred_q13, 8, frame_length);
 
         assert_eq!(state.pred_prev_q13, pred_q13);
-        assert!(x1[1..=frame_length].iter().any(|&sample| sample == i16::MAX));
-        assert!(x2[1..=frame_length]
-            .iter()
-            .all(|&sample| (i16::MIN..=i16::MAX).contains(&sample)));
+        assert!(
+            x1[1..=frame_length]
+                .iter()
+                .any(|&sample| sample == i16::MAX)
+        );
+        assert!(
+            x2[1..=frame_length]
+                .iter()
+                .all(|&sample| (i16::MIN..=i16::MAX).contains(&sample))
+        );
     }
 
     #[test]
@@ -2899,6 +2908,150 @@ mod tests {
         assert_eq!(dec.nlsf_cb.order, SILK_NLSF_CB_WB.order);
         assert_eq!(dec.nlsf_cb.cb1_icdf, SILK_NLSF_CB1_ICDF_WB.as_slice());
         assert_eq!(dec.nlsf_cb.ec_icdf, SILK_NLSF_CB2_ICDF_WB.as_slice());
+    }
+
+    #[test]
+    fn test_silk_decode_rejects_invalid_payload_size_and_sampling_rate() {
+        let rc_buf = [0x80u8];
+        let mut out = vec![0i16; 1920];
+        let mut n = 0usize;
+
+        let mut decoder = SilkDecoder::new();
+        let mut invalid_payload_ctrl = SilkDecControl {
+            n_channels_api: 1,
+            n_channels_internal: 1,
+            api_sample_rate: 48_000,
+            internal_sample_rate: 16_384,
+            payload_size_ms: 30,
+            prev_pitch_lag: 0,
+            #[cfg(feature = "dnn")]
+            enable_deep_plc: false,
+        };
+        let mut rc = RangeDecoder::new(&rc_buf);
+        #[cfg(feature = "dnn")]
+        let lpcnet_arg: DnnPlcArg<'_> = None;
+        #[cfg(not(feature = "dnn"))]
+        let lpcnet_arg: DnnPlcArg<'_> = ();
+        assert_eq!(
+            silk_decode(
+                &mut decoder,
+                &mut invalid_payload_ctrl,
+                FLAG_DECODE_NORMAL,
+                true,
+                &mut rc,
+                &mut out,
+                &mut n,
+                lpcnet_arg,
+            ),
+            -1
+        );
+
+        let mut decoder = SilkDecoder::new();
+        let mut invalid_rate_ctrl = SilkDecControl {
+            n_channels_api: 1,
+            n_channels_internal: 1,
+            api_sample_rate: 48_000,
+            internal_sample_rate: 8_192,
+            payload_size_ms: 20,
+            prev_pitch_lag: 0,
+            #[cfg(feature = "dnn")]
+            enable_deep_plc: false,
+        };
+        let mut rc = RangeDecoder::new(&rc_buf);
+        #[cfg(feature = "dnn")]
+        let lpcnet_arg: DnnPlcArg<'_> = None;
+        #[cfg(not(feature = "dnn"))]
+        let lpcnet_arg: DnnPlcArg<'_> = ();
+        assert_eq!(
+            silk_decode(
+                &mut decoder,
+                &mut invalid_rate_ctrl,
+                FLAG_DECODE_NORMAL,
+                true,
+                &mut rc,
+                &mut out,
+                &mut n,
+                lpcnet_arg,
+            ),
+            -2
+        );
+    }
+
+    #[test]
+    fn test_silk_decode_stereo_transition_resets_side_channel_state() {
+        let mut decoder = SilkDecoder::new();
+        decoder.n_channels_api = 1;
+        decoder.n_channels_internal = 1;
+        decoder.prev_decode_only_middle = true;
+        decoder.s_stereo.pred_prev_q13 = [123, -456];
+        decoder.s_stereo.s_side = [11, 22];
+
+        for channel in &mut decoder.channel_state {
+            silk_decoder_set_fs(channel, 8, 48_000);
+            channel.n_frames_decoded = 1;
+            channel.loss_cnt = 1;
+            channel.prev_signal_type = TYPE_NO_VOICE_ACTIVITY;
+            channel.exc_q14.fill(1 << 14);
+            channel.s_plc.rand_scale_q14 = 1 << 14;
+            channel.s_plc.pitch_l_q8 = 8 << 8;
+            channel.s_plc.prev_gain_q16 = [1 << 16, 1 << 16];
+            channel.s_plc.fs_khz = 8;
+        }
+
+        decoder.channel_state[0].resampler_state.input_delay = 7;
+        decoder.channel_state[1].resampler_state.input_delay = 99;
+        decoder.channel_state[1].out_buf.fill(55);
+        decoder.channel_state[1].s_lpc_q14_buf.fill(66);
+        decoder.channel_state[1].lag_prev = 12;
+        decoder.channel_state[1].last_gain_index = 3;
+        decoder.channel_state[1].prev_signal_type = TYPE_VOICED;
+        decoder.channel_state[1].first_frame_after_reset = false;
+
+        let mut ctrl = SilkDecControl {
+            n_channels_api: 2,
+            n_channels_internal: 2,
+            api_sample_rate: 48_000,
+            internal_sample_rate: 7_168,
+            payload_size_ms: 20,
+            prev_pitch_lag: 0,
+            #[cfg(feature = "dnn")]
+            enable_deep_plc: false,
+        };
+        let rc_buf = [0x80u8];
+        let mut rc = RangeDecoder::new(&rc_buf);
+        let mut out = vec![0i16; 1920];
+        let mut n = 0usize;
+        #[cfg(feature = "dnn")]
+        let lpcnet_arg: DnnPlcArg<'_> = None;
+        #[cfg(not(feature = "dnn"))]
+        let lpcnet_arg: DnnPlcArg<'_> = ();
+
+        assert_eq!(
+            silk_decode(
+                &mut decoder,
+                &mut ctrl,
+                FLAG_PACKET_LOST,
+                false,
+                &mut rc,
+                &mut out,
+                &mut n,
+                lpcnet_arg,
+            ),
+            0
+        );
+        assert_eq!(decoder.s_stereo.pred_prev_q13, [0, 0]);
+        assert_eq!(decoder.s_stereo.s_side, [0, 0]);
+        assert_eq!(decoder.channel_state[1].resampler_state.input_delay, 7);
+        assert!(decoder.channel_state[1].out_buf.iter().all(|&sample| sample == 0));
+        assert!(decoder.channel_state[1].s_lpc_q14_buf.iter().all(|&sample| sample == 0));
+        assert_eq!(decoder.channel_state[1].lag_prev, 100);
+        assert_eq!(decoder.channel_state[1].last_gain_index, 10);
+        assert_eq!(decoder.channel_state[1].prev_signal_type, TYPE_NO_VOICE_ACTIVITY);
+        assert!(decoder.channel_state[1].first_frame_after_reset);
+        assert_eq!(decoder.n_channels_api, 2);
+        assert_eq!(decoder.n_channels_internal, 2);
+        assert!(!decoder.prev_decode_only_middle);
+        assert_eq!(n, 960);
     }
 
     #[test]
@@ -3059,9 +3212,11 @@ mod tests {
             1 << 16,
         );
         assert_eq!(written2, 2);
-        assert!(out2[..written2]
-            .iter()
-            .all(|&sample| (i16::MIN..=i16::MAX).contains(&sample)));
+        assert!(
+            out2[..written2]
+                .iter()
+                .all(|&sample| (i16::MIN..=i16::MAX).contains(&sample))
+        );
     }
 
     #[test]
@@ -3069,8 +3224,16 @@ mod tests {
         let buf = vec![0i32; 16];
         let fir = &get_down_fir_coefs(ResamplerCoefs::Ratio1_2)[2..];
         let mut out = [123i16; 4];
-        let written =
-            silk_resampler_private_down_fir_interpol(&mut out, 0, &buf, fir, 5, 1, 1 << 16, 1 << 16);
+        let written = silk_resampler_private_down_fir_interpol(
+            &mut out,
+            0,
+            &buf,
+            fir,
+            5,
+            1,
+            1 << 16,
+            1 << 16,
+        );
 
         assert_eq!(written, 0);
         assert_eq!(out, [123; 4]);
