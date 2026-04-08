@@ -21,16 +21,12 @@ const SECOND_CHECK: [i32; 16] = [0, 0, 3, 2, 3, 2, 5, 2, 3, 2, 3, 2, 5, 2, 3, 2]
 // Inline correlation kernels (from pitch.h)
 // ===========================================================================
 
-/// Compute 4 cross-correlations simultaneously:
-///   sum[i] += Σ_{j=0}^{len-1} x[j] * y[j+i]  for i = 0..3
+/// Scalar implementation of xcorr_kernel (always compiled, used as test oracle).
 ///
-/// This is the single most performance-critical function in the codec.
 /// The inner loop is unrolled 4x, maintaining a sliding window of y values.
-///
 /// Preconditions: `len >= 3`, `x` has >= `len` elements, `y` has >= `len + 3` elements.
-/// `sum` is an in-out accumulator (caller initializes, typically to zero).
 #[inline(always)]
-pub fn xcorr_kernel(x: &[i32], y: &[i32], sum: &mut [i32; 4], len: usize) {
+pub(crate) fn xcorr_kernel_scalar(x: &[i32], y: &[i32], sum: &mut [i32; 4], len: usize) {
     debug_assert!(len >= 3);
 
     let mut xi: usize = 0;
@@ -116,6 +112,23 @@ pub fn xcorr_kernel(x: &[i32], y: &[i32], sum: &mut [i32; 4], len: usize) {
         sum[1] = mac16_16(sum[1], tmp, y_3);
         sum[2] = mac16_16(sum[2], tmp, y_0);
         sum[3] = mac16_16(sum[3], tmp, y_1);
+    }
+}
+
+/// Compute 4 cross-correlations simultaneously:
+///   sum[i] += Sigma_{j=0}^{len-1} x[j] * y[j+i]  for i = 0..3
+///
+/// With the `simd` feature enabled, dispatches to a SIMD implementation
+/// using `wide::i32x4`. Without the feature, uses the scalar implementation.
+#[inline(always)]
+pub fn xcorr_kernel(x: &[i32], y: &[i32], sum: &mut [i32; 4], len: usize) {
+    #[cfg(feature = "simd")]
+    {
+        super::simd::xcorr_kernel_simd(x, y, sum, len);
+    }
+    #[cfg(not(feature = "simd"))]
+    {
+        xcorr_kernel_scalar(x, y, sum, len);
     }
 }
 

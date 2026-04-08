@@ -1,13 +1,18 @@
 [package]
 name = "mdopus"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 build = "tests/harness/build.rs"
 autobins = false
 autobenches = false
 autotests = false
 
+[features]
+default = []
+simd = ["wide"]
+
 [dependencies]
+wide = { version = "0.7", optional = true }
 
 [build-dependencies]
 cc = "1"

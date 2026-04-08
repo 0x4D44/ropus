@@ -560,8 +560,8 @@ pub fn celt_maxabs16(x: &[i32]) -> i32 {
     max32(extend32(maxval), -extend32(minval))
 }
 
-/// Find maximum absolute value in a slice of 32-bit values.
-pub fn celt_maxabs32(x: &[i32]) -> i32 {
+/// Scalar implementation of celt_maxabs32 (always compiled, used as test oracle).
+pub(crate) fn celt_maxabs32_scalar(x: &[i32]) -> i32 {
     let mut maxval: i32 = 0;
     let mut minval: i32 = 0;
     for &v in x {
@@ -569,6 +569,18 @@ pub fn celt_maxabs32(x: &[i32]) -> i32 {
         minval = min32(minval, v);
     }
     max32(maxval, -minval)
+}
+
+/// Find maximum absolute value in a slice of 32-bit values.
+pub fn celt_maxabs32(x: &[i32]) -> i32 {
+    #[cfg(feature = "simd")]
+    {
+        super::simd::celt_maxabs32_simd(x)
+    }
+    #[cfg(not(feature = "simd"))]
+    {
+        celt_maxabs32_scalar(x)
+    }
 }
 
 // ===========================================================================
