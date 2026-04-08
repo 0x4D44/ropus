@@ -16,7 +16,9 @@ use super::bands::{
 use super::fft;
 use super::fft::{KissFftCpx, KissFftState, opus_fft_impl};
 use super::math_ops::*;
-use super::modes::{CELTMode, MODE_48000_960_120, NB_EBANDS, bitrate_to_bits, init_caps, resampling_factor};
+use super::modes::{
+    CELTMode, MODE_48000_960_120, NB_EBANDS, bitrate_to_bits, init_caps, resampling_factor,
+};
 use super::pitch::{pitch_downsample, pitch_search, remove_doubling};
 use super::quant_bands::EMEANS;
 use super::quant_bands::{amp2log2, quant_coarse_energy, quant_energy_finalise, quant_fine_energy};
@@ -2228,9 +2230,9 @@ fn celt_encode_core(
             tmp += tell * mode.fs;
         }
         if st.bitrate != OPUS_BITRATE_MAX {
-            nb_compressed_bytes = nb_compressed_bytes.min(
-                (tmp + 4 * mode.fs) / (8 * mode.fs) - (st.signalling != 0) as i32,
-            ).max(2);
+            nb_compressed_bytes = nb_compressed_bytes
+                .min((tmp + 4 * mode.fs) / (8 * mode.fs) - (st.signalling != 0) as i32)
+                .max(2);
             enc_ref.shrink(nb_compressed_bytes as u32);
         }
         effective_bytes = nb_compressed_bytes - nb_filled_bytes;
@@ -2267,8 +2269,7 @@ fn celt_encode_core(
         &pcm_as_i32[..(cc * (n - overlap) / st.upsample) as usize],
     ));
     st.overlap_max = celt_maxabs16(
-        &pcm_as_i32[(cc * (n - overlap) / st.upsample) as usize
-            ..(cc * n / st.upsample) as usize],
+        &pcm_as_i32[(cc * (n - overlap) / st.upsample) as usize..(cc * n / st.upsample) as usize],
     );
     sample_max = sample_max.max(st.overlap_max);
     if sample_max == 0 {

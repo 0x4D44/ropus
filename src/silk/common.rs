@@ -1535,17 +1535,26 @@ mod tests {
         // All-zero coefficients = no prediction = maximum inverse gain = 1<<30
         let a_q12 = [0i16; MAX_LPC_ORDER];
         let result = silk_lpc_inverse_pred_gain(&a_q12, 10);
-        assert_eq!(result, 1 << 30, "identity filter should have gain 1.0 in Q30");
+        assert_eq!(
+            result,
+            1 << 30,
+            "identity filter should have gain 1.0 in Q30"
+        );
     }
 
     #[test]
     fn test_ipg_stable_filter() {
         // Known stable LPC from uniform NLSFs
-        let nlsf: [i16; 10] = [3277, 6554, 9830, 13107, 16384, 19661, 22938, 26214, 29491, 32000];
+        let nlsf: [i16; 10] = [
+            3277, 6554, 9830, 13107, 16384, 19661, 22938, 26214, 29491, 32000,
+        ];
         let mut a_q12 = [0i16; 10];
         silk_nlsf2a(&mut a_q12, &nlsf, 10);
         let result = silk_lpc_inverse_pred_gain(&a_q12, 10);
-        assert!(result > 0, "stable filter should have positive inverse gain, got {result}");
+        assert!(
+            result > 0,
+            "stable filter should have positive inverse gain, got {result}"
+        );
     }
 
     #[test]
@@ -1566,7 +1575,10 @@ mod tests {
         let result = silk_lpc_inverse_pred_gain(&a_q12, 1);
         // (1 - 0.5^2) = 0.75 => Q30 = 0.75 * 2^30 = 805306368
         // Allow some tolerance for fixed-point rounding
-        assert!(result > 0, "first-order stable filter should have positive gain");
+        assert!(
+            result > 0,
+            "first-order stable filter should have positive gain"
+        );
         let expected_approx = (0.75 * (1i64 << 30) as f64) as i32;
         assert!(
             (result - expected_approx).abs() < expected_approx / 10,
@@ -1591,7 +1603,9 @@ mod tests {
     #[test]
     fn test_stabilize_already_valid() {
         // Well-spaced NLSFs should be unchanged
-        let mut nlsf = [3277i16, 6554, 9830, 13107, 16384, 19661, 22938, 26214, 29491, 32000];
+        let mut nlsf = [
+            3277i16, 6554, 9830, 13107, 16384, 19661, 22938, 26214, 29491, 32000,
+        ];
         let original = nlsf;
         silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
         assert_eq!(nlsf, original, "well-spaced NLSFs should be unchanged");
@@ -1617,7 +1631,9 @@ mod tests {
     #[test]
     fn test_stabilize_boundary_low() {
         // NLSF[0] below delta_min[0] should be clamped up
-        let mut nlsf = [10i16, 6554, 9830, 13107, 16384, 19661, 22938, 26214, 29491, 32000];
+        let mut nlsf = [
+            10i16, 6554, 9830, 13107, 16384, 19661, 22938, 26214, 29491, 32000,
+        ];
         silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
         assert!(
             nlsf[0] as i32 >= SILK_NLSF_DELTA_MIN_NB_MB_Q15[0] as i32,
@@ -1630,7 +1646,9 @@ mod tests {
     #[test]
     fn test_stabilize_boundary_high() {
         // NLSF[last] above upper limit should be clamped down
-        let mut nlsf = [3277i16, 6554, 9830, 13107, 16384, 19661, 22938, 26214, 29491, 32700];
+        let mut nlsf = [
+            3277i16, 6554, 9830, 13107, 16384, 19661, 22938, 26214, 29491, 32700,
+        ];
         silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
         let upper = (1i32 << 15) - SILK_NLSF_DELTA_MIN_NB_MB_Q15[10] as i32;
         assert!(
@@ -1644,10 +1662,18 @@ mod tests {
     #[test]
     fn test_stabilize_ordering_maintained() {
         // After stabilization, output should always be strictly increasing
-        let mut nlsf = [5000i16, 5001, 5002, 5003, 5004, 5005, 5006, 5007, 5008, 5009];
+        let mut nlsf = [
+            5000i16, 5001, 5002, 5003, 5004, 5005, 5006, 5007, 5008, 5009,
+        ];
         silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
         for i in 1..10 {
-            assert!(nlsf[i] > nlsf[i - 1], "nlsf[{i}]={} should be > nlsf[{}]={}", nlsf[i], i - 1, nlsf[i - 1]);
+            assert!(
+                nlsf[i] > nlsf[i - 1],
+                "nlsf[{i}]={} should be > nlsf[{}]={}",
+                nlsf[i],
+                i - 1,
+                nlsf[i - 1]
+            );
         }
     }
 
@@ -1658,32 +1684,48 @@ mod tests {
     #[test]
     fn test_nlsf2a_order10() {
         // Uniform NLSFs at order 10 should produce stable LPC
-        let nlsf: [i16; 10] = [3277, 6554, 9830, 13107, 16384, 19661, 22938, 26214, 29491, 32000];
+        let nlsf: [i16; 10] = [
+            3277, 6554, 9830, 13107, 16384, 19661, 22938, 26214, 29491, 32000,
+        ];
         let mut a_q12 = [0i16; 10];
         silk_nlsf2a(&mut a_q12, &nlsf, 10);
-        assert!(a_q12.iter().any(|&x| x != 0), "order-10 should produce non-zero LPC");
+        assert!(
+            a_q12.iter().any(|&x| x != 0),
+            "order-10 should produce non-zero LPC"
+        );
         let ipg = silk_lpc_inverse_pred_gain(&a_q12, 10);
-        assert!(ipg > 0, "order-10 NLSF2A should produce stable filter (IPG={ipg})");
+        assert!(
+            ipg > 0,
+            "order-10 NLSF2A should produce stable filter (IPG={ipg})"
+        );
     }
 
     #[test]
     fn test_nlsf2a_order16() {
         // Uniform NLSFs at order 16
         let nlsf: [i16; 16] = [
-            2048, 4096, 6144, 8192, 10240, 12288, 14336, 16384,
-            18432, 20480, 22528, 24576, 26624, 28672, 30720, 32500,
+            2048, 4096, 6144, 8192, 10240, 12288, 14336, 16384, 18432, 20480, 22528, 24576, 26624,
+            28672, 30720, 32500,
         ];
         let mut a_q12 = [0i16; 16];
         silk_nlsf2a(&mut a_q12, &nlsf, 16);
-        assert!(a_q12.iter().any(|&x| x != 0), "order-16 should produce non-zero LPC");
+        assert!(
+            a_q12.iter().any(|&x| x != 0),
+            "order-16 should produce non-zero LPC"
+        );
         let ipg = silk_lpc_inverse_pred_gain(&a_q12, 16);
-        assert!(ipg > 0, "order-16 NLSF2A should produce stable filter (IPG={ipg})");
+        assert!(
+            ipg > 0,
+            "order-16 NLSF2A should produce stable filter (IPG={ipg})"
+        );
     }
 
     #[test]
     fn test_nlsf2a_uniform_nlsf() {
         // Evenly spaced NLSFs
-        let nlsf: [i16; 10] = [2978, 5957, 8935, 11914, 14892, 17871, 20849, 23828, 26806, 29785];
+        let nlsf: [i16; 10] = [
+            2978, 5957, 8935, 11914, 14892, 17871, 20849, 23828, 26806, 29785,
+        ];
         let mut a_q12 = [0i16; 10];
         silk_nlsf2a(&mut a_q12, &nlsf, 10);
         let ipg = silk_lpc_inverse_pred_gain(&a_q12, 10);
@@ -1796,8 +1838,16 @@ mod tests {
 
     #[test]
     fn test_log2lin_overflow() {
-        assert_eq!(silk_log2lin(3967), i32::MAX, "3967 should saturate to i32::MAX");
-        assert_eq!(silk_log2lin(4000), i32::MAX, "4000 should saturate to i32::MAX");
+        assert_eq!(
+            silk_log2lin(3967),
+            i32::MAX,
+            "3967 should saturate to i32::MAX"
+        );
+        assert_eq!(
+            silk_log2lin(4000),
+            i32::MAX,
+            "4000 should saturate to i32::MAX"
+        );
     }
 
     // ===================================================================
@@ -1811,12 +1861,20 @@ mod tests {
 
     #[test]
     fn test_sigm_large_positive() {
-        assert_eq!(silk_sigm_q15(6 * 32), 32767, "large positive should saturate");
+        assert_eq!(
+            silk_sigm_q15(6 * 32),
+            32767,
+            "large positive should saturate"
+        );
     }
 
     #[test]
     fn test_sigm_large_negative() {
-        assert_eq!(silk_sigm_q15(-6 * 32), 0, "large negative should saturate to 0");
+        assert_eq!(
+            silk_sigm_q15(-6 * 32),
+            0,
+            "large negative should saturate to 0"
+        );
     }
 
     #[test]
@@ -1851,7 +1909,11 @@ mod tests {
                     break;
                 }
                 let val = silk_sigm_q15(x);
-                assert!(val >= prev, "positive segment: sigm({x})={val} < sigm({})={prev}", x - 1);
+                assert!(
+                    val >= prev,
+                    "positive segment: sigm({x})={val} < sigm({})={prev}",
+                    x - 1
+                );
                 prev = val;
             }
         }
@@ -1860,7 +1922,11 @@ mod tests {
             let mut prev = silk_sigm_q15(seg_start);
             for x in (seg_start + 1)..seg_start + 31 {
                 let val = silk_sigm_q15(x);
-                assert!(val >= prev, "negative segment: sigm({x})={val} < sigm({})={prev}", x - 1);
+                assert!(
+                    val >= prev,
+                    "negative segment: sigm({x})={val} < sigm({})={prev}",
+                    x - 1
+                );
                 prev = val;
             }
         }
@@ -2038,7 +2104,10 @@ mod tests {
         let mut out = [0i16; 20];
         silk_lpc_analysis_filter(&mut out, &s, &a_q12, 20, 4);
         for i in 4..20 {
-            assert_eq!(out[i], s[i], "out[{i}] should equal s[{i}] with zero coefficients");
+            assert_eq!(
+                out[i], s[i],
+                "out[{i}] should equal s[{i}] with zero coefficients"
+            );
         }
     }
 
@@ -2079,7 +2148,11 @@ mod tests {
         let mut ar = [10000i16, 10000, 10000, 10000];
         silk_bwexpander(&mut ar, 4, 32768);
         // ar[0] ~ 5000, ar[1] ~ 2500, ar[2] ~ 1250, ar[3] ~ 625
-        assert!((ar[0] - 5000).abs() <= 10, "ar[0]={}, expected ~5000", ar[0]);
+        assert!(
+            (ar[0] - 5000).abs() <= 10,
+            "ar[0]={}, expected ~5000",
+            ar[0]
+        );
         assert!(ar[1] < ar[0], "ar[1]={} should be < ar[0]={}", ar[1], ar[0]);
         assert!(ar[2] < ar[1], "ar[2]={} should be < ar[1]={}", ar[2], ar[1]);
         assert!(ar[3] < ar[2], "ar[3]={} should be < ar[2]={}", ar[3], ar[2]);
@@ -2205,7 +2278,10 @@ mod tests {
         // The `as i16` truncation of c means 0x10001 is treated as 1
         let result = silk_smlawb_i32(0, 0x10000, 0x10001);
         // c as i16 = 1, so (0x10000 * 1) >> 16 = 1, + 0 = 1
-        assert_eq!(result, 1, "smlawb_i32 i16 truncation: expected 1, got {result}");
+        assert_eq!(
+            result, 1,
+            "smlawb_i32 i16 truncation: expected 1, got {result}"
+        );
     }
 
     #[test]
@@ -2213,7 +2289,10 @@ mod tests {
         // Same i16 truncation trap
         let result = silk_smulwb_i32(0x10000, 0x10001);
         // b as i16 = 1, so (0x10000 * 1) >> 16 = 1
-        assert_eq!(result, 1, "smulwb_i32 i16 truncation: expected 1, got {result}");
+        assert_eq!(
+            result, 1,
+            "smulwb_i32 i16 truncation: expected 1, got {result}"
+        );
     }
 
     #[test]

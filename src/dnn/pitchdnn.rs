@@ -468,12 +468,18 @@ mod tests {
             ),
             zero_f32_array("gru_1_recurrent_scale", 3 * GRU_1_STATE_SIZE),
             zero_f32_array("dense_final_upsampler_bias", DENSE_FINAL_UPSAMPLER_OUT_SIZE),
-            zero_f32_array("dense_final_upsampler_subias", DENSE_FINAL_UPSAMPLER_OUT_SIZE),
+            zero_f32_array(
+                "dense_final_upsampler_subias",
+                DENSE_FINAL_UPSAMPLER_OUT_SIZE,
+            ),
             zero_i8_array(
                 "dense_final_upsampler_weights_int8",
                 GRU_1_STATE_SIZE * DENSE_FINAL_UPSAMPLER_OUT_SIZE,
             ),
-            zero_f32_array("dense_final_upsampler_scale", DENSE_FINAL_UPSAMPLER_OUT_SIZE),
+            zero_f32_array(
+                "dense_final_upsampler_scale",
+                DENSE_FINAL_UPSAMPLER_OUT_SIZE,
+            ),
         ]
     }
 
@@ -733,8 +739,14 @@ mod tests {
         let arrays = valid_zero_weight_arrays();
         let model = init_pitchdnn(&arrays).expect("zero model");
         assert_eq!(model.dense_if_upsampler_1.nb_inputs, PITCH_IF_FEATURES);
-        assert_eq!(model.dense_if_upsampler_2.nb_outputs, DENSE_IF_UPSAMPLER_2_OUT_SIZE);
-        assert_eq!(model.conv2d_1.float_weights.as_ref().unwrap().len(), 4 * 3 * 3);
+        assert_eq!(
+            model.dense_if_upsampler_2.nb_outputs,
+            DENSE_IF_UPSAMPLER_2_OUT_SIZE
+        );
+        assert_eq!(
+            model.conv2d_1.float_weights.as_ref().unwrap().len(),
+            4 * 3 * 3
+        );
         assert_eq!(
             model.dense_final_upsampler.weights.as_ref().unwrap().len(),
             GRU_1_STATE_SIZE * DENSE_FINAL_UPSAMPLER_OUT_SIZE

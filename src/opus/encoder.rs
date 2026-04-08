@@ -1378,7 +1378,11 @@ impl OpusEncoder {
 
         // --- SILK DTX ---
         // C: st->silk_mode.useDTX = st->use_dtx && !is_silence;
-        self.silk_mode.use_dtx = if self.use_dtx != 0 && !is_silence { 1 } else { 0 };
+        self.silk_mode.use_dtx = if self.use_dtx != 0 && !is_silence {
+            1
+        } else {
+            0
+        };
 
         // --- Mode selection ---
         let mut mode: i32;
@@ -1861,7 +1865,8 @@ impl OpusEncoder {
 
         // C: silk_SMLAWB(smth2, diff, SILK_FIX_CONST(0.015, 16)) = smth2 + (diff * 983) >> 16
         let hp_diff = hp_freq_smth1 - self.variable_hp_smth2_q15;
-        self.variable_hp_smth2_q15 += ((hp_diff as i64 * VARIABLE_HP_SMTH_COEF2 as i64) >> 16) as i32;
+        self.variable_hp_smth2_q15 +=
+            ((hp_diff as i64 * VARIABLE_HP_SMTH_COEF2 as i64) >> 16) as i32;
         let cutoff_hz = silk_log2lin(shr32(self.variable_hp_smth2_q15, 8));
 
         // --- HP / DC filter on new PCM ---
@@ -2047,7 +2052,11 @@ impl OpusEncoder {
 
                 // C: st->silk_mode.opusCanSwitch = st->silk_mode.switchReady && !st->nonfinal_frame;
                 self.silk_mode.opus_can_switch =
-                    if self.silk_mode.switch_ready != 0 && self.nonfinal_frame == 0 { 1 } else { 0 };
+                    if self.silk_mode.switch_ready != 0 && self.nonfinal_frame == 0 {
+                        1
+                    } else {
+                        0
+                    };
 
                 // Get activity from SILK
                 if activity == VAD_NO_DECISION {
@@ -3066,7 +3075,9 @@ mod tests {
         dec.set_phase_inversion_disabled(true);
 
         let mut out = vec![0f32; 240 * 2];
-        let decoded = dec.decode_float(Some(packet), &mut out, 240, false).unwrap();
+        let decoded = dec
+            .decode_float(Some(packet), &mut out, 240, false)
+            .unwrap();
         assert_eq!(decoded, 240);
         assert!(out.iter().any(|sample| sample.abs() > 1e-4));
     }
@@ -3084,16 +3095,25 @@ mod tests {
 
         let mut dec24 = OpusDecoder::new(48000, 1).unwrap();
         let mut pcm24 = vec![0i32; 480];
-        let decoded24 = dec24.decode24(Some(packet), &mut pcm24, 480, false).unwrap();
+        let decoded24 = dec24
+            .decode24(Some(packet), &mut pcm24, 480, false)
+            .unwrap();
         assert_eq!(decoded24, 480);
         assert!(pcm24.iter().any(|&sample| sample != 0));
 
         let mut plc_dec = OpusDecoder::new(48000, 1).unwrap();
         let mut warmup = vec![0i16; 480];
-        assert_eq!(plc_dec.decode(Some(packet), &mut warmup, 480, false).unwrap(), 480);
+        assert_eq!(
+            plc_dec
+                .decode(Some(packet), &mut warmup, 480, false)
+                .unwrap(),
+            480
+        );
 
         let mut fec_pcm = vec![0i16; 480];
-        let decoded_fec = plc_dec.decode(Some(packet), &mut fec_pcm, 480, true).unwrap();
+        let decoded_fec = plc_dec
+            .decode(Some(packet), &mut fec_pcm, 480, true)
+            .unwrap();
         assert_eq!(decoded_fec, 480);
         assert!(fec_pcm.iter().any(|&sample| sample != 0));
     }
@@ -3186,8 +3206,14 @@ mod tests {
 
     #[test]
     fn test_helper_branches_cover_mode_rate_fec_and_redundancy_math() {
-        assert_eq!(user_bitrate_to_bitrate(OPUS_AUTO, 1, 48000, 960, 1276), 51000);
-        assert_eq!(user_bitrate_to_bitrate(OPUS_BITRATE_MAX, 2, 48000, 960, 1276), 510400);
+        assert_eq!(
+            user_bitrate_to_bitrate(OPUS_AUTO, 1, 48000, 960, 1276),
+            51000
+        );
+        assert_eq!(
+            user_bitrate_to_bitrate(OPUS_BITRATE_MAX, 2, 48000, 960, 1276),
+            510400
+        );
         assert_eq!(user_bitrate_to_bitrate(64000, 2, 48000, 960, 1276), 64000);
 
         assert_eq!(

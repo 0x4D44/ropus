@@ -208,15 +208,8 @@ unsafe extern "C" {
         maxlen: opus_int32,
     ) -> opus_int32;
     pub fn opus_repacketizer_get_nb_frames(rp: *mut OpusRepacketizer) -> c_int;
-    pub fn opus_packet_pad(
-        data: *mut c_uchar,
-        len: opus_int32,
-        new_len: opus_int32,
-    ) -> c_int;
-    pub fn opus_packet_unpad(
-        data: *mut c_uchar,
-        len: opus_int32,
-    ) -> opus_int32;
+    pub fn opus_packet_pad(data: *mut c_uchar, len: opus_int32, new_len: opus_int32) -> c_int;
+    pub fn opus_packet_unpad(data: *mut c_uchar, len: opus_int32) -> opus_int32;
 
     // Multistream encoder
     pub fn opus_multistream_encoder_create(
@@ -277,10 +270,7 @@ unsafe extern "C" {
     pub fn debug_c_celt_rsqrt_norm32(x: opus_int32) -> opus_int32;
     pub fn debug_c_normalise_residual_g(ryy: opus_int32, gain: opus_int32) -> opus_int32;
     pub fn debug_c_opus_fast_int64() -> c_int;
-    pub fn debug_get_celt_preemph_mem(
-        dec: *mut OpusDecoder,
-        out_mem: *mut opus_int32,
-    );
+    pub fn debug_get_celt_preemph_mem(dec: *mut OpusDecoder, out_mem: *mut opus_int32);
     pub fn debug_get_celt_decode_mem(
         dec: *mut OpusDecoder,
         offset: c_int,

@@ -377,7 +377,10 @@ mod tests {
         let ac = [1 << 20, 0, 0, 0, 0];
         celt_lpc(&mut lpc_out, &ac, 4);
         for (i, &coeff) in lpc_out.iter().enumerate() {
-            assert_eq!(coeff, 0, "lpc_out[{i}] should be 0 for white noise, got {coeff}");
+            assert_eq!(
+                coeff, 0,
+                "lpc_out[{i}] should be 0 for white noise, got {coeff}"
+            );
         }
     }
 
@@ -418,7 +421,10 @@ mod tests {
         let mut lpc_out = [0; 4];
         let ac = [1 << 24, (1 << 24) - 1, 0, 0, 0];
         celt_lpc(&mut lpc_out, &ac, 4);
-        assert!(lpc_out[0].abs() > 0, "first coefficient should be non-zero after bailout");
+        assert!(
+            lpc_out[0].abs() > 0,
+            "first coefficient should be non-zero after bailout"
+        );
         // Coefficients beyond the first should be near zero since the bailout
         // stops iteration once 30dB gain is reached
         for i in 2..4 {
@@ -440,7 +446,10 @@ mod tests {
         }
         let mut lpc_out = [0i32; CELT_LPC_ORDER];
         celt_lpc(&mut lpc_out, &ac, CELT_LPC_ORDER);
-        assert!(lpc_out[0] != 0, "max order should produce non-zero coefficients");
+        assert!(
+            lpc_out[0] != 0,
+            "max order should produce non-zero coefficients"
+        );
         for (i, &c) in lpc_out.iter().enumerate() {
             assert!(c.abs() <= 32767, "lpc_out[{i}] = {c} exceeds Q12 i16 range");
         }
@@ -513,12 +522,20 @@ mod tests {
         let _shift = celt_autocorr(&x, &mut ac, None, 0, 4, 64);
         // R(0) >= R(k) for all k
         for k in 1..5 {
-            assert!(ac[0] >= ac[k], "ac[0]={} should be >= ac[{k}]={}", ac[0], ac[k]);
+            assert!(
+                ac[0] >= ac[k],
+                "ac[0]={} should be >= ac[{k}]={}",
+                ac[0],
+                ac[k]
+            );
         }
         // For DC, all lags nearly equal
         for k in 1..5 {
             let ratio = (ac[k] as f64) / (ac[0] as f64);
-            assert!(ratio > 0.9, "DC: ac[{k}]/ac[0] = {ratio:.4}, expected close to 1.0");
+            assert!(
+                ratio > 0.9,
+                "DC: ac[{k}]/ac[0] = {ratio:.4}, expected close to 1.0"
+            );
         }
     }
 
@@ -541,7 +558,12 @@ mod tests {
         let mut ac = [0i32; 9];
         let _shift = celt_autocorr(&x, &mut ac, None, 0, 8, 64);
         for k in 1..9 {
-            assert!(ac[0] >= ac[k].abs(), "R(0)={} should be >= |R({k})|={}", ac[0], ac[k].abs());
+            assert!(
+                ac[0] >= ac[k].abs(),
+                "R(0)={} should be >= |R({k})|={}",
+                ac[0],
+                ac[k].abs()
+            );
         }
     }
 
@@ -564,9 +586,20 @@ mod tests {
             let x = vec![amplitude; 64];
             let mut ac = [0i32; 5];
             let shift = celt_autocorr(&x, &mut ac, None, 0, 4, 64);
-            assert!(ac[0] >= 268_435_456, "amp={amplitude}: ac[0]={} too small", ac[0]);
-            assert!(ac[0] < 1_073_741_824, "amp={amplitude}: ac[0]={} too large", ac[0]);
-            assert!(shift.abs() < 64, "amp={amplitude}: shift={shift} unreasonable");
+            assert!(
+                ac[0] >= 268_435_456,
+                "amp={amplitude}: ac[0]={} too small",
+                ac[0]
+            );
+            assert!(
+                ac[0] < 1_073_741_824,
+                "amp={amplitude}: ac[0]={} too large",
+                ac[0]
+            );
+            assert!(
+                shift.abs() < 64,
+                "amp={amplitude}: shift={shift} unreasonable"
+            );
         }
     }
 
@@ -626,7 +659,10 @@ mod tests {
             }
             y_naive[i] = sround16(sum, SIG_SHIFT);
         }
-        assert_eq!(y_fast, y_naive, "FIR fast path should match naive convolution");
+        assert_eq!(
+            y_fast, y_naive,
+            "FIR fast path should match naive convolution"
+        );
     }
 
     #[test]
@@ -639,7 +675,10 @@ mod tests {
         num[0] = 4096;
         let mut y = vec![0i32; n];
         celt_fir(&x, &num, &mut y, n, ord);
-        assert!(y.iter().any(|&v| v != 0), "impulse through non-zero filter should produce output");
+        assert!(
+            y.iter().any(|&v| v != 0),
+            "impulse through non-zero filter should produce output"
+        );
     }
 
     // ===================================================================
@@ -709,7 +748,10 @@ mod tests {
             y_internal[i + ord] = sround16(sum, SIG_SHIFT);
             y_out_naive[i] = sum;
         }
-        assert_eq!(y_fast, y_out_naive, "IIR unrolled must match naive sample-by-sample");
+        assert_eq!(
+            y_fast, y_out_naive,
+            "IIR unrolled must match naive sample-by-sample"
+        );
     }
 
     #[test]
@@ -722,6 +764,9 @@ mod tests {
         let mut mem = [0i32; 4];
         celt_iir(&x, &den, &mut y, n, 4, &mut mem);
         assert_eq!(y[0], x[0], "first sample should be the impulse");
-        assert!(y[1..].iter().any(|&v| v != 0), "feedback should produce non-zero tail");
+        assert!(
+            y[1..].iter().any(|&v| v != 0),
+            "feedback should produce non-zero tail"
+        );
     }
 }

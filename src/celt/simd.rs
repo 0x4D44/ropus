@@ -252,7 +252,9 @@ mod tests {
     fn xcorr_kernel_simd_matches_scalar_truncation() {
         // Values with high bits that get truncated by mac16_16
         let x = [0x10001, 0x20002, 0x30003, 0x40004];
-        let y = [0x50005, 0x60006, 0x70007, 0x80008, 0x90009, 0xA000A, 0xB000B];
+        let y = [
+            0x50005, 0x60006, 0x70007, 0x80008, 0x90009, 0xA000A, 0xB000B,
+        ];
 
         let mut sum_scalar = [0i32; 4];
         let mut sum_simd = [0i32; 4];
@@ -266,7 +268,9 @@ mod tests {
     #[test]
     fn xcorr_kernel_simd_matches_scalar_negative() {
         let x = [-32768, 32767, -1, 0, 12345, -12345, 100, -100];
-        let y = [32767, -32768, 0, 1, -1, 32767, -32768, 100, -100, 12345, -12345];
+        let y = [
+            32767, -32768, 0, 1, -1, 32767, -32768, 100, -100, 12345, -12345,
+        ];
 
         let mut sum_scalar = [0i32; 4];
         let mut sum_simd = [0i32; 4];

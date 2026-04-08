@@ -786,15 +786,55 @@ impl CeltDecoder {
     /// 49 taps (SINC_ORDER=48), matching C reference `celt_decoder.c:629`.
     #[cfg(feature = "dnn")]
     const SINC_FILTER: [f32; 49] = [
-        4.2931e-05, -0.000190293, -0.000816132, -0.000637162, 0.00141662,
-        0.00354764, 0.00184368, -0.00428274, -0.00856105, -0.0034003,
-        0.00930201, 0.0159616, 0.00489785, -0.0169649, -0.0259484, -0.00596856,
-        0.0286551, 0.0405872, 0.00649994, -0.0509284, -0.0716655, -0.00665212,
-        0.134336, 0.278927, 0.339995, 0.278927, 0.134336, -0.00665212,
-        -0.0716655, -0.0509284, 0.00649994, 0.0405872, 0.0286551, -0.00596856,
-        -0.0259484, -0.0169649, 0.00489785, 0.0159616, 0.00930201, -0.0034003,
-        -0.00856105, -0.00428274, 0.00184368, 0.00354764, 0.00141662,
-        -0.000637162, -0.000816132, -0.000190293, 4.2931e-05,
+        4.2931e-05,
+        -0.000190293,
+        -0.000816132,
+        -0.000637162,
+        0.00141662,
+        0.00354764,
+        0.00184368,
+        -0.00428274,
+        -0.00856105,
+        -0.0034003,
+        0.00930201,
+        0.0159616,
+        0.00489785,
+        -0.0169649,
+        -0.0259484,
+        -0.00596856,
+        0.0286551,
+        0.0405872,
+        0.00649994,
+        -0.0509284,
+        -0.0716655,
+        -0.00665212,
+        0.134336,
+        0.278927,
+        0.339995,
+        0.278927,
+        0.134336,
+        -0.00665212,
+        -0.0716655,
+        -0.0509284,
+        0.00649994,
+        0.0405872,
+        0.0286551,
+        -0.00596856,
+        -0.0259484,
+        -0.0169649,
+        0.00489785,
+        0.0159616,
+        0.00930201,
+        -0.0034003,
+        -0.00856105,
+        -0.00428274,
+        0.00184368,
+        0.00354764,
+        0.00141662,
+        -0.000637162,
+        -0.000816132,
+        -0.000190293,
+        4.2931e-05,
     ];
 
     /// CELT preemphasis coefficient (0.85), matching C `dnn/freq.h`.
@@ -844,8 +884,7 @@ impl CeltDecoder {
         self.plc_preemphasis_mem = buf48k[decode_buffer_size - 1];
 
         // Downsample 48kHz -> 16kHz using the sinc filter (factor 3)
-        let offset =
-            decode_buffer_size - Self::SINC_ORDER - 1 - 3 * (plc_update_samples - 1);
+        let offset = decode_buffer_size - Self::SINC_ORDER - 1 - 3 * (plc_update_samples - 1);
         let mut buf16k = vec![0i16; plc_update_samples];
         for i in 0..plc_update_samples {
             let mut sum = 0.0f32;
@@ -1036,16 +1075,15 @@ impl CeltDecoder {
 
             // Neural PLC flags for frame type transitions
             #[cfg(feature = "dnn")]
-            let curr_neural = curr_frame_type == FRAME_PLC_NEURAL
-                || curr_frame_type == FRAME_DRED;
+            let curr_neural = curr_frame_type == FRAME_PLC_NEURAL || curr_frame_type == FRAME_DRED;
             #[cfg(feature = "dnn")]
-            let last_neural = self.last_frame_type == FRAME_PLC_NEURAL
-                || self.last_frame_type == FRAME_DRED;
+            let last_neural =
+                self.last_frame_type == FRAME_PLC_NEURAL || self.last_frame_type == FRAME_DRED;
 
             // Pitch search: skip if continuing periodic or continuing neural PLC
             #[cfg(feature = "dnn")]
-            let skip_pitch_search = self.last_frame_type == FRAME_PLC_PERIODIC
-                || (last_neural && curr_neural);
+            let skip_pitch_search =
+                self.last_frame_type == FRAME_PLC_PERIODIC || (last_neural && curr_neural);
             #[cfg(not(feature = "dnn"))]
             let skip_pitch_search = self.last_frame_type == FRAME_PLC_PERIODIC;
 
@@ -1282,8 +1320,7 @@ impl CeltDecoder {
                         let overlap_usize = overlap as usize;
 
                         // Save overlap region from classical PLC for cross-fade
-                        let mut buf_copy =
-                            vec![vec![0.0f32; overlap_usize]; cc as usize];
+                        let mut buf_copy = vec![vec![0.0f32; overlap_usize]; cc as usize];
                         for c in 0..cc as usize {
                             let off = self.ch_off(c) + decode_buffer_size - n as usize;
                             for i in 0..overlap_usize {
@@ -1304,8 +1341,10 @@ impl CeltDecoder {
                                 self.plc_pcm
                                     .resize(self.plc_fill + Self::LPCNET_FRAME_SIZE, 0);
                             }
-                            lpcnet
-                                .conceal(&mut self.plc_pcm[self.plc_fill..self.plc_fill + Self::LPCNET_FRAME_SIZE]);
+                            lpcnet.conceal(
+                                &mut self.plc_pcm
+                                    [self.plc_fill..self.plc_fill + Self::LPCNET_FRAME_SIZE],
+                            );
                             self.plc_fill += Self::LPCNET_FRAME_SIZE;
                         }
 
@@ -1316,12 +1355,9 @@ impl CeltDecoder {
                         for i in 0..resamp_len {
                             let mut sum0 = 0.0f32;
                             for j in 0..17 {
-                                sum0 += 3.0
-                                    * self.plc_pcm[i + j] as f32
-                                    * Self::SINC_FILTER[3 * j];
+                                sum0 += 3.0 * self.plc_pcm[i + j] as f32 * Self::SINC_FILTER[3 * j];
                             }
-                            self.decode_mem
-                                [buf_off + decode_buffer_size - n as usize + 3 * i] =
+                            self.decode_mem[buf_off + decode_buffer_size - n as usize + 3 * i] =
                                 sum0.round() as i32;
 
                             let mut sum1 = 0.0f32;
@@ -1354,9 +1390,8 @@ impl CeltDecoder {
                         let buf_start = buf_off + decode_buffer_size - n as usize;
                         for i in 0..n as usize {
                             let tmp = self.decode_mem[buf_start + i] as f32;
-                            self.decode_mem[buf_start + i] = (tmp
-                                - Self::PREEMPHASIS * self.plc_preemphasis_mem)
-                                .round() as i32;
+                            self.decode_mem[buf_start + i] =
+                                (tmp - Self::PREEMPHASIS * self.plc_preemphasis_mem).round() as i32;
                             self.plc_preemphasis_mem = tmp;
                         }
 
@@ -1384,15 +1419,13 @@ impl CeltDecoder {
                         // on the first neural frame.
                         if !last_neural {
                             for c in 0..cc as usize {
-                                let off =
-                                    self.ch_off(c) + decode_buffer_size - n as usize;
+                                let off = self.ch_off(c) + decode_buffer_size - n as usize;
                                 for i in 0..overlap_usize {
                                     let w = mode.window[i] as f32 / 32768.0;
                                     let classical = buf_copy[c][i];
                                     let neural = self.decode_mem[off + i] as f32;
                                     self.decode_mem[off + i] =
-                                        ((1.0 - w) * classical + w * neural).round()
-                                            as i32;
+                                        ((1.0 - w) * classical + w * neural).round() as i32;
                                 }
                             }
                         }
@@ -1840,10 +1873,7 @@ impl CeltDecoder {
 
         // Prefilter and fold if needed
         if self.prefilter_and_fold {
-            let pf_offsets: [usize; 2] = [
-                self.ch_off(0),
-                if cc >= 2 { self.ch_off(1) } else { 0 },
-            ];
+            let pf_offsets: [usize; 2] = [self.ch_off(0), if cc >= 2 { self.ch_off(1) } else { 0 }];
             prefilter_and_fold(
                 &mut self.decode_mem,
                 &pf_offsets[..cc as usize],

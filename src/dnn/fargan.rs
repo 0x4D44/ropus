@@ -11,9 +11,9 @@
 //! computation, exp, float-to-int16 conversion).
 
 use super::core::{
+    ACTIVATION_LINEAR, ACTIVATION_SIGMOID, ACTIVATION_TANH, LinearLayer, WeightArray,
     compute_generic_conv1d, compute_generic_dense, compute_generic_gru, compute_glu, linear_init,
-    parse_weights, LinearLayer, WeightArray, ACTIVATION_LINEAR, ACTIVATION_SIGMOID,
-    ACTIVATION_TANH,
+    parse_weights,
 };
 use super::lpcnet::{LPCNET_FRAME_SIZE, NB_BANDS, NB_FEATURES, PITCH_MAX_PERIOD};
 
@@ -1001,7 +1001,7 @@ impl FarganState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dnn::core::{WeightArray, WEIGHT_TYPE_FLOAT, WEIGHT_TYPE_INT8};
+    use crate::dnn::core::{WEIGHT_TYPE_FLOAT, WEIGHT_TYPE_INT8, WeightArray};
 
     fn zero_f32_array(name: &'static str, len: usize) -> WeightArray {
         WeightArray {

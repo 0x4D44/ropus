@@ -638,8 +638,8 @@ mod tests {
 
     #[test]
     fn test_get_pulses_exponential_range() {
-        assert_eq!(get_pulses(8), 8);   // (8+0)<<0
-        assert_eq!(get_pulses(9), 9);   // (8+1)<<0
+        assert_eq!(get_pulses(8), 8); // (8+0)<<0
+        assert_eq!(get_pulses(9), 9); // (8+1)<<0
         assert_eq!(get_pulses(16), 16); // (8+0)<<1
         assert_eq!(get_pulses(17), 18); // (8+1)<<1
         assert_eq!(get_pulses(24), 32); // (8+0)<<2
@@ -650,7 +650,11 @@ mod tests {
         let mut prev = get_pulses(0);
         for i in 1..64 {
             let val = get_pulses(i);
-            assert!(val >= prev, "get_pulses({i})={val} < get_pulses({})={prev}", i - 1);
+            assert!(
+                val >= prev,
+                "get_pulses({i})={val} < get_pulses({})={prev}",
+                i - 1
+            );
             prev = val;
         }
     }
@@ -672,7 +676,11 @@ mod tests {
     fn test_pulses2bits_zero() {
         let mode = mode_create(48000, 960).expect("static mode");
         for band in [0, 5, 10, 15] {
-            assert_eq!(pulses2bits(mode, band, 0, 0), 0, "0 pulses should cost 0 bits for band {band}");
+            assert_eq!(
+                pulses2bits(mode, band, 0, 0),
+                0,
+                "0 pulses should cost 0 bits for band {band}"
+            );
         }
     }
 
@@ -684,7 +692,10 @@ mod tests {
         let mut prev_q = 0;
         for bits in [0, 8, 16, 24, 32, 48, 64, 96, 128, 256, 512] {
             let q = bits2pulses(mode, band, lm, bits);
-            assert!(q >= prev_q, "band={band} bits={bits}: q={q} < prev_q={prev_q}");
+            assert!(
+                q >= prev_q,
+                "band={band} bits={bits}: q={q} < prev_q={prev_q}"
+            );
             prev_q = q;
         }
     }
@@ -699,7 +710,10 @@ mod tests {
         let mut prev_bits = 0;
         for q in 0..=max_q.min(30) {
             let b = pulses2bits(mode, band, lm, q);
-            assert!(b >= prev_bits, "band={band} q={q}: bits={b} < prev_bits={prev_bits}");
+            assert!(
+                b >= prev_bits,
+                "band={band} q={q}: bits={b} < prev_bits={prev_bits}"
+            );
             prev_bits = b;
         }
     }
@@ -720,7 +734,11 @@ mod tests {
             assert!(
                 q_back == q || (q > 0 && q_back == q - 1),
                 "roundtrip: q={q} -> bits={bits} -> q_back={q_back} (expected {q}{})",
-                if q > 0 { format!(" or {}", q - 1) } else { String::new() }
+                if q > 0 {
+                    format!(" or {}", q - 1)
+                } else {
+                    String::new()
+                }
             );
         }
     }
@@ -757,11 +775,25 @@ mod tests {
         let enc_bands = {
             let mut enc = RangeEncoder::new(&mut buf);
             let coded = clt_compute_allocation(
-                mode, 0, NB_EBANDS as i32, &offsets, &cap, 7,
-                &mut enc_intensity, &mut enc_dual_stereo,
-                700 << BITRES, &mut enc_balance,
-                &mut enc_pulses, &mut enc_ebits, &mut enc_priority,
-                2, 0, &mut enc, true, NB_EBANDS as i32, NB_EBANDS as i32,
+                mode,
+                0,
+                NB_EBANDS as i32,
+                &offsets,
+                &cap,
+                7,
+                &mut enc_intensity,
+                &mut enc_dual_stereo,
+                700 << BITRES,
+                &mut enc_balance,
+                &mut enc_pulses,
+                &mut enc_ebits,
+                &mut enc_priority,
+                2,
+                0,
+                &mut enc,
+                true,
+                NB_EBANDS as i32,
+                NB_EBANDS as i32,
             );
             enc.done();
             coded
@@ -776,11 +808,25 @@ mod tests {
 
         let mut dec = RangeDecoder::new(&buf);
         let dec_bands = clt_compute_allocation(
-            mode, 0, NB_EBANDS as i32, &offsets, &cap, 7,
-            &mut dec_intensity, &mut dec_dual_stereo,
-            700 << BITRES, &mut dec_balance,
-            &mut dec_pulses, &mut dec_ebits, &mut dec_priority,
-            2, 0, &mut dec, false, NB_EBANDS as i32, NB_EBANDS as i32,
+            mode,
+            0,
+            NB_EBANDS as i32,
+            &offsets,
+            &cap,
+            7,
+            &mut dec_intensity,
+            &mut dec_dual_stereo,
+            700 << BITRES,
+            &mut dec_balance,
+            &mut dec_pulses,
+            &mut dec_ebits,
+            &mut dec_priority,
+            2,
+            0,
+            &mut dec,
+            false,
+            NB_EBANDS as i32,
+            NB_EBANDS as i32,
         );
 
         assert_eq!(dec_bands, enc_bands, "coded bands mismatch");
@@ -808,11 +854,25 @@ mod tests {
 
         let mut enc = RangeEncoder::new(&mut buf);
         let _coded = clt_compute_allocation(
-            mode, 0, NB_EBANDS as i32, &offsets, &cap, 5,
-            &mut intensity, &mut dual_stereo,
-            500 << BITRES, &mut balance,
-            &mut pulses, &mut ebits, &mut priority,
-            1, 0, &mut enc, true, NB_EBANDS as i32, NB_EBANDS as i32,
+            mode,
+            0,
+            NB_EBANDS as i32,
+            &offsets,
+            &cap,
+            5,
+            &mut intensity,
+            &mut dual_stereo,
+            500 << BITRES,
+            &mut balance,
+            &mut pulses,
+            &mut ebits,
+            &mut priority,
+            1,
+            0,
+            &mut enc,
+            true,
+            NB_EBANDS as i32,
+            NB_EBANDS as i32,
         );
 
         assert_eq!(intensity, 0, "mono should have intensity=0");
@@ -836,15 +896,33 @@ mod tests {
 
             let mut enc = RangeEncoder::new(&mut buf);
             let _coded = clt_compute_allocation(
-                mode, 0, NB_EBANDS as i32, &offsets, &cap, 5,
-                &mut intensity, &mut dual_stereo,
-                total_bits, &mut balance,
-                &mut pulses, &mut ebits, &mut priority,
-                2, 0, &mut enc, true, NB_EBANDS as i32, NB_EBANDS as i32,
+                mode,
+                0,
+                NB_EBANDS as i32,
+                &offsets,
+                &cap,
+                5,
+                &mut intensity,
+                &mut dual_stereo,
+                total_bits,
+                &mut balance,
+                &mut pulses,
+                &mut ebits,
+                &mut priority,
+                2,
+                0,
+                &mut enc,
+                true,
+                NB_EBANDS as i32,
+                NB_EBANDS as i32,
             );
 
-            let allocated: i32 = pulses.iter().sum::<i32>() + ebits.iter().map(|&e| e * 2 << BITRES).sum::<i32>();
-            assert!(allocated >= 0, "total={total_bits}: allocated bits should be non-negative");
+            let allocated: i32 =
+                pulses.iter().sum::<i32>() + ebits.iter().map(|&e| e * 2 << BITRES).sum::<i32>();
+            assert!(
+                allocated >= 0,
+                "total={total_bits}: allocated bits should be non-negative"
+            );
         }
     }
 
@@ -854,9 +932,15 @@ mod tests {
         let band = 8;
         for lm in 0..=3 {
             let q = bits2pulses(mode, band, lm, 64);
-            assert!(q >= 0, "lm={lm}: bits2pulses should return non-negative, got {q}");
+            assert!(
+                q >= 0,
+                "lm={lm}: bits2pulses should return non-negative, got {q}"
+            );
             let b = pulses2bits(mode, band, lm, q);
-            assert!(b >= 0, "lm={lm}: pulses2bits should return non-negative, got {b}");
+            assert!(
+                b >= 0,
+                "lm={lm}: pulses2bits should return non-negative, got {b}"
+            );
         }
     }
 }

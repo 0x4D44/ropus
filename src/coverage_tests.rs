@@ -1,7 +1,7 @@
-use crate::opus::decoder::{OpusDecoder, MODE_CELT_ONLY, MODE_SILK_ONLY, OPUS_OK};
+use crate::opus::decoder::{MODE_CELT_ONLY, MODE_SILK_ONLY, OPUS_OK, OpusDecoder};
 use crate::opus::encoder::{
-    OpusEncoder, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
-    OPUS_APPLICATION_VOIP, OPUS_FRAMESIZE_40_MS, OPUS_FRAMESIZE_5_MS, OPUS_SIGNAL_VOICE,
+    OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY, OPUS_APPLICATION_VOIP,
+    OPUS_FRAMESIZE_5_MS, OPUS_FRAMESIZE_40_MS, OPUS_SIGNAL_VOICE, OpusEncoder,
 };
 use crate::opus::multistream::{OpusMSDecoder, OpusMSEncoder};
 
@@ -95,7 +95,9 @@ fn public_api_restricted_lowdelay_float_roundtrip() {
     dec.set_phase_inversion_disabled(true);
 
     let mut out = vec![0f32; 240 * 2];
-    let decoded = dec.decode_float(Some(packet), &mut out, 240, false).unwrap();
+    let decoded = dec
+        .decode_float(Some(packet), &mut out, 240, false)
+        .unwrap();
     assert_eq!(decoded, 240);
     assert!(out.iter().any(|sample| sample.abs() > 1e-4));
 }

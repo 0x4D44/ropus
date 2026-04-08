@@ -1249,7 +1249,12 @@ fn quant_band<EC: EcCoder>(
             deinterleave_hadamard(x, n_b >> recombine, b0_new << recombine, long_blocks);
         }
         if scratch_buf_active && use_scratch_as_lowband {
-            deinterleave_hadamard(&mut scratch_arr, n_b >> recombine, b0_new << recombine, long_blocks);
+            deinterleave_hadamard(
+                &mut scratch_arr,
+                n_b >> recombine,
+                b0_new << recombine,
+                long_blocks,
+            );
         }
     }
 
@@ -1826,7 +1831,11 @@ pub fn quant_all_bands<EC: EcCoder>(
                     big_b,
                     lb,
                     lm,
-                    if !last { Some(&mut lbo_buf[..n as usize]) } else { None },
+                    if !last {
+                        Some(&mut lbo_buf[..n as usize])
+                    } else {
+                        None
+                    },
                     Q31ONE,
                     None,
                     x_cm as i32,
@@ -1870,7 +1879,11 @@ pub fn quant_all_bands<EC: EcCoder>(
                     big_b,
                     lb2.as_deref(),
                     lm,
-                    if !last { Some(&mut lbo_buf[..n as usize]) } else { None },
+                    if !last {
+                        Some(&mut lbo_buf[..n as usize])
+                    } else {
+                        None
+                    },
                     Q31ONE,
                     None,
                     y_cm as i32,
@@ -1936,7 +1949,11 @@ pub fn quant_all_bands<EC: EcCoder>(
                         big_b,
                         lb,
                         lm,
-                        if !last { Some(&mut lbo_buf[..nu]) } else { None },
+                        if !last {
+                            Some(&mut lbo_buf[..nu])
+                        } else {
+                            None
+                        },
                         None,
                         cm as i32,
                     );
@@ -2012,7 +2029,11 @@ pub fn quant_all_bands<EC: EcCoder>(
                         big_b,
                         lb,
                         lm,
-                        if !last { Some(&mut lbo_buf2[..nu]) } else { None },
+                        if !last {
+                            Some(&mut lbo_buf2[..nu])
+                        } else {
+                            None
+                        },
                         None,
                         cm as i32,
                     );
@@ -2077,13 +2098,18 @@ pub fn quant_all_bands<EC: EcCoder>(
                         big_b,
                         lb,
                         lm,
-                        if !last { Some(&mut lbo_buf[..n as usize]) } else { None },
+                        if !last {
+                            Some(&mut lbo_buf[..n as usize])
+                        } else {
+                            None
+                        },
                         None,
                         (x_cm | y_cm) as i32,
                     );
                     if !last {
                         let out_off = norm_out_offset.unwrap();
-                        _norm[out_off..out_off + n as usize].copy_from_slice(&lbo_buf[..n as usize]);
+                        _norm[out_off..out_off + n as usize]
+                            .copy_from_slice(&lbo_buf[..n as usize]);
                     }
                     ctx_seed = ctx.seed;
                 }
@@ -2119,7 +2145,11 @@ pub fn quant_all_bands<EC: EcCoder>(
                     big_b,
                     lb,
                     lm,
-                    if !last { Some(&mut lbo_buf[..n as usize]) } else { None },
+                    if !last {
+                        Some(&mut lbo_buf[..n as usize])
+                    } else {
+                        None
+                    },
                     Q31ONE,
                     None,
                     (x_cm | y_cm) as i32,

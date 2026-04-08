@@ -2108,13 +2108,29 @@ mod tests {
 
         let mut output1 = vec![9.0];
         let mut mem1 = vec![10.0, 20.0];
-        compute_generic_conv1d_dilation(&layer, &mut output1, &mut mem1, &input, 2, 1, ACTIVATION_LINEAR);
+        compute_generic_conv1d_dilation(
+            &layer,
+            &mut output1,
+            &mut mem1,
+            &input,
+            2,
+            1,
+            ACTIVATION_LINEAR,
+        );
         assert!(approx_eq(output1[0], 0.0, EPS));
         assert_eq!(mem1, vec![1.0, 2.0]);
 
         let mut output2 = vec![9.0];
         let mut mem2 = vec![10.0, 11.0, 20.0, 21.0];
-        compute_generic_conv1d_dilation(&layer, &mut output2, &mut mem2, &input, 2, 2, ACTIVATION_LINEAR);
+        compute_generic_conv1d_dilation(
+            &layer,
+            &mut output2,
+            &mut mem2,
+            &input,
+            2,
+            2,
+            ACTIVATION_LINEAR,
+        );
         assert!(approx_eq(output2[0], 0.0, EPS));
         assert_eq!(mem2, vec![20.0, 21.0, 1.0, 2.0]);
     }
@@ -2132,7 +2148,15 @@ mod tests {
         let mut out = vec![0.0; 2];
         let mut mem = vec![];
         let input = vec![3.0, 4.0];
-        compute_conv2d(&generic, &mut out, &mut mem, &input, 2, 2, ACTIVATION_LINEAR);
+        compute_conv2d(
+            &generic,
+            &mut out,
+            &mut mem,
+            &input,
+            2,
+            2,
+            ACTIVATION_LINEAR,
+        );
         assert_eq!(out, vec![7.0, 9.0]);
         assert!(mem.is_empty());
 
@@ -2151,7 +2175,15 @@ mod tests {
         let mut out2 = vec![0.0; 1];
         let mut mem2 = vec![0.0; 6];
         let input2 = vec![1.0, 2.0, 3.0];
-        compute_conv2d(&specialized, &mut out2, &mut mem2, &input2, 1, 1, ACTIVATION_LINEAR);
+        compute_conv2d(
+            &specialized,
+            &mut out2,
+            &mut mem2,
+            &input2,
+            1,
+            1,
+            ACTIVATION_LINEAR,
+        );
         assert!(approx_eq(out2[0], 2.0, EPS));
         assert_eq!(mem2, vec![0.0, 0.0, 0.0, 1.0, 2.0, 3.0]);
     }
@@ -2261,19 +2293,21 @@ mod tests {
         compute_linear(&sparse, &mut sparse_out, &[1.0 / 127.0; 4]);
         assert!(sparse_out.iter().all(|&v| approx_eq(v, 4.0, EPS)));
 
-        assert!(linear_init(
-            &sparse_arrays,
-            None,
-            None,
-            Some("weights"),
-            None,
-            Some("idx"),
-            None,
-            None,
-            4,
-            8,
-        )
-        .is_err());
+        assert!(
+            linear_init(
+                &sparse_arrays,
+                None,
+                None,
+                Some("weights"),
+                None,
+                Some("idx"),
+                None,
+                None,
+                4,
+                8,
+            )
+            .is_err()
+        );
 
         let bad_idx_arrays = vec![WeightArray {
             name: "bad_idx".into(),
@@ -2281,29 +2315,34 @@ mod tests {
             size: 8,
             data: i32_bytes(&[1, 1]),
         }];
-        assert!(linear_init(
-            &bad_idx_arrays,
-            None,
-            None,
-            Some("weights"),
-            None,
-            Some("bad_idx"),
-            None,
-            Some("scale"),
-            4,
-            8,
-        )
-        .is_err());
+        assert!(
+            linear_init(
+                &bad_idx_arrays,
+                None,
+                None,
+                Some("weights"),
+                None,
+                Some("bad_idx"),
+                None,
+                Some("scale"),
+                4,
+                8,
+            )
+            .is_err()
+        );
 
-        let mut negative_size = make_weight_record("bad", WEIGHT_TYPE_FLOAT, &f32_bytes(&[0.0]), 4, true);
+        let mut negative_size =
+            make_weight_record("bad", WEIGHT_TYPE_FLOAT, &f32_bytes(&[0.0]), 4, true);
         negative_size[12..16].copy_from_slice(&(-1i32).to_ne_bytes());
         assert!(parse_weights(&negative_size).is_err());
 
-        let mut bad_nul = make_weight_record("bad", WEIGHT_TYPE_FLOAT, &f32_bytes(&[0.0]), 4, false);
+        let mut bad_nul =
+            make_weight_record("bad", WEIGHT_TYPE_FLOAT, &f32_bytes(&[0.0]), 4, false);
         bad_nul[16..20].copy_from_slice(&(4i32).to_ne_bytes());
         assert!(parse_weights(&bad_nul).is_err());
 
-        let mut small_block = make_weight_record("bad", WEIGHT_TYPE_FLOAT, &f32_bytes(&[0.0]), 4, true);
+        let mut small_block =
+            make_weight_record("bad", WEIGHT_TYPE_FLOAT, &f32_bytes(&[0.0]), 4, true);
         small_block[12..16].copy_from_slice(&(8i32).to_ne_bytes());
         assert!(parse_weights(&small_block).is_err());
     }
@@ -2342,7 +2381,11 @@ mod tests {
         );
         assert!(adaconv_out.iter().all(|&v| approx_eq(v, 0.0, EPS)));
         assert_eq!(&adaconv_state.history[..2], &[3.0, 4.0]);
-        assert!(adaconv_state.last_kernel[..2].iter().all(|&v| approx_eq(v, 0.0, EPS)));
+        assert!(
+            adaconv_state.last_kernel[..2]
+                .iter()
+                .all(|&v| approx_eq(v, 0.0, EPS))
+        );
 
         let mut adacomb_state = AdaCombState::new();
         let adacomb_kernel = zero_dense(2, 2);
@@ -2368,10 +2411,12 @@ mod tests {
             0.0,
             &[0.0, 0.0],
         );
-        assert!(adacomb_out
-            .iter()
-            .zip([1.0, 2.0, 3.0, 4.0])
-            .all(|(a, b)| approx_eq(*a, b, 0.001)));
+        assert!(
+            adacomb_out
+                .iter()
+                .zip([1.0, 2.0, 3.0, 4.0])
+                .all(|(a, b)| approx_eq(*a, b, 0.001))
+        );
         assert_eq!(adacomb_state.last_pitch_lag, 1);
         assert!(approx_eq(adacomb_state.last_global_gain, 1.0, EPS));
 
@@ -2393,13 +2438,30 @@ mod tests {
             2,
             2,
         );
-        assert!(adashape_out
-            .iter()
-            .zip([1.0, 2.0, 3.0, 4.0])
-            .all(|(a, b)| approx_eq(*a, b, 0.001)));
-        assert!(adashape_state.conv_alpha1f_state.iter().all(|&v| approx_eq(v, 0.0, EPS)));
-        assert!(adashape_state.conv_alpha1t_state.iter().all(|&v| approx_eq(v, 0.0, EPS)));
-        assert!(adashape_state.conv_alpha2_state.iter().all(|&v| approx_eq(v, 0.0, EPS)));
+        assert!(
+            adashape_out
+                .iter()
+                .zip([1.0, 2.0, 3.0, 4.0])
+                .all(|(a, b)| approx_eq(*a, b, 0.001))
+        );
+        assert!(
+            adashape_state
+                .conv_alpha1f_state
+                .iter()
+                .all(|&v| approx_eq(v, 0.0, EPS))
+        );
+        assert!(
+            adashape_state
+                .conv_alpha1t_state
+                .iter()
+                .all(|&v| approx_eq(v, 0.0, EPS))
+        );
+        assert!(
+            adashape_state
+                .conv_alpha2_state
+                .iter()
+                .all(|&v| approx_eq(v, 0.0, EPS))
+        );
         assert!(approx_eq(adashape_state.interpolate_state[0], 0.0, EPS));
     }
 }

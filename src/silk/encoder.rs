@@ -7098,7 +7098,12 @@ pub fn silk_encode_frame_fix(
         silk_process_gains_fix(ps_enc, &mut s_enc_ctrl, cond_coding);
 
         // Low Bitrate Redundant Encoding (matches C encode_frame_FIX.c:172)
-        silk_lbrr_encode_fix(ps_enc, &mut s_enc_ctrl, &ps_enc.x_buf[x_frame_offset..x_frame_offset + frame_length].to_vec(), cond_coding);
+        silk_lbrr_encode_fix(
+            ps_enc,
+            &mut s_enc_ctrl,
+            &ps_enc.x_buf[x_frame_offset..x_frame_offset + frame_length].to_vec(),
+            cond_coding,
+        );
 
         // Rate control loop: NSQ + encode (matches C encode_frame_FIX.c)
         let max_iter: i32 = 6;
@@ -7815,7 +7820,11 @@ pub fn silk_encode(
     let n_samples_to_buffer_max = (10 * n_blocks_of_10ms * fs_khz) as usize;
 
     // C: tot_blocks = (nBlocksOf10ms > 1) ? nBlocksOf10ms >> 1 : 1
-    let tot_blocks = if n_blocks_of_10ms > 1 { n_blocks_of_10ms >> 1 } else { 1 };
+    let tot_blocks = if n_blocks_of_10ms > 1 {
+        n_blocks_of_10ms >> 1
+    } else {
+        1
+    };
     let mut curr_block: i32 = 0;
 
     // Main encode loop — matches C while(1) in enc_API.c.
@@ -7971,15 +7980,19 @@ pub fn silk_encode(
                                 // For LBRR data there's no need to code the mid-only flag
                                 // if the side-channel LBRR flag is set
                                 if enc.state_fxx[1].s_cmn.lbrr_flags[i] == 0 {
-                                    silk_stereo_encode_mid_only(range_enc, enc.s_stereo.mid_only_flags[i]);
+                                    silk_stereo_encode_mid_only(
+                                        range_enc,
+                                        enc.s_stereo.mid_only_flags[i],
+                                    );
                                 }
                             }
                             // Use conditional coding if previous frame available (C enc_API.c:390-394)
-                            let cond_coding = if i > 0 && enc.state_fxx[n].s_cmn.lbrr_flags[i - 1] != 0 {
-                                CODE_CONDITIONALLY
-                            } else {
-                                CODE_INDEPENDENTLY
-                            };
+                            let cond_coding =
+                                if i > 0 && enc.state_fxx[n].s_cmn.lbrr_flags[i - 1] != 0 {
+                                    CODE_CONDITIONALLY
+                                } else {
+                                    CODE_INDEPENDENTLY
+                                };
                             silk_encode_indices(
                                 &enc.state_fxx[n].s_cmn,
                                 range_enc,
@@ -8043,7 +8056,8 @@ pub fn silk_encode(
                 let bits_balance = range_enc.tell()
                     - enc.n_bits_used_lbrr
                     - n_bits_target * enc.state_fxx[0].s_cmn.n_frames_encoded;
-                target_rate -= silk_div32_16(silk_mul(bits_balance, 1000), BITRESERVOIR_DECAY_TIME_MS);
+                target_rate -=
+                    silk_div32_16(silk_mul(bits_balance, 1000), BITRESERVOIR_DECAY_TIME_MS);
             }
             let target_rate = target_rate.max(5000).min(enc_control.bit_rate);
 
@@ -8114,7 +8128,10 @@ pub fn silk_encode(
                 if prefill_flag == 0 {
                     silk_stereo_encode_pred(range_enc, &enc.s_stereo.pred_ix[n_frames_enc]);
                     if enc.state_fxx[1].s_cmn.vad_flags[n_frames_enc] == 0 {
-                        silk_stereo_encode_mid_only(range_enc, enc.s_stereo.mid_only_flags[n_frames_enc]);
+                        silk_stereo_encode_mid_only(
+                            range_enc,
+                            enc.s_stereo.mid_only_flags[n_frames_enc],
+                        );
                     }
                 }
             } else {
@@ -8149,7 +8166,11 @@ pub fn silk_encode(
                         max_bits = max_bits * 3 / 4;
                     }
                 }
-                let mut use_cbr = if enc_control.use_cbr != 0 && curr_block == tot_blocks - 1 { enc_control.use_cbr } else { 0 };
+                let mut use_cbr = if enc_control.use_cbr != 0 && curr_block == tot_blocks - 1 {
+                    enc_control.use_cbr
+                } else {
+                    0
+                };
 
                 let channel_rate = if n_channels_internal == 1 {
                     target_rate
@@ -8166,7 +8187,12 @@ pub fn silk_encode(
                     silk_control_snr(&mut enc.state_fxx[n].s_cmn, channel_rate);
 
                     // Use independent coding if no previous frame available
-                    let cond_coding = if enc.state_fxx[0].s_cmn.n_frames_encoded.wrapping_sub(n as i32) <= 0 {
+                    let cond_coding = if enc.state_fxx[0]
+                        .s_cmn
+                        .n_frames_encoded
+                        .wrapping_sub(n as i32)
+                        <= 0
+                    {
                         CODE_INDEPENDENTLY
                     } else if n > 0 && enc.prev_decode_only_middle != 0 {
                         CODE_INDEPENDENTLY_NO_LTP_SCALING
@@ -8193,7 +8219,8 @@ pub fn silk_encode(
             // Update prev_decode_only_middle (C enc_API.c:533)
             let n_enc = enc.state_fxx[0].s_cmn.n_frames_encoded;
             if n_enc > 0 {
-                enc.prev_decode_only_middle = enc.s_stereo.mid_only_flags[(n_enc - 1) as usize] as i32;
+                enc.prev_decode_only_middle =
+                    enc.s_stereo.mid_only_flags[(n_enc - 1) as usize] as i32;
             }
 
             // --- Check if packet is complete ---
@@ -8237,7 +8264,8 @@ pub fn silk_encode(
                     const BW_SWITCH_COEF_Q24: i32 = 3188;
                     // silk_SMLAWB(a, b, c) = a + ((b as i64 * c as i64) >> 16) as i32
                     let speech_act_thr_for_switch_q8 = SPEECH_ACT_DTX_THRES_Q8
-                        + ((BW_SWITCH_COEF_Q24 as i64 * enc.time_since_switch_allowed_ms as i64) >> 16) as i32;
+                        + ((BW_SWITCH_COEF_Q24 as i64 * enc.time_since_switch_allowed_ms as i64)
+                            >> 16) as i32;
                     if enc.state_fxx[0].s_cmn.speech_activity_q8 < speech_act_thr_for_switch_q8 {
                         enc.allow_bandwidth_switch = 1;
                         enc.time_since_switch_allowed_ms = 0;

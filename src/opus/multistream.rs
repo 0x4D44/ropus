@@ -11,25 +11,25 @@
 //! Fixed-point path (FIXED_POINT, non-RES24, non-QEXT).
 
 use crate::celt::bands::compute_band_energies;
-use crate::celt::encoder::{celt_preemphasis, clt_mdct_forward, get_fft_state, CeltEncoder};
+use crate::celt::encoder::{CeltEncoder, celt_preemphasis, clt_mdct_forward, get_fft_state};
 use crate::celt::math_ops::{celt_log2, isqrt32};
-use crate::celt::modes::{bitrate_to_bits, bits_to_bitrate, resampling_factor, CELTMode};
+use crate::celt::modes::{CELTMode, bitrate_to_bits, bits_to_bitrate, resampling_factor};
 use crate::celt::pitch::celt_inner_prod;
 use crate::celt::quant_bands::amp2log2;
 use crate::types::*;
 
 use super::decoder::{
-    opus_packet_get_nb_frames, opus_packet_get_nb_samples, opus_packet_get_samples_per_frame,
-    OpusDecoder, OPUS_BAD_ARG, OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR, OPUS_INVALID_PACKET,
-    OPUS_OK, OPUS_UNIMPLEMENTED, MODE_CELT_ONLY,
-};
-use super::encoder::{
-    frame_size_select, OpusEncoder, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
-    OPUS_APPLICATION_VOIP, OPUS_AUTO, OPUS_BITRATE_MAX, OPUS_FRAMESIZE_ARG,
+    MODE_CELT_ONLY, OPUS_BAD_ARG, OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR, OPUS_INVALID_PACKET,
+    OPUS_OK, OPUS_UNIMPLEMENTED, OpusDecoder, opus_packet_get_nb_frames,
+    opus_packet_get_nb_samples, opus_packet_get_samples_per_frame,
 };
 use super::decoder::{
-    OPUS_BANDWIDTH_FULLBAND, OPUS_BANDWIDTH_NARROWBAND,
-    OPUS_BANDWIDTH_SUPERWIDEBAND, OPUS_BANDWIDTH_WIDEBAND,
+    OPUS_BANDWIDTH_FULLBAND, OPUS_BANDWIDTH_NARROWBAND, OPUS_BANDWIDTH_SUPERWIDEBAND,
+    OPUS_BANDWIDTH_WIDEBAND,
+};
+use super::encoder::{
+    OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY, OPUS_APPLICATION_VOIP, OPUS_AUTO,
+    OPUS_BITRATE_MAX, OPUS_FRAMESIZE_ARG, OpusEncoder, frame_size_select,
 };
 use super::repacketizer::OpusRepacketizer;
 
@@ -165,14 +165,46 @@ struct VorbisLayout {
 
 /// Index is nb_channels - 1. Matches C `vorbis_mappings[8]`.
 static VORBIS_MAPPINGS: [VorbisLayout; 8] = [
-    VorbisLayout { nb_streams: 1, nb_coupled_streams: 0, mapping: [0, 0, 0, 0, 0, 0, 0, 0] },
-    VorbisLayout { nb_streams: 1, nb_coupled_streams: 1, mapping: [0, 1, 0, 0, 0, 0, 0, 0] },
-    VorbisLayout { nb_streams: 2, nb_coupled_streams: 1, mapping: [0, 2, 1, 0, 0, 0, 0, 0] },
-    VorbisLayout { nb_streams: 2, nb_coupled_streams: 2, mapping: [0, 1, 2, 3, 0, 0, 0, 0] },
-    VorbisLayout { nb_streams: 3, nb_coupled_streams: 2, mapping: [0, 4, 1, 2, 3, 0, 0, 0] },
-    VorbisLayout { nb_streams: 4, nb_coupled_streams: 2, mapping: [0, 4, 1, 2, 3, 5, 0, 0] },
-    VorbisLayout { nb_streams: 4, nb_coupled_streams: 3, mapping: [0, 4, 1, 2, 3, 5, 6, 0] },
-    VorbisLayout { nb_streams: 5, nb_coupled_streams: 3, mapping: [0, 6, 1, 2, 3, 4, 5, 7] },
+    VorbisLayout {
+        nb_streams: 1,
+        nb_coupled_streams: 0,
+        mapping: [0, 0, 0, 0, 0, 0, 0, 0],
+    },
+    VorbisLayout {
+        nb_streams: 1,
+        nb_coupled_streams: 1,
+        mapping: [0, 1, 0, 0, 0, 0, 0, 0],
+    },
+    VorbisLayout {
+        nb_streams: 2,
+        nb_coupled_streams: 1,
+        mapping: [0, 2, 1, 0, 0, 0, 0, 0],
+    },
+    VorbisLayout {
+        nb_streams: 2,
+        nb_coupled_streams: 2,
+        mapping: [0, 1, 2, 3, 0, 0, 0, 0],
+    },
+    VorbisLayout {
+        nb_streams: 3,
+        nb_coupled_streams: 2,
+        mapping: [0, 4, 1, 2, 3, 0, 0, 0],
+    },
+    VorbisLayout {
+        nb_streams: 4,
+        nb_coupled_streams: 2,
+        mapping: [0, 4, 1, 2, 3, 5, 0, 0],
+    },
+    VorbisLayout {
+        nb_streams: 4,
+        nb_coupled_streams: 3,
+        mapping: [0, 4, 1, 2, 3, 5, 6, 0],
+    },
+    VorbisLayout {
+        nb_streams: 5,
+        nb_coupled_streams: 3,
+        mapping: [0, 6, 1, 2, 3, 4, 5, 7],
+    },
 ];
 
 // ===========================================================================
@@ -217,15 +249,34 @@ fn validate_ambisonics(
 fn channel_pos(channels: i32, pos: &mut [i32; 8]) {
     pos.fill(0);
     if channels == 4 {
-        pos[0] = 1; pos[1] = 3; pos[2] = 1; pos[3] = 3;
+        pos[0] = 1;
+        pos[1] = 3;
+        pos[2] = 1;
+        pos[3] = 3;
     } else if channels == 3 || channels == 5 || channels == 6 {
-        pos[0] = 1; pos[1] = 2; pos[2] = 3; pos[3] = 1; pos[4] = 3; pos[5] = 0;
+        pos[0] = 1;
+        pos[1] = 2;
+        pos[2] = 3;
+        pos[3] = 1;
+        pos[4] = 3;
+        pos[5] = 0;
     } else if channels == 7 {
-        pos[0] = 1; pos[1] = 2; pos[2] = 3; pos[3] = 1;
-        pos[4] = 3; pos[5] = 2; pos[6] = 0;
+        pos[0] = 1;
+        pos[1] = 2;
+        pos[2] = 3;
+        pos[3] = 1;
+        pos[4] = 3;
+        pos[5] = 2;
+        pos[6] = 0;
     } else if channels == 8 {
-        pos[0] = 1; pos[1] = 2; pos[2] = 3; pos[3] = 1;
-        pos[4] = 3; pos[5] = 1; pos[6] = 3; pos[7] = 0;
+        pos[0] = 1;
+        pos[1] = 2;
+        pos[2] = 3;
+        pos[3] = 1;
+        pos[4] = 3;
+        pos[5] = 1;
+        pos[6] = 3;
+        pos[7] = 0;
     }
 }
 
@@ -242,20 +293,28 @@ const fn gconst(x: f64) -> i32 {
 /// Matches C `logSum` (fixed-point path).
 fn log_sum(a: i32, b: i32) -> i32 {
     static DIFF_TABLE: [i32; 17] = [
-        gconst(0.5000000), gconst(0.2924813), gconst(0.1609640), gconst(0.0849625),
-        gconst(0.0437314), gconst(0.0221971), gconst(0.0111839), gconst(0.0056136),
+        gconst(0.5000000),
+        gconst(0.2924813),
+        gconst(0.1609640),
+        gconst(0.0849625),
+        gconst(0.0437314),
+        gconst(0.0221971),
+        gconst(0.0111839),
+        gconst(0.0056136),
         gconst(0.0028123),
         // Table only needs 9 entries for diff < 8.0 (indices 0..8 + interpolation to 9)
         // But C code has 17 entries; pad with very small values for safety.
-        gconst(0.0014060), gconst(0.0007030), gconst(0.0003515), gconst(0.0001757),
-        gconst(0.0000879), gconst(0.0000439), gconst(0.0000220), gconst(0.0000110),
+        gconst(0.0014060),
+        gconst(0.0007030),
+        gconst(0.0003515),
+        gconst(0.0001757),
+        gconst(0.0000879),
+        gconst(0.0000439),
+        gconst(0.0000220),
+        gconst(0.0000110),
     ];
 
-    let (max_val, diff) = if a > b {
-        (a, a - b)
-    } else {
-        (b, b - a)
-    };
+    let (max_val, diff) = if a > b { (a, a - b) } else { (b, b - a) };
     // Inverted comparison to catch large values (NaN-like guard from C)
     if !(diff < gconst(8.0)) {
         return max_val;
@@ -264,14 +323,17 @@ fn log_sum(a: i32, b: i32) -> i32 {
     let low = (diff >> (DB_SHIFT - 1)) as usize;
     // frac in Q16 for interpolation
     let frac = vshr32(diff - ((low as i32) << (DB_SHIFT - 1)), DB_SHIFT - 16);
-    max_val + DIFF_TABLE[low]
-        + mult16_32_q15(frac, DIFF_TABLE[low + 1] - DIFF_TABLE[low])
+    max_val + DIFF_TABLE[low] + mult16_32_q15(frac, DIFF_TABLE[low + 1] - DIFF_TABLE[low])
 }
 
 /// Variable shift right — handles both positive and negative shifts.
 #[inline(always)]
 fn vshr32(x: i32, shift: i32) -> i32 {
-    if shift >= 0 { x >> shift } else { x << (-shift) }
+    if shift >= 0 {
+        x >> shift
+    } else {
+        x << (-shift)
+    }
 }
 
 /// 16×32 multiply keeping Q15 result.
@@ -333,9 +395,13 @@ fn surround_analysis(
 
         // Apply pre-emphasis
         celt_preemphasis(
-            &x, 0,
-            &mut inp, ov,
-            frame_size, 1, upsample,
+            &x,
+            0,
+            &mut inp,
+            ov,
+            frame_size,
+            1,
+            upsample,
             &celt_mode.preemph,
             &mut preemph_mem[c],
             0,
@@ -408,9 +474,8 @@ fn surround_analysis(
         }
 
         // Save overlap for next frame
-        mem[c * ov..(c + 1) * ov].copy_from_slice(
-            &inp[frame_size as usize..(frame_size + overlap) as usize],
-        );
+        mem[c * ov..(c + 1) * ov]
+            .copy_from_slice(&inp[frame_size as usize..(frame_size + overlap) as usize]);
     }
 
     // Center mask = min(left, right)
@@ -489,14 +554,17 @@ fn surround_rate_allocation(
 
     let total = (nb_uncoupled << 8) + coupled_ratio * nb_coupled + nb_lfe * lfe_ratio;
     let channel_rate = (256
-        * (bitrate - lfe_offset * nb_lfe - stream_offset * (nb_coupled + nb_uncoupled)
+        * (bitrate
+            - lfe_offset * nb_lfe
+            - stream_offset * (nb_coupled + nb_uncoupled)
             - channel_offset * nb_normal) as i64
         / total as i64) as i32;
 
     for i in 0..layout.nb_streams as usize {
         let i32_i = i as i32;
         if i32_i < layout.nb_coupled_streams {
-            rate[i] = 2 * channel_offset + imax(0, stream_offset + (channel_rate * coupled_ratio >> 8));
+            rate[i] =
+                2 * channel_offset + imax(0, stream_offset + (channel_rate * coupled_ratio >> 8));
         } else if i32_i != lfe_stream {
             rate[i] = channel_offset + imax(0, stream_offset + channel_rate);
         } else {
@@ -780,7 +848,13 @@ impl OpusMSEncoder {
         application: i32,
     ) -> Result<Self, i32> {
         Self::new_impl(
-            fs, channels, streams, coupled_streams, mapping, application, MappingType::None,
+            fs,
+            channels,
+            streams,
+            coupled_streams,
+            mapping,
+            application,
+            MappingType::None,
             -1,
         )
     }
@@ -860,7 +934,13 @@ impl OpusMSEncoder {
         }
 
         let encoder = Self::new_impl(
-            fs, channels, streams, coupled_streams, &mapping, application, mapping_type,
+            fs,
+            channels,
+            streams,
+            coupled_streams,
+            &mapping,
+            application,
+            mapping_type,
             lfe_stream,
         )?;
 
@@ -901,9 +981,7 @@ impl OpusMSEncoder {
         if !validate_encoder_layout(&layout) {
             return Err(OPUS_BAD_ARG);
         }
-        if mapping_type == MappingType::Ambisonics
-            && !validate_ambisonics(channels, None, None)
-        {
+        if mapping_type == MappingType::Ambisonics && !validate_ambisonics(channels, None, None) {
             return Err(OPUS_BAD_ARG);
         }
 
@@ -1029,11 +1107,12 @@ impl OpusMSEncoder {
             enc.ms_set_user_bitrate(bitrates[s]);
 
             if self.mapping_type == MappingType::Surround {
-                let equiv_rate = if self.bitrate_bps == OPUS_AUTO || self.bitrate_bps == OPUS_BITRATE_MAX {
-                    bitrates.iter().sum::<i32>()
-                } else {
-                    self.bitrate_bps
-                };
+                let equiv_rate =
+                    if self.bitrate_bps == OPUS_AUTO || self.bitrate_bps == OPUS_BITRATE_MAX {
+                        bitrates.iter().sum::<i32>()
+                    } else {
+                        self.bitrate_bps
+                    };
                 let mut adj_rate = equiv_rate;
                 if frame_size * 50 < fs {
                     adj_rate -= 60 * (fs / frame_size - 50) * self.layout.nb_channels;
@@ -1147,7 +1226,12 @@ impl OpusMSEncoder {
             ambisonics_rate_allocation(&self.layout, self.bitrate_bps, rate, frame_size, fs);
         } else {
             surround_rate_allocation(
-                &self.layout, self.lfe_stream, self.bitrate_bps, rate, frame_size, fs,
+                &self.layout,
+                self.lfe_stream,
+                self.bitrate_bps,
+                rate,
+                frame_size,
+                fs,
             );
         }
         let mut rate_sum = 0i32;
@@ -1202,72 +1286,100 @@ impl OpusMSEncoder {
     }
 
     pub fn set_vbr(&mut self, v: i32) -> i32 {
-        for enc in &mut self.encoders { enc.ms_set_vbr(v); }
+        for enc in &mut self.encoders {
+            enc.ms_set_vbr(v);
+        }
         OPUS_OK
     }
 
     pub fn set_vbr_constraint(&mut self, v: i32) -> i32 {
-        for enc in &mut self.encoders { enc.ms_set_vbr_constraint(v); }
+        for enc in &mut self.encoders {
+            enc.ms_set_vbr_constraint(v);
+        }
         OPUS_OK
     }
 
     pub fn set_signal(&mut self, v: i32) -> i32 {
-        for enc in &mut self.encoders { enc.ms_set_signal(v); }
+        for enc in &mut self.encoders {
+            enc.ms_set_signal(v);
+        }
         OPUS_OK
     }
 
     pub fn set_bandwidth(&mut self, v: i32) -> i32 {
-        for enc in &mut self.encoders { enc.ms_set_bandwidth(v); }
+        for enc in &mut self.encoders {
+            enc.ms_set_bandwidth(v);
+        }
         OPUS_OK
     }
 
     pub fn set_max_bandwidth(&mut self, v: i32) -> i32 {
-        for enc in &mut self.encoders { enc.ms_set_max_bandwidth(v); }
+        for enc in &mut self.encoders {
+            enc.ms_set_max_bandwidth(v);
+        }
         OPUS_OK
     }
 
     pub fn set_inband_fec(&mut self, v: i32) -> i32 {
-        for enc in &mut self.encoders { enc.ms_set_inband_fec(v); }
+        for enc in &mut self.encoders {
+            enc.ms_set_inband_fec(v);
+        }
         OPUS_OK
     }
 
     pub fn set_packet_loss_perc(&mut self, v: i32) -> i32 {
-        for enc in &mut self.encoders { enc.ms_set_packet_loss_perc(v); }
+        for enc in &mut self.encoders {
+            enc.ms_set_packet_loss_perc(v);
+        }
         OPUS_OK
     }
 
     pub fn set_dtx(&mut self, v: i32) -> i32 {
-        for enc in &mut self.encoders { enc.ms_set_dtx(v); }
+        for enc in &mut self.encoders {
+            enc.ms_set_dtx(v);
+        }
         OPUS_OK
     }
 
     pub fn set_lsb_depth(&mut self, v: i32) -> i32 {
-        for enc in &mut self.encoders { enc.ms_set_lsb_depth(v); }
+        for enc in &mut self.encoders {
+            enc.ms_set_lsb_depth(v);
+        }
         OPUS_OK
     }
 
     pub fn set_prediction_disabled(&mut self, v: i32) -> i32 {
-        for enc in &mut self.encoders { enc.ms_set_prediction_disabled(v); }
+        for enc in &mut self.encoders {
+            enc.ms_set_prediction_disabled(v);
+        }
         OPUS_OK
     }
 
     pub fn set_phase_inversion_disabled(&mut self, v: i32) -> i32 {
-        for enc in &mut self.encoders { enc.ms_set_phase_inversion_disabled(v); }
+        for enc in &mut self.encoders {
+            enc.ms_set_phase_inversion_disabled(v);
+        }
         OPUS_OK
     }
 
     pub fn set_force_mode(&mut self, v: i32) -> i32 {
-        for enc in &mut self.encoders { enc.ms_set_force_mode(v); }
+        for enc in &mut self.encoders {
+            enc.ms_set_force_mode(v);
+        }
         OPUS_OK
     }
 
     pub fn set_force_channels(&mut self, v: i32) -> i32 {
-        for enc in &mut self.encoders { enc.ms_set_force_channels(v); }
+        for enc in &mut self.encoders {
+            enc.ms_set_force_channels(v);
+        }
         OPUS_OK
     }
 
     pub fn set_application(&mut self, v: i32) -> i32 {
-        for enc in &mut self.encoders { enc.ms_set_application(v); }
+        for enc in &mut self.encoders {
+            enc.ms_set_application(v);
+        }
         OPUS_OK
     }
 
@@ -1306,8 +1418,12 @@ impl OpusMSEncoder {
         }
     }
 
-    pub fn nb_streams(&self) -> i32 { self.layout.nb_streams }
-    pub fn nb_coupled_streams(&self) -> i32 { self.layout.nb_coupled_streams }
+    pub fn nb_streams(&self) -> i32 {
+        self.layout.nb_streams
+    }
+    pub fn nb_coupled_streams(&self) -> i32 {
+        self.layout.nb_coupled_streams
+    }
 }
 
 // ===========================================================================
@@ -1452,7 +1568,9 @@ impl OpusMSDecoder {
                 let mut prev = -1;
                 loop {
                     let chan = get_left_channel(&self.layout, s_i32, prev);
-                    if chan == -1 { break; }
+                    if chan == -1 {
+                        break;
+                    }
                     copy_channel_out_short(
                         pcm,
                         self.layout.nb_channels as usize,
@@ -1466,7 +1584,9 @@ impl OpusMSDecoder {
                 prev = -1;
                 loop {
                     let chan = get_right_channel(&self.layout, s_i32, prev);
-                    if chan == -1 { break; }
+                    if chan == -1 {
+                        break;
+                    }
                     copy_channel_out_short(
                         pcm,
                         self.layout.nb_channels as usize,
@@ -1482,7 +1602,9 @@ impl OpusMSDecoder {
                 let mut prev = -1;
                 loop {
                     let chan = get_mono_channel(&self.layout, s_i32, prev);
-                    if chan == -1 { break; }
+                    if chan == -1 {
+                        break;
+                    }
                     copy_channel_out_short(
                         pcm,
                         self.layout.nb_channels as usize,
@@ -1535,7 +1657,9 @@ impl OpusMSDecoder {
     }
 
     pub fn set_gain(&mut self, gain: i32) -> i32 {
-        for dec in &mut self.decoders { dec.ms_set_gain(gain); }
+        for dec in &mut self.decoders {
+            dec.ms_set_gain(gain);
+        }
         OPUS_OK
     }
 
@@ -1544,7 +1668,9 @@ impl OpusMSDecoder {
     }
 
     pub fn set_phase_inversion_disabled(&mut self, v: i32) -> i32 {
-        for dec in &mut self.decoders { dec.ms_set_phase_inversion_disabled(v); }
+        for dec in &mut self.decoders {
+            dec.ms_set_phase_inversion_disabled(v);
+        }
         OPUS_OK
     }
 
@@ -1553,7 +1679,9 @@ impl OpusMSDecoder {
     }
 
     pub fn set_complexity(&mut self, v: i32) -> i32 {
-        for dec in &mut self.decoders { dec.ms_set_complexity(v); }
+        for dec in &mut self.decoders {
+            dec.ms_set_complexity(v);
+        }
         OPUS_OK
     }
 
@@ -1576,8 +1704,12 @@ impl OpusMSDecoder {
         self.decoders.get_mut(stream_id)
     }
 
-    pub fn nb_streams(&self) -> i32 { self.layout.nb_streams }
-    pub fn nb_coupled_streams(&self) -> i32 { self.layout.nb_coupled_streams }
+    pub fn nb_streams(&self) -> i32 {
+        self.layout.nb_streams
+    }
+    pub fn nb_coupled_streams(&self) -> i32 {
+        self.layout.nb_coupled_streams
+    }
 }
 
 // ===========================================================================
@@ -1705,10 +1837,7 @@ fn get_order_plus_one_from_channels(channels: i32) -> Result<i32, i32> {
 }
 
 /// Get stream counts for projection (mapping family 3).
-fn get_streams_from_channels(
-    channels: i32,
-    mapping_family: i32,
-) -> Result<(i32, i32, i32), i32> {
+fn get_streams_from_channels(channels: i32, mapping_family: i32) -> Result<(i32, i32, i32), i32> {
     if mapping_family != 3 {
         return Err(OPUS_BAD_ARG);
     }
@@ -1782,11 +1911,20 @@ impl OpusProjectionEncoder {
         let mapping: Vec<u8> = (0..channels as u8).collect();
 
         let ms_encoder = OpusMSEncoder::new(
-            fs, channels, streams, coupled_streams, &mapping, application,
+            fs,
+            channels,
+            streams,
+            coupled_streams,
+            &mapping,
+            application,
         )?;
 
         Ok((
-            Self { mixing_matrix, demixing_matrix, ms_encoder },
+            Self {
+                mixing_matrix,
+                demixing_matrix,
+                ms_encoder,
+            },
             streams,
             coupled_streams,
         ))
@@ -1823,7 +1961,8 @@ impl OpusProjectionEncoder {
         }
 
         // Encode the mixed buffer using the multistream encoder
-        self.ms_encoder.encode(&mixed, frame_size, data, max_data_bytes)
+        self.ms_encoder
+            .encode(&mixed, frame_size, data, max_data_bytes)
     }
 
     /// Get the demixing matrix size (for Ogg encapsulation).
@@ -1861,12 +2000,24 @@ impl OpusProjectionEncoder {
         result
     }
 
-    pub fn get_final_range(&self) -> u32 { self.ms_encoder.get_final_range() }
-    pub fn set_bitrate(&mut self, v: i32) -> i32 { self.ms_encoder.set_bitrate(v) }
-    pub fn get_bitrate(&self) -> i32 { self.ms_encoder.get_bitrate() }
-    pub fn set_complexity(&mut self, v: i32) -> i32 { self.ms_encoder.set_complexity(v) }
-    pub fn set_vbr(&mut self, v: i32) -> i32 { self.ms_encoder.set_vbr(v) }
-    pub fn reset(&mut self) { self.ms_encoder.reset(); }
+    pub fn get_final_range(&self) -> u32 {
+        self.ms_encoder.get_final_range()
+    }
+    pub fn set_bitrate(&mut self, v: i32) -> i32 {
+        self.ms_encoder.set_bitrate(v)
+    }
+    pub fn get_bitrate(&self) -> i32 {
+        self.ms_encoder.get_bitrate()
+    }
+    pub fn set_complexity(&mut self, v: i32) -> i32 {
+        self.ms_encoder.set_complexity(v)
+    }
+    pub fn set_vbr(&mut self, v: i32) -> i32 {
+        self.ms_encoder.set_vbr(v)
+    }
+    pub fn reset(&mut self) {
+        self.ms_encoder.reset();
+    }
 }
 
 // ===========================================================================
@@ -1919,7 +2070,10 @@ impl OpusProjectionDecoder {
 
         let ms_decoder = OpusMSDecoder::new(fs, channels, streams, coupled_streams, &mapping)?;
 
-        Ok(Self { demixing_matrix, ms_decoder })
+        Ok(Self {
+            demixing_matrix,
+            ms_decoder,
+        })
     }
 
     /// Decode with matrix demixing applied.
@@ -1939,7 +2093,9 @@ impl OpusProjectionDecoder {
 
         // Decode to an intermediate buffer with stream channel layout
         let mut stream_pcm = vec![0i16; total_stream_channels as usize * frame_size as usize];
-        let ret = self.ms_decoder.decode(data, len, &mut stream_pcm, frame_size, decode_fec)?;
+        let ret = self
+            .ms_decoder
+            .decode(data, len, &mut stream_pcm, frame_size, decode_fec)?;
 
         // Zero the output buffer (accumulation pattern requires this)
         for v in pcm[..nb_channels as usize * ret as usize].iter_mut() {
@@ -1961,11 +2117,21 @@ impl OpusProjectionDecoder {
         Ok(ret)
     }
 
-    pub fn get_final_range(&self) -> u32 { self.ms_decoder.get_final_range() }
-    pub fn get_sample_rate(&self) -> i32 { self.ms_decoder.get_sample_rate() }
-    pub fn set_gain(&mut self, v: i32) -> i32 { self.ms_decoder.set_gain(v) }
-    pub fn get_gain(&self) -> i32 { self.ms_decoder.get_gain() }
-    pub fn reset(&mut self) { self.ms_decoder.reset(); }
+    pub fn get_final_range(&self) -> u32 {
+        self.ms_decoder.get_final_range()
+    }
+    pub fn get_sample_rate(&self) -> i32 {
+        self.ms_decoder.get_sample_rate()
+    }
+    pub fn set_gain(&mut self, v: i32) -> i32 {
+        self.ms_decoder.set_gain(v)
+    }
+    pub fn get_gain(&self) -> i32 {
+        self.ms_decoder.get_gain()
+    }
+    pub fn reset(&mut self) {
+        self.ms_decoder.reset();
+    }
 }
 
 // ===========================================================================
@@ -2209,16 +2375,20 @@ mod tests {
         let mut packet = vec![0u8; 4000];
         let mut pcm_out = vec![0i16; frame_size];
 
-        let len = enc.encode(&pcm_in, frame_size as i32, &mut packet, 4000).unwrap();
+        let len = enc
+            .encode(&pcm_in, frame_size as i32, &mut packet, 4000)
+            .unwrap();
         assert!(len > 0);
 
-        let samples = dec.decode(
-            Some(&packet[..len as usize]),
-            len,
-            &mut pcm_out,
-            frame_size as i32,
-            false,
-        ).unwrap();
+        let samples = dec
+            .decode(
+                Some(&packet[..len as usize]),
+                len,
+                &mut pcm_out,
+                frame_size as i32,
+                false,
+            )
+            .unwrap();
         assert_eq!(samples, frame_size as i32);
     }
 
@@ -2232,16 +2402,20 @@ mod tests {
         let mut packet = vec![0u8; 4000];
         let mut pcm_out = vec![0i16; frame_size * 2];
 
-        let len = enc.encode(&pcm_in, frame_size as i32, &mut packet, 4000).unwrap();
+        let len = enc
+            .encode(&pcm_in, frame_size as i32, &mut packet, 4000)
+            .unwrap();
         assert!(len > 0);
 
-        let samples = dec.decode(
-            Some(&packet[..len as usize]),
-            len,
-            &mut pcm_out,
-            frame_size as i32,
-            false,
-        ).unwrap();
+        let samples = dec
+            .decode(
+                Some(&packet[..len as usize]),
+                len,
+                &mut pcm_out,
+                frame_size as i32,
+                false,
+            )
+            .unwrap();
         assert_eq!(samples, frame_size as i32);
     }
 
@@ -2251,7 +2425,8 @@ mod tests {
         let frame_size = 960;
         let pcm = vec![0i16; frame_size * 2];
         let mut packet = vec![0u8; 4000];
-        enc.encode(&pcm, frame_size as i32, &mut packet, 4000).unwrap();
+        enc.encode(&pcm, frame_size as i32, &mut packet, 4000)
+            .unwrap();
         let range = enc.get_final_range();
         // Just verify it's non-zero after encoding
         assert_ne!(range, 0);
@@ -2267,11 +2442,22 @@ mod tests {
         let mut enc = OpusMSEncoder::new(48000, 1, 1, 0, &[0], OPUS_APPLICATION_AUDIO).unwrap();
         let pcm_in = vec![0i16; frame_size];
         let mut packet = vec![0u8; 4000];
-        let len = enc.encode(&pcm_in, frame_size as i32, &mut packet, 4000).unwrap();
-        dec.decode(Some(&packet[..len as usize]), len, &mut pcm_out, frame_size as i32, false).unwrap();
+        let len = enc
+            .encode(&pcm_in, frame_size as i32, &mut packet, 4000)
+            .unwrap();
+        dec.decode(
+            Some(&packet[..len as usize]),
+            len,
+            &mut pcm_out,
+            frame_size as i32,
+            false,
+        )
+        .unwrap();
 
         // Now do PLC (None data)
-        let samples = dec.decode(None, 0, &mut pcm_out, frame_size as i32, false).unwrap();
+        let samples = dec
+            .decode(None, 0, &mut pcm_out, frame_size as i32, false)
+            .unwrap();
         assert_eq!(samples, frame_size as i32);
     }
 
@@ -2365,7 +2551,10 @@ mod tests {
         );
         assert_eq!(parse_multistream_subpacket(&[0x03, 0x02], 2, false), 2);
         assert!(parse_multistream_subpacket(&[0x03, 0x42, 0x01], 3, false) < 0);
-        assert_eq!(parse_multistream_subpacket(&[0x03, 0x82, 0x01, 0x00], 4, false), 3);
+        assert_eq!(
+            parse_multistream_subpacket(&[0x03, 0x82, 0x01, 0x00], 4, false),
+            3
+        );
         assert_eq!(parse_multistream_subpacket(&[0x03, 0x02, 0x01], 3, true), 4);
         assert!(parse_multistream_subpacket(&[0x03], 1, false) < 0);
         assert!(parse_multistream_subpacket(&[0x03, 0x00], 2, false) < 0);

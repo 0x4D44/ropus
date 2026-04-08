@@ -311,7 +311,9 @@ fn generate_noise(sample_rate: i32, channels: i32, duration_secs: f64, seed: u64
     let mut rng = seed;
     let mut samples = Vec::with_capacity(num_samples);
     for _ in 0..num_samples {
-        rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        rng = rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         // Use bits 33-48 directly as i16 — uniform over full i16 range
         samples.push((rng >> 33) as i16);
     }
@@ -331,7 +333,9 @@ fn generate_dtx_signal(sample_rate: i32, channels: i32, duration_secs: f64, seed
         let n = chunk.min(remaining);
         for _ in 0..n {
             if noise_phase {
-                rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                rng = rng
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 samples.push((rng >> 33) as i16);
             } else {
                 samples.push(0);
@@ -367,7 +371,12 @@ fn c_encode_cfg(pcm: &[i16], cfg: &EncodeConfig) -> Vec<u8> {
             ($enc:expr, $req:expr, $val:expr) => {{
                 let ret = bindings::opus_encoder_ctl($enc, $req, $val);
                 if ret != bindings::OPUS_OK {
-                    eprintln!("WARNING: C opus_encoder_ctl({}, {}) failed: {}", $req, $val, bindings::error_string(ret));
+                    eprintln!(
+                        "WARNING: C opus_encoder_ctl({}, {}) failed: {}",
+                        $req,
+                        $val,
+                        bindings::error_string(ret)
+                    );
                 }
             }};
         }
@@ -376,17 +385,41 @@ fn c_encode_cfg(pcm: &[i16], cfg: &EncodeConfig) -> Vec<u8> {
         ctl!(enc, bindings::OPUS_SET_BITRATE_REQUEST, cfg.bitrate);
         ctl!(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, cfg.complexity);
         ctl!(enc, bindings::OPUS_SET_VBR_REQUEST, cfg.vbr);
-        ctl!(enc, bindings::OPUS_SET_VBR_CONSTRAINT_REQUEST, cfg.vbr_constraint);
+        ctl!(
+            enc,
+            bindings::OPUS_SET_VBR_CONSTRAINT_REQUEST,
+            cfg.vbr_constraint
+        );
         ctl!(enc, bindings::OPUS_SET_INBAND_FEC_REQUEST, cfg.fec);
-        ctl!(enc, bindings::OPUS_SET_PACKET_LOSS_PERC_REQUEST, cfg.packet_loss_pct);
+        ctl!(
+            enc,
+            bindings::OPUS_SET_PACKET_LOSS_PERC_REQUEST,
+            cfg.packet_loss_pct
+        );
         ctl!(enc, bindings::OPUS_SET_DTX_REQUEST, cfg.dtx);
         ctl!(enc, bindings::OPUS_SET_SIGNAL_REQUEST, cfg.signal);
         ctl!(enc, bindings::OPUS_SET_BANDWIDTH_REQUEST, cfg.bandwidth);
-        ctl!(enc, bindings::OPUS_SET_FORCE_CHANNELS_REQUEST, cfg.force_channels);
-        ctl!(enc, bindings::OPUS_SET_MAX_BANDWIDTH_REQUEST, cfg.max_bandwidth);
+        ctl!(
+            enc,
+            bindings::OPUS_SET_FORCE_CHANNELS_REQUEST,
+            cfg.force_channels
+        );
+        ctl!(
+            enc,
+            bindings::OPUS_SET_MAX_BANDWIDTH_REQUEST,
+            cfg.max_bandwidth
+        );
         ctl!(enc, bindings::OPUS_SET_LSB_DEPTH_REQUEST, cfg.lsb_depth);
-        ctl!(enc, bindings::OPUS_SET_PREDICTION_DISABLED_REQUEST, cfg.prediction_disabled);
-        ctl!(enc, bindings::OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST, cfg.phase_inversion_disabled);
+        ctl!(
+            enc,
+            bindings::OPUS_SET_PREDICTION_DISABLED_REQUEST,
+            cfg.prediction_disabled
+        );
+        ctl!(
+            enc,
+            bindings::OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST,
+            cfg.phase_inversion_disabled
+        );
         ctl!(enc, bindings::OPUS_SET_FORCE_MODE_REQUEST, cfg.force_mode);
 
         let frame_size = cfg.frame_size();
@@ -516,17 +549,35 @@ fn rust_encode_cfg(pcm: &[i16], cfg: &EncodeConfig) -> Vec<u8> {
     check_ctl("set_bitrate", enc.set_bitrate(cfg.bitrate));
     check_ctl("set_complexity", enc.set_complexity(cfg.complexity));
     check_ctl("set_vbr", enc.set_vbr(cfg.vbr));
-    check_ctl("set_vbr_constraint", enc.set_vbr_constraint(cfg.vbr_constraint));
+    check_ctl(
+        "set_vbr_constraint",
+        enc.set_vbr_constraint(cfg.vbr_constraint),
+    );
     check_ctl("set_inband_fec", enc.set_inband_fec(cfg.fec));
-    check_ctl("set_packet_loss_perc", enc.set_packet_loss_perc(cfg.packet_loss_pct));
+    check_ctl(
+        "set_packet_loss_perc",
+        enc.set_packet_loss_perc(cfg.packet_loss_pct),
+    );
     check_ctl("set_dtx", enc.set_dtx(cfg.dtx));
     check_ctl("set_signal", enc.set_signal(cfg.signal));
     check_ctl("set_bandwidth", enc.set_bandwidth(cfg.bandwidth));
-    check_ctl("set_force_channels", enc.set_force_channels(cfg.force_channels));
-    check_ctl("set_max_bandwidth", enc.set_max_bandwidth(cfg.max_bandwidth));
+    check_ctl(
+        "set_force_channels",
+        enc.set_force_channels(cfg.force_channels),
+    );
+    check_ctl(
+        "set_max_bandwidth",
+        enc.set_max_bandwidth(cfg.max_bandwidth),
+    );
     check_ctl("set_lsb_depth", enc.set_lsb_depth(cfg.lsb_depth));
-    check_ctl("set_prediction_disabled", enc.set_prediction_disabled(cfg.prediction_disabled));
-    check_ctl("set_phase_inversion_disabled", enc.set_phase_inversion_disabled(cfg.phase_inversion_disabled));
+    check_ctl(
+        "set_prediction_disabled",
+        enc.set_prediction_disabled(cfg.prediction_disabled),
+    );
+    check_ctl(
+        "set_phase_inversion_disabled",
+        enc.set_phase_inversion_disabled(cfg.phase_inversion_disabled),
+    );
     check_ctl("set_force_mode", enc.set_force_mode(cfg.force_mode));
 
     let frame_size = cfg.frame_size();
@@ -830,7 +881,13 @@ fn cmd_encode(wav_path: &str, bitrate: i32, complexity: i32) {
     }
 }
 
-fn cmd_encode_framecompare(wav_path: &str, bitrate: i32, complexity: i32, application: i32, signal: i32) {
+fn cmd_encode_framecompare(
+    wav_path: &str,
+    bitrate: i32,
+    complexity: i32,
+    application: i32,
+    signal: i32,
+) {
     // Do per-frame encode: each frame independently through C and Rust,
     // comparing the encoder state after each frame
     let wav = read_wav(Path::new(wav_path));
@@ -843,8 +900,7 @@ fn cmd_encode_framecompare(wav_path: &str, bitrate: i32, complexity: i32, applic
     // C encoder
     let c_enc = unsafe {
         let mut error: i32 = 0;
-        let enc =
-            bindings::opus_encoder_create(sr, ch, application, &mut error);
+        let enc = bindings::opus_encoder_create(sr, ch, application, &mut error);
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, complexity);
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_VBR_REQUEST, 0i32);
@@ -894,13 +950,20 @@ fn cmd_encode_framecompare(wav_path: &str, bitrate: i32, complexity: i32, applic
         // Query bandwidths
         let c_bw = unsafe {
             let mut bw: i32 = 0;
-            bindings::opus_encoder_ctl(c_enc, bindings::OPUS_GET_BANDWIDTH_REQUEST, &mut bw as *mut i32);
+            bindings::opus_encoder_ctl(
+                c_enc,
+                bindings::OPUS_GET_BANDWIDTH_REQUEST,
+                &mut bw as *mut i32,
+            );
             bw
         };
         let r_bw = r_enc.get_bandwidth();
 
         if c_pkt[..cl] == r_pkt[..rl] {
-            println!("Frame {:3}: {} bytes - MATCH (C_bw={} R_bw={} C_toc=0x{:02x} R_toc=0x{:02x})", frame_idx, cl, c_bw, r_bw, c_pkt[0], r_pkt[0]);
+            println!(
+                "Frame {:3}: {} bytes - MATCH (C_bw={} R_bw={} C_toc=0x{:02x} R_toc=0x{:02x})",
+                frame_idx, cl, c_bw, r_bw, c_pkt[0], r_pkt[0]
+            );
         } else {
             println!(
                 "Frame {:3}: C={} bytes, R={} bytes - DIFFER (C_bw={} R_bw={} C_toc=0x{:02x} R_toc=0x{:02x})",
@@ -2429,12 +2492,7 @@ fn bench_encode_rust(
     }
 }
 
-fn bench_decode_c(
-    encoded: &[u8],
-    sample_rate: i32,
-    channels: i32,
-    iters: u32,
-) -> BenchResult {
+fn bench_decode_c(encoded: &[u8], sample_rate: i32, channels: i32, iters: u32) -> BenchResult {
     let frame_size = (sample_rate / 50) as usize;
     let mut pcm = vec![0i16; frame_size * channels as usize];
 
@@ -2485,12 +2543,7 @@ fn bench_decode_c(
     }
 }
 
-fn bench_decode_rust(
-    encoded: &[u8],
-    sample_rate: i32,
-    channels: i32,
-    iters: u32,
-) -> BenchResult {
+fn bench_decode_rust(encoded: &[u8], sample_rate: i32, channels: i32, iters: u32) -> BenchResult {
     use mdopus::opus::decoder::OpusDecoder;
 
     let frame_size = (sample_rate / 50) as usize;
@@ -2711,18 +2764,18 @@ fn cmd_plc(wav_path: &str, bitrate: i32) {
     let patterns: &[(&str, Vec<usize>)] = &[
         ("isolated", vec![5, 15, 25, 35, 45]),
         ("burst", vec![20, 21, 22]),
-        (
-            "heavy",
-            (0..packets.len()).filter(|i| i % 3 == 2).collect(),
-        ),
+        ("heavy", (0..packets.len()).filter(|i| i % 3 == 2).collect()),
     ];
 
     let mut all_pass = true;
 
     for (name, drops) in patterns {
         // Skip patterns that reference frames beyond what we have
-        let effective_drops: Vec<usize> =
-            drops.iter().copied().filter(|&d| d < packets.len()).collect();
+        let effective_drops: Vec<usize> = drops
+            .iter()
+            .copied()
+            .filter(|&d| d < packets.len())
+            .collect();
 
         let c_pcm = plc_decode_c(sr, ch, frame_size, &packets, &effective_drops);
         let rust_pcm = plc_decode_rust(sr, ch, frame_size, &packets, &effective_drops);
@@ -2987,7 +3040,10 @@ fn cmd_bench(wav_path: &str, bitrate: i32, complexity: i32, iters: u32) {
         "Input : {} ({} Hz, {} ch, {:.2}s, {} frames @ 20ms)",
         wav_path, sr, ch, duration_sec, num_frames,
     );
-    println!("Config: bitrate={}, complexity={}, CBR", bitrate, complexity);
+    println!(
+        "Config: bitrate={}, complexity={}, CBR",
+        bitrate, complexity
+    );
     println!("Iters : {} (each iter encodes/decodes ALL frames)", iters);
     println!();
 
@@ -3046,12 +3102,31 @@ fn sweep_cases() -> Vec<SweepCase> {
             cfg.vbr = $vbr;
             cfg.complexity = $cx;
             cfg.application = $app;
-            let mode = if $sr >= 48000 { "CELT" } else if $sr <= 12000 { "SILK" } else { "Hybrid" };
+            let mode = if $sr >= 48000 {
+                "CELT"
+            } else if $sr <= 12000 {
+                "SILK"
+            } else {
+                "Hybrid"
+            };
             let vbr_s = if $vbr == 0 { "CBR" } else { "VBR" };
             let ch_s = if $ch == 1 { "1ch" } else { "2ch" };
-            let br_k = if $br >= 1000 { format!("{}kbps", $br / 1000) } else { format!("{}bps", $br) };
-            let label = format!("{} {}k/{} {} {} {}ms cx{} {}",
-                mode, $sr / 1000, ch_s, vbr_s, br_k, $frame_ms, $cx, $app_label);
+            let br_k = if $br >= 1000 {
+                format!("{}kbps", $br / 1000)
+            } else {
+                format!("{}bps", $br)
+            };
+            let label = format!(
+                "{} {}k/{} {} {} {}ms cx{} {}",
+                mode,
+                $sr / 1000,
+                ch_s,
+                vbr_s,
+                br_k,
+                $frame_ms,
+                $cx,
+                $app_label
+            );
             cases.push(SweepCase { cfg, label });
         }};
     }
@@ -3245,26 +3320,38 @@ fn sweep_cases() -> Vec<SweepCase> {
         let mut cfg = EncodeConfig::new(16000, 1);
         cfg.bitrate = 24000;
         cfg.signal = bindings::OPUS_SIGNAL_VOICE;
-        cases.push(SweepCase { cfg, label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 AUDIO sig=VOICE".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 AUDIO sig=VOICE".into(),
+        });
     }
     {
         let mut cfg = EncodeConfig::new(16000, 1);
         cfg.bitrate = 24000;
         cfg.signal = bindings::OPUS_SIGNAL_MUSIC;
-        cases.push(SweepCase { cfg, label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 AUDIO sig=MUSIC".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 AUDIO sig=MUSIC".into(),
+        });
     }
     // VOICE vs MUSIC at 48k
     {
         let mut cfg = EncodeConfig::new(48000, 1);
         cfg.bitrate = 64000;
         cfg.signal = bindings::OPUS_SIGNAL_VOICE;
-        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO sig=VOICE".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO sig=VOICE".into(),
+        });
     }
     {
         let mut cfg = EncodeConfig::new(48000, 1);
         cfg.bitrate = 64000;
         cfg.signal = bindings::OPUS_SIGNAL_MUSIC;
-        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO sig=MUSIC".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO sig=MUSIC".into(),
+        });
     }
     // Signal hints with VOIP application
     {
@@ -3272,14 +3359,20 @@ fn sweep_cases() -> Vec<SweepCase> {
         cfg.bitrate = 24000;
         cfg.application = voip;
         cfg.signal = bindings::OPUS_SIGNAL_VOICE;
-        cases.push(SweepCase { cfg, label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 VOIP sig=VOICE".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 VOIP sig=VOICE".into(),
+        });
     }
     {
         let mut cfg = EncodeConfig::new(48000, 1);
         cfg.bitrate = 64000;
         cfg.application = voip;
         cfg.signal = bindings::OPUS_SIGNAL_MUSIC;
-        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 VOIP sig=MUSIC".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "CELT 48k/1ch CBR 64kbps 20ms cx10 VOIP sig=MUSIC".into(),
+        });
     }
 
     // ---------------------------------------------------------------
@@ -3304,7 +3397,10 @@ fn sweep_cases() -> Vec<SweepCase> {
         let mut cfg = EncodeConfig::new(48000, 1);
         cfg.bitrate = 64000;
         cfg.bandwidth = bindings::OPUS_BANDWIDTH_MEDIUMBAND;
-        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO bw=MB".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO bw=MB".into(),
+        });
     }
 
     // Bandwidth forcing at lower bitrate
@@ -3324,13 +3420,19 @@ fn sweep_cases() -> Vec<SweepCase> {
         let mut cfg = EncodeConfig::new(48000, 1);
         cfg.bitrate = 128000;
         cfg.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND;
-        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 128kbps 20ms cx10 AUDIO maxbw=WB".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "CELT 48k/1ch CBR 128kbps 20ms cx10 AUDIO maxbw=WB".into(),
+        });
     }
     {
         let mut cfg = EncodeConfig::new(48000, 1);
         cfg.bitrate = 128000;
         cfg.max_bandwidth = bindings::OPUS_BANDWIDTH_SUPERWIDEBAND;
-        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 128kbps 20ms cx10 AUDIO maxbw=SWB".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "CELT 48k/1ch CBR 128kbps 20ms cx10 AUDIO maxbw=SWB".into(),
+        });
     }
 
     // Bandwidth forcing at 16kHz
@@ -3338,13 +3440,19 @@ fn sweep_cases() -> Vec<SweepCase> {
         let mut cfg = EncodeConfig::new(16000, 1);
         cfg.bitrate = 24000;
         cfg.bandwidth = bindings::OPUS_BANDWIDTH_NARROWBAND;
-        cases.push(SweepCase { cfg, label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 AUDIO bw=NB".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 AUDIO bw=NB".into(),
+        });
     }
     {
         let mut cfg = EncodeConfig::new(16000, 1);
         cfg.bitrate = 24000;
         cfg.bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND;
-        cases.push(SweepCase { cfg, label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 AUDIO bw=WB".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 AUDIO bw=WB".into(),
+        });
     }
 
     // ---------------------------------------------------------------
@@ -3384,7 +3492,10 @@ fn sweep_cases() -> Vec<SweepCase> {
         cfg.application = voip;
         cfg.fec = 1;
         cfg.packet_loss_pct = 10;
-        cases.push(SweepCase { cfg, label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 VOIP FEC+10%loss".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 VOIP FEC+10%loss".into(),
+        });
     }
     {
         let mut cfg = EncodeConfig::new(8000, 1);
@@ -3392,7 +3503,10 @@ fn sweep_cases() -> Vec<SweepCase> {
         cfg.application = voip;
         cfg.fec = 1;
         cfg.packet_loss_pct = 20;
-        cases.push(SweepCase { cfg, label: "SILK 8k/1ch CBR 12kbps 20ms cx10 VOIP FEC+20%loss".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "SILK 8k/1ch CBR 12kbps 20ms cx10 VOIP FEC+20%loss".into(),
+        });
     }
 
     // FEC + stereo
@@ -3402,7 +3516,10 @@ fn sweep_cases() -> Vec<SweepCase> {
         cfg.application = voip;
         cfg.fec = 1;
         cfg.packet_loss_pct = 20;
-        cases.push(SweepCase { cfg, label: "CELT 48k/2ch CBR 64kbps 20ms cx10 VOIP FEC+20%loss".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "CELT 48k/2ch CBR 64kbps 20ms cx10 VOIP FEC+20%loss".into(),
+        });
     }
     {
         let mut cfg = EncodeConfig::new(16000, 2);
@@ -3410,7 +3527,10 @@ fn sweep_cases() -> Vec<SweepCase> {
         cfg.application = voip;
         cfg.fec = 1;
         cfg.packet_loss_pct = 20;
-        cases.push(SweepCase { cfg, label: "Hybrid 16k/2ch CBR 24kbps 20ms cx10 VOIP FEC+20%loss".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "Hybrid 16k/2ch CBR 24kbps 20ms cx10 VOIP FEC+20%loss".into(),
+        });
     }
 
     // FEC + long frames
@@ -3421,7 +3541,10 @@ fn sweep_cases() -> Vec<SweepCase> {
         cfg.application = voip;
         cfg.fec = 1;
         cfg.packet_loss_pct = 20;
-        cases.push(SweepCase { cfg, label: "SILK 8k/1ch CBR 12kbps 40ms cx10 VOIP FEC+20%loss".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "SILK 8k/1ch CBR 12kbps 40ms cx10 VOIP FEC+20%loss".into(),
+        });
     }
     {
         let mut cfg = EncodeConfig::new(8000, 1);
@@ -3430,7 +3553,10 @@ fn sweep_cases() -> Vec<SweepCase> {
         cfg.application = voip;
         cfg.fec = 1;
         cfg.packet_loss_pct = 20;
-        cases.push(SweepCase { cfg, label: "SILK 8k/1ch CBR 12kbps 60ms cx10 VOIP FEC+20%loss".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "SILK 8k/1ch CBR 12kbps 60ms cx10 VOIP FEC+20%loss".into(),
+        });
     }
 
     // DTX enabled
@@ -3439,14 +3565,20 @@ fn sweep_cases() -> Vec<SweepCase> {
         cfg.bitrate = 12000;
         cfg.application = voip;
         cfg.dtx = 1;
-        cases.push(SweepCase { cfg, label: "SILK 8k/1ch CBR 12kbps 20ms cx10 VOIP DTX".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "SILK 8k/1ch CBR 12kbps 20ms cx10 VOIP DTX".into(),
+        });
     }
     {
         let mut cfg = EncodeConfig::new(16000, 1);
         cfg.bitrate = 24000;
         cfg.application = voip;
         cfg.dtx = 1;
-        cases.push(SweepCase { cfg, label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 VOIP DTX".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "Hybrid 16k/1ch CBR 24kbps 20ms cx10 VOIP DTX".into(),
+        });
     }
 
     // Prediction disabled
@@ -3454,7 +3586,10 @@ fn sweep_cases() -> Vec<SweepCase> {
         let mut cfg = EncodeConfig::new(48000, 1);
         cfg.bitrate = 64000;
         cfg.prediction_disabled = 1;
-        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO nopred".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO nopred".into(),
+        });
     }
 
     // Phase inversion disabled (stereo)
@@ -3462,7 +3597,10 @@ fn sweep_cases() -> Vec<SweepCase> {
         let mut cfg = EncodeConfig::new(48000, 2);
         cfg.bitrate = 128000;
         cfg.phase_inversion_disabled = 1;
-        cases.push(SweepCase { cfg, label: "CELT 48k/2ch CBR 128kbps 20ms cx10 AUDIO nophase".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "CELT 48k/2ch CBR 128kbps 20ms cx10 AUDIO nophase".into(),
+        });
     }
 
     // ---------------------------------------------------------------
@@ -3601,7 +3739,10 @@ fn sweep_cases() -> Vec<SweepCase> {
         cfg.application = voip;
         cfg.fec = 1;
         cfg.packet_loss_pct = 5;
-        cases.push(SweepCase { cfg, label: "SILK 8k/1ch CBR 24kbps 20ms cx10 VOIP FEC+5%loss".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "SILK 8k/1ch CBR 24kbps 20ms cx10 VOIP FEC+5%loss".into(),
+        });
     }
     {
         let mut cfg = EncodeConfig::new(48000, 1);
@@ -3609,7 +3750,10 @@ fn sweep_cases() -> Vec<SweepCase> {
         cfg.application = voip;
         cfg.fec = 1;
         cfg.packet_loss_pct = 10;
-        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 VOIP FEC+10%loss".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "CELT 48k/1ch CBR 64kbps 20ms cx10 VOIP FEC+10%loss".into(),
+        });
     }
 
     // DTX at CELT rate
@@ -3618,7 +3762,10 @@ fn sweep_cases() -> Vec<SweepCase> {
         cfg.bitrate = 64000;
         cfg.application = voip;
         cfg.dtx = 1;
-        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 VOIP DTX".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "CELT 48k/1ch CBR 64kbps 20ms cx10 VOIP DTX".into(),
+        });
     }
 
     // Force channels (force mono in stereo encoder)
@@ -3626,13 +3773,19 @@ fn sweep_cases() -> Vec<SweepCase> {
         let mut cfg = EncodeConfig::new(48000, 2);
         cfg.bitrate = 128000;
         cfg.force_channels = 1;
-        cases.push(SweepCase { cfg, label: "CELT 48k/2ch CBR 128kbps 20ms cx10 AUDIO forcemono".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "CELT 48k/2ch CBR 128kbps 20ms cx10 AUDIO forcemono".into(),
+        });
     }
     {
         let mut cfg = EncodeConfig::new(48000, 2);
         cfg.bitrate = 128000;
         cfg.force_channels = 2;
-        cases.push(SweepCase { cfg, label: "CELT 48k/2ch CBR 128kbps 20ms cx10 AUDIO forcestereo".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "CELT 48k/2ch CBR 128kbps 20ms cx10 AUDIO forcestereo".into(),
+        });
     }
 
     // LSB depth variations
@@ -3640,13 +3793,19 @@ fn sweep_cases() -> Vec<SweepCase> {
         let mut cfg = EncodeConfig::new(48000, 1);
         cfg.bitrate = 64000;
         cfg.lsb_depth = 16;
-        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO lsb=16".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO lsb=16".into(),
+        });
     }
     {
         let mut cfg = EncodeConfig::new(48000, 1);
         cfg.bitrate = 64000;
         cfg.lsb_depth = 8;
-        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO lsb=8".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "CELT 48k/1ch CBR 64kbps 20ms cx10 AUDIO lsb=8".into(),
+        });
     }
 
     // VBR constraint
@@ -3655,14 +3814,20 @@ fn sweep_cases() -> Vec<SweepCase> {
         cfg.bitrate = 64000;
         cfg.vbr = 1;
         cfg.vbr_constraint = 1;
-        cases.push(SweepCase { cfg, label: "CELT 48k/1ch CVBR 64kbps 20ms cx10 AUDIO".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "CELT 48k/1ch CVBR 64kbps 20ms cx10 AUDIO".into(),
+        });
     }
     {
         let mut cfg = EncodeConfig::new(16000, 1);
         cfg.bitrate = 24000;
         cfg.vbr = 1;
         cfg.vbr_constraint = 1;
-        cases.push(SweepCase { cfg, label: "Hybrid 16k/1ch CVBR 24kbps 20ms cx10 AUDIO".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "Hybrid 16k/1ch CVBR 24kbps 20ms cx10 AUDIO".into(),
+        });
     }
     {
         let mut cfg = EncodeConfig::new(8000, 1);
@@ -3670,7 +3835,10 @@ fn sweep_cases() -> Vec<SweepCase> {
         cfg.application = voip;
         cfg.vbr = 1;
         cfg.vbr_constraint = 1;
-        cases.push(SweepCase { cfg, label: "SILK 8k/1ch CVBR 12kbps 20ms cx10 VOIP".into() });
+        cases.push(SweepCase {
+            cfg,
+            label: "SILK 8k/1ch CVBR 12kbps 20ms cx10 VOIP".into(),
+        });
     }
 
     cases
@@ -3715,12 +3883,7 @@ fn cmd_sweep(filter: Option<&str>, stop_on_fail: bool) {
         let rust_enc = rust_encode_cfg(&pcm, &case.cfg);
 
         if rust_enc.is_empty() {
-            println!(
-                "[{:4}/{}] SKIP  {}",
-                i + 1,
-                filtered.len(),
-                case.label
-            );
+            println!("[{:4}/{}] SKIP  {}", i + 1, filtered.len(), case.label);
             skip += 1;
             continue;
         }
@@ -3734,20 +3897,10 @@ fn cmd_sweep(filter: Option<&str>, stop_on_fail: bool) {
         let dec_match = c_dec == rust_dec;
 
         if enc_match && dec_match {
-            println!(
-                "[{:4}/{}] PASS  {}",
-                i + 1,
-                filtered.len(),
-                case.label
-            );
+            println!("[{:4}/{}] PASS  {}", i + 1, filtered.len(), case.label);
             pass += 1;
         } else {
-            println!(
-                "[{:4}/{}] FAIL  {}",
-                i + 1,
-                filtered.len(),
-                case.label
-            );
+            println!("[{:4}/{}] FAIL  {}", i + 1, filtered.len(), case.label);
             if !enc_match {
                 let stats = compare_bytes(&c_enc, &rust_enc);
                 println!(
@@ -4322,7 +4475,14 @@ fn cmd_api() {
         };
         let mut c_pcm = vec![0i16; 5760];
         let c_ret = unsafe {
-            bindings::opus_decode(c_dec, data.as_ptr(), c_data_len, c_pcm.as_mut_ptr(), frame_size, 0)
+            bindings::opus_decode(
+                c_dec,
+                data.as_ptr(),
+                c_data_len,
+                c_pcm.as_mut_ptr(),
+                frame_size,
+                0,
+            )
         };
         unsafe {
             bindings::opus_decoder_destroy(c_dec);
@@ -4353,12 +4513,7 @@ fn cmd_api() {
     }
 
     // Helper: test decode with NULL/None data (PLC path)
-    fn test_decode_null(
-        frame_size: i32,
-        label: &str,
-        pass: &mut u32,
-        fail: &mut u32,
-    ) {
+    fn test_decode_null(frame_size: i32, label: &str, pass: &mut u32, fail: &mut u32) {
         let c_dec = unsafe {
             let mut err: i32 = 0;
             let dec = bindings::opus_decoder_create(48000, 1, &mut err);
@@ -4367,7 +4522,14 @@ fn cmd_api() {
         };
         let mut c_pcm = vec![0i16; 5760];
         let c_ret = unsafe {
-            bindings::opus_decode(c_dec, std::ptr::null(), 0, c_pcm.as_mut_ptr(), frame_size, 0)
+            bindings::opus_decode(
+                c_dec,
+                std::ptr::null(),
+                0,
+                c_pcm.as_mut_ptr(),
+                frame_size,
+                0,
+            )
         };
         unsafe {
             bindings::opus_decoder_destroy(c_dec);
@@ -4392,26 +4554,68 @@ fn cmd_api() {
     }
 
     // Valid decode (baseline)
-    test_decode_data(valid_pkt, c_pkt_len as i32, 960, "decode(valid, 960)", &mut pass, &mut fail);
+    test_decode_data(
+        valid_pkt,
+        c_pkt_len as i32,
+        960,
+        "decode(valid, 960)",
+        &mut pass,
+        &mut fail,
+    );
 
     // Null/None data -- triggers PLC
     test_decode_null(960, "decode(NULL, 960) [PLC]", &mut pass, &mut fail);
 
     // Frame size 0
-    test_decode_data(valid_pkt, c_pkt_len as i32, 0, "decode(valid, fs=0)", &mut pass, &mut fail);
+    test_decode_data(
+        valid_pkt,
+        c_pkt_len as i32,
+        0,
+        "decode(valid, fs=0)",
+        &mut pass,
+        &mut fail,
+    );
 
     // Empty packet (0-length data pointer)
-    test_decode_data(valid_pkt, 0, 960, "decode(data, len=0, 960)", &mut pass, &mut fail);
+    test_decode_data(
+        valid_pkt,
+        0,
+        960,
+        "decode(data, len=0, 960)",
+        &mut pass,
+        &mut fail,
+    );
 
     // Very small frame size
-    test_decode_data(valid_pkt, c_pkt_len as i32, 1, "decode(valid, fs=1)", &mut pass, &mut fail);
+    test_decode_data(
+        valid_pkt,
+        c_pkt_len as i32,
+        1,
+        "decode(valid, fs=1)",
+        &mut pass,
+        &mut fail,
+    );
 
     // Large frame size (5760 = 120ms at 48kHz -- max supported)
-    test_decode_data(valid_pkt, c_pkt_len as i32, 5760, "decode(valid, fs=5760)", &mut pass, &mut fail);
+    test_decode_data(
+        valid_pkt,
+        c_pkt_len as i32,
+        5760,
+        "decode(valid, fs=5760)",
+        &mut pass,
+        &mut fail,
+    );
 
     // Corrupted packet: single byte
     let bad_pkt: [u8; 1] = [0xFF];
-    test_decode_data(&bad_pkt, 1, 960, "decode([0xFF], 960)", &mut pass, &mut fail);
+    test_decode_data(
+        &bad_pkt,
+        1,
+        960,
+        "decode([0xFF], 960)",
+        &mut pass,
+        &mut fail,
+    );
 
     // Null data with frame_size 0
     test_decode_null(0, "decode(NULL, fs=0)", &mut pass, &mut fail);
@@ -4510,8 +4714,7 @@ fn cmd_packets(wav_path: &str) {
             let c_ch = unsafe { bindings::opus_packet_get_nb_channels(pkt.as_ptr()) };
             let c_nf =
                 unsafe { bindings::opus_packet_get_nb_frames(pkt.as_ptr(), pkt.len() as i32) };
-            let c_spf =
-                unsafe { bindings::opus_packet_get_samples_per_frame(pkt.as_ptr(), *sr) };
+            let c_spf = unsafe { bindings::opus_packet_get_samples_per_frame(pkt.as_ptr(), *sr) };
             let c_ns = unsafe {
                 bindings::opus_packet_get_nb_samples(pkt.as_ptr(), pkt.len() as i32, *sr)
             };
@@ -4560,9 +4763,8 @@ fn cmd_packets(wav_path: &str) {
         let c_ch = unsafe { bindings::opus_packet_get_nb_channels(pkt.as_ptr()) };
         let c_nf = unsafe { bindings::opus_packet_get_nb_frames(pkt.as_ptr(), pkt.len() as i32) };
         let c_spf = unsafe { bindings::opus_packet_get_samples_per_frame(pkt.as_ptr(), wav_sr) };
-        let c_ns = unsafe {
-            bindings::opus_packet_get_nb_samples(pkt.as_ptr(), pkt.len() as i32, wav_sr)
-        };
+        let c_ns =
+            unsafe { bindings::opus_packet_get_nb_samples(pkt.as_ptr(), pkt.len() as i32, wav_sr) };
 
         let r_bw = opus_packet_get_bandwidth(pkt);
         let r_ch = opus_packet_get_nb_channels(pkt);
@@ -4904,10 +5106,7 @@ fn cmd_decode_formats(wav_path: &str) {
         }
 
         if total_match == total_samples {
-            println!(
-                "  i32/24-bit: PASS ({} samples, all match)",
-                total_samples
-            );
+            println!("  i32/24-bit: PASS ({} samples, all match)", total_samples);
             pass += 1;
         } else {
             println!(
@@ -4989,10 +5188,11 @@ fn cmd_longsoak(duration_secs: i32, sample_rate: i32) {
     };
 
     // Create Rust decoder
-    let mut rust_dec = mdopus::opus::decoder::OpusDecoder::new(sample_rate, ch).unwrap_or_else(|e| {
-        eprintln!("ERROR: Rust OpusDecoder::new failed: {}", e);
-        process::exit(1);
-    });
+    let mut rust_dec =
+        mdopus::opus::decoder::OpusDecoder::new(sample_rate, ch).unwrap_or_else(|e| {
+            eprintln!("ERROR: Rust OpusDecoder::new failed: {}", e);
+            process::exit(1);
+        });
 
     let mut c_pcm_buf = vec![0i16; frame_samples];
     let mut rust_pcm_buf = vec![0i16; frame_samples];
@@ -5023,14 +5223,14 @@ fn cmd_longsoak(duration_secs: i32, sample_rate: i32) {
         }
 
         // Rust decode
-        let rust_ret =
-            match rust_dec.decode(Some(pkt), &mut rust_pcm_buf, frame_size as i32, false) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("  frame {}: Rust decode error: {}", i, e);
-                    break;
-                }
-            };
+        let rust_ret = match rust_dec.decode(Some(pkt), &mut rust_pcm_buf, frame_size as i32, false)
+        {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("  frame {}: Rust decode error: {}", i, e);
+                break;
+            }
+        };
 
         // Get final range from both
         let mut c_range: u32 = 0;
@@ -5209,13 +5409,18 @@ fn cmd_repacketizer(wav_path: &str) {
     let packets = parse_packets(&encoded);
 
     if packets.len() < 3 {
-        eprintln!("ERROR: need at least 3 encoded packets, got {}", packets.len());
+        eprintln!(
+            "ERROR: need at least 3 encoded packets, got {}",
+            packets.len()
+        );
         process::exit(1);
     }
 
     println!(
         "Repacketizer test: {} packets from {} Hz {} ch",
-        packets.len(), sr, ch
+        packets.len(),
+        sr,
+        ch
     );
     println!();
 
@@ -5236,7 +5441,11 @@ fn cmd_repacketizer(wav_path: &str) {
                     packets[i].as_ptr(),
                     packets[i].len() as i32,
                 );
-                assert!(ret == bindings::OPUS_OK, "C repacketizer_cat failed: {}", ret);
+                assert!(
+                    ret == bindings::OPUS_OK,
+                    "C repacketizer_cat failed: {}",
+                    ret
+                );
             }
             let nb = bindings::opus_repacketizer_get_nb_frames(rp);
             println!("  C repacketizer: {} frames after cat", nb);
@@ -5269,7 +5478,11 @@ fn cmd_repacketizer(wav_path: &str) {
 
         let stats = compare_bytes(&c_out, &rust_out);
         print_result("repack_cat3_out", &stats, &c_out, &rust_out);
-        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+        if stats.first_diff_offset.is_none() {
+            pass += 1;
+        } else {
+            fail += 1;
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -5284,7 +5497,8 @@ fn cmd_repacketizer(wav_path: &str) {
                 bindings::opus_repacketizer_cat(rp, packets[i].as_ptr(), packets[i].len() as i32);
             }
             let mut out = vec![0u8; 4000];
-            let out_len = bindings::opus_repacketizer_out_range(rp, 1, 2, out.as_mut_ptr(), out.len() as i32);
+            let out_len =
+                bindings::opus_repacketizer_out_range(rp, 1, 2, out.as_mut_ptr(), out.len() as i32);
             assert!(out_len > 0, "C repacketizer_out_range failed: {}", out_len);
             bindings::opus_repacketizer_destroy(rp);
             out.truncate(out_len as usize);
@@ -5300,14 +5514,22 @@ fn cmd_repacketizer(wav_path: &str) {
             let mut out = vec![0u8; 4000];
             let maxlen = out.len() as i32;
             let out_len = rp.out_range(1, 2, &mut out, maxlen);
-            assert!(out_len > 0, "Rust repacketizer out_range failed: {}", out_len);
+            assert!(
+                out_len > 0,
+                "Rust repacketizer out_range failed: {}",
+                out_len
+            );
             out.truncate(out_len as usize);
             out
         };
 
         let stats = compare_bytes(&c_out, &rust_out);
         print_result("repack_out_range(1,2)", &stats, &c_out, &rust_out);
-        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+        if stats.first_diff_offset.is_none() {
+            pass += 1;
+        } else {
+            fail += 1;
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -5322,8 +5544,13 @@ fn cmd_repacketizer(wav_path: &str) {
                 bindings::opus_repacketizer_cat(rp, packets[i].as_ptr(), packets[i].len() as i32);
             }
             let mut out = vec![0u8; 4000];
-            let out_len = bindings::opus_repacketizer_out_range(rp, 0, 2, out.as_mut_ptr(), out.len() as i32);
-            assert!(out_len > 0, "C repacketizer_out_range(0,2) failed: {}", out_len);
+            let out_len =
+                bindings::opus_repacketizer_out_range(rp, 0, 2, out.as_mut_ptr(), out.len() as i32);
+            assert!(
+                out_len > 0,
+                "C repacketizer_out_range(0,2) failed: {}",
+                out_len
+            );
             bindings::opus_repacketizer_destroy(rp);
             out.truncate(out_len as usize);
             out
@@ -5338,14 +5565,22 @@ fn cmd_repacketizer(wav_path: &str) {
             let mut out = vec![0u8; 4000];
             let maxlen = out.len() as i32;
             let out_len = rp.out_range(0, 2, &mut out, maxlen);
-            assert!(out_len > 0, "Rust repacketizer out_range(0,2) failed: {}", out_len);
+            assert!(
+                out_len > 0,
+                "Rust repacketizer out_range(0,2) failed: {}",
+                out_len
+            );
             out.truncate(out_len as usize);
             out
         };
 
         let stats = compare_bytes(&c_out, &rust_out);
         print_result("repack_out_range(0,2)", &stats, &c_out, &rust_out);
-        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+        if stats.first_diff_offset.is_none() {
+            pass += 1;
+        } else {
+            fail += 1;
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -5363,7 +5598,11 @@ fn cmd_repacketizer(wav_path: &str) {
             let mut buf = vec![0u8; padded_len as usize];
             buf[..orig.len()].copy_from_slice(orig);
             let ret = bindings::opus_packet_pad(buf.as_mut_ptr(), orig_len, padded_len);
-            assert!(ret == bindings::OPUS_OK, "C opus_packet_pad failed: {}", ret);
+            assert!(
+                ret == bindings::OPUS_OK,
+                "C opus_packet_pad failed: {}",
+                ret
+            );
             buf
         };
 
@@ -5379,7 +5618,11 @@ fn cmd_repacketizer(wav_path: &str) {
 
         let stats = compare_bytes(&c_padded, &rust_padded);
         print_result("pad", &stats, &c_padded, &rust_padded);
-        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+        if stats.first_diff_offset.is_none() {
+            pass += 1;
+        } else {
+            fail += 1;
+        }
 
         // C unpad
         let c_unpadded = unsafe {
@@ -5402,12 +5645,20 @@ fn cmd_repacketizer(wav_path: &str) {
 
         let stats = compare_bytes(&c_unpadded, &rust_unpadded);
         print_result("unpad", &stats, &c_unpadded, &rust_unpadded);
-        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+        if stats.first_diff_offset.is_none() {
+            pass += 1;
+        } else {
+            fail += 1;
+        }
 
         // Verify unpadded matches original
         let stats = compare_bytes(orig, &c_unpadded);
         print_result("unpad_vs_original", &stats, orig, &c_unpadded);
-        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+        if stats.first_diff_offset.is_none() {
+            pass += 1;
+        } else {
+            fail += 1;
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -5424,7 +5675,11 @@ fn cmd_repacketizer(wav_path: &str) {
             bindings::opus_repacketizer_cat(rp, packets[2].as_ptr(), packets[2].len() as i32);
             let mut out = vec![0u8; 4000];
             let out_len = bindings::opus_repacketizer_out(rp, out.as_mut_ptr(), out.len() as i32);
-            assert!(out_len > 0, "C repacketizer_out after init failed: {}", out_len);
+            assert!(
+                out_len > 0,
+                "C repacketizer_out after init failed: {}",
+                out_len
+            );
             bindings::opus_repacketizer_destroy(rp);
             out.truncate(out_len as usize);
             out
@@ -5440,14 +5695,22 @@ fn cmd_repacketizer(wav_path: &str) {
             let mut out = vec![0u8; 4000];
             let maxlen = out.len() as i32;
             let out_len = rp.out(&mut out, maxlen);
-            assert!(out_len > 0, "Rust repacketizer out after init failed: {}", out_len);
+            assert!(
+                out_len > 0,
+                "Rust repacketizer out after init failed: {}",
+                out_len
+            );
             out.truncate(out_len as usize);
             out
         };
 
         let stats = compare_bytes(&c_out, &rust_out);
         print_result("repack_init_reuse", &stats, &c_out, &rust_out);
-        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+        if stats.first_diff_offset.is_none() {
+            pass += 1;
+        } else {
+            fail += 1;
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -5460,7 +5723,11 @@ fn cmd_repacketizer(wav_path: &str) {
             let c_nb = unsafe {
                 let rp = bindings::opus_repacketizer_create();
                 for i in 0..count {
-                    bindings::opus_repacketizer_cat(rp, packets[i].as_ptr(), packets[i].len() as i32);
+                    bindings::opus_repacketizer_cat(
+                        rp,
+                        packets[i].as_ptr(),
+                        packets[i].len() as i32,
+                    );
                 }
                 let nb = bindings::opus_repacketizer_get_nb_frames(rp);
                 bindings::opus_repacketizer_destroy(rp);
@@ -5477,10 +5744,16 @@ fn cmd_repacketizer(wav_path: &str) {
             };
 
             if c_nb == r_nb {
-                println!("  PASS  nb_frames after {} cat: C={}, Rust={}", count, c_nb, r_nb);
+                println!(
+                    "  PASS  nb_frames after {} cat: C={}, Rust={}",
+                    count, c_nb, r_nb
+                );
                 pass += 1;
             } else {
-                println!("  FAIL  nb_frames after {} cat: C={}, Rust={}", count, c_nb, r_nb);
+                println!(
+                    "  FAIL  nb_frames after {} cat: C={}, Rust={}",
+                    count, c_nb, r_nb
+                );
                 fail += 1;
             }
         }
@@ -5515,8 +5788,14 @@ fn cmd_multistream() {
     let pcm = generate_noise(sr, channels, 0.5, 42);
     let num_frames = pcm.len() / (frame_size * channels as usize);
 
-    println!("  {} samples, {} frames of {} at {} Hz {} ch",
-        pcm.len() / channels as usize, num_frames, frame_size, sr, channels);
+    println!(
+        "  {} samples, {} frames of {} at {} Hz {} ch",
+        pcm.len() / channels as usize,
+        num_frames,
+        frame_size,
+        sr,
+        channels
+    );
     println!();
 
     let mut pass = 0u32;
@@ -5530,10 +5809,19 @@ fn cmd_multistream() {
     let c_packets: Vec<Vec<u8>> = unsafe {
         let mut err: i32 = 0;
         let enc = bindings::opus_multistream_encoder_create(
-            sr, channels, streams, coupled, mapping.as_ptr(), application, &mut err,
+            sr,
+            channels,
+            streams,
+            coupled,
+            mapping.as_ptr(),
+            application,
+            &mut err,
         );
-        assert!(!enc.is_null() && err == bindings::OPUS_OK,
-            "C multistream_encoder_create failed: {}", err);
+        assert!(
+            !enc.is_null() && err == bindings::OPUS_OK,
+            "C multistream_encoder_create failed: {}",
+            err
+        );
 
         bindings::opus_multistream_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
         bindings::opus_multistream_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, 10i32);
@@ -5574,28 +5862,38 @@ fn cmd_multistream() {
         let mut out = vec![0u8; 4000];
         while pos + samples_per_frame <= pcm.len() {
             let maxlen = out.len() as i32;
-            let ret = enc.encode(
-                &pcm[pos..pos + samples_per_frame],
-                frame_size as i32,
-                &mut out,
-                maxlen,
-            ).expect("Rust multistream encode failed");
+            let ret = enc
+                .encode(
+                    &pcm[pos..pos + samples_per_frame],
+                    frame_size as i32,
+                    &mut out,
+                    maxlen,
+                )
+                .expect("Rust multistream encode failed");
             pkts.push(out[..ret as usize].to_vec());
             pos += samples_per_frame;
         }
         pkts
     };
 
-    println!("  C encoded {} packets, Rust encoded {} packets", c_packets.len(), rust_packets.len());
+    println!(
+        "  C encoded {} packets, Rust encoded {} packets",
+        c_packets.len(),
+        rust_packets.len()
+    );
     {
         let mut all_match = true;
         let frame_count = c_packets.len().min(rust_packets.len());
         for i in 0..frame_count {
             let stats = compare_bytes(&c_packets[i], &rust_packets[i]);
             if stats.first_diff_offset.is_some() {
-                println!("  Frame {}: FAIL (C {} bytes, Rust {} bytes, first_diff @{})",
-                    i, c_packets[i].len(), rust_packets[i].len(),
-                    stats.first_diff_offset.unwrap());
+                println!(
+                    "  Frame {}: FAIL (C {} bytes, Rust {} bytes, first_diff @{})",
+                    i,
+                    c_packets[i].len(),
+                    rust_packets[i].len(),
+                    stats.first_diff_offset.unwrap()
+                );
                 all_match = false;
             }
         }
@@ -5603,7 +5901,10 @@ fn cmd_multistream() {
             all_match = false;
         }
         if all_match {
-            println!("  ms_encode: PASS ({} packets, all byte-exact)", frame_count);
+            println!(
+                "  ms_encode: PASS ({} packets, all byte-exact)",
+                frame_count
+            );
             pass += 1;
         } else {
             println!("  ms_encode: FAIL");
@@ -5620,17 +5921,29 @@ fn cmd_multistream() {
     let c_decoded: Vec<i16> = unsafe {
         let mut err: i32 = 0;
         let dec = bindings::opus_multistream_decoder_create(
-            sr, channels, streams, coupled, mapping.as_ptr(), &mut err,
+            sr,
+            channels,
+            streams,
+            coupled,
+            mapping.as_ptr(),
+            &mut err,
         );
-        assert!(!dec.is_null() && err == bindings::OPUS_OK,
-            "C multistream_decoder_create failed: {}", err);
+        assert!(
+            !dec.is_null() && err == bindings::OPUS_OK,
+            "C multistream_decoder_create failed: {}",
+            err
+        );
 
         let mut output = Vec::new();
         let mut pcm_buf = vec![0i16; frame_size * channels as usize];
         for pkt in &c_packets {
             let ret = bindings::opus_multistream_decode(
-                dec, pkt.as_ptr(), pkt.len() as i32,
-                pcm_buf.as_mut_ptr(), frame_size as i32, 0,
+                dec,
+                pkt.as_ptr(),
+                pkt.len() as i32,
+                pcm_buf.as_mut_ptr(),
+                frame_size as i32,
+                0,
             );
             assert!(ret > 0, "C multistream_decode failed: {}", ret);
             output.extend_from_slice(&pcm_buf[..ret as usize * channels as usize]);
@@ -5647,19 +5960,33 @@ fn cmd_multistream() {
         let mut output = Vec::new();
         let mut pcm_buf = vec![0i16; frame_size * channels as usize];
         for pkt in &c_packets {
-            let ret = dec.decode(Some(pkt.as_slice()), pkt.len() as i32, &mut pcm_buf, frame_size as i32, false)
+            let ret = dec
+                .decode(
+                    Some(pkt.as_slice()),
+                    pkt.len() as i32,
+                    &mut pcm_buf,
+                    frame_size as i32,
+                    false,
+                )
                 .expect("Rust multistream decode failed");
             output.extend_from_slice(&pcm_buf[..ret as usize * channels as usize]);
         }
         output
     };
 
-    println!("  C decoded {} samples, Rust decoded {} samples",
-        c_decoded.len() / channels as usize, rust_decoded.len() / channels as usize);
+    println!(
+        "  C decoded {} samples, Rust decoded {} samples",
+        c_decoded.len() / channels as usize,
+        rust_decoded.len() / channels as usize
+    );
     {
         let stats = compare_samples(&c_decoded, &rust_decoded);
         print_sample_result("ms_decode", &stats, &c_decoded, &rust_decoded);
-        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+        if stats.first_diff_offset.is_none() {
+            pass += 1;
+        } else {
+            fail += 1;
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -5671,7 +5998,12 @@ fn cmd_multistream() {
     let c_roundtrip: Vec<i16> = unsafe {
         let mut err: i32 = 0;
         let dec = bindings::opus_multistream_decoder_create(
-            sr, channels, streams, coupled, mapping.as_ptr(), &mut err,
+            sr,
+            channels,
+            streams,
+            coupled,
+            mapping.as_ptr(),
+            &mut err,
         );
         assert!(!dec.is_null() && err == bindings::OPUS_OK);
 
@@ -5679,8 +6011,12 @@ fn cmd_multistream() {
         let mut pcm_buf = vec![0i16; frame_size * channels as usize];
         for pkt in &c_packets {
             let ret = bindings::opus_multistream_decode(
-                dec, pkt.as_ptr(), pkt.len() as i32,
-                pcm_buf.as_mut_ptr(), frame_size as i32, 0,
+                dec,
+                pkt.as_ptr(),
+                pkt.len() as i32,
+                pcm_buf.as_mut_ptr(),
+                frame_size as i32,
+                0,
             );
             if ret > 0 {
                 output.extend_from_slice(&pcm_buf[..ret as usize * channels as usize]);
@@ -5698,12 +6034,21 @@ fn cmd_multistream() {
         let mut output = Vec::new();
         let mut pcm_buf = vec![0i16; frame_size * channels as usize];
         for pkt in &rust_packets {
-            match dec.decode(Some(pkt.as_slice()), pkt.len() as i32, &mut pcm_buf, frame_size as i32, false) {
+            match dec.decode(
+                Some(pkt.as_slice()),
+                pkt.len() as i32,
+                &mut pcm_buf,
+                frame_size as i32,
+                false,
+            ) {
                 Ok(ret) => {
                     output.extend_from_slice(&pcm_buf[..ret as usize * channels as usize]);
                 }
                 Err(e) => {
-                    eprintln!("  WARNING: Rust multistream decode failed on Rust-encoded packet: {}", e);
+                    eprintln!(
+                        "  WARNING: Rust multistream decode failed on Rust-encoded packet: {}",
+                        e
+                    );
                     break;
                 }
             }
@@ -5711,12 +6056,19 @@ fn cmd_multistream() {
         output
     };
 
-    println!("  C roundtrip {} samples, Rust roundtrip {} samples",
-        c_roundtrip.len() / channels as usize, rust_roundtrip.len() / channels as usize);
+    println!(
+        "  C roundtrip {} samples, Rust roundtrip {} samples",
+        c_roundtrip.len() / channels as usize,
+        rust_roundtrip.len() / channels as usize
+    );
     {
         let stats = compare_samples(&c_roundtrip, &rust_roundtrip);
         print_sample_result("ms_roundtrip", &stats, &c_roundtrip, &rust_roundtrip);
-        if stats.first_diff_offset.is_none() { pass += 1; } else { fail += 1; }
+        if stats.first_diff_offset.is_none() {
+            pass += 1;
+        } else {
+            fail += 1;
+        }
     }
 
     println!();
@@ -5855,7 +6207,10 @@ mod coverage_smoke_tests {
             "DTX smoke path should produce encoded output"
         );
         let dtx_decoded = rust_decode_cfg(&dtx_encoded, &dtx_cfg);
-        assert!(!dtx_decoded.is_empty(), "DTX smoke path should decode output");
+        assert!(
+            !dtx_decoded.is_empty(),
+            "DTX smoke path should decode output"
+        );
 
         cmd_multistream();
         cmd_quality("tests/vectors/48000hz_mono_sine440.wav");
@@ -6040,7 +6395,12 @@ fn cmd_debug_decode_25ms() {
     cfg.application = bindings::OPUS_APPLICATION_AUDIO;
     let encoded = c_encode_cfg(&pcm, &cfg);
 
-    println!("Encoded {} bytes from {} samples (frame_size={})", encoded.len(), pcm.len(), frame_size);
+    println!(
+        "Encoded {} bytes from {} samples (frame_size={})",
+        encoded.len(),
+        pcm.len(),
+        frame_size
+    );
 
     // Create C decoder
     let c_dec = unsafe {
@@ -6061,24 +6421,33 @@ fn cmd_debug_decode_25ms() {
     while pos + 2 <= encoded.len() {
         let pkt_len = u16::from_le_bytes([encoded[pos], encoded[pos + 1]]) as usize;
         pos += 2;
-        if pos + pkt_len > encoded.len() { break; }
+        if pos + pkt_len > encoded.len() {
+            break;
+        }
         let pkt = &encoded[pos..pos + pkt_len];
 
         // C decode
         let c_ret = unsafe {
             bindings::opus_decode(
-                c_dec, pkt.as_ptr(), pkt_len as i32,
-                c_pcm.as_mut_ptr(), frame_size as i32, 0,
+                c_dec,
+                pkt.as_ptr(),
+                pkt_len as i32,
+                c_pcm.as_mut_ptr(),
+                frame_size as i32,
+                0,
             )
         };
         assert!(c_ret >= 0);
 
         // Get C final range
         let mut c_range: u32 = 0;
-        unsafe { bindings::opus_decoder_ctl(c_dec, 4031i32, &mut c_range as *mut u32); }
+        unsafe {
+            bindings::opus_decoder_ctl(c_dec, 4031i32, &mut c_range as *mut u32);
+        }
 
         // Rust decode
-        let rust_ret = rust_dec.decode(Some(pkt), &mut rust_pcm, frame_size as i32, false)
+        let rust_ret = rust_dec
+            .decode(Some(pkt), &mut rust_pcm, frame_size as i32, false)
             .expect("Rust decode");
         let rust_range = rust_dec.get_final_range();
 
@@ -6091,8 +6460,12 @@ fn cmd_debug_decode_25ms() {
             let d = (c_pcm[i] as i32 - rust_pcm[i] as i32).abs();
             if d != 0 {
                 ndiff += 1;
-                if first_diff.is_none() { first_diff = Some(i); }
-                if d > max_diff { max_diff = d; }
+                if first_diff.is_none() {
+                    first_diff = Some(i);
+                }
+                if d > max_diff {
+                    max_diff = d;
+                }
             }
         }
 
@@ -6100,7 +6473,9 @@ fn cmd_debug_decode_25ms() {
         if frame_idx < 3 {
             // C old_band_e
             let mut c_band_e = [0i32; 42];
-            unsafe { bindings::debug_get_celt_old_band_e(c_dec, c_band_e.as_mut_ptr(), 42); }
+            unsafe {
+                bindings::debug_get_celt_old_band_e(c_dec, c_band_e.as_mut_ptr(), 42);
+            }
             let r_band_e = rust_dec.debug_get_old_band_e();
             let mut be_diff = false;
             for i in 0..42.min(r_band_e.len()) {
@@ -6143,7 +6518,9 @@ fn cmd_debug_decode_25ms() {
             let mut c_overlap = vec![0i32; overlap_count];
             unsafe {
                 bindings::debug_get_celt_decode_mem(
-                    c_dec, overlap_start as i32, overlap_count as i32,
+                    c_dec,
+                    overlap_start as i32,
+                    overlap_count as i32,
                     c_overlap.as_mut_ptr(),
                 );
             }
@@ -6154,36 +6531,71 @@ fn cmd_debug_decode_25ms() {
                 let d = (c_overlap[i] - r_overlap[i]).abs();
                 if d != 0 {
                     ov_ndiff += 1;
-                    if d > ov_max_diff { ov_max_diff = d; }
+                    if d > ov_max_diff {
+                        ov_max_diff = d;
+                    }
                 }
             }
             if ov_ndiff > 0 {
-                println!("  decode_mem overlap [{}-{}]: {} diffs, max_diff={}", overlap_start, overlap_start + overlap_count, ov_ndiff, ov_max_diff);
+                println!(
+                    "  decode_mem overlap [{}-{}]: {} diffs, max_diff={}",
+                    overlap_start,
+                    overlap_start + overlap_count,
+                    ov_ndiff,
+                    ov_max_diff
+                );
                 let mut shown = 0;
                 for i in 0..overlap_count {
                     let d = c_overlap[i] - r_overlap[i];
                     if d != 0 && shown < 20 {
-                        println!("    mem[{}]: C={} R={} (diff={})", overlap_start + i, c_overlap[i], r_overlap[i], d);
+                        println!(
+                            "    mem[{}]: C={} R={} (diff={})",
+                            overlap_start + i,
+                            c_overlap[i],
+                            r_overlap[i],
+                            d
+                        );
                         shown += 1;
                     }
                 }
             } else {
-                println!("  decode_mem overlap [{}-{}]: MATCH", overlap_start, overlap_start + overlap_count);
+                println!(
+                    "  decode_mem overlap [{}-{}]: MATCH",
+                    overlap_start,
+                    overlap_start + overlap_count
+                );
             }
         }
 
         if ndiff == 0 {
-            println!("Frame {:3}: {} bytes, {} samples - MATCH (range: C={:#010x} R={:#010x})",
-                frame_idx, pkt_len, c_ret, c_range, rust_range);
+            println!(
+                "Frame {:3}: {} bytes, {} samples - MATCH (range: C={:#010x} R={:#010x})",
+                frame_idx, pkt_len, c_ret, c_range, rust_range
+            );
         } else {
-            println!("Frame {:3}: {} bytes, {} samples - DIFFER: {} diffs, first at sample {}, max_diff={} (range: C={:#010x} R={:#010x})",
-                frame_idx, pkt_len, c_ret, ndiff, first_diff.unwrap(), max_diff, c_range, rust_range);
+            println!(
+                "Frame {:3}: {} bytes, {} samples - DIFFER: {} diffs, first at sample {}, max_diff={} (range: C={:#010x} R={:#010x})",
+                frame_idx,
+                pkt_len,
+                c_ret,
+                ndiff,
+                first_diff.unwrap(),
+                max_diff,
+                c_range,
+                rust_range
+            );
             // Print first 10 differing samples
             let mut shown = 0;
             for i in 0..count {
                 let d = (c_pcm[i] as i32 - rust_pcm[i] as i32).abs();
                 if d != 0 && shown < 10 {
-                    println!("  sample[{}]: C={} R={} (diff={})", i, c_pcm[i], rust_pcm[i], c_pcm[i] as i32 - rust_pcm[i] as i32);
+                    println!(
+                        "  sample[{}]: C={} R={} (diff={})",
+                        i,
+                        c_pcm[i],
+                        rust_pcm[i],
+                        c_pcm[i] as i32 - rust_pcm[i] as i32
+                    );
                     shown += 1;
                 }
             }
@@ -6193,11 +6605,13 @@ fn cmd_debug_decode_25ms() {
         frame_idx += 1;
     }
 
-    unsafe { bindings::opus_decoder_destroy(c_dec); }
+    unsafe {
+        bindings::opus_decoder_destroy(c_dec);
+    }
 }
 
 fn cmd_debug_mdct_compare() {
-    use mdopus::celt::mdct::{clt_mdct_backward, MDCT_48000_960};
+    use mdopus::celt::mdct::{MDCT_48000_960, clt_mdct_backward};
     use mdopus::celt::modes::MODE_48000_960_120;
 
     let mode = &MODE_48000_960_120;
@@ -6226,13 +6640,20 @@ fn cmd_debug_mdct_compare() {
         // C MDCT backward
         unsafe {
             bindings::debug_clt_mdct_backward(
-                freq.as_ptr(), c_out.as_mut_ptr(), overlap_buf.as_ptr(),
-                overlap, shift, stride, n_mdct as i32,
+                freq.as_ptr(),
+                c_out.as_mut_ptr(),
+                overlap_buf.as_ptr(),
+                overlap,
+                shift,
+                stride,
+                n_mdct as i32,
             );
         }
 
         // Rust MDCT backward
-        for i in 0..overlap as usize { r_out[i] = overlap_buf[i]; }
+        for i in 0..overlap as usize {
+            r_out[i] = overlap_buf[i];
+        }
         clt_mdct_backward(l, &freq, &mut r_out, mode.window, overlap, shift, stride);
 
         // Compare ALL positions (not just 0..120)
@@ -6242,10 +6663,15 @@ fn cmd_debug_mdct_compare() {
             let d = (c_out[i] - r_out[i]).abs();
             if d != 0 {
                 ndiff += 1;
-                if d > max_diff { max_diff = d; }
+                if d > max_diff {
+                    max_diff = d;
+                }
             }
         }
-        println!("Test 1 (zero overlap, shift=3): {} diffs out of {}, max_diff={}", ndiff, n_mdct, max_diff);
+        println!(
+            "Test 1 (zero overlap, shift=3): {} diffs out of {}, max_diff={}",
+            ndiff, n_mdct, max_diff
+        );
         if ndiff > 0 {
             let mut shown = 0;
             for i in 0..n_mdct {
@@ -6264,7 +6690,15 @@ fn cmd_debug_mdct_compare() {
         let mut overlap_buf = vec![0i32; overlap as usize];
         // First run Rust MDCT to get frame 0's output, then extract overlap region
         let mut frame0_out = vec![0i32; n_mdct];
-        clt_mdct_backward(l, &freq, &mut frame0_out, mode.window, overlap, shift, stride);
+        clt_mdct_backward(
+            l,
+            &freq,
+            &mut frame0_out,
+            mode.window,
+            overlap,
+            shift,
+            stride,
+        );
         // The "future overlap" is positions [120..180]
         for i in 0..60 {
             overlap_buf[i] = frame0_out[120 + i];
@@ -6284,13 +6718,20 @@ fn cmd_debug_mdct_compare() {
         // C MDCT backward with overlap
         unsafe {
             bindings::debug_clt_mdct_backward(
-                freq2.as_ptr(), c_out.as_mut_ptr(), overlap_buf.as_ptr(),
-                overlap, shift, stride, n_mdct as i32,
+                freq2.as_ptr(),
+                c_out.as_mut_ptr(),
+                overlap_buf.as_ptr(),
+                overlap,
+                shift,
+                stride,
+                n_mdct as i32,
             );
         }
 
         // Rust MDCT backward with overlap
-        for i in 0..overlap as usize { r_out[i] = overlap_buf[i]; }
+        for i in 0..overlap as usize {
+            r_out[i] = overlap_buf[i];
+        }
         clt_mdct_backward(l, &freq2, &mut r_out, mode.window, overlap, shift, stride);
 
         // Compare ALL positions
@@ -6300,10 +6741,15 @@ fn cmd_debug_mdct_compare() {
             let d = (c_out[i] - r_out[i]).abs();
             if d != 0 {
                 ndiff += 1;
-                if d > max_diff { max_diff = d; }
+                if d > max_diff {
+                    max_diff = d;
+                }
             }
         }
-        println!("Test 2 (non-zero overlap, shift=3): {} diffs out of {}, max_diff={}", ndiff, n_mdct, max_diff);
+        println!(
+            "Test 2 (non-zero overlap, shift=3): {} diffs out of {}, max_diff={}",
+            ndiff, n_mdct, max_diff
+        );
         if ndiff > 0 {
             let mut shown = 0;
             for i in 0..n_mdct {
@@ -6336,13 +6782,20 @@ fn cmd_debug_mdct_compare() {
         // C MDCT backward
         unsafe {
             bindings::debug_clt_mdct_backward(
-                freq0.as_ptr(), c_out.as_mut_ptr(), overlap_buf.as_ptr(),
-                overlap, shift0, stride, n_mdct0 as i32,
+                freq0.as_ptr(),
+                c_out.as_mut_ptr(),
+                overlap_buf.as_ptr(),
+                overlap,
+                shift0,
+                stride,
+                n_mdct0 as i32,
             );
         }
 
         // Rust MDCT backward
-        for i in 0..overlap as usize { r_out[i] = overlap_buf[i]; }
+        for i in 0..overlap as usize {
+            r_out[i] = overlap_buf[i];
+        }
         clt_mdct_backward(l, &freq0, &mut r_out, mode.window, overlap, shift0, stride);
 
         let mut ndiff = 0;
@@ -6351,10 +6804,15 @@ fn cmd_debug_mdct_compare() {
             let d = (c_out[i] - r_out[i]).abs();
             if d != 0 {
                 ndiff += 1;
-                if d > max_diff { max_diff = d; }
+                if d > max_diff {
+                    max_diff = d;
+                }
             }
         }
-        println!("Test 3 (non-zero overlap, shift=0): {} diffs out of {}, max_diff={}", ndiff, n_mdct0, max_diff);
+        println!(
+            "Test 3 (non-zero overlap, shift=0): {} diffs out of {}, max_diff={}",
+            ndiff, n_mdct0, max_diff
+        );
         if ndiff > 0 {
             let mut shown = 0;
             for i in 0..n_mdct0 {
@@ -6384,16 +6842,32 @@ fn cmd_debug_stereo_voip() {
         let mut c_hp_mem = [0i32; 4];
         unsafe {
             bindings::debug_c_hp_cutoff_stereo(
-                test_pcm.as_ptr(), cutoff_hz, c_out.as_mut_ptr(),
-                c_hp_mem.as_mut_ptr(), len, fs,
+                test_pcm.as_ptr(),
+                cutoff_hz,
+                c_out.as_mut_ptr(),
+                c_hp_mem.as_mut_ptr(),
+                len,
+                fs,
             );
         }
 
         let mut r_out = vec![0i16; test_pcm.len()];
         let mut r_hp_mem = [0i32; 4];
-        hp_cutoff_debug(test_pcm, cutoff_hz, &mut r_out, &mut r_hp_mem, len as usize, 2, fs);
+        hp_cutoff_debug(
+            test_pcm,
+            cutoff_hz,
+            &mut r_out,
+            &mut r_hp_mem,
+            len as usize,
+            2,
+            fs,
+        );
 
-        let ndiff = c_out.iter().zip(r_out.iter()).filter(|(a,b)| a != b).count();
+        let ndiff = c_out
+            .iter()
+            .zip(r_out.iter())
+            .filter(|(a, b)| a != b)
+            .count();
         if ndiff == 0 {
             println!("HP cutoff 8kHz stereo: MATCH ({} samples)", test_pcm.len());
         } else {
@@ -6417,8 +6891,12 @@ fn cmd_debug_stereo_voip() {
         let fl = 80usize; // 8kHz * 10ms = 80 samples (internal frame)
         let fs_khz = 8;
         // Use some non-trivial input data
-        let mut x1: Vec<i16> = (0..fl).map(|i| ((i as i32 * 1234 + 5678) % 20000 - 10000) as i16).collect();
-        let mut x2: Vec<i16> = (0..fl).map(|i| ((i as i32 * 4321 + 8765) % 20000 - 10000) as i16).collect();
+        let mut x1: Vec<i16> = (0..fl)
+            .map(|i| ((i as i32 * 1234 + 5678) % 20000 - 10000) as i16)
+            .collect();
+        let mut x2: Vec<i16> = (0..fl)
+            .map(|i| ((i as i32 * 4321 + 8765) % 20000 - 10000) as i16)
+            .collect();
 
         // C version
         let mut c_mid = vec![0i16; fl + 2];
@@ -6428,11 +6906,18 @@ fn cmd_debug_stereo_voip() {
         let mut c_rates = [0i32; 2];
         unsafe {
             bindings::debug_c_stereo_lr_to_ms(
-                x1.as_ptr(), x2.as_ptr(),
-                c_mid.as_mut_ptr(), c_side.as_mut_ptr(),
-                c_pred_ix.as_mut_ptr(), &mut c_mid_only,
+                x1.as_ptr(),
+                x2.as_ptr(),
+                c_mid.as_mut_ptr(),
+                c_side.as_mut_ptr(),
+                c_pred_ix.as_mut_ptr(),
+                &mut c_mid_only,
                 c_rates.as_mut_ptr(),
-                24000, 0, 0, fs_khz, fl as i32,
+                24000,
+                0,
+                0,
+                fs_khz,
+                fl as i32,
             );
         }
 
@@ -6444,19 +6929,35 @@ fn cmd_debug_stereo_voip() {
         let mut r_mid_only = 0i8;
         let mut r_rates = [0i32; 2];
         silk_stereo_lr_to_ms(
-            &mut r_state, &mut r_x1, &mut r_x2,
-            &mut r_pred_ix, &mut r_mid_only, &mut r_rates,
-            24000, 0, false, fs_khz, fl,
+            &mut r_state,
+            &mut r_x1,
+            &mut r_x2,
+            &mut r_pred_ix,
+            &mut r_mid_only,
+            &mut r_rates,
+            24000,
+            0,
+            false,
+            fs_khz,
+            fl,
         );
 
         // C returns mid in c_mid[0..fl+2] (inputBuf layout) and side in c_side[0..fl+1]
         // The mid signal at inputBuf[2..fl+2] should match Rust x1[0..fl]
         // The side signal at c_side[1..fl+1] should match Rust x2[0..fl]
-        let c_mid_signal = &c_mid[2..fl+2];
-        let c_side_signal = &c_side[1..fl+1];
+        let c_mid_signal = &c_mid[2..fl + 2];
+        let c_side_signal = &c_side[1..fl + 1];
 
-        let mid_ndiff = c_mid_signal.iter().zip(r_x1.iter()).filter(|(a,b)| a != b).count();
-        let side_ndiff = c_side_signal.iter().zip(r_x2.iter()).filter(|(a,b)| a != b).count();
+        let mid_ndiff = c_mid_signal
+            .iter()
+            .zip(r_x1.iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        let side_ndiff = c_side_signal
+            .iter()
+            .zip(r_x2.iter())
+            .filter(|(a, b)| a != b)
+            .count();
 
         println!("\nLR_to_MS comparison (fl={}, fs_kHz={}):", fl, fs_khz);
         if mid_ndiff == 0 {
@@ -6483,8 +6984,15 @@ fn cmd_debug_stereo_voip() {
                 }
             }
         }
-        println!("  C overlap: mid[0..2]={:?} side[0..2]={:?}", &c_mid[0..2], &c_side[0..2]);
-        println!("  R state: s_mid={:?} s_side={:?}", r_state.s_mid, r_state.s_side);
+        println!(
+            "  C overlap: mid[0..2]={:?} side[0..2]={:?}",
+            &c_mid[0..2],
+            &c_side[0..2]
+        );
+        println!(
+            "  R state: s_mid={:?} s_side={:?}",
+            r_state.s_mid, r_state.s_side
+        );
         println!("  C pred_ix={:?} mid_only={}", c_pred_ix, c_mid_only);
         println!("  R pred_ix={:?} mid_only={}", r_pred_ix, r_mid_only);
         println!("  C rates={:?}", c_rates);
@@ -6502,12 +7010,16 @@ fn cmd_debug_stereo_voip() {
     let wav = read_wav(Path::new(&wav_path));
     let pcm = wav.samples;
 
-    println!("\nDebug stereo VOIP: {}Hz {}ch {}bps frame_size={}", sr, ch, bitrate, frame_size);
+    println!(
+        "\nDebug stereo VOIP: {}Hz {}ch {}bps frame_size={}",
+        sr, ch, bitrate, frame_size
+    );
     println!("Total PCM samples: {}", pcm.len());
 
     let c_enc = unsafe {
         let mut error: i32 = 0;
-        let enc = bindings::opus_encoder_create(sr, ch, bindings::OPUS_APPLICATION_VOIP, &mut error);
+        let enc =
+            bindings::opus_encoder_create(sr, ch, bindings::OPUS_APPLICATION_VOIP, &mut error);
         assert!(!enc.is_null() && error == bindings::OPUS_OK);
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, 10);
@@ -6528,12 +7040,21 @@ fn cmd_debug_stereo_voip() {
         let frame_pcm = &pcm[pos..pos + samples_per_frame];
 
         let c_ret = unsafe {
-            bindings::opus_encode(c_enc, frame_pcm.as_ptr(), frame_size as i32,
-                c_pkt.as_mut_ptr(), max_packet as i32)
+            bindings::opus_encode(
+                c_enc,
+                frame_pcm.as_ptr(),
+                frame_size as i32,
+                c_pkt.as_mut_ptr(),
+                max_packet as i32,
+            )
         };
 
-        let r_ret = r_enc.encode(frame_pcm, frame_size as i32, &mut r_pkt, max_packet as i32)
-            .unwrap_or_else(|e| { eprintln!("Rust encode error: {}", e); 0 });
+        let r_ret = r_enc
+            .encode(frame_pcm, frame_size as i32, &mut r_pkt, max_packet as i32)
+            .unwrap_or_else(|e| {
+                eprintln!("Rust encode error: {}", e);
+                0
+            });
 
         let c_bytes = &c_pkt[..c_ret as usize];
         let r_bytes = &r_pkt[..r_ret as usize];
@@ -6545,27 +7066,48 @@ fn cmd_debug_stereo_voip() {
         let r_range = r_enc.get_final_range();
         let c_range = unsafe {
             let mut v: u32 = 0;
-            bindings::opus_encoder_ctl(c_enc, bindings::OPUS_GET_FINAL_RANGE_REQUEST, &mut v as *mut u32);
+            bindings::opus_encoder_ctl(
+                c_enc,
+                bindings::OPUS_GET_FINAL_RANGE_REQUEST,
+                &mut v as *mut u32,
+            );
             v
         };
         let c_bw = unsafe {
             let mut v: i32 = 0;
-            bindings::opus_encoder_ctl(c_enc, bindings::OPUS_GET_BANDWIDTH_REQUEST, &mut v as *mut i32);
+            bindings::opus_encoder_ctl(
+                c_enc,
+                bindings::OPUS_GET_BANDWIDTH_REQUEST,
+                &mut v as *mut i32,
+            );
             v
         };
 
         if c_bytes == r_bytes {
-            println!("  frame {}: MATCH ({} bytes) mode={} sch={} bw=C{}/R{}", frame_idx, c_ret, r_mode, r_stream_ch, c_bw, r_bw);
+            println!(
+                "  frame {}: MATCH ({} bytes) mode={} sch={} bw=C{}/R{}",
+                frame_idx, c_ret, r_mode, r_stream_ch, c_bw, r_bw
+            );
         } else {
-            let ndiff = c_bytes.iter().zip(r_bytes.iter()).filter(|(a, b)| a != b).count();
-            println!("  frame {}: DIFFER c_len={} r_len={} byte_diffs={} mode={} sch={} bw=C{}/R{}", frame_idx, c_ret, r_ret, ndiff, r_mode, r_stream_ch, c_bw, r_bw);
+            let ndiff = c_bytes
+                .iter()
+                .zip(r_bytes.iter())
+                .filter(|(a, b)| a != b)
+                .count();
+            println!(
+                "  frame {}: DIFFER c_len={} r_len={} byte_diffs={} mode={} sch={} bw=C{}/R{}",
+                frame_idx, c_ret, r_ret, ndiff, r_mode, r_stream_ch, c_bw, r_bw
+            );
             println!("    TOC: C=0x{:02x} R=0x{:02x}", c_bytes[0], r_bytes[0]);
             println!("    range: C=0x{:08x} R=0x{:08x}", c_range, r_range);
             let min_len = (c_ret as usize).min(r_ret as usize);
             let mut shown = 0;
             for i in 1..min_len {
                 if c_bytes[i] != r_bytes[i] && shown < 5 {
-                    println!("    byte[{}]: C=0x{:02x} R=0x{:02x}", i, c_bytes[i], r_bytes[i]);
+                    println!(
+                        "    byte[{}]: C=0x{:02x} R=0x{:02x}",
+                        i, c_bytes[i], r_bytes[i]
+                    );
                     shown += 1;
                 }
             }
@@ -6578,7 +7120,9 @@ fn cmd_debug_stereo_voip() {
         frame_idx += 1;
     }
 
-    unsafe { bindings::opus_encoder_destroy(c_enc); }
+    unsafe {
+        bindings::opus_encoder_destroy(c_enc);
+    }
 }
 
 fn main() {
@@ -6623,7 +7167,8 @@ fn main() {
             }
             let bitrate = parse_option(&args, "--bitrate", 64000);
             let complexity = parse_option(&args, "--complexity", 10);
-            let application = parse_option(&args, "--application", bindings::OPUS_APPLICATION_AUDIO);
+            let application =
+                parse_option(&args, "--application", bindings::OPUS_APPLICATION_AUDIO);
             let signal = parse_option(&args, "--signal", -1000);
             cmd_encode_framecompare(&args[2], bitrate, complexity, application, signal);
         }
@@ -6659,7 +7204,8 @@ fn main() {
                 process::exit(1);
             }
             let bitrate = parse_option(&args, "--bitrate", 64000);
-            let application = parse_option(&args, "--application", bindings::OPUS_APPLICATION_AUDIO);
+            let application =
+                parse_option(&args, "--application", bindings::OPUS_APPLICATION_AUDIO);
             cmd_decode_framecompare(&args[2], bitrate, application);
         }
         "plc" => {
