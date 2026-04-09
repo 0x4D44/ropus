@@ -216,6 +216,35 @@ fn main() {
         .define("HAVE_CONFIG_H", "1")
         .define("OPUS_BUILD", None);
 
+    // --- Fuzzing context detection ---
+    //
+    // When built under cargo-fuzz, the Rust code is compiled with
+    // AddressSanitizer + libFuzzer coverage instrumentation. The C reference
+    // should match so that (a) C-side memory errors become clean ASAN reports
+    // instead of raw segfaults, and (b) libFuzzer's coverage guidance includes
+    // code paths through the C library. Without this, C memory bugs would be
+    // indistinguishable from Rust bugs in differential fuzzing.
+    //
+    // cargo-fuzz sets `--cfg fuzzing` for all crates in the build, which
+    // surfaces to build.rs as CARGO_CFG_FUZZING. We additionally check
+    // CARGO_ENCODED_RUSTFLAGS to confirm ASAN is actually requested (cargo-fuzz
+    // disables sanitizers on platforms where they're unsupported, e.g. Windows).
+    let fuzzing = std::env::var("CARGO_CFG_FUZZING").is_ok();
+    let rustflags = std::env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
+    let asan_requested = rustflags.contains("sanitizer=address");
+
+    if fuzzing && asan_requested {
+        // ASAN instrumentation for the C code. flag_if_supported is a no-op on
+        // compilers that don't understand -fsanitize (e.g. MSVC).
+        build.flag_if_supported("-fsanitize=address");
+        build.flag_if_supported("-fno-omit-frame-pointer");
+        // libFuzzer coverage instrumentation matches what cargo-fuzz asks for
+        // on the Rust side, so the fuzzer can learn from C code paths too.
+        build.flag_if_supported("-fsanitize-coverage=inline-8bit-counters,pc-table,trace-cmp");
+    }
+    println!("cargo:rerun-if-env-changed=CARGO_CFG_FUZZING");
+    println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
+
     // Add all source files
     for src in &celt_sources {
         build.file(ref_dir.join(src));

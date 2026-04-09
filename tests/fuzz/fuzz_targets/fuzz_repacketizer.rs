@@ -2,20 +2,74 @@
 use libfuzzer_sys::fuzz_target;
 use mdopus::opus::repacketizer::OpusRepacketizer;
 
+#[path = "c_reference.rs"]
+mod c_reference;
+use c_reference::{
+    opus_repacketizer_cat, opus_repacketizer_create, opus_repacketizer_destroy,
+    opus_repacketizer_init, opus_repacketizer_out, OPUS_OK,
+};
+
 fuzz_target!(|data: &[u8]| {
     if data.is_empty() {
         return;
     }
 
-    let mut rp = OpusRepacketizer::new();
-    rp.init();
+    // --- Rust repacketizer ---
+    let mut rust_rp = OpusRepacketizer::new();
+    rust_rp.init();
 
-    // Try to cat the data as a packet
-    let len = data.len() as i32;
-    let _ = rp.cat(data, len);
+    let rust_cat = rust_rp.cat(data, data.len() as i32);
 
-    // Try to extract output
-    let mut out = vec![0u8; data.len() + 256];
-    let maxlen = out.len() as i32;
-    let _ = rp.out(&mut out, maxlen);
+    let mut rust_out = vec![0u8; data.len() + 256];
+    let rust_out_maxlen = rust_out.len() as i32;
+    let rust_out_len = rust_rp.out(&mut rust_out, rust_out_maxlen);
+
+    // --- C reference repacketizer ---
+    let (c_cat, c_out_result) = unsafe {
+        let c_rp = opus_repacketizer_create();
+        if c_rp.is_null() {
+            return;
+        }
+        opus_repacketizer_init(c_rp);
+
+        let c_cat_ret = opus_repacketizer_cat(c_rp, data.as_ptr(), data.len() as i32);
+
+        let mut c_out = vec![0u8; data.len() + 256];
+        let c_out_ret = opus_repacketizer_out(c_rp, c_out.as_mut_ptr(), c_out.len() as i32);
+
+        opus_repacketizer_destroy(c_rp);
+        (c_cat_ret, (c_out_ret, c_out))
+    };
+
+    let (c_out_len, c_out) = c_out_result;
+
+    // --- Differential comparison ---
+
+    // cat() return value must agree on success/failure
+    let rust_cat_ok = rust_cat == OPUS_OK as i32;
+    let c_cat_ok = c_cat == OPUS_OK as i32;
+    assert_eq!(
+        rust_cat_ok, c_cat_ok,
+        "cat() agreement mismatch: Rust={rust_cat} (ok={rust_cat_ok}), C={c_cat} (ok={c_cat_ok}), \
+         data_len={}",
+        data.len()
+    );
+
+    // If both cat succeeded, out() must produce identical results
+    if rust_cat_ok && c_cat_ok {
+        assert_eq!(
+            rust_out_len, c_out_len,
+            "out() length mismatch: Rust={rust_out_len}, C={c_out_len}, data_len={}",
+            data.len()
+        );
+
+        if rust_out_len > 0 && c_out_len > 0 {
+            assert_eq!(
+                &rust_out[..rust_out_len as usize],
+                &c_out[..c_out_len as usize],
+                "out() content mismatch at data_len={}",
+                data.len()
+            );
+        }
+    }
 });
