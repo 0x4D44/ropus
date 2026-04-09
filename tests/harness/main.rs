@@ -253,6 +253,7 @@ fn print_sample_result(label: &str, stats: &CompareStats, a: &[i16], b: &[i16]) 
 // ---------------------------------------------------------------------------
 
 #[allow(dead_code)]
+#[derive(Clone)]
 struct EncodeConfig {
     sample_rate: i32,
     channels: i32,
@@ -5315,6 +5316,943 @@ fn cmd_longsoak(duration_secs: i32, sample_rate: i32) {
 }
 
 // ---------------------------------------------------------------------------
+// Torture: extended soak with random parameter variation mid-stream
+// ---------------------------------------------------------------------------
+
+/// Get current process RSS in bytes (for memory leak detection).
+#[allow(unused_variables, unreachable_code)]
+fn get_rss_bytes() -> Option<usize> {
+    #[cfg(target_os = "windows")]
+    {
+        #[repr(C)]
+        #[allow(non_snake_case)]
+        struct ProcessMemoryCounters {
+            cb: u32,
+            page_fault_count: u32,
+            peak_working_set_size: usize,
+            working_set_size: usize,
+            quota_peak_paged_pool_usage: usize,
+            quota_paged_pool_usage: usize,
+            quota_peak_non_paged_pool_usage: usize,
+            quota_non_paged_pool_usage: usize,
+            pagefile_usage: usize,
+            peak_pagefile_usage: usize,
+        }
+        unsafe extern "system" {
+            fn GetCurrentProcess() -> *mut core::ffi::c_void;
+            fn K32GetProcessMemoryInfo(
+                h_process: *mut core::ffi::c_void,
+                ppsmem_counters: *mut ProcessMemoryCounters,
+                cb: u32,
+            ) -> i32;
+        }
+        unsafe {
+            let mut pmc = std::mem::zeroed::<ProcessMemoryCounters>();
+            pmc.cb = std::mem::size_of::<ProcessMemoryCounters>() as u32;
+            if K32GetProcessMemoryInfo(GetCurrentProcess(), &mut pmc, pmc.cb) != 0 {
+                return Some(pmc.working_set_size);
+            }
+        }
+        return None;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+            for line in status.lines() {
+                if let Some(rest) = line.strip_prefix("VmRSS:") {
+                    let trimmed = rest.trim().trim_end_matches(" kB").trim();
+                    if let Ok(kb) = trimmed.parse::<usize>() {
+                        return Some(kb * 1024);
+                    }
+                }
+            }
+        }
+        return None;
+    }
+}
+
+/// Advance PRNG state (LCG, same constants as generate_noise).
+fn torture_rng(state: &mut u64) -> u64 {
+    *state = state
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    *state
+}
+
+/// Pick a random element from a slice.
+fn torture_rng_choice<T: Copy>(state: &mut u64, choices: &[T]) -> T {
+    choices[(torture_rng(state) % choices.len() as u64) as usize]
+}
+
+/// Generate a random encoder config for torture testing.
+/// Only varies parameters settable mid-stream via CTL (not sample_rate, channels, application).
+fn random_torture_config(rng: &mut u64, sample_rate: i32, channels: i32) -> EncodeConfig {
+    let mut cfg = EncodeConfig::new(sample_rate, channels);
+
+    cfg.bitrate = torture_rng_choice(rng, &[
+        6000, 8000, 10000, 16000, 24000, 32000, 48000,
+        64000, 96000, 128000, 256000, 320000, 510000,
+    ]);
+    cfg.complexity = (torture_rng(rng) % 11) as i32;
+    cfg.vbr = (torture_rng(rng) % 2) as i32;
+    cfg.vbr_constraint = if cfg.vbr != 0 { (torture_rng(rng) % 2) as i32 } else { 0 };
+    cfg.signal = torture_rng_choice(rng, &[
+        bindings::OPUS_AUTO, bindings::OPUS_SIGNAL_VOICE, bindings::OPUS_SIGNAL_MUSIC,
+    ]);
+    cfg.max_bandwidth = torture_rng_choice(rng, &[
+        bindings::OPUS_BANDWIDTH_NARROWBAND,
+        bindings::OPUS_BANDWIDTH_MEDIUMBAND,
+        bindings::OPUS_BANDWIDTH_WIDEBAND,
+        bindings::OPUS_BANDWIDTH_SUPERWIDEBAND,
+        bindings::OPUS_BANDWIDTH_FULLBAND,
+    ]);
+    cfg.bandwidth = bindings::OPUS_AUTO;
+    // Weight toward AUTO to let the encoder decide, but occasionally force a mode
+    cfg.force_mode = torture_rng_choice(rng, &[
+        bindings::OPUS_AUTO, bindings::OPUS_AUTO, bindings::OPUS_AUTO,
+        1000, // SILK_ONLY
+        1002, // CELT_ONLY
+    ]);
+    cfg.fec = (torture_rng(rng) % 2) as i32;
+    cfg.packet_loss_pct = if cfg.fec != 0 {
+        torture_rng_choice(rng, &[0, 1, 5, 10, 20, 30])
+    } else {
+        0
+    };
+    cfg.dtx = (torture_rng(rng) % 2) as i32;
+    cfg.force_channels = if channels > 1 {
+        torture_rng_choice(rng, &[bindings::OPUS_AUTO, 1, 2])
+    } else {
+        bindings::OPUS_AUTO
+    };
+    cfg.lsb_depth = torture_rng_choice(rng, &[8, 16, 24]);
+    cfg.prediction_disabled = (torture_rng(rng) % 2) as i32;
+    cfg.phase_inversion_disabled = (torture_rng(rng) % 2) as i32;
+    // Frame sizes safe for all modes: 10ms, 20ms, 40ms, 60ms. Weight toward 20ms.
+    cfg.frame_ms = torture_rng_choice(rng, &[10.0, 20.0, 20.0, 20.0, 40.0, 60.0]);
+
+    cfg
+}
+
+/// Apply an EncodeConfig to a live C encoder via CTL calls.
+unsafe fn apply_config_to_c_encoder(enc: *mut bindings::OpusEncoder, cfg: &EncodeConfig) {
+    unsafe {
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, cfg.bitrate);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, cfg.complexity);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_VBR_REQUEST, cfg.vbr);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_VBR_CONSTRAINT_REQUEST, cfg.vbr_constraint);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_INBAND_FEC_REQUEST, cfg.fec);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_PACKET_LOSS_PERC_REQUEST, cfg.packet_loss_pct);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_DTX_REQUEST, cfg.dtx);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_SIGNAL_REQUEST, cfg.signal);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BANDWIDTH_REQUEST, cfg.bandwidth);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_FORCE_CHANNELS_REQUEST, cfg.force_channels);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_MAX_BANDWIDTH_REQUEST, cfg.max_bandwidth);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_LSB_DEPTH_REQUEST, cfg.lsb_depth);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_PREDICTION_DISABLED_REQUEST, cfg.prediction_disabled);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST, cfg.phase_inversion_disabled);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_FORCE_MODE_REQUEST, cfg.force_mode);
+    }
+}
+
+/// Apply an EncodeConfig to a live Rust encoder.
+fn apply_config_to_rust_encoder(enc: &mut mdopus::opus::encoder::OpusEncoder, cfg: &EncodeConfig) {
+    enc.set_bitrate(cfg.bitrate);
+    enc.set_complexity(cfg.complexity);
+    enc.set_vbr(cfg.vbr);
+    enc.set_vbr_constraint(cfg.vbr_constraint);
+    enc.set_inband_fec(cfg.fec);
+    enc.set_packet_loss_perc(cfg.packet_loss_pct);
+    enc.set_dtx(cfg.dtx);
+    enc.set_signal(cfg.signal);
+    enc.set_bandwidth(cfg.bandwidth);
+    enc.set_force_channels(cfg.force_channels);
+    enc.set_max_bandwidth(cfg.max_bandwidth);
+    enc.set_lsb_depth(cfg.lsb_depth);
+    enc.set_prediction_disabled(cfg.prediction_disabled);
+    enc.set_phase_inversion_disabled(cfg.phase_inversion_disabled);
+    enc.set_force_mode(cfg.force_mode);
+}
+
+/// Format an EncodeConfig as a compact diagnostic string.
+fn format_torture_config(cfg: &EncodeConfig) -> String {
+    let mode_str = match cfg.force_mode {
+        -1000 => "AUTO",
+        1000 => "SILK",
+        1001 => "HYBRID",
+        1002 => "CELT",
+        _ => "??",
+    };
+    let bw_str = match cfg.max_bandwidth {
+        1101 => "NB", 1102 => "MB", 1103 => "WB", 1104 => "SWB", 1105 => "FB",
+        _ => "AUTO",
+    };
+    let sig_str = match cfg.signal {
+        -1000 => "AUTO", 3001 => "VOICE", 3002 => "MUSIC",
+        _ => "??",
+    };
+    format!(
+        "br={} mode={} bw={} cx={} vbr={} fec={}/{} dtx={} sig={} frame={}ms",
+        cfg.bitrate, mode_str, bw_str, cfg.complexity,
+        cfg.vbr, cfg.fec, cfg.packet_loss_pct,
+        cfg.dtx, sig_str, cfg.frame_ms
+    )
+}
+
+fn cmd_torture(
+    duration_secs: i32,
+    seed: u64,
+    change_interval: usize,
+    sample_rate: i32,
+    channels: i32,
+) {
+    println!("=== Torture Test ===");
+    println!(
+        "Duration: {}s, Seed: {}, Config change every {} frames",
+        duration_secs, seed, change_interval
+    );
+    println!("Sample rate: {} Hz, Channels: {}", sample_rate, channels);
+    println!();
+
+    let rss_start = get_rss_bytes();
+    if let Some(rss) = rss_start {
+        println!("RSS at start: {:.1} MB", rss as f64 / 1_048_576.0);
+    }
+
+    // Generate PCM for the full duration
+    let pcm = generate_noise(sample_rate, channels, duration_secs as f64, seed);
+
+    // --- Create C encoder + decoder ---
+    let c_enc = unsafe {
+        let mut err: i32 = 0;
+        let enc = bindings::opus_encoder_create(
+            sample_rate,
+            channels,
+            bindings::OPUS_APPLICATION_AUDIO,
+            &mut err,
+        );
+        if enc.is_null() || err != bindings::OPUS_OK {
+            eprintln!("ERROR: C encoder create failed: {}", bindings::error_string(err));
+            process::exit(1);
+        }
+        enc
+    };
+    let c_dec = unsafe {
+        let mut err: i32 = 0;
+        let dec = bindings::opus_decoder_create(sample_rate, channels, &mut err);
+        if dec.is_null() || err != bindings::OPUS_OK {
+            eprintln!("ERROR: C decoder create failed: {}", bindings::error_string(err));
+            process::exit(1);
+        }
+        dec
+    };
+
+    // --- Create Rust encoder + decoder ---
+    let mut rust_enc = mdopus::opus::encoder::OpusEncoder::new(
+        sample_rate,
+        channels,
+        bindings::OPUS_APPLICATION_AUDIO,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("ERROR: Rust encoder create failed: {}", e);
+        process::exit(1);
+    });
+    let mut rust_dec =
+        mdopus::opus::decoder::OpusDecoder::new(sample_rate, channels).unwrap_or_else(|e| {
+            eprintln!("ERROR: Rust decoder create failed: {}", e);
+            process::exit(1);
+        });
+
+    // Buffers — 120ms is the absolute max Opus frame at any sample rate
+    let max_frame_samples_per_ch = sample_rate as usize * 120 / 1000;
+    let max_frame_samples = max_frame_samples_per_ch * channels as usize;
+    let mut c_pkt = vec![0u8; 4000];
+    let mut rust_pkt = vec![0u8; 4000];
+    let mut c_pcm_buf = vec![0i16; max_frame_samples];
+    let mut rust_pcm_buf = vec![0i16; max_frame_samples];
+
+    let mut rng = seed.wrapping_add(0xDEAD_BEEF); // Offset from PCM seed
+    let mut frame_idx: usize = 0;
+    let mut pcm_pos: usize = 0;
+    let mut configs_tested: usize = 0;
+    let mut encode_mismatches: usize = 0;
+    let mut decode_mismatches: usize = 0;
+    let mut range_mismatches: usize = 0;
+    let mut max_pcm_diff: i32 = 0;
+    let mut first_fail_frame: Option<usize> = None;
+
+    let mut current_cfg = EncodeConfig::new(sample_rate, channels);
+    let mut current_frame_size = current_cfg.frame_size();
+
+    unsafe { apply_config_to_c_encoder(c_enc, &current_cfg) };
+    apply_config_to_rust_encoder(&mut rust_enc, &current_cfg);
+
+    let start_time = std::time::Instant::now();
+
+    loop {
+        let frame_samples = current_frame_size * channels as usize;
+        if pcm_pos + frame_samples > pcm.len() {
+            break;
+        }
+
+        // --- Maybe change config ---
+        if frame_idx > 0 && frame_idx % change_interval == 0 {
+            current_cfg = random_torture_config(&mut rng, sample_rate, channels);
+            unsafe { apply_config_to_c_encoder(c_enc, &current_cfg) };
+            apply_config_to_rust_encoder(&mut rust_enc, &current_cfg);
+            current_frame_size = current_cfg.frame_size();
+            configs_tested += 1;
+
+            // Re-check PCM availability after frame size change
+            let frame_samples = current_frame_size * channels as usize;
+            if pcm_pos + frame_samples > pcm.len() {
+                break;
+            }
+        }
+
+        let frame_samples = current_frame_size * channels as usize;
+
+        // --- Encode with C ---
+        let c_len = unsafe {
+            bindings::opus_encode(
+                c_enc,
+                pcm[pcm_pos..].as_ptr(),
+                current_frame_size as i32,
+                c_pkt.as_mut_ptr(),
+                c_pkt.len() as i32,
+            )
+        };
+
+        // --- Encode with Rust ---
+        let rust_pkt_len = rust_pkt.len() as i32;
+        let rust_len = match rust_enc.encode(
+            &pcm[pcm_pos..pcm_pos + frame_samples],
+            current_frame_size as i32,
+            &mut rust_pkt,
+            rust_pkt_len,
+        ) {
+            Ok(n) => n,
+            Err(e) => {
+                if c_len >= 0 {
+                    encode_mismatches += 1;
+                    if encode_mismatches <= 5 {
+                        println!(
+                            "ENCODE ERROR frame {}: Rust failed ({}), C ok ({} bytes)",
+                            frame_idx, e, c_len
+                        );
+                        println!("  {}", format_torture_config(&current_cfg));
+                    }
+                    if first_fail_frame.is_none() {
+                        first_fail_frame = Some(frame_idx);
+                    }
+                }
+                pcm_pos += frame_samples;
+                frame_idx += 1;
+                continue;
+            }
+        };
+
+        // Both failed — skip (valid: some configs are rejected by both)
+        if c_len < 0 {
+            pcm_pos += frame_samples;
+            frame_idx += 1;
+            continue;
+        }
+
+        let c_len = c_len as usize;
+        let rust_len = rust_len as usize;
+
+        // --- Compare encoded bytes ---
+        if c_len != rust_len || c_pkt[..c_len] != rust_pkt[..rust_len] {
+            encode_mismatches += 1;
+            if encode_mismatches <= 5 {
+                println!(
+                    "ENCODE MISMATCH frame {} (config #{}): C={} bytes, Rust={} bytes",
+                    frame_idx, configs_tested, c_len, rust_len
+                );
+                println!("  {}", format_torture_config(&current_cfg));
+                if c_len == rust_len {
+                    for k in 0..c_len {
+                        if c_pkt[k] != rust_pkt[k] {
+                            println!(
+                                "  First diff byte {}: C=0x{:02x} Rust=0x{:02x}",
+                                k, c_pkt[k], rust_pkt[k]
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
+            if first_fail_frame.is_none() {
+                first_fail_frame = Some(frame_idx);
+            }
+        }
+
+        // --- Decode C packet with both decoders ---
+        let c_dec_ret = unsafe {
+            bindings::opus_decode(
+                c_dec,
+                c_pkt.as_ptr(),
+                c_len as i32,
+                c_pcm_buf.as_mut_ptr(),
+                max_frame_samples_per_ch as i32,
+                0,
+            )
+        };
+
+        let rust_dec_ret = match rust_dec.decode(
+            Some(&c_pkt[..c_len]),
+            &mut rust_pcm_buf,
+            max_frame_samples_per_ch as i32,
+            false,
+        ) {
+            Ok(n) => n,
+            Err(e) => {
+                if c_dec_ret >= 0 {
+                    decode_mismatches += 1;
+                    if decode_mismatches <= 5 {
+                        println!(
+                            "DECODE ERROR frame {}: Rust failed ({}), C ok ({} samples)",
+                            frame_idx, e, c_dec_ret
+                        );
+                        println!("  {}", format_torture_config(&current_cfg));
+                    }
+                    if first_fail_frame.is_none() {
+                        first_fail_frame = Some(frame_idx);
+                    }
+                }
+                pcm_pos += frame_samples;
+                frame_idx += 1;
+                continue;
+            }
+        };
+
+        // --- Compare decoded PCM ---
+        if c_dec_ret >= 0 {
+            let c_count = c_dec_ret as usize * channels as usize;
+            let r_count = rust_dec_ret as usize * channels as usize;
+            let len = c_count.min(r_count);
+            for j in 0..len {
+                let d = (c_pcm_buf[j] as i32 - rust_pcm_buf[j] as i32).abs();
+                if d > 0 {
+                    decode_mismatches += 1;
+                    max_pcm_diff = max_pcm_diff.max(d);
+                    if decode_mismatches <= 5 {
+                        println!(
+                            "DECODE MISMATCH frame {} sample {}: C={} Rust={} (diff={})",
+                            frame_idx, j, c_pcm_buf[j], rust_pcm_buf[j], d
+                        );
+                        println!("  {}", format_torture_config(&current_cfg));
+                    }
+                    if first_fail_frame.is_none() {
+                        first_fail_frame = Some(frame_idx);
+                    }
+                    break; // One mismatch per frame is enough
+                }
+            }
+        }
+
+        // --- Compare final_range ---
+        let mut c_range: u32 = 0;
+        unsafe {
+            bindings::opus_decoder_ctl(
+                c_dec,
+                bindings::OPUS_GET_FINAL_RANGE_REQUEST,
+                &mut c_range as *mut u32,
+            );
+        }
+        let rust_range = rust_dec.get_final_range();
+        if c_range != rust_range {
+            range_mismatches += 1;
+            if range_mismatches <= 5 {
+                println!(
+                    "RANGE MISMATCH frame {}: C={:08x} Rust={:08x}",
+                    frame_idx, c_range, rust_range
+                );
+                println!("  {}", format_torture_config(&current_cfg));
+            }
+            if first_fail_frame.is_none() {
+                first_fail_frame = Some(frame_idx);
+            }
+        }
+
+        pcm_pos += frame_samples;
+        frame_idx += 1;
+
+        // Progress every 500 frames
+        if frame_idx % 500 == 0 {
+            let elapsed = start_time.elapsed().as_secs_f64();
+            let pct = pcm_pos as f64 / pcm.len() as f64 * 100.0;
+            eprint!(
+                "\r  [{:.0}s] frame {} ({:.1}%), cfgs: {}, enc_err: {}, dec_err: {}, rng_err: {}   ",
+                elapsed, frame_idx, pct, configs_tested,
+                encode_mismatches, decode_mismatches, range_mismatches
+            );
+        }
+    }
+    eprintln!();
+
+    let elapsed = start_time.elapsed();
+    let rss_end = get_rss_bytes();
+
+    unsafe {
+        bindings::opus_encoder_destroy(c_enc);
+        bindings::opus_decoder_destroy(c_dec);
+    }
+
+    println!();
+    println!("=== Torture Test Summary ===");
+    println!("  Duration:        {:.1}s", elapsed.as_secs_f64());
+    println!("  Frames encoded:  {}", frame_idx);
+    println!("  Configs tested:  {}", configs_tested);
+    println!("  Encode errors:   {}", encode_mismatches);
+    println!("  Decode errors:   {}", decode_mismatches);
+    println!("  Range errors:    {}", range_mismatches);
+    if max_pcm_diff > 0 {
+        println!("  Max PCM diff:    {}", max_pcm_diff);
+    }
+    if let (Some(start), Some(end)) = (rss_start, rss_end) {
+        let delta = end as i64 - start as i64;
+        println!(
+            "  RSS: {:.1} MB -> {:.1} MB ({:+.1} MB)",
+            start as f64 / 1_048_576.0,
+            end as f64 / 1_048_576.0,
+            delta as f64 / 1_048_576.0
+        );
+        if delta > 50 * 1024 * 1024 {
+            println!("  WARNING: RSS grew >50 MB — possible memory leak");
+        }
+    }
+
+    let all_pass = encode_mismatches == 0 && decode_mismatches == 0 && range_mismatches == 0;
+    if all_pass {
+        println!("  RESULT: PASS");
+    } else {
+        println!(
+            "  RESULT: FAIL (first failure at frame {})",
+            first_fail_frame.unwrap_or(0)
+        );
+        process::exit(1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mode Transition Tests: deterministic sequences exercising risky transitions
+// ---------------------------------------------------------------------------
+
+/// Run a sequence of (config, frame_count) steps through paired C/Rust encoders.
+/// Returns true if all frames match.
+fn run_transition_sequence(
+    label: &str,
+    sample_rate: i32,
+    channels: i32,
+    steps: &[(EncodeConfig, usize)],
+) -> bool {
+    let frame_size = (sample_rate / 50) as usize; // 20ms frames
+    let total_frames: usize = steps.iter().map(|(_, n)| *n).sum();
+    let duration = total_frames as f64 * 0.02; // 20ms per frame
+    let pcm = generate_noise(sample_rate, channels, duration + 0.1, 54321);
+
+    print!("  {}: ", label);
+
+    let c_enc = unsafe {
+        let mut err: i32 = 0;
+        let enc = bindings::opus_encoder_create(
+            sample_rate,
+            channels,
+            bindings::OPUS_APPLICATION_AUDIO,
+            &mut err,
+        );
+        if enc.is_null() || err != 0 {
+            println!("SKIP (C encoder failed)");
+            return true;
+        }
+        enc
+    };
+    let mut rust_enc = match mdopus::opus::encoder::OpusEncoder::new(
+        sample_rate,
+        channels,
+        bindings::OPUS_APPLICATION_AUDIO,
+    ) {
+        Ok(e) => e,
+        Err(_) => {
+            println!("SKIP (Rust encoder failed)");
+            unsafe { bindings::opus_encoder_destroy(c_enc) };
+            return true;
+        }
+    };
+
+    let c_dec = unsafe {
+        let mut err: i32 = 0;
+        let dec = bindings::opus_decoder_create(sample_rate, channels, &mut err);
+        if dec.is_null() || err != 0 {
+            println!("SKIP (C decoder failed)");
+            bindings::opus_encoder_destroy(c_enc);
+            return true;
+        }
+        dec
+    };
+    let mut rust_dec =
+        match mdopus::opus::decoder::OpusDecoder::new(sample_rate, channels) {
+            Ok(d) => d,
+            Err(_) => {
+                println!("SKIP (Rust decoder failed)");
+                unsafe {
+                    bindings::opus_encoder_destroy(c_enc);
+                    bindings::opus_decoder_destroy(c_dec);
+                };
+                return true;
+            }
+        };
+
+    let max_dec_per_ch = sample_rate as usize * 120 / 1000;
+    let mut c_pkt = vec![0u8; 4000];
+    let mut rust_pkt = vec![0u8; 4000];
+    let mut c_pcm_buf = vec![0i16; max_dec_per_ch * channels as usize];
+    let mut rust_pcm_buf = vec![0i16; max_dec_per_ch * channels as usize];
+
+    let frame_samples = frame_size * channels as usize;
+    let mut pcm_pos: usize = 0;
+    let mut frame_idx: usize = 0;
+    let mut mismatches: usize = 0;
+    let mut first_fail: Option<(usize, usize)> = None; // (step, frame_within_step)
+
+    for (step_idx, (cfg, num_frames)) in steps.iter().enumerate() {
+        unsafe { apply_config_to_c_encoder(c_enc, cfg) };
+        apply_config_to_rust_encoder(&mut rust_enc, cfg);
+
+        for f in 0..*num_frames {
+            if pcm_pos + frame_samples > pcm.len() {
+                break;
+            }
+
+            let c_len = unsafe {
+                bindings::opus_encode(
+                    c_enc,
+                    pcm[pcm_pos..].as_ptr(),
+                    frame_size as i32,
+                    c_pkt.as_mut_ptr(),
+                    c_pkt.len() as i32,
+                )
+            };
+            let rpkt_len = rust_pkt.len() as i32;
+            let rust_len = rust_enc
+                .encode(
+                    &pcm[pcm_pos..pcm_pos + frame_samples],
+                    frame_size as i32,
+                    &mut rust_pkt,
+                    rpkt_len,
+                )
+                .unwrap_or(-1);
+
+            if c_len < 0 && rust_len < 0 {
+                // Both reject — fine
+            } else if c_len >= 0 && rust_len >= 0 {
+                let cl = c_len as usize;
+                let rl = rust_len as usize;
+                if cl != rl || c_pkt[..cl] != rust_pkt[..rl] {
+                    mismatches += 1;
+                    if first_fail.is_none() {
+                        first_fail = Some((step_idx, f));
+                        // Dump first mismatch details
+                        eprintln!("    DIAG step={} frame={}: C={} bytes Rust={} bytes", step_idx, f, cl, rl);
+                        if cl > 0 && rl > 0 {
+                            eprintln!("    C_toc=0x{:02x} R_toc=0x{:02x}", c_pkt[0], rust_pkt[0]);
+                        }
+                        let min_len = cl.min(rl).min(16);
+                        eprint!("    C_pkt:");
+                        for b in &c_pkt[..min_len] { eprint!(" {:02x}", b); }
+                        eprintln!();
+                        eprint!("    R_pkt:");
+                        for b in &rust_pkt[..min_len] { eprint!(" {:02x}", b); }
+                        eprintln!();
+                        // Find first diff
+                        let cmp_len = cl.min(rl);
+                        for k in 0..cmp_len {
+                            if c_pkt[k] != rust_pkt[k] {
+                                eprintln!("    First diff at byte {}: C=0x{:02x} R=0x{:02x}", k, c_pkt[k], rust_pkt[k]);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Decode and compare
+                let c_dec_ret = unsafe {
+                    bindings::opus_decode(
+                        c_dec,
+                        c_pkt.as_ptr(),
+                        c_len,
+                        c_pcm_buf.as_mut_ptr(),
+                        max_dec_per_ch as i32,
+                        0,
+                    )
+                };
+                let rust_dec_ret = rust_dec
+                    .decode(
+                        Some(&c_pkt[..cl]),
+                        &mut rust_pcm_buf,
+                        max_dec_per_ch as i32,
+                        false,
+                    )
+                    .unwrap_or(-1);
+
+                if c_dec_ret >= 0 && rust_dec_ret >= 0 {
+                    let n = (c_dec_ret as usize * channels as usize)
+                        .min(rust_dec_ret as usize * channels as usize);
+                    for j in 0..n {
+                        if c_pcm_buf[j] != rust_pcm_buf[j] {
+                            mismatches += 1;
+                            if first_fail.is_none() {
+                                first_fail = Some((step_idx, f));
+                            }
+                            break;
+                        }
+                    }
+                } else if c_dec_ret >= 0 || rust_dec_ret >= 0 {
+                    mismatches += 1;
+                    if first_fail.is_none() {
+                        first_fail = Some((step_idx, f));
+                    }
+                }
+            } else {
+                // One succeeded, one failed
+                mismatches += 1;
+                if first_fail.is_none() {
+                    first_fail = Some((step_idx, f));
+                }
+            }
+
+            pcm_pos += frame_samples;
+            frame_idx += 1;
+        }
+    }
+
+    unsafe {
+        bindings::opus_encoder_destroy(c_enc);
+        bindings::opus_decoder_destroy(c_dec);
+    }
+
+    if mismatches == 0 {
+        println!("PASS ({} frames)", frame_idx);
+        true
+    } else {
+        let (s, f) = first_fail.unwrap_or((0, 0));
+        println!(
+            "FAIL ({} mismatches in {} frames, first at step {} frame {})",
+            mismatches, frame_idx, s, f
+        );
+        false
+    }
+}
+
+fn cmd_transitions() {
+    println!("=== Mode Transition Tests ===");
+    println!();
+    let mut all_pass = true;
+
+    // Frames per step — enough to let encoder state settle after each transition
+    let n = 100;
+
+    // --- Test 1: SILK -> CELT -> SILK mode cycling ---
+    {
+        let sr = 48000;
+        let ch = 1;
+        let mut silk = EncodeConfig::new(sr, ch);
+        silk.force_mode = 1000; // SILK_ONLY
+        silk.bitrate = 16000;
+        silk.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND;
+
+        let mut celt = EncodeConfig::new(sr, ch);
+        celt.force_mode = 1002; // CELT_ONLY
+        celt.bitrate = 128000;
+        celt.max_bandwidth = bindings::OPUS_BANDWIDTH_FULLBAND;
+
+        all_pass &= run_transition_sequence(
+            "SILK->CELT->SILK->CELT (mono)",
+            sr, ch,
+            &[(silk.clone(), n), (celt.clone(), n), (silk.clone(), n), (celt.clone(), n)],
+        );
+    }
+
+    // --- Test 2: Bandwidth sweep NB -> FB -> NB ---
+    {
+        let sr = 48000;
+        let ch = 1;
+        let bws = [
+            bindings::OPUS_BANDWIDTH_NARROWBAND,
+            bindings::OPUS_BANDWIDTH_MEDIUMBAND,
+            bindings::OPUS_BANDWIDTH_WIDEBAND,
+            bindings::OPUS_BANDWIDTH_SUPERWIDEBAND,
+            bindings::OPUS_BANDWIDTH_FULLBAND,
+            bindings::OPUS_BANDWIDTH_SUPERWIDEBAND,
+            bindings::OPUS_BANDWIDTH_WIDEBAND,
+            bindings::OPUS_BANDWIDTH_MEDIUMBAND,
+            bindings::OPUS_BANDWIDTH_NARROWBAND,
+        ];
+        let steps: Vec<(EncodeConfig, usize)> = bws
+            .iter()
+            .map(|&bw| {
+                let mut cfg = EncodeConfig::new(sr, ch);
+                cfg.bitrate = 64000;
+                cfg.max_bandwidth = bw;
+                (cfg, n / 2)
+            })
+            .collect();
+        all_pass &= run_transition_sequence("BW sweep NB->FB->NB (mono)", sr, ch, &steps);
+    }
+
+    // --- Test 3: VBR on/off cycling ---
+    {
+        let sr = 48000;
+        let ch = 1;
+        let mut vbr_on = EncodeConfig::new(sr, ch);
+        vbr_on.vbr = 1;
+        vbr_on.vbr_constraint = 1;
+        vbr_on.bitrate = 64000;
+
+        let mut vbr_off = EncodeConfig::new(sr, ch);
+        vbr_off.vbr = 0;
+        vbr_off.bitrate = 64000;
+
+        all_pass &= run_transition_sequence(
+            "VBR on->off->on->off (mono)",
+            sr, ch,
+            &[(vbr_on.clone(), n), (vbr_off.clone(), n), (vbr_on.clone(), n), (vbr_off.clone(), n)],
+        );
+    }
+
+    // --- Test 4: VOIP-like -> AUDIO-like switching via signal + force_mode ---
+    {
+        let sr = 48000;
+        let ch = 1;
+        let mut voip_like = EncodeConfig::new(sr, ch);
+        voip_like.signal = bindings::OPUS_SIGNAL_VOICE;
+        voip_like.bitrate = 16000;
+        voip_like.force_mode = 1000; // SILK
+        voip_like.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND;
+        voip_like.fec = 1;
+        voip_like.packet_loss_pct = 10;
+
+        let mut audio_like = EncodeConfig::new(sr, ch);
+        audio_like.signal = bindings::OPUS_SIGNAL_MUSIC;
+        audio_like.bitrate = 128000;
+        audio_like.force_mode = 1002; // CELT
+        audio_like.max_bandwidth = bindings::OPUS_BANDWIDTH_FULLBAND;
+        audio_like.fec = 0;
+        audio_like.packet_loss_pct = 0;
+
+        all_pass &= run_transition_sequence(
+            "VOIP-like->AUDIO-like->VOIP-like (mono)",
+            sr, ch,
+            &[
+                (voip_like.clone(), n),
+                (audio_like.clone(), n),
+                (voip_like.clone(), n),
+                (audio_like.clone(), n),
+            ],
+        );
+    }
+
+    // --- Test 5: DTX on/off cycling ---
+    {
+        let sr = 48000;
+        let ch = 1;
+        let mut dtx_on = EncodeConfig::new(sr, ch);
+        dtx_on.dtx = 1;
+        dtx_on.bitrate = 16000;
+        dtx_on.signal = bindings::OPUS_SIGNAL_VOICE;
+
+        let mut dtx_off = EncodeConfig::new(sr, ch);
+        dtx_off.dtx = 0;
+        dtx_off.bitrate = 64000;
+
+        all_pass &= run_transition_sequence(
+            "DTX on->off->on (mono)",
+            sr, ch,
+            &[(dtx_on.clone(), n), (dtx_off.clone(), n), (dtx_on.clone(), n)],
+        );
+    }
+
+    // --- Test 6: Stereo force-channels switching ---
+    {
+        let sr = 48000;
+        let ch = 2;
+        let mut stereo = EncodeConfig::new(sr, ch);
+        stereo.bitrate = 96000;
+        stereo.force_channels = 2;
+
+        let mut mono_forced = EncodeConfig::new(sr, ch);
+        mono_forced.bitrate = 96000;
+        mono_forced.force_channels = 1;
+
+        let mut auto_ch = EncodeConfig::new(sr, ch);
+        auto_ch.bitrate = 96000;
+        auto_ch.force_channels = bindings::OPUS_AUTO;
+
+        all_pass &= run_transition_sequence(
+            "Stereo->ForceMono->Auto->Stereo",
+            sr, ch,
+            &[
+                (stereo.clone(), n),
+                (mono_forced.clone(), n),
+                (auto_ch.clone(), n),
+                (stereo.clone(), n),
+            ],
+        );
+    }
+
+    // --- Test 7: Bitrate extremes ---
+    {
+        let sr = 48000;
+        let ch = 1;
+        let bitrates = [6000, 510000, 6000, 128000, 6000];
+        let steps: Vec<(EncodeConfig, usize)> = bitrates
+            .iter()
+            .map(|&br| {
+                let mut cfg = EncodeConfig::new(sr, ch);
+                cfg.bitrate = br;
+                (cfg, n)
+            })
+            .collect();
+        all_pass &= run_transition_sequence("Bitrate extremes 6k->510k->6k (mono)", sr, ch, &steps);
+    }
+
+    // --- Test 8: FEC + packet loss cycling ---
+    {
+        let sr = 48000;
+        let ch = 1;
+        let mut fec_off = EncodeConfig::new(sr, ch);
+        fec_off.fec = 0;
+        fec_off.bitrate = 32000;
+
+        let mut fec_low = EncodeConfig::new(sr, ch);
+        fec_low.fec = 1;
+        fec_low.packet_loss_pct = 5;
+        fec_low.bitrate = 32000;
+
+        let mut fec_high = EncodeConfig::new(sr, ch);
+        fec_high.fec = 1;
+        fec_high.packet_loss_pct = 30;
+        fec_high.bitrate = 32000;
+
+        all_pass &= run_transition_sequence(
+            "FEC off->low_loss->high_loss->off (mono)",
+            sr, ch,
+            &[(fec_off.clone(), n), (fec_low.clone(), n), (fec_high.clone(), n), (fec_off.clone(), n)],
+        );
+    }
+
+    println!();
+    if all_pass {
+        println!("=== All transition tests PASSED ===");
+    } else {
+        println!("=== Some transition tests FAILED ===");
+        process::exit(1);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Quality: SNR sanity check for encode-decode roundtrip
 // ---------------------------------------------------------------------------
 
@@ -6256,6 +7194,8 @@ fn usage() {
     eprintln!("  mdopus-compare sweep [filter] [--stop-on-fail]");
     eprintln!("  mdopus-compare bench <input.wav> [--bitrate N] [--complexity N] [--iters N]");
     eprintln!("  mdopus-compare longsoak [--duration N] [--sample-rate N]");
+    eprintln!("  mdopus-compare torture [--duration N] [--seed N] [--change-interval N] [--sample-rate N] [--channels N]");
+    eprintln!("  mdopus-compare transitions");
     eprintln!("  mdopus-compare quality <input.wav>");
     eprintln!("  mdopus-compare packets <input.wav>");
     eprintln!("  mdopus-compare decode-formats <input.wav>");
@@ -7269,6 +8209,17 @@ fn main() {
             let duration = parse_option(&args, "--duration", 30);
             let sr = parse_option(&args, "--sample-rate", 48000);
             cmd_longsoak(duration, sr);
+        }
+        "torture" => {
+            let duration = parse_option(&args, "--duration", 1800); // 30 min default
+            let seed_i = parse_option(&args, "--seed", 42);
+            let interval = parse_option(&args, "--change-interval", 50);
+            let sr = parse_option(&args, "--sample-rate", 48000);
+            let ch = parse_option(&args, "--channels", 1);
+            cmd_torture(duration, seed_i as u64, interval as usize, sr, ch);
+        }
+        "transitions" => {
+            cmd_transitions();
         }
         "quality" => {
             if args.len() < 3 {

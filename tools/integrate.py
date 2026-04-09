@@ -203,7 +203,7 @@ def generate_corpus(log: logging.Logger) -> int:
 # Test runner
 # ---------------------------------------------------------------------------
 
-BITRATES = [16000, 32000, 64000, 128000]
+BITRATES = [6000, 8000, 10000, 16000, 24000, 32000, 48000, 64000, 96000, 128000, 256000, 320000, 510000]
 COMPARE_BIN = ROOT / "target" / "debug" / "mdopus-compare"
 if sys.platform == "win32":
     COMPARE_BIN = COMPARE_BIN.with_suffix(".exe")

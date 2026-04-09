@@ -239,6 +239,10 @@ pub struct OpusEncoder {
     nonfinal_frame: i32,
     pub range_final: u32,
     delay_buffer: Vec<i16>,
+    /// Saved 2.5ms of prefill data from delay_buffer, captured BEFORE the
+    /// delay buffer update. Used for CELT prefill on mode transitions.
+    /// C: tmp_prefill in opus_encode_frame_native.
+    tmp_prefill: Vec<i16>,
 }
 
 // ===========================================================================
@@ -1014,6 +1018,7 @@ impl OpusEncoder {
             nonfinal_frame: 0,
             range_final: 0,
             delay_buffer: vec![0i16; (encoder_buffer * channels) as usize],
+            tmp_prefill: vec![0i16; (channels * fs / 400) as usize],
         };
 
         // Configure CELT
@@ -1169,6 +1174,7 @@ impl OpusEncoder {
         self.nonfinal_frame = 0;
         self.range_final = 0;
         self.delay_buffer.fill(0);
+        self.tmp_prefill.fill(0);
 
         if let Some(ref mut silk) = self.silk_enc {
             silk_init_encoder_top(silk, self.channels as usize);
@@ -1679,11 +1685,11 @@ impl OpusEncoder {
         mode: i32,
         _bitrate_bps: i32,
         _is_silence: bool,
-        _redundancy: bool,
-        _celt_to_silk: bool,
-        _prefill: i32,
-        _equiv_rate: i32,
-        _to_celt: bool,
+        redundancy: bool,
+        celt_to_silk: bool,
+        prefill: i32,
+        equiv_rate: i32,
+        to_celt: bool,
     ) -> Result<i32, i32> {
         // Determine sub-frame size
         let enc_frame_size = if mode == MODE_SILK_ONLY {
@@ -1705,30 +1711,71 @@ impl OpusEncoder {
             return Err(OPUS_INTERNAL_ERROR);
         }
 
-        let bytes_per_frame = imin(1276, imax(1, max_data_bytes / nb_frames));
+        // C: bak_to_mono = st->silk_mode.toMono;
+        let bak_to_mono = self.silk_mode.to_mono;
+        if bak_to_mono != 0 {
+            self.force_channels = 1;
+        } else {
+            self.prev_channels = self.stream_channels;
+        }
 
-        // Encode each sub-frame
+        let max_len_sum = max_data_bytes;
+        let mut tot_size: i32 = 0;
+        let mut dtx_count: i32 = 0;
+
+        // Encode each sub-frame using encode_frame_native with per-frame
+        // transition flags (matching C opus_encode_native multiframe loop).
         let mut sub_packets: Vec<Vec<u8>> = Vec::with_capacity(nb_frames as usize);
         for i in 0..nb_frames {
-            let offset = (i * enc_frame_size * self.channels) as usize;
-            let pcm_frame = &pcm[offset..];
-            let mut frame_buf = vec![0u8; bytes_per_frame as usize];
-
+            self.silk_mode.to_mono = 0;
             self.nonfinal_frame = if i < nb_frames - 1 { 1 } else { 0 };
 
-            let ret = self.encode_native(
+            // C: frame_to_celt = to_celt && i==nb_frames-1;
+            let frame_to_celt = to_celt && i == nb_frames - 1;
+            // C: frame_redundancy = redundancy && (frame_to_celt || (!to_celt && i==0));
+            let frame_redundancy =
+                redundancy && (frame_to_celt || (!to_celt && i == 0));
+
+            // C: curr_max = IMIN(bitrate_to_bits(...)/8, max_len_sum/nb_frames);
+            //    curr_max = IMIN(max_len_sum-tot_size, curr_max);
+            let mut curr_max = imin(
+                bitrate_to_bits(self.bitrate_bps, self.fs, enc_frame_size) / 8,
+                max_len_sum / nb_frames,
+            );
+            curr_max = imin(max_len_sum - tot_size, curr_max);
+
+            let offset = (i * enc_frame_size * self.channels) as usize;
+            let pcm_frame = &pcm[offset..];
+            let frame_is_silence =
+                is_digital_silence(pcm_frame, enc_frame_size, self.channels, lsb_depth);
+
+            let mut frame_buf = vec![0u8; curr_max as usize];
+
+            let ret = self.encode_frame_native(
                 pcm_frame,
                 enc_frame_size,
                 &mut frame_buf,
-                bytes_per_frame,
-                lsb_depth,
+                curr_max,
+                curr_max,
+                frame_is_silence,
+                frame_redundancy,
+                celt_to_silk,
+                prefill,
+                equiv_rate,
+                frame_to_celt,
             )?;
+
+            if ret == 1 {
+                dtx_count += 1;
+            }
+
             frame_buf.truncate(ret as usize);
+            tot_size += ret;
             sub_packets.push(frame_buf);
         }
         self.nonfinal_frame = 0;
 
-        // Repacketize
+        // Repacketize — C uses out_range_impl with CBR pad flag
         let mut rp = OpusRepacketizer::new();
         for pkt in &sub_packets {
             let ret = rp.cat(pkt, pkt.len() as i32);
@@ -1737,18 +1784,22 @@ impl OpusEncoder {
             }
         }
 
-        let ret = rp.out(data, orig_max_data_bytes);
+        let pad_cbr = self.use_vbr == 0 && dtx_count != nb_frames;
+        let repacketize_len = orig_max_data_bytes;
+        let ret = rp.out_range_impl(
+            0,
+            nb_frames as usize,
+            data,
+            repacketize_len,
+            false,
+            pad_cbr,
+            &[],
+        );
         if ret < 0 {
             return Err(ret);
         }
 
-        // CBR padding
-        if self.use_vbr == 0 && ret < orig_max_data_bytes {
-            let pad_ret = opus_packet_pad(data, ret, orig_max_data_bytes);
-            if pad_ret == OPUS_OK {
-                return Ok(orig_max_data_bytes);
-            }
-        }
+        self.silk_mode.to_mono = bak_to_mono;
 
         self.range_final = if let Some(ref celt) = self.celt_enc {
             celt.rng
@@ -1991,13 +2042,48 @@ impl OpusEncoder {
                 }
 
                 // Prefill SILK on mode transition
-                // C: resets encoder, sets payloadSize_ms=10, complexity=0
-                if prefill != 0 {
+                // C: applies gain_fade onset ramp on delay_buffer, zeros before it,
+                // then feeds entire delay_buffer to silk_Encode for prefill.
+                if prefill != 0 && self.application != OPUS_APPLICATION_RESTRICTED_SILK {
                     if let Some(ref mut silk) = self.silk_enc {
-                        let db = self.delay_buffer.clone();
+                        let mut db = self.delay_buffer.clone();
                         let db_samples = (self.encoder_buffer * self.channels) as usize;
+                        // C: prefill_offset = channels * (encoder_buffer - delay_compensation - Fs/400)
+                        let prefill_offset = (self.channels
+                            * (self.encoder_buffer - self.delay_compensation - self.fs / 400))
+                            as usize;
+                        // Apply gain_fade onset ramp (0 → Q15ONE) on the last 2.5ms
+                        if prefill_offset + (self.fs as usize / 400 * self.channels as usize)
+                            <= db.len()
+                        {
+                            let celt_overlap = if let Some(ref celt) = self.celt_enc {
+                                celt.mode.overlap as i32
+                            } else {
+                                120
+                            };
+                            let celt_window = if let Some(ref celt) = self.celt_enc {
+                                celt.mode.window
+                            } else {
+                                &[]
+                            };
+                            if !celt_window.is_empty() {
+                                gain_fade(
+                                    &mut db[prefill_offset..],
+                                    0,
+                                    Q15ONE,
+                                    celt_overlap,
+                                    self.fs / 400,
+                                    self.channels,
+                                    celt_window,
+                                    self.fs,
+                                );
+                            }
+                            // Zero everything before the ramp
+                            for s in db[..prefill_offset].iter_mut() {
+                                *s = 0;
+                            }
+                        }
                         let mut prefill_control = self.silk_mode.clone();
-                        // C: encControl->payloadSize_ms = 10; encControl->complexity = 0;
                         prefill_control.payload_size_ms = 10;
                         prefill_control.complexity = 0;
                         let mut zero = 0i32;
@@ -2108,12 +2194,36 @@ impl OpusEncoder {
                 celt.ctl(CeltEncoderCtl::SetBitrate(OPUS_BITRATE_MAX));
             }
 
+            // --- Save CELT prefill data BEFORE delay buffer update ---
+            // C: OPUS_COPY(tmp_prefill, &delay_buffer[(encoder_buffer-total_buffer-Fs/400)*ch], ch*Fs/400)
+            // This captures 2.5ms from the delay buffer at an offset that will be
+            // overwritten by the update below.
+            if self.mode != MODE_SILK_ONLY && self.mode != self.prev_mode && self.prev_mode > 0
+                && self.application != OPUS_APPLICATION_RESTRICTED_SILK
+            {
+                let n4 = (self.fs / 400) as usize;
+                let ch = self.channels as usize;
+                let src_offset = ((self.encoder_buffer as usize)
+                    .saturating_sub(total_buffer as usize)
+                    .saturating_sub(n4))
+                    * ch;
+                let copy_len = n4 * ch;
+                if src_offset + copy_len <= self.delay_buffer.len()
+                    && copy_len <= self.tmp_prefill.len()
+                {
+                    self.tmp_prefill[..copy_len]
+                        .copy_from_slice(&self.delay_buffer[src_offset..src_offset + copy_len]);
+                }
+            }
+
             // --- Update delay buffer BEFORE CELT encoding ---
             // C copies from pcm_buf (dc_reject'd), not raw pcm
             self.update_delay_buffer_from_pcm_buf(&pcm_buf, frame_size, total_buffer);
 
             // --- HB gain fade ---
-            if (self.prev_hb_gain < Q15ONE || hb_gain < Q15ONE) && self.mode != MODE_SILK_ONLY {
+            // C: if ((prev_HB_gain < Q15ONE || HB_gain < Q15ONE) && celt_mode != NULL)
+            // celt_mode is always non-NULL for non-RESTRICTED_SILK apps, so check celt_enc.
+            if (self.prev_hb_gain < Q15ONE || hb_gain < Q15ONE) && self.celt_enc.is_some() {
                 let mode_ref = if let Some(ref celt) = self.celt_enc {
                     celt.mode
                 } else {
@@ -2270,18 +2380,15 @@ impl OpusEncoder {
                     }
 
                     // Prefill on mode transition
+                    // C: uses tmp_prefill saved from delay_buffer BEFORE the delay buffer
+                    // update, at offset (encoder_buffer - total_buffer - Fs/400). This is
+                    // 2.5ms earlier than the start of pcm_buf's delay compensation region.
                     if self.mode != self.prev_mode && self.prev_mode > 0 {
                         celt.ctl(CeltEncoderCtl::ResetState);
                         let mut prefill_buf = [0u8; 2];
-                        let n4 = (self.fs / 400) as usize;
-                        let prefill_pcm = if pcm_buf.len() >= n4 * self.channels as usize {
-                            &pcm_buf[..n4 * self.channels as usize]
-                        } else {
-                            &pcm_buf
-                        };
                         celt_encode_with_ec(
                             celt,
-                            prefill_pcm,
+                            &self.tmp_prefill,
                             self.fs / 400,
                             &mut prefill_buf,
                             2,
