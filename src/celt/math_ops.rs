@@ -963,4 +963,409 @@ mod tests {
         let mut samples: [f32; 0] = [];
         assert_eq!(opus_limit2_checkwithin1(&mut samples), 1);
     }
+
+    // =========================================================================
+    // Mutation-testing-driven tests (Phase 1 pilot, 2026-04-08)
+    // =========================================================================
+
+    // --- celt_div (3 surviving mutants: full function replacements) ---
+
+    #[test]
+    fn test_celt_div_basic() {
+        // celt_div(a, b) = mult32_32_q31(a, celt_rcp(b))
+        // rcp(b) is Q16, so result = (a * rcp(b)) >> 31.
+        // For b=32767 (Q15 1.0), rcp≈65536 (Q16), result ≈ a * 65536 >> 31 = a >> 15
+        // celt_div(1B, 32767) ≈ 1B >> 15 ≈ 30517
+        let result = celt_div(1_000_000_000, 32767);
+        assert!(
+            (result - 30517).abs() < 16,
+            "celt_div(1B, 32767) = {result}, expected ~30517"
+        );
+    }
+
+    #[test]
+    fn test_celt_div_half() {
+        // b=16384 (Q15 0.5), rcp≈131072 (Q16 2.0), result ≈ a * 131072 >> 31 = a >> 14
+        let result = celt_div(500_000_000, 16384);
+        let expected = 500_000_000 >> 14; // ≈ 30517
+        assert!(
+            (result - expected).abs() < 32,
+            "celt_div(500M, 16384) = {result}, expected ~{expected}"
+        );
+    }
+
+    #[test]
+    fn test_celt_div_asymmetric() {
+        // Different a and b should give different results (catches arg-swap mutations)
+        let r1 = celt_div(100_000_000, 10000);
+        let r2 = celt_div(100_000_000, 20000);
+        assert_ne!(r1, r2, "Different divisors should give different results");
+        assert!(r1 > r2, "Larger divisor should give smaller result");
+    }
+
+    #[test]
+    fn test_celt_div_nonzero() {
+        // Verify result is not 0, 1, or -1 for typical inputs
+        let result = celt_div(100_000_000, 10000);
+        assert!(result.abs() > 100, "celt_div should not return ~0 for large a");
+    }
+
+    // --- celt_sqrt32 (3 survivors: no direct test) ---
+
+    #[test]
+    fn test_celt_sqrt32_edges() {
+        assert_eq!(celt_sqrt32(0), 0);
+        assert_eq!(celt_sqrt32(1_073_741_824), 2_147_483_647); // >= 2^30 saturates
+    }
+
+    #[test]
+    fn test_celt_sqrt32_known_values() {
+        // Input 1 (smallest). sqrt(1) in Q(0/2+16) = Q16 = 65536
+        // For x=1: k=0, x_frac calculation varies. Let's test a Q28 input.
+        // x = 1<<28 (0.25 in Q30). sqrt(0.25)=0.5. Output Q(30/2+16)=Q31. 0.5*2^31 = 1073741824
+        let result = celt_sqrt32(1 << 28);
+        assert!(
+            (result - 1_073_741_824).abs() < 65536,
+            "celt_sqrt32(2^28) = {result}, expected ~1073741824"
+        );
+    }
+
+    #[test]
+    fn test_celt_sqrt32_mid_range() {
+        // x = 1<<20 (Q20 = 1.0). sqrt(1.0) = 1.0. Output Q(20/2+16) = Q26 = 67108864
+        let result = celt_sqrt32(1 << 20);
+        assert!(
+            (result - 67_108_864).abs() < 32768,
+            "celt_sqrt32(2^20) = {result}, expected ~67108864"
+        );
+    }
+
+    #[test]
+    fn test_celt_sqrt32_small_k() {
+        // Exercise the k<12 branch: k = celt_ilog2(x) >> 1
+        // For k<12, need ilog2(x) < 24, so x < 2^24 = 16777216
+        let result = celt_sqrt32(100);
+        assert!(result > 0, "celt_sqrt32(100) should be positive, got {result}");
+        // sqrt(100) * 2^(Q_out) where Q_out = (ilog2(100)/2 + 16)
+        // ilog2(100) = 6, k=3, Q_out = 3+16=19 => ~524288 * sqrt(100/8) ≈ ...
+        // Just verify it's reasonable and not 0/1/-1
+        assert!(result > 1000, "celt_sqrt32(100) = {result}, should be > 1000");
+    }
+
+    // --- celt_rcp_norm32 (3 survivors: no test) ---
+
+    #[test]
+    fn test_celt_rcp_norm32_half() {
+        // Input 0.5 in Q31 = 1073741824. rcp(0.5) = 2.0 in Q30 = 2147483648
+        // But that overflows i32. rcp_norm32 output Q30 in [1.0, 2.0).
+        // For x exactly at 2^30, reciprocal is 2.0 — at the boundary.
+        // Use x slightly above 0.5 to stay in range.
+        let x = 1_073_741_824 + 1000;
+        let result = celt_rcp_norm32(x);
+        // Expected: ~2.0 in Q30 = ~2147483647 (just under)
+        assert!(
+            result > 2_100_000_000,
+            "celt_rcp_norm32(~0.5) = {result}, expected close to 2^31"
+        );
+    }
+
+    #[test]
+    fn test_celt_rcp_norm32_one() {
+        // Input ~1.0 in Q31 = 2^31-1 = 2147483647. rcp(1.0) = 1.0 in Q30 = 1073741824
+        let result = celt_rcp_norm32(2_147_483_647);
+        let diff = (result - 1_073_741_824).abs();
+        assert!(
+            diff < 1024,
+            "celt_rcp_norm32(MAX) = {result}, expected ~1073741824, diff={diff}"
+        );
+    }
+
+    #[test]
+    fn test_celt_rcp_norm32_mid() {
+        // Input 0.75 in Q31 = 1610612736. rcp(0.75) ≈ 1.333 in Q30 ≈ 1431655765
+        let result = celt_rcp_norm32(1_610_612_736);
+        let diff = (result - 1_431_655_765).abs();
+        assert!(
+            diff < 4096,
+            "celt_rcp_norm32(0.75) = {result}, expected ~1431655765, diff={diff}"
+        );
+    }
+
+    // --- celt_log2_db / celt_exp2_db wrappers (10 survivors) ---
+
+    #[test]
+    fn test_celt_log2_db_known() {
+        // celt_log2_db(x) = shl32(extend32(celt_log2(x)), DB_SHIFT - 10)
+        // DB_SHIFT = 24, so shift = 14. Just verify it equals celt_log2(x) << 14.
+        let x = 16384; // 1.0 in Q14 → log2 ≈ 0
+        let result = celt_log2_db(x);
+        let expected = shl32(extend32(celt_log2(x)), 14);
+        assert_eq!(result, expected, "celt_log2_db should be celt_log2 << 14");
+    }
+
+    #[test]
+    fn test_celt_log2_db_nonzero() {
+        // For x=32768 (2.0 in Q14), log2 ≈ 1024 (Q10), db ≈ 1024 << 14 = 16777216
+        let result = celt_log2_db(32768);
+        assert!(
+            (result - 16_777_216).abs() < 32768,
+            "celt_log2_db(32768) = {result}, expected ~16777216"
+        );
+    }
+
+    #[test]
+    fn test_celt_exp2_db_known() {
+        // celt_exp2_db(x) = celt_exp2(pshr32(x, DB_SHIFT - 10))
+        // For x=0, exp2(0) should be close to 1.0 in Q16 = 65536
+        let result = celt_exp2_db(0);
+        let diff = (result - 65536).abs();
+        assert!(
+            diff < 64,
+            "celt_exp2_db(0) = {result}, expected ~65536"
+        );
+    }
+
+    #[test]
+    fn test_celt_exp2_db_positive() {
+        // x = 1 << 24 = 16777216 (1.0 in Q24 DB_SHIFT). exp2(1.0) = 2.0 in Q16 = 131072
+        let result = celt_exp2_db(16_777_216);
+        let diff = (result - 131_072).abs();
+        assert!(
+            diff < 128,
+            "celt_exp2_db(2^24) = {result}, expected ~131072"
+        );
+    }
+
+    #[test]
+    fn test_celt_exp2_db_frac_known() {
+        // celt_exp2_db_frac(0) = shl32(celt_exp2_frac(0), 14) = shl32(16383, 14) = 268419072
+        let result = celt_exp2_db_frac(0);
+        assert_eq!(
+            result,
+            shl32(16383, 14),
+            "celt_exp2_db_frac(0) should equal celt_exp2_frac(0) << 14"
+        );
+    }
+
+    // --- celt_cos_norm strengthened (7 survivors: weak boundary tests) ---
+
+    #[test]
+    fn test_celt_cos_norm_polynomial_values() {
+        // Test non-boundary values where the polynomial path is exercised.
+        // cos(π/4) = cos(45°) ≈ 0.7071 → Q15 ≈ 23170
+        // Phase input for π/4: x = 16384 (quarter of π/2 range)
+        let result = celt_cos_norm(16384);
+        assert!(
+            (result - 23170).abs() <= 4,
+            "celt_cos_norm(16384) = {result}, expected ~23170 (cos π/4)"
+        );
+    }
+
+    #[test]
+    fn test_celt_cos_norm_quadrant2() {
+        // cos(3π/4) ≈ -0.7071 → Q15 ≈ -23170
+        // Phase: 3*16384 = 49152
+        let result = celt_cos_norm(49152);
+        assert!(
+            (result + 23170).abs() <= 4,
+            "celt_cos_norm(49152) = {result}, expected ~-23170 (cos 3π/4)"
+        );
+    }
+
+    #[test]
+    fn test_celt_cos_norm_mirror_exact() {
+        // Verify the mirror fold: cos(x) = cos(2π - x) AND cos(π-x) = -cos(x)
+        // cos(π - x) should be -cos(x) for non-boundary x
+        let x = 10000;
+        let cos_x = celt_cos_norm(x);
+        let cos_pi_minus_x = celt_cos_norm(65536 - x);
+        assert_eq!(
+            cos_x, -cos_pi_minus_x,
+            "cos(x)={cos_x} should equal -cos(π-x)={}", -cos_pi_minus_x
+        );
+    }
+
+    #[test]
+    fn test_celt_cos_norm_monotone_q1() {
+        // In [0, π/2], cosine is strictly decreasing.
+        let mut prev = celt_cos_norm(0);
+        for x in [1000, 5000, 10000, 16384, 20000, 25000, 30000, 32768] {
+            let val = celt_cos_norm(x);
+            assert!(
+                val <= prev,
+                "cos should decrease in [0,π/2]: cos({x})={val} > cos(prev)={prev}"
+            );
+            prev = val;
+        }
+    }
+
+    // --- celt_log2 strengthened (5 survivors: loose tolerances) ---
+
+    #[test]
+    fn test_celt_log2_exact_powers() {
+        // Test more powers of 2 with tight tolerances
+        // log2(2^n in Q14) = (n-14) in Q10
+        for n in 1..=20 {
+            let x = 1 << n;
+            let expected = (n as i32 - 14) * 1024; // Q10
+            let result = celt_log2(x);
+            assert!(
+                (result - expected).abs() <= 2,
+                "celt_log2(2^{n}) = {result}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_celt_log2_non_powers() {
+        // log2(3 * 2^14) = log2(3) + 0 ≈ 1.585 → Q10 ≈ 1623
+        let result = celt_log2(3 * 16384);
+        assert!(
+            (result - 1623).abs() <= 8,
+            "celt_log2(3*2^14) = {result}, expected ~1623"
+        );
+
+        // log2(5 * 2^14) = log2(5) ≈ 2.322 → Q10 ≈ 2377
+        let result = celt_log2(5 * 16384);
+        assert!(
+            (result - 2377).abs() <= 8,
+            "celt_log2(5*2^14) = {result}, expected ~2377"
+        );
+    }
+
+    // --- celt_atan2p_norm (2 survivors: no test, live in vq.rs) ---
+
+    #[test]
+    fn test_celt_atan2p_norm_zero() {
+        assert_eq!(celt_atan2p_norm(0, 0), 0);
+    }
+
+    #[test]
+    fn test_celt_atan2p_norm_equal() {
+        // atan2(1,1) = π/4. Normalized by π/2 → 0.5 in Q30 = 536870912
+        let one_q30 = 1 << 30;
+        let result = celt_atan2p_norm(one_q30, one_q30);
+        // Should be close to 0.5 * 2^30 = 536870912
+        assert!(
+            (result - 536_870_912).abs() < 65536,
+            "atan2p_norm(1,1) = {result}, expected ~536870912"
+        );
+    }
+
+    #[test]
+    fn test_celt_atan2p_norm_x_dominant() {
+        // y << x: atan2(small, large) ≈ small/large, close to 0
+        let result = celt_atan2p_norm(1000, 1 << 30);
+        assert!(
+            result.abs() < 100_000,
+            "atan2p_norm(small, large) = {result}, expected near 0"
+        );
+    }
+
+    #[test]
+    fn test_celt_atan2p_norm_y_dominant() {
+        // x << y: atan2(large, small) ≈ π/2 → 1.0 in Q30 = 1073741824
+        let result = celt_atan2p_norm(1 << 30, 1000);
+        assert!(
+            (result - 1_073_741_824).abs() < 100_000,
+            "atan2p_norm(large, small) = {result}, expected ~1073741824"
+        );
+    }
+
+    // --- celt_rsqrt_norm / celt_rsqrt_norm32 strengthened ---
+
+    #[test]
+    fn test_celt_rsqrt_norm_mid() {
+        // Input 0.5 in Q16 = 32768. rsqrt(0.5) ≈ 1.4142 → Q14 ≈ 23170
+        let result = celt_rsqrt_norm(32768);
+        assert!(
+            (result - 23170).abs() < 64,
+            "celt_rsqrt_norm(32768) = {result}, expected ~23170"
+        );
+    }
+
+    #[test]
+    fn test_celt_rsqrt_norm32_known() {
+        // Input 0.5 in Q31 = 1073741824. rsqrt(0.5) ≈ 1.4142 → Q29 ≈ 759250125
+        let result = celt_rsqrt_norm32(1_073_741_824);
+        assert!(
+            (result - 759_250_125).abs() < 65536,
+            "celt_rsqrt_norm32(2^30) = {result}, expected ~759250125"
+        );
+    }
+
+    // --- celt_exp2 strengthened ---
+
+    #[test]
+    fn test_celt_exp2_zero() {
+        // exp2(0) = 1.0 in Q16 = 65536. Input 0 in Q10.
+        let result = celt_exp2(0);
+        let diff = (result - 65536).abs();
+        assert!(
+            diff < 32,
+            "celt_exp2(0) = {result}, expected ~65536"
+        );
+    }
+
+    #[test]
+    fn test_celt_exp2_one() {
+        // exp2(1024) = exp2(1.0 in Q10) = 2.0 in Q16 = 131072
+        let result = celt_exp2(1024);
+        let diff = (result - 131_072).abs();
+        assert!(
+            diff < 64,
+            "celt_exp2(1024) = {result}, expected ~131072"
+        );
+    }
+
+    #[test]
+    fn test_celt_exp2_negative() {
+        // exp2(-1024) = exp2(-1.0) = 0.5 in Q16 = 32768
+        let result = celt_exp2(-1024);
+        let diff = (result - 32768).abs();
+        assert!(
+            diff < 32,
+            "celt_exp2(-1024) = {result}, expected ~32768"
+        );
+    }
+
+    // --- celt_sqrt strengthened ---
+
+    #[test]
+    fn test_celt_sqrt_sweep() {
+        // Test multiple Q14 inputs with tight tolerances
+        // For Q14 input x, output is Q7. sqrt(x_real) * 2^7.
+        for &(x, expected) in &[
+            (4096, 64),    // sqrt(0.25) = 0.5 → Q7 = 64
+            (16384, 128),  // sqrt(1.0) = 1.0 → Q7 = 128
+            (65536, 256),  // sqrt(4.0) = 2.0 → Q7 = 256
+            (262144, 512), // sqrt(16.0) = 4.0 → Q7 = 512
+        ] {
+            let result = celt_sqrt(x);
+            assert!(
+                (result - expected).abs() <= 2,
+                "celt_sqrt({x}) = {result}, expected ~{expected}"
+            );
+        }
+    }
+
+    // --- frac_div32 strengthened ---
+
+    #[test]
+    fn test_frac_div32_negative_saturation() {
+        // a/b < -1 should saturate to -2^31+1
+        let result = frac_div32(-10000, 5000);
+        assert_eq!(result, -2_147_483_647);
+    }
+
+    #[test]
+    fn test_frac_div32_quarter() {
+        // a/b = 0.25 → Q31 = 536870912
+        let result = frac_div32(250_000, 1_000_000);
+        let diff = (result - 536_870_912).abs();
+        assert!(
+            diff < 8192,
+            "frac_div32(250K, 1M) = {result}, expected ~536870912, diff={diff}"
+        );
+    }
 }
