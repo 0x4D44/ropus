@@ -21,10 +21,12 @@
 #   FUZZ_MAX_LEN    — max input length in bytes (default: 16384)
 #
 # Requirements:
-#   - Linux or macOS (libFuzzer sanitizers not available on Windows)
+#   - Linux, macOS, or Windows (Git Bash / MSYS2 shell)
 #   - Rust nightly toolchain
 #   - cargo-fuzz: cargo install cargo-fuzz
 #   - C reference source in reference/ (clone https://github.com/xiph/opus)
+#   - On Windows: Visual Studio with "C++ AddressSanitizer" component installed
+#                 (provides clang_rt.asan_dynamic-x86_64.dll)
 
 set -euo pipefail
 
@@ -34,6 +36,63 @@ FUZZ_DIR="$ROOT/tests/fuzz"
 CORPUS_DIR="$FUZZ_DIR/corpus"
 CRASHES_DIR="$FUZZ_DIR/crashes"
 FINDINGS_DIR="$ROOT/logs/fuzz-findings"
+
+# --------------------------------------------------------------------------- #
+# Windows ASan runtime setup
+# --------------------------------------------------------------------------- #
+# Rust nightly on Windows MSVC does not ship librustc-nightly_rt.asan.a, so
+# rust-lld fails when cargo-fuzz asks for -Zsanitizer=address. The workaround:
+#   1. Force cargo to use MSVC's link.exe (which knows the MSVC lib paths and
+#      can find clang_rt.asan_dynamic-x86_64.lib on its own).
+#   2. Prepend the VS ASan runtime directory to PATH so the fuzz binaries can
+#      load clang_rt.asan_dynamic-x86_64.dll at runtime.
+#   3. Suppress ASan LeakSanitizer noise from the vendored C reference.
+setup_windows_asan() {
+    local os
+    os=$(uname -s 2>/dev/null || echo unknown)
+    case "$os" in
+        MINGW*|MSYS*|CYGWIN*) ;;
+        *) return 0 ;;  # not Windows — no setup needed
+    esac
+
+    echo "  Windows detected — setting up MSVC ASan runtime"
+
+    # Find the latest VS installation with an x64 ASan DLL
+    local vs_parent="/c/Program Files/Microsoft Visual Studio"
+    if [[ ! -d "$vs_parent" ]]; then
+        echo "  WARNING: $vs_parent not found — Windows fuzz build will likely fail"
+        return 0
+    fi
+
+    local asan_dir=""
+    local candidate
+    while IFS= read -r candidate; do
+        if [[ -f "$candidate/clang_rt.asan_dynamic-x86_64.dll" ]]; then
+            asan_dir="$candidate"
+        fi
+    done < <(find "$vs_parent" -type d -path '*/bin/Hostx64/x64' 2>/dev/null | sort)
+
+    if [[ -z "$asan_dir" ]]; then
+        echo "  WARNING: clang_rt.asan_dynamic-x86_64.dll not found under $vs_parent"
+        echo "  Install 'C++ AddressSanitizer' via the Visual Studio Installer"
+        return 0
+    fi
+
+    echo "  Using ASan runtime at: $asan_dir"
+
+    # Override the linker — rust-lld can't find the ASan runtime, but MSVC
+    # link.exe can (it knows about the MSVC lib search paths automatically).
+    export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER="link.exe"
+
+    # Put the ASan DLL directory on PATH so the fuzz binaries can load it.
+    # The Windows path format is required here so link.exe / the loader can
+    # resolve it; bash $PATH is auto-translated in Git Bash.
+    export PATH="$asan_dir:$PATH"
+
+    # Suppress LeakSanitizer — vendored C reference code has no leaks we care
+    # about, and LSan false-positives would derail the fuzz session.
+    export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_odr_violation=0:detect_leaks=0}"
+}
 
 ALL_TARGETS=(
     fuzz_decode
@@ -115,6 +174,9 @@ if ! cargo fuzz --version &>/dev/null; then
     exit 1
 fi
 
+# Windows-specific: wire up MSVC ASan runtime (no-op on Linux/macOS)
+setup_windows_asan
+
 # Create findings directory for this run
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 RUN_DIR="$FINDINGS_DIR/$TIMESTAMP"
@@ -129,13 +191,15 @@ echo ""
 echo "--- Building fuzz targets ---"
 cd "$ROOT"
 
-# Common cargo fuzz args — our fuzz dir is non-standard
-CARGO_FUZZ=(cargo fuzz --fuzz-dir tests/fuzz)
+# cargo-fuzz requires nightly. --fuzz-dir is a per-subcommand arg (must appear
+# after build/run, not before).
+CARGO_FUZZ=(cargo +nightly fuzz)
+FUZZ_DIR_ARG=(--fuzz-dir tests/fuzz)
 
 # Verify targets build before starting long runs
 for target in "${TARGETS[@]}"; do
     echo "  Building $target..."
-    "${CARGO_FUZZ[@]}" build "$target" 2>&1 | tail -1
+    "${CARGO_FUZZ[@]}" build "${FUZZ_DIR_ARG[@]}" "$target" 2>&1 | tail -1
 done
 echo ""
 
@@ -156,7 +220,7 @@ if $CHECK_CRASHES_ONLY; then
 
         fail_count=0
         for crash_file in "$crash_dir"/*.bin; do
-            if ! "${CARGO_FUZZ[@]}" run "$target" -- -runs=0 "$crash_file" &>/dev/null; then
+            if ! "${CARGO_FUZZ[@]}" run "${FUZZ_DIR_ARG[@]}" "$target" -- -runs=0 "$crash_file" &>/dev/null; then
                 echo "    FAIL: $crash_file still crashes!"
                 ((fail_count++))
             fi
@@ -217,7 +281,7 @@ for target in "${TARGETS[@]}"; do
     log_file="$target_findings/fuzz.log"
 
     set +e
-    "${CARGO_FUZZ[@]}" run "$target" \
+    "${CARGO_FUZZ[@]}" run "${FUZZ_DIR_ARG[@]}" "$target" \
         "$target_corpus" \
         -- "${FUZZ_ARGS[@]}" \
         2>&1 | tee "$log_file"
