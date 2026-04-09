@@ -8,6 +8,7 @@ __pycache__
 .codex-tmp/
 .wrk_validate/
 .wrk_validate*.patch
+.wrk_cov*/
 
 # Debug trace/output artifacts
 /*.txt
@@ -15,3 +16,9 @@ notes/*.txt
 notes/*.log
 /*.log
 /build.rs
+
+# Mutation testing output directories (cargo-mutants runs)
+/mutants_*/
+
+# Fuzz build artifacts (keep corpus/, crashes/, fuzz_targets/, Cargo.*)
+/tests/fuzz/target/
