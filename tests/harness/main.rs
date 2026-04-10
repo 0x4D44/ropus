@@ -5499,12 +5499,446 @@ fn format_torture_config(cfg: &EncodeConfig) -> String {
     )
 }
 
+// ---------------------------------------------------------------------------
+// Section 6: Periodic state comparison (HLD 2026.04.08)
+// ---------------------------------------------------------------------------
+// Every N frames during a torture run we sample the C and Rust encoder /
+// decoder state via OPUS_GET_* CTLs and compare. A drifting internal counter
+// that has not yet produced a divergent packet is caught within one polling
+// window. Strict by default per Decision 5 — the project is bit-exact, so
+// "state differs but packets still match" is a latent bug, not noise.
+//
+// OPUS_GET_IN_DTX is deliberately absent: the Rust encoder does not expose a
+// `get_in_dtx` getter and the HLD forbids `src/` changes. All other dynamic
+// encoder/decoder state we can read is covered.
+
+/// Read one i32 from a C encoder CTL. Returns 0 on error (CTL should not
+/// fail with a GET request — if it does, comparison will flag it).
+unsafe fn c_enc_get_i32(enc: *mut bindings::OpusEncoder, req: i32) -> i32 {
+    let mut val: i32 = 0;
+    unsafe { bindings::opus_encoder_ctl(enc, req, &mut val as *mut i32) };
+    val
+}
+
+/// Read one u32 from a C encoder CTL.
+unsafe fn c_enc_get_u32(enc: *mut bindings::OpusEncoder, req: i32) -> u32 {
+    let mut val: u32 = 0;
+    unsafe { bindings::opus_encoder_ctl(enc, req, &mut val as *mut u32) };
+    val
+}
+
+/// Read one i32 from a C decoder CTL.
+unsafe fn c_dec_get_i32(dec: *mut bindings::OpusDecoder, req: i32) -> i32 {
+    let mut val: i32 = 0;
+    unsafe { bindings::opus_decoder_ctl(dec, req, &mut val as *mut i32) };
+    val
+}
+
+/// Read one u32 from a C decoder CTL.
+unsafe fn c_dec_get_u32(dec: *mut bindings::OpusDecoder, req: i32) -> u32 {
+    let mut val: u32 = 0;
+    unsafe { bindings::opus_decoder_ctl(dec, req, &mut val as *mut u32) };
+    val
+}
+
+/// Compare every observable state getter on the C and Rust encoder/decoder
+/// pairs. Returns an empty vec if everything matches; otherwise a list of
+/// human-readable diff lines.
+fn state_checkpoint_diffs(
+    c_enc: *mut bindings::OpusEncoder,
+    r_enc: &mdopus::opus::encoder::OpusEncoder,
+    c_dec: *mut bindings::OpusDecoder,
+    r_dec: &mdopus::opus::decoder::OpusDecoder,
+) -> Vec<String> {
+    let mut diffs: Vec<String> = Vec::new();
+
+    // ---- Encoder state ----
+    unsafe {
+        macro_rules! cmp_enc_i32 {
+            ($req:expr, $rust:expr, $name:literal) => {{
+                let c_val = c_enc_get_i32(c_enc, $req);
+                let r_val: i32 = $rust;
+                if c_val != r_val {
+                    diffs.push(format!("enc.{}: C={} R={}", $name, c_val, r_val));
+                }
+            }};
+        }
+        cmp_enc_i32!(bindings::OPUS_GET_BITRATE_REQUEST,      r_enc.get_bitrate(),      "bitrate");
+        cmp_enc_i32!(bindings::OPUS_GET_MAX_BANDWIDTH_REQUEST, r_enc.get_max_bandwidth(), "max_bandwidth");
+        cmp_enc_i32!(bindings::OPUS_GET_VBR_REQUEST,          r_enc.get_vbr(),          "vbr");
+        cmp_enc_i32!(bindings::OPUS_GET_BANDWIDTH_REQUEST,    r_enc.get_bandwidth(),    "bandwidth");
+        cmp_enc_i32!(bindings::OPUS_GET_COMPLEXITY_REQUEST,   r_enc.get_complexity(),   "complexity");
+        cmp_enc_i32!(bindings::OPUS_GET_INBAND_FEC_REQUEST,   r_enc.get_inband_fec(),   "inband_fec");
+        cmp_enc_i32!(bindings::OPUS_GET_PACKET_LOSS_PERC_REQUEST, r_enc.get_packet_loss_perc(), "packet_loss_perc");
+        cmp_enc_i32!(bindings::OPUS_GET_DTX_REQUEST,          r_enc.get_dtx(),          "dtx");
+        cmp_enc_i32!(bindings::OPUS_GET_VBR_CONSTRAINT_REQUEST, r_enc.get_vbr_constraint(), "vbr_constraint");
+        cmp_enc_i32!(bindings::OPUS_GET_FORCE_CHANNELS_REQUEST, r_enc.get_force_channels(), "force_channels");
+        cmp_enc_i32!(bindings::OPUS_GET_SIGNAL_REQUEST,       r_enc.get_signal(),       "signal");
+        cmp_enc_i32!(bindings::OPUS_GET_LOOKAHEAD_REQUEST,    r_enc.get_lookahead(),    "lookahead");
+        cmp_enc_i32!(bindings::OPUS_GET_SAMPLE_RATE_REQUEST,  r_enc.get_sample_rate(),  "sample_rate");
+        cmp_enc_i32!(bindings::OPUS_GET_LSB_DEPTH_REQUEST,    r_enc.get_lsb_depth(),    "lsb_depth");
+        cmp_enc_i32!(bindings::OPUS_GET_PREDICTION_DISABLED_REQUEST, r_enc.get_prediction_disabled(), "prediction_disabled");
+        cmp_enc_i32!(bindings::OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST, r_enc.get_phase_inversion_disabled(), "phase_inversion_disabled");
+
+        // Final range is u32.
+        let c_rng = c_enc_get_u32(c_enc, bindings::OPUS_GET_FINAL_RANGE_REQUEST);
+        let r_rng = r_enc.get_final_range();
+        if c_rng != r_rng {
+            diffs.push(format!("enc.final_range: C=0x{:08x} R=0x{:08x}", c_rng, r_rng));
+        }
+    }
+
+    // ---- Decoder state ----
+    unsafe {
+        macro_rules! cmp_dec_i32 {
+            ($req:expr, $rust:expr, $name:literal) => {{
+                let c_val = c_dec_get_i32(c_dec, $req);
+                let r_val: i32 = $rust;
+                if c_val != r_val {
+                    diffs.push(format!("dec.{}: C={} R={}", $name, c_val, r_val));
+                }
+            }};
+        }
+        cmp_dec_i32!(bindings::OPUS_GET_BANDWIDTH_REQUEST,    r_dec.get_bandwidth(),    "bandwidth");
+        cmp_dec_i32!(bindings::OPUS_GET_SAMPLE_RATE_REQUEST,  r_dec.get_sample_rate(),  "sample_rate");
+        cmp_dec_i32!(bindings::OPUS_GET_PITCH_REQUEST,        r_dec.get_pitch(),        "pitch");
+        cmp_dec_i32!(bindings::OPUS_GET_GAIN_REQUEST,         r_dec.get_gain(),         "gain");
+        cmp_dec_i32!(bindings::OPUS_GET_LAST_PACKET_DURATION_REQUEST, r_dec.get_last_packet_duration(), "last_packet_duration");
+
+        // phase_inversion_disabled is bool on Rust decoder side.
+        let c_piv = c_dec_get_i32(c_dec, bindings::OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST);
+        let r_piv = r_dec.get_phase_inversion_disabled() as i32;
+        if c_piv != r_piv {
+            diffs.push(format!("dec.phase_inversion_disabled: C={} R={}", c_piv, r_piv));
+        }
+
+        let c_rng = c_dec_get_u32(c_dec, bindings::OPUS_GET_FINAL_RANGE_REQUEST);
+        let r_rng = r_dec.get_final_range();
+        if c_rng != r_rng {
+            diffs.push(format!("dec.final_range: C=0x{:08x} R=0x{:08x}", c_rng, r_rng));
+        }
+    }
+
+    diffs
+}
+
+// ---------------------------------------------------------------------------
+// Section 3: Deterministic transition bursts (HLD 2026.04.08)
+// ---------------------------------------------------------------------------
+// Every burst_interval frames the random walk is suspended and a small
+// scripted sequence is injected. Bursts target the redundancy / prefill /
+// stereo→mono transition branches in src/opus/encoder.rs:1452-1505 that a
+// uniform random walk rarely hits by chance. Selection is deterministic
+// round-robin (Decision 8 rationale: reproducibility > diversity).
+
+/// A single step in a burst: the config mutation, plus how many frames to
+/// hold it. The mutation is applied on top of a neutral baseline so burst
+/// steps do not accidentally inherit state from the random walk.
+#[derive(Clone, Debug)]
+struct BurstStep {
+    /// Description of the mutation, for diagnostics.
+    label: &'static str,
+    /// Number of frames to hold this step.
+    hold: usize,
+    /// Function that mutates a neutral baseline config in place.
+    mutate: fn(&mut EncodeConfig),
+}
+
+/// A single named burst: 3 consecutive steps.
+#[derive(Clone, Debug)]
+struct Burst {
+    name: &'static str,
+    steps: [BurstStep; 3],
+    /// Minimum channel count a burst requires (1 = any, 2 = stereo-only).
+    min_channels: i32,
+}
+
+/// Build a neutral baseline config that burst steps mutate. Keeps settings
+/// predictable so each burst exercises its targeted branch rather than
+/// whatever quirks the previous random config left on the stack.
+fn burst_neutral_baseline(sample_rate: i32, channels: i32) -> EncodeConfig {
+    let mut cfg = EncodeConfig::new(sample_rate, channels);
+    cfg.bitrate = 64000;
+    cfg.complexity = 10;
+    cfg.vbr = 1;
+    cfg.vbr_constraint = 0;
+    cfg.signal = bindings::OPUS_AUTO;
+    cfg.bandwidth = bindings::OPUS_AUTO;
+    cfg.max_bandwidth = bindings::OPUS_BANDWIDTH_FULLBAND;
+    cfg.force_channels = bindings::OPUS_AUTO;
+    cfg.force_mode = bindings::OPUS_AUTO;
+    cfg.fec = 0;
+    cfg.packet_loss_pct = 0;
+    cfg.dtx = 0;
+    cfg.lsb_depth = 24;
+    cfg.prediction_disabled = 0;
+    cfg.phase_inversion_disabled = 0;
+    cfg.frame_ms = 20.0;
+    cfg
+}
+
+// Mode constants used by force_mode: values are the same as the C MODE_*
+// constants in celt/modes.h — 1000=SILK_ONLY, 1001=HYBRID, 1002=CELT_ONLY.
+const BURST_MODE_SILK: i32 = 1000;
+const BURST_MODE_HYBRID: i32 = 1001;
+const BURST_MODE_CELT: i32 = 1002;
+
+/// The burst table. Index is deterministic (frame_idx/burst_interval) mod
+/// len, so a seed-and-bug report reproduces exactly. Appending new bursts
+/// only changes the schedule on future runs. Order must remain stable.
+static BURSTS: &[Burst] = &[
+    Burst {
+        name: "silk_celt_silk",
+        min_channels: 1,
+        steps: [
+            BurstStep { label: "SILK 20ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_SILK; c.frame_ms = 20.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND; c.bitrate = 32000; } },
+            BurstStep { label: "CELT 20ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_CELT; c.frame_ms = 20.0; c.bitrate = 128000; } },
+            BurstStep { label: "SILK 20ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_SILK; c.frame_ms = 20.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND; c.bitrate = 32000; } },
+        ],
+    },
+    Burst {
+        name: "celt_silk_celt",
+        min_channels: 1,
+        steps: [
+            BurstStep { label: "CELT 20ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_CELT; c.frame_ms = 20.0; c.bitrate = 128000; } },
+            BurstStep { label: "SILK 20ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_SILK; c.frame_ms = 20.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND; c.bitrate = 32000; } },
+            BurstStep { label: "CELT 20ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_CELT; c.frame_ms = 20.0; c.bitrate = 128000; } },
+        ],
+    },
+    Burst {
+        name: "silk_celt_silk_short",
+        min_channels: 1,
+        steps: [
+            BurstStep { label: "SILK 10ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_SILK; c.frame_ms = 10.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND; c.bitrate = 32000; } },
+            BurstStep { label: "CELT 10ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_CELT; c.frame_ms = 10.0; c.bitrate = 128000; } },
+            BurstStep { label: "SILK 10ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_SILK; c.frame_ms = 10.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND; c.bitrate = 32000; } },
+        ],
+    },
+    Burst {
+        name: "hybrid_celt_hybrid",
+        min_channels: 1,
+        steps: [
+            BurstStep { label: "HYBRID 20ms", hold: 1, mutate: |c| { c.force_mode = BURST_MODE_HYBRID; c.frame_ms = 20.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_SUPERWIDEBAND; c.bitrate = 48000; } },
+            BurstStep { label: "CELT 20ms",   hold: 1, mutate: |c| { c.force_mode = BURST_MODE_CELT;   c.frame_ms = 20.0; c.bitrate = 128000; } },
+            BurstStep { label: "HYBRID 20ms", hold: 1, mutate: |c| { c.force_mode = BURST_MODE_HYBRID; c.frame_ms = 20.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_SUPERWIDEBAND; c.bitrate = 48000; } },
+        ],
+    },
+    Burst {
+        name: "stereo_mono_stereo",
+        min_channels: 2,
+        steps: [
+            BurstStep { label: "ch=2", hold: 1, mutate: |c| { c.force_channels = 2; c.bitrate = 96000; } },
+            BurstStep { label: "ch=1", hold: 1, mutate: |c| { c.force_channels = 1; c.bitrate = 96000; } },
+            BurstStep { label: "ch=2", hold: 1, mutate: |c| { c.force_channels = 2; c.bitrate = 96000; } },
+        ],
+    },
+    Burst {
+        name: "stereo_mono_auto",
+        min_channels: 2,
+        steps: [
+            BurstStep { label: "ch=2",    hold: 1, mutate: |c| { c.force_channels = 2; c.bitrate = 96000; } },
+            BurstStep { label: "ch=1",    hold: 1, mutate: |c| { c.force_channels = 1; c.bitrate = 96000; } },
+            BurstStep { label: "ch=AUTO", hold: 1, mutate: |c| { c.force_channels = bindings::OPUS_AUTO; c.bitrate = 96000; } },
+        ],
+    },
+    Burst {
+        name: "vbr_cbr_at_low_br",
+        min_channels: 1,
+        steps: [
+            BurstStep { label: "vbr=1 br=8k", hold: 1, mutate: |c| { c.vbr = 1; c.vbr_constraint = 0; c.bitrate = 8000; } },
+            BurstStep { label: "vbr=0 br=8k", hold: 1, mutate: |c| { c.vbr = 0; c.bitrate = 8000; } },
+            BurstStep { label: "vbr=1 br=8k", hold: 1, mutate: |c| { c.vbr = 1; c.vbr_constraint = 0; c.bitrate = 8000; } },
+        ],
+    },
+    Burst {
+        name: "celt_framesize_2p5_10_20",
+        min_channels: 1,
+        // Exercise CELT's short-block path (2.5 ms → 10 ms → 20 ms).
+        // CELT's valid frame sizes are 2.5, 5, 10, 20 ms. 60 ms is
+        // SILK-only so mixing it with force_mode=CELT would produce
+        // rejected frames and waste the burst slot. Sticking to
+        // CELT-valid sizes tests the MDCT length transitions that
+        // the devil's-advocate review (2026.04.09) called out as the
+        // real coverage gap.
+        steps: [
+            BurstStep { label: "CELT 2.5ms", hold: 1, mutate: |c| { c.force_mode = BURST_MODE_CELT; c.frame_ms = 2.5;  c.bitrate = 128000; } },
+            BurstStep { label: "CELT 10ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_CELT; c.frame_ms = 10.0; c.bitrate = 128000; } },
+            BurstStep { label: "CELT 20ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_CELT; c.frame_ms = 20.0; c.bitrate = 128000; } },
+        ],
+    },
+    Burst {
+        name: "silk_framesize_60_40_20",
+        min_channels: 1,
+        // Companion SILK-side burst: test long-block frame-size
+        // transitions within SILK mode. force_mode=SILK keeps us on
+        // the SILK path; 60, 40, 20 ms are all valid SILK sizes.
+        steps: [
+            BurstStep { label: "SILK 60ms", hold: 1, mutate: |c| { c.force_mode = BURST_MODE_SILK; c.frame_ms = 60.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND; c.bitrate = 24000; } },
+            BurstStep { label: "SILK 40ms", hold: 1, mutate: |c| { c.force_mode = BURST_MODE_SILK; c.frame_ms = 40.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND; c.bitrate = 24000; } },
+            BurstStep { label: "SILK 20ms", hold: 1, mutate: |c| { c.force_mode = BURST_MODE_SILK; c.frame_ms = 20.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND; c.bitrate = 24000; } },
+        ],
+    },
+    Burst {
+        name: "framesize_20_40_20",
+        min_channels: 1,
+        steps: [
+            BurstStep { label: "20ms", hold: 1, mutate: |c| { c.frame_ms = 20.0; } },
+            BurstStep { label: "40ms", hold: 1, mutate: |c| { c.frame_ms = 40.0; } },
+            BurstStep { label: "20ms", hold: 1, mutate: |c| { c.frame_ms = 20.0; } },
+        ],
+    },
+    Burst {
+        name: "bitrate_crash_6k_510k_6k",
+        min_channels: 1,
+        steps: [
+            BurstStep { label: "br=6k",   hold: 1, mutate: |c| { c.bitrate = 6000; } },
+            BurstStep { label: "br=510k", hold: 1, mutate: |c| { c.bitrate = 510000; } },
+            BurstStep { label: "br=6k",   hold: 1, mutate: |c| { c.bitrate = 6000; } },
+        ],
+    },
+    Burst {
+        name: "bandwidth_NB_FB_NB",
+        min_channels: 1,
+        steps: [
+            BurstStep { label: "NB", hold: 1, mutate: |c| { c.max_bandwidth = bindings::OPUS_BANDWIDTH_NARROWBAND; } },
+            BurstStep { label: "FB", hold: 1, mutate: |c| { c.max_bandwidth = bindings::OPUS_BANDWIDTH_FULLBAND; } },
+            BurstStep { label: "NB", hold: 1, mutate: |c| { c.max_bandwidth = bindings::OPUS_BANDWIDTH_NARROWBAND; } },
+        ],
+    },
+    Burst {
+        name: "fec_off_on_off",
+        min_channels: 1,
+        steps: [
+            BurstStep { label: "fec=0",        hold: 1, mutate: |c| { c.fec = 0; c.packet_loss_pct = 0; } },
+            BurstStep { label: "fec=1 loss20", hold: 1, mutate: |c| { c.fec = 1; c.packet_loss_pct = 20; } },
+            BurstStep { label: "fec=0",        hold: 1, mutate: |c| { c.fec = 0; c.packet_loss_pct = 0; } },
+        ],
+    },
+];
+
+/// Apply a burst step on top of the neutral baseline.
+fn apply_burst_step(baseline: &EncodeConfig, step: &BurstStep) -> EncodeConfig {
+    let mut cfg = baseline.clone();
+    (step.mutate)(&mut cfg);
+    cfg
+}
+
+/// Pick the burst at a given frame_idx / burst_interval boundary, filtering
+/// out bursts that require more channels than the test has.
+fn select_burst(frame_idx: usize, burst_interval: usize, channels: i32) -> &'static Burst {
+    // Filter to usable bursts first so the rotation is stable relative to
+    // the channel count (i.e. a mono run and a stereo run both cycle
+    // through the same subset deterministically).
+    let usable: Vec<&'static Burst> = BURSTS.iter().filter(|b| b.min_channels <= channels).collect();
+    assert!(!usable.is_empty(), "no bursts usable at channels={}", channels);
+    let boundary = frame_idx / burst_interval.max(1);
+    usable[boundary % usable.len()]
+}
+
+// ---------------------------------------------------------------------------
+// Config provenance for diagnostics (HLD Decision 8).
+// ---------------------------------------------------------------------------
+// When a mismatch fires inside a torture run, the diagnostic needs to say
+// whether the frame came from the random walk or from a scripted burst. A
+// small enum wrapping the active config makes that unambiguous.
+#[derive(Clone, Debug)]
+enum CurrentCfgSource {
+    Random,
+    Burst {
+        name: &'static str,
+        step_idx: usize,
+        step_label: &'static str,
+    },
+}
+
+impl CurrentCfgSource {
+    fn format(&self) -> String {
+        match self {
+            CurrentCfgSource::Random => "random".to_string(),
+            CurrentCfgSource::Burst { name, step_idx, step_label } => {
+                format!("burst={} step={}:{}", name, step_idx, step_label)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Section 2: Cross-decoding (HLD 2026.04.08)
+// ---------------------------------------------------------------------------
+// In `--cross-decode` mode we run every encoded packet (both the C packet
+// and the Rust packet) through both a C decoder and a Rust decoder, so the
+// 2x2 matrix is:
+//
+//              decode with C    decode with Rust
+//   encode C:      A                  B
+//   encode R:      C                  D
+//
+// Strong pass (when encoders agree byte-for-byte): A == B == C == D.
+// Weak pass (when encoders diverge): A == B AND C == D — i.e. decoders
+// agree on each encoder's output individually.
+//
+// Two columns of the matrix (B,D) and (A,C) each see a fixed encoder's
+// stream, so the "mode-transition state across packets" constraint from the
+// HLD means we need four *separate* decoder instances: one dedicated to
+// each (encoder, decoder) pair.
+
+/// Run a single packet through a C decoder and return PCM + final_range.
+/// Overwrites `out` with the decoded samples. Returns `None` if decode
+/// failed.
+unsafe fn c_decode_packet(
+    dec: *mut bindings::OpusDecoder,
+    pkt: &[u8],
+    out: &mut [i16],
+    max_per_ch: i32,
+) -> Option<(i32, u32)> {
+    let n = unsafe {
+        bindings::opus_decode(
+            dec,
+            pkt.as_ptr(),
+            pkt.len() as i32,
+            out.as_mut_ptr(),
+            max_per_ch,
+            0,
+        )
+    };
+    if n < 0 {
+        return None;
+    }
+    let mut rng: u32 = 0;
+    unsafe {
+        bindings::opus_decoder_ctl(
+            dec,
+            bindings::OPUS_GET_FINAL_RANGE_REQUEST,
+            &mut rng as *mut u32,
+        );
+    }
+    Some((n, rng))
+}
+
+/// Run a single packet through a Rust decoder and return (nsamples, range).
+fn rust_decode_packet(
+    dec: &mut mdopus::opus::decoder::OpusDecoder,
+    pkt: &[u8],
+    out: &mut [i16],
+    max_per_ch: i32,
+) -> Option<(i32, u32)> {
+    match dec.decode(Some(pkt), out, max_per_ch, false) {
+        Ok(n) => Some((n, dec.get_final_range())),
+        Err(_) => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::manual_is_multiple_of)]
 fn cmd_torture(
     duration_secs: i32,
     seed: u64,
     change_interval: usize,
     sample_rate: i32,
     channels: i32,
+    cross_decode: bool,
+    burst_interval: usize,
+    state_check_interval: usize,
+    state_check_strict: bool,
 ) {
     println!("=== Torture Test ===");
     println!(
@@ -5512,6 +5946,10 @@ fn cmd_torture(
         duration_secs, seed, change_interval
     );
     println!("Sample rate: {} Hz, Channels: {}", sample_rate, channels);
+    println!(
+        "Cross-decode: {}, Burst interval: {} (0=disabled), State check interval: {} (0=disabled), strict={}",
+        cross_decode, burst_interval, state_check_interval, state_check_strict,
+    );
     println!();
 
     let rss_start = get_rss_bytes();
@@ -5537,11 +5975,12 @@ fn cmd_torture(
         }
         enc
     };
-    let c_dec = unsafe {
+    let c_dec_cs = unsafe {
+        // Primary C decoder: fed the C-encoded stream.
         let mut err: i32 = 0;
         let dec = bindings::opus_decoder_create(sample_rate, channels, &mut err);
         if dec.is_null() || err != bindings::OPUS_OK {
-            eprintln!("ERROR: C decoder create failed: {}", bindings::error_string(err));
+            eprintln!("ERROR: C decoder (C stream) create failed: {}", bindings::error_string(err));
             process::exit(1);
         }
         dec
@@ -5557,19 +5996,63 @@ fn cmd_torture(
         eprintln!("ERROR: Rust encoder create failed: {}", e);
         process::exit(1);
     });
-    let mut rust_dec =
+    let mut rust_dec_cs =
         mdopus::opus::decoder::OpusDecoder::new(sample_rate, channels).unwrap_or_else(|e| {
-            eprintln!("ERROR: Rust decoder create failed: {}", e);
+            eprintln!("ERROR: Rust decoder (C stream) create failed: {}", e);
             process::exit(1);
         });
+
+    // --- Section 2: cross-decode extras ---
+    // When --cross-decode is on we also route the Rust-encoded stream
+    // through a dedicated C decoder and a dedicated Rust decoder. Those
+    // are allocated lazily so the default torture run has unchanged
+    // memory footprint.
+    let c_dec_rs: *mut bindings::OpusDecoder = if cross_decode {
+        unsafe {
+            let mut err: i32 = 0;
+            let dec = bindings::opus_decoder_create(sample_rate, channels, &mut err);
+            if dec.is_null() || err != bindings::OPUS_OK {
+                eprintln!("ERROR: C decoder (Rust stream) create failed: {}", bindings::error_string(err));
+                process::exit(1);
+            }
+            dec
+        }
+    } else {
+        std::ptr::null_mut()
+    };
+    let mut rust_dec_rs_opt = if cross_decode {
+        Some(
+            mdopus::opus::decoder::OpusDecoder::new(sample_rate, channels).unwrap_or_else(|e| {
+                eprintln!("ERROR: Rust decoder (Rust stream) create failed: {}", e);
+                process::exit(1);
+            }),
+        )
+    } else {
+        None
+    };
 
     // Buffers — 120ms is the absolute max Opus frame at any sample rate
     let max_frame_samples_per_ch = sample_rate as usize * 120 / 1000;
     let max_frame_samples = max_frame_samples_per_ch * channels as usize;
     let mut c_pkt = vec![0u8; 4000];
     let mut rust_pkt = vec![0u8; 4000];
-    let mut c_pcm_buf = vec![0i16; max_frame_samples];
-    let mut rust_pcm_buf = vec![0i16; max_frame_samples];
+    // Matrix cells:
+    //   pcm_a = C decoder fed C packet
+    //   pcm_b = Rust decoder fed C packet
+    //   pcm_c = C decoder fed Rust packet   (cross-decode only)
+    //   pcm_d = Rust decoder fed Rust packet (cross-decode only)
+    let mut pcm_a = vec![0i16; max_frame_samples];
+    let mut pcm_b = vec![0i16; max_frame_samples];
+    let mut pcm_c = if cross_decode {
+        vec![0i16; max_frame_samples]
+    } else {
+        Vec::new()
+    };
+    let mut pcm_d = if cross_decode {
+        vec![0i16; max_frame_samples]
+    } else {
+        Vec::new()
+    };
 
     let mut rng = seed.wrapping_add(0xDEAD_BEEF); // Offset from PCM seed
     let mut frame_idx: usize = 0;
@@ -5578,10 +6061,38 @@ fn cmd_torture(
     let mut encode_mismatches: usize = 0;
     let mut decode_mismatches: usize = 0;
     let mut range_mismatches: usize = 0;
+    let mut cross_decode_mismatches: usize = 0;
+    let mut state_check_mismatches: usize = 0;
     let mut max_pcm_diff: i32 = 0;
     let mut first_fail_frame: Option<usize> = None;
+    // Once the encoders have produced any divergent packet, the four
+    // cross-decoder instances no longer share identical input histories
+    // — so the "strong" A==C / B==D checks would false-positive on
+    // subsequent frames that happen to match byte-for-byte. Track
+    // whether we've ever seen a divergence and only run the strong
+    // checks while this is false. The weak C==D check is still valid
+    // on any divergent frame because c_dec_rs and rust_dec_rs share a
+    // history (both fed rust_pkt from frame 0).
+    let mut prior_divergence_seen = false;
+
+    // --- Section 3: burst scheduler state ---
+    // When a burst is active, `burst_current` is Some and the state machine
+    // walks the 3 steps. On burst completion the pre-burst config is
+    // restored so the random walk picks up where it left off.
+    let mut burst_current: Option<&'static Burst> = None;
+    let mut burst_step_idx: usize = 0;
+    let mut burst_step_frames_done: usize = 0;
+    let mut burst_saved_cfg: Option<EncodeConfig> = None;
+    let mut bursts_fired: usize = 0;
+    // Burst mismatches get their own 5-line print budget so random-walk
+    // noise does not starve burst diagnostics (devil's-advocate finding
+    // #15, 2026.04.09). The burst label is far more actionable than a
+    // random config dump — pinpointing burst=name step=k is the whole
+    // point of the scheduled sequences.
+    let mut burst_mismatches_printed: usize = 0;
 
     let mut current_cfg = EncodeConfig::new(sample_rate, channels);
+    let mut current_cfg_source = CurrentCfgSource::Random;
     let mut current_frame_size = current_cfg.frame_size();
 
     unsafe { apply_config_to_c_encoder(c_enc, &current_cfg) };
@@ -5595,13 +6106,72 @@ fn cmd_torture(
             break;
         }
 
-        // --- Maybe change config ---
-        if frame_idx > 0 && frame_idx % change_interval == 0 {
-            current_cfg = random_torture_config(&mut rng, sample_rate, channels);
+        // --- Config selection state machine ---
+        // Priority order per frame:
+        //   1. Advance an in-progress burst (or finish it).
+        //   2. If burst_interval boundary, start a new burst.
+        //   3. Otherwise, maybe run a random-walk config change.
+        let mut cfg_changed = false;
+
+        if let Some(burst) = burst_current {
+            burst_step_frames_done += 1;
+            let current_step_hold = burst.steps[burst_step_idx].hold;
+            if burst_step_frames_done > current_step_hold {
+                burst_step_idx += 1;
+                burst_step_frames_done = 1;
+                if burst_step_idx >= burst.steps.len() {
+                    // Burst complete — restore the pre-burst random-walk config.
+                    if let Some(saved) = burst_saved_cfg.take() {
+                        current_cfg = saved;
+                    }
+                    current_cfg_source = CurrentCfgSource::Random;
+                    burst_current = None;
+                    burst_step_idx = 0;
+                    burst_step_frames_done = 0;
+                    cfg_changed = true;
+                } else {
+                    let base = burst_neutral_baseline(sample_rate, channels);
+                    current_cfg = apply_burst_step(&base, &burst.steps[burst_step_idx]);
+                    current_cfg_source = CurrentCfgSource::Burst {
+                        name: burst.name,
+                        step_idx: burst_step_idx,
+                        step_label: burst.steps[burst_step_idx].label,
+                    };
+                    cfg_changed = true;
+                }
+            }
+        } else {
+            // Not currently in a burst.
+            let start_burst = burst_interval > 0
+                && frame_idx > 0
+                && frame_idx % burst_interval == 0;
+            if start_burst {
+                let burst = select_burst(frame_idx, burst_interval, channels);
+                burst_saved_cfg = Some(current_cfg.clone());
+                burst_current = Some(burst);
+                burst_step_idx = 0;
+                burst_step_frames_done = 1;
+                bursts_fired += 1;
+                let base = burst_neutral_baseline(sample_rate, channels);
+                current_cfg = apply_burst_step(&base, &burst.steps[0]);
+                current_cfg_source = CurrentCfgSource::Burst {
+                    name: burst.name,
+                    step_idx: 0,
+                    step_label: burst.steps[0].label,
+                };
+                cfg_changed = true;
+            } else if frame_idx > 0 && frame_idx % change_interval == 0 {
+                current_cfg = random_torture_config(&mut rng, sample_rate, channels);
+                current_cfg_source = CurrentCfgSource::Random;
+                cfg_changed = true;
+                configs_tested += 1;
+            }
+        }
+
+        if cfg_changed {
             unsafe { apply_config_to_c_encoder(c_enc, &current_cfg) };
             apply_config_to_rust_encoder(&mut rust_enc, &current_cfg);
             current_frame_size = current_cfg.frame_size();
-            configs_tested += 1;
 
             // Re-check PCM availability after frame size change
             let frame_samples = current_frame_size * channels as usize;
@@ -5613,6 +6183,15 @@ fn cmd_torture(
         let frame_samples = current_frame_size * channels as usize;
 
         // --- Encode with C ---
+        // Once per frame, compute whether we are currently inside a
+        // burst. Diagnostic print gates consult this so that burst
+        // failures get their own 5-line budget (devil's-advocate
+        // finding #15) — a burst mismatch is much more actionable than
+        // a random-walk mismatch because the burst name + step
+        // pinpoints the exact code path.
+        let in_burst = matches!(current_cfg_source, CurrentCfgSource::Burst { .. });
+        let burst_print_budget_ok = burst_mismatches_printed < 5;
+
         let c_len = unsafe {
             bindings::opus_encode(
                 c_enc,
@@ -5635,12 +6214,18 @@ fn cmd_torture(
             Err(e) => {
                 if c_len >= 0 {
                     encode_mismatches += 1;
-                    if encode_mismatches <= 5 {
+                    let print_ok = encode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
+                    if print_ok {
+                        if in_burst { burst_mismatches_printed += 1; }
                         println!(
                             "ENCODE ERROR frame {}: Rust failed ({}), C ok ({} bytes)",
                             frame_idx, e, c_len
                         );
-                        println!("  {}", format_torture_config(&current_cfg));
+                        println!(
+                            "  {} / src: {}",
+                            format_torture_config(&current_cfg),
+                            current_cfg_source.format()
+                        );
                     }
                     if first_fail_frame.is_none() {
                         first_fail_frame = Some(frame_idx);
@@ -5663,14 +6248,22 @@ fn cmd_torture(
         let rust_len = rust_len as usize;
 
         // --- Compare encoded bytes ---
-        if c_len != rust_len || c_pkt[..c_len] != rust_pkt[..rust_len] {
+        let packets_equal = c_len == rust_len && c_pkt[..c_len] == rust_pkt[..rust_len];
+        if !packets_equal {
             encode_mismatches += 1;
-            if encode_mismatches <= 5 {
+            prior_divergence_seen = true;
+            let print_ok = encode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
+            if print_ok {
+                if in_burst { burst_mismatches_printed += 1; }
                 println!(
                     "ENCODE MISMATCH frame {} (config #{}): C={} bytes, Rust={} bytes",
                     frame_idx, configs_tested, c_len, rust_len
                 );
-                println!("  {}", format_torture_config(&current_cfg));
+                println!(
+                    "  {} / src: {}",
+                    format_torture_config(&current_cfg),
+                    current_cfg_source.format()
+                );
                 if c_len == rust_len {
                     for k in 0..c_len {
                         if c_pkt[k] != rust_pkt[k] {
@@ -5688,126 +6281,379 @@ fn cmd_torture(
             }
         }
 
-        // --- Decode C packet with both decoders ---
-        let c_dec_ret = unsafe {
-            bindings::opus_decode(
-                c_dec,
-                c_pkt.as_ptr(),
-                c_len as i32,
-                c_pcm_buf.as_mut_ptr(),
-                max_frame_samples_per_ch as i32,
-                0,
-            )
+        // --- Decode (2x2 matrix if cross-decode, else 1x2) ---
+        // A: c_dec_cs  fed C packet
+        // B: rust_dec_cs fed C packet
+        // C: c_dec_rs  fed Rust packet (cross_decode only)
+        // D: rust_dec_rs fed Rust packet (cross_decode only)
+        let a = unsafe {
+            c_decode_packet(c_dec_cs, &c_pkt[..c_len], &mut pcm_a, max_frame_samples_per_ch as i32)
         };
-
-        let rust_dec_ret = match rust_dec.decode(
-            Some(&c_pkt[..c_len]),
-            &mut rust_pcm_buf,
+        let b = rust_decode_packet(
+            &mut rust_dec_cs,
+            &c_pkt[..c_len],
+            &mut pcm_b,
             max_frame_samples_per_ch as i32,
-            false,
-        ) {
-            Ok(n) => n,
-            Err(e) => {
-                if c_dec_ret >= 0 {
-                    decode_mismatches += 1;
-                    if decode_mismatches <= 5 {
-                        println!(
-                            "DECODE ERROR frame {}: Rust failed ({}), C ok ({} samples)",
-                            frame_idx, e, c_dec_ret
-                        );
-                        println!("  {}", format_torture_config(&current_cfg));
-                    }
-                    if first_fail_frame.is_none() {
-                        first_fail_frame = Some(frame_idx);
-                    }
-                }
-                pcm_pos += frame_samples;
-                frame_idx += 1;
-                continue;
+        );
+        let c_res = if cross_decode {
+            unsafe {
+                c_decode_packet(
+                    c_dec_rs,
+                    &rust_pkt[..rust_len],
+                    &mut pcm_c,
+                    max_frame_samples_per_ch as i32,
+                )
             }
+        } else {
+            None
+        };
+        let d_res = if cross_decode {
+            rust_decode_packet(
+                rust_dec_rs_opt.as_mut().unwrap(),
+                &rust_pkt[..rust_len],
+                &mut pcm_d,
+                max_frame_samples_per_ch as i32,
+            )
+        } else {
+            None
         };
 
-        // --- Compare decoded PCM ---
-        if c_dec_ret >= 0 {
-            let c_count = c_dec_ret as usize * channels as usize;
-            let r_count = rust_dec_ret as usize * channels as usize;
-            let len = c_count.min(r_count);
-            for j in 0..len {
-                let d = (c_pcm_buf[j] as i32 - rust_pcm_buf[j] as i32).abs();
-                if d > 0 {
+        // --- A vs B check (this is the existing "Rust decoder matches C
+        //     decoder on the C-encoded stream" check, unchanged semantics).
+        match (a, b) {
+            (Some((an, ar)), Some((bn, br))) => {
+                let an_samples = an as usize * channels as usize;
+                let bn_samples = bn as usize * channels as usize;
+                let cmp_len = an_samples.min(bn_samples);
+                let mut local_max_diff = 0i32;
+                for j in 0..cmp_len {
+                    let d = (pcm_a[j] as i32 - pcm_b[j] as i32).abs();
+                    if d > local_max_diff {
+                        local_max_diff = d;
+                    }
+                }
+                if local_max_diff > 0 {
                     decode_mismatches += 1;
-                    max_pcm_diff = max_pcm_diff.max(d);
-                    if decode_mismatches <= 5 {
+                    max_pcm_diff = max_pcm_diff.max(local_max_diff);
+                    let print_ok = decode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
+                    if print_ok {
+                        if in_burst { burst_mismatches_printed += 1; }
                         println!(
-                            "DECODE MISMATCH frame {} sample {}: C={} Rust={} (diff={})",
-                            frame_idx, j, c_pcm_buf[j], rust_pcm_buf[j], d
+                            "DECODE MISMATCH frame {}: max PCM diff {} (A vs B, c_len={})",
+                            frame_idx, local_max_diff, c_len
                         );
-                        println!("  {}", format_torture_config(&current_cfg));
+                        println!(
+                            "  {} / src: {}",
+                            format_torture_config(&current_cfg),
+                            current_cfg_source.format()
+                        );
                     }
                     if first_fail_frame.is_none() {
                         first_fail_frame = Some(frame_idx);
                     }
-                    break; // One mismatch per frame is enough
                 }
+                if ar != br {
+                    range_mismatches += 1;
+                    let print_ok = range_mismatches <= 5 || (in_burst && burst_print_budget_ok);
+                    if print_ok {
+                        if in_burst { burst_mismatches_printed += 1; }
+                        println!(
+                            "RANGE MISMATCH frame {}: A.rng=0x{:08x} B.rng=0x{:08x}",
+                            frame_idx, ar, br
+                        );
+                        println!(
+                            "  {} / src: {}",
+                            format_torture_config(&current_cfg),
+                            current_cfg_source.format()
+                        );
+                    }
+                    if first_fail_frame.is_none() {
+                        first_fail_frame = Some(frame_idx);
+                    }
+                }
+            }
+            (Some(_), None) => {
+                decode_mismatches += 1;
+                let print_ok = decode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
+                if print_ok {
+                    if in_burst { burst_mismatches_printed += 1; }
+                    println!(
+                        "DECODE ERROR frame {}: Rust decoder rejected C packet",
+                        frame_idx
+                    );
+                    println!(
+                        "  {} / src: {}",
+                        format_torture_config(&current_cfg),
+                        current_cfg_source.format()
+                    );
+                }
+                if first_fail_frame.is_none() {
+                    first_fail_frame = Some(frame_idx);
+                }
+            }
+            (None, Some(_)) => {
+                decode_mismatches += 1;
+                let print_ok = decode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
+                if print_ok {
+                    if in_burst { burst_mismatches_printed += 1; }
+                    println!(
+                        "DECODE ERROR frame {}: C decoder rejected C packet (Rust accepted)",
+                        frame_idx
+                    );
+                    println!(
+                        "  {} / src: {}",
+                        format_torture_config(&current_cfg),
+                        current_cfg_source.format()
+                    );
+                }
+                if first_fail_frame.is_none() {
+                    first_fail_frame = Some(frame_idx);
+                }
+            }
+            (None, None) => {
+                // Both decoders rejected — not a divergence.
             }
         }
 
-        // --- Compare final_range ---
-        let mut c_range: u32 = 0;
-        unsafe {
-            bindings::opus_decoder_ctl(
-                c_dec,
-                bindings::OPUS_GET_FINAL_RANGE_REQUEST,
-                &mut c_range as *mut u32,
-            );
-        }
-        let rust_range = rust_dec.get_final_range();
-        if c_range != rust_range {
-            range_mismatches += 1;
-            if range_mismatches <= 5 {
-                println!(
-                    "RANGE MISMATCH frame {}: C={:08x} Rust={:08x}",
-                    frame_idx, c_range, rust_range
-                );
-                println!("  {}", format_torture_config(&current_cfg));
-            }
-            if first_fail_frame.is_none() {
-                first_fail_frame = Some(frame_idx);
+        // --- Cross-decode checks (Section 2) ---
+        // The strong check (A vs C, B vs D on packets_equal frames) is
+        // only meaningful while the four decoder instances share an
+        // identical input history. Once the encoders have diverged on
+        // any prior frame, decoder histories differ forever and the
+        // strong check false-positives. `prior_divergence_seen` gates it.
+        // The weak check (C vs D on divergent frames) is always valid:
+        // c_dec_rs and rust_dec_rs both see the Rust-encoded stream from
+        // frame 0, so their histories match regardless of encoder drift.
+        if cross_decode {
+            if packets_equal && !prior_divergence_seen {
+                // Compare A vs C (same bytes, different decoder instance:
+                // should be bit-identical because they've seen identical
+                // input sequences from frame 0).
+                let cross_pcm_fail = match (a, c_res) {
+                    (Some((an, ar)), Some((cn, cr))) => {
+                        let an_samples = an as usize * channels as usize;
+                        let cn_samples = cn as usize * channels as usize;
+                        let cmp_len = an_samples.min(cn_samples);
+                        let mut diff = false;
+                        for j in 0..cmp_len {
+                            if pcm_a[j] != pcm_c[j] {
+                                diff = true;
+                                break;
+                            }
+                        }
+                        diff || ar != cr
+                    }
+                    (None, None) => false,
+                    _ => true,
+                };
+                if cross_pcm_fail {
+                    cross_decode_mismatches += 1;
+                    let print_ok = cross_decode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
+                    if print_ok {
+                        if in_burst { burst_mismatches_printed += 1; }
+                        println!(
+                            "CROSS-DECODE MISMATCH (A vs C, packets equal) @ frame {}",
+                            frame_idx
+                        );
+                        println!(
+                            "  {} / src: {}",
+                            format_torture_config(&current_cfg),
+                            current_cfg_source.format()
+                        );
+                    }
+                    if first_fail_frame.is_none() {
+                        first_fail_frame = Some(frame_idx);
+                    }
+                }
+                // Compare B vs D.
+                let cross_rust_fail = match (b, d_res) {
+                    (Some((bn, br)), Some((dn, dr))) => {
+                        let bn_samples = bn as usize * channels as usize;
+                        let dn_samples = dn as usize * channels as usize;
+                        let cmp_len = bn_samples.min(dn_samples);
+                        let mut diff = false;
+                        for j in 0..cmp_len {
+                            if pcm_b[j] != pcm_d[j] {
+                                diff = true;
+                                break;
+                            }
+                        }
+                        diff || br != dr
+                    }
+                    (None, None) => false,
+                    _ => true,
+                };
+                if cross_rust_fail {
+                    cross_decode_mismatches += 1;
+                    let print_ok = cross_decode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
+                    if print_ok {
+                        if in_burst { burst_mismatches_printed += 1; }
+                        println!(
+                            "CROSS-DECODE MISMATCH (B vs D, packets equal) @ frame {}",
+                            frame_idx
+                        );
+                        println!(
+                            "  {} / src: {}",
+                            format_torture_config(&current_cfg),
+                            current_cfg_source.format()
+                        );
+                    }
+                    if first_fail_frame.is_none() {
+                        first_fail_frame = Some(frame_idx);
+                    }
+                }
+            } else if !packets_equal {
+                // Packets diverged. Weak criterion: each encoder's output
+                // must decode the same way under both decoders. A vs B is
+                // already covered; still to cover is C vs D.
+                let weak_fail_cd = match (c_res, d_res) {
+                    (Some((cn, cr)), Some((dn, dr))) => {
+                        let cn_samples = cn as usize * channels as usize;
+                        let dn_samples = dn as usize * channels as usize;
+                        let cmp_len = cn_samples.min(dn_samples);
+                        let mut diff = false;
+                        for j in 0..cmp_len {
+                            if pcm_c[j] != pcm_d[j] {
+                                diff = true;
+                                break;
+                            }
+                        }
+                        diff || cr != dr
+                    }
+                    (None, None) => false,
+                    _ => true,
+                };
+                if weak_fail_cd {
+                    cross_decode_mismatches += 1;
+                    let print_ok = cross_decode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
+                    if print_ok {
+                        if in_burst { burst_mismatches_printed += 1; }
+                        println!(
+                            "CROSS-DECODE MISMATCH (C vs D, packets diverged) @ frame {}",
+                            frame_idx
+                        );
+                        println!(
+                            "  {} / src: {}",
+                            format_torture_config(&current_cfg),
+                            current_cfg_source.format()
+                        );
+                    }
+                    if first_fail_frame.is_none() {
+                        first_fail_frame = Some(frame_idx);
+                    }
+                }
             }
         }
 
         pcm_pos += frame_samples;
         frame_idx += 1;
 
+        // --- Section 6: periodic state comparison ---
+        // In cross-decode mode the four decoder instances have diverging
+        // histories after the first encoder mismatch, so we deliberately
+        // checkpoint only the column (c_dec_cs vs rust_dec_cs) — the
+        // primary C-stream pair. That is the only comparison that has
+        // a meaningful bit-exact invariant: both decoders consumed the
+        // C-encoded stream from frame 0, so they must agree on every
+        // getter. The rust-stream column (c_dec_rs vs rust_dec_rs) has
+        // the same invariant but is redundant in terms of drift
+        // detection. Documented per devil's-advocate finding #4.
+        if state_check_interval > 0 && frame_idx % state_check_interval == 0 {
+            let diffs = state_checkpoint_diffs(c_enc, &rust_enc, c_dec_cs, &rust_dec_cs);
+            if !diffs.is_empty() {
+                state_check_mismatches += 1;
+                if state_check_mismatches <= 5 {
+                    println!(
+                        "STATE CHECK MISMATCH @ frame {} ({} diffs):",
+                        frame_idx,
+                        diffs.len()
+                    );
+                    for dline in &diffs {
+                        println!("  {}", dline);
+                    }
+                    println!(
+                        "  cfg: {} / src: {}",
+                        format_torture_config(&current_cfg),
+                        current_cfg_source.format()
+                    );
+                }
+                if first_fail_frame.is_none() {
+                    first_fail_frame = Some(frame_idx);
+                }
+                if state_check_strict {
+                    eprintln!();
+                    eprintln!("STATE CHECK STRICT MODE: aborting at frame {}", frame_idx);
+                    break;
+                }
+            }
+        }
+
         // Progress every 500 frames
         if frame_idx % 500 == 0 {
             let elapsed = start_time.elapsed().as_secs_f64();
             let pct = pcm_pos as f64 / pcm.len() as f64 * 100.0;
             eprint!(
-                "\r  [{:.0}s] frame {} ({:.1}%), cfgs: {}, enc_err: {}, dec_err: {}, rng_err: {}   ",
-                elapsed, frame_idx, pct, configs_tested,
-                encode_mismatches, decode_mismatches, range_mismatches
+                "\r  [{:.0}s] frame {} ({:.1}%), cfgs: {}, bursts: {}, enc_err: {}, dec_err: {}, rng_err: {}, xdec_err: {}, state_err: {}   ",
+                elapsed, frame_idx, pct, configs_tested, bursts_fired,
+                encode_mismatches, decode_mismatches, range_mismatches,
+                cross_decode_mismatches, state_check_mismatches,
             );
         }
     }
     eprintln!();
+
+    // Final state checkpoint at end of test — catches drift that never
+    // crossed an interval boundary.
+    if state_check_interval > 0 && frame_idx > 0 {
+        let diffs = state_checkpoint_diffs(c_enc, &rust_enc, c_dec_cs, &rust_dec_cs);
+        if !diffs.is_empty() {
+            state_check_mismatches += 1;
+            println!(
+                "STATE CHECK MISMATCH @ end-of-test frame {} ({} diffs):",
+                frame_idx,
+                diffs.len()
+            );
+            for dline in &diffs {
+                println!("  {}", dline);
+            }
+            println!(
+                "  cfg: {} / src: {}",
+                format_torture_config(&current_cfg),
+                current_cfg_source.format()
+            );
+            if first_fail_frame.is_none() {
+                first_fail_frame = Some(frame_idx);
+            }
+        }
+    }
 
     let elapsed = start_time.elapsed();
     let rss_end = get_rss_bytes();
 
     unsafe {
         bindings::opus_encoder_destroy(c_enc);
-        bindings::opus_decoder_destroy(c_dec);
+        bindings::opus_decoder_destroy(c_dec_cs);
+        if !c_dec_rs.is_null() {
+            bindings::opus_decoder_destroy(c_dec_rs);
+        }
     }
+    drop(rust_dec_rs_opt);
 
     println!();
     println!("=== Torture Test Summary ===");
     println!("  Duration:        {:.1}s", elapsed.as_secs_f64());
     println!("  Frames encoded:  {}", frame_idx);
     println!("  Configs tested:  {}", configs_tested);
+    println!("  Bursts fired:    {}", bursts_fired);
     println!("  Encode errors:   {}", encode_mismatches);
     println!("  Decode errors:   {}", decode_mismatches);
     println!("  Range errors:    {}", range_mismatches);
+    if cross_decode {
+        println!("  X-decode errors: {}", cross_decode_mismatches);
+    }
+    if state_check_interval > 0 {
+        println!("  State errors:    {}", state_check_mismatches);
+    }
     if max_pcm_diff > 0 {
         println!("  Max PCM diff:    {}", max_pcm_diff);
     }
@@ -5824,7 +6670,11 @@ fn cmd_torture(
         }
     }
 
-    let all_pass = encode_mismatches == 0 && decode_mismatches == 0 && range_mismatches == 0;
+    let all_pass = encode_mismatches == 0
+        && decode_mismatches == 0
+        && range_mismatches == 0
+        && cross_decode_mismatches == 0
+        && (!state_check_strict || state_check_mismatches == 0);
     if all_pass {
         println!("  RESULT: PASS");
     } else {
@@ -5847,6 +6697,7 @@ fn run_transition_sequence(
     sample_rate: i32,
     channels: i32,
     steps: &[(EncodeConfig, usize)],
+    cross_decode: bool,
 ) -> bool {
     let frame_size = (sample_rate / 50) as usize; // 20ms frames
     let total_frames: usize = steps.iter().map(|(_, n)| *n).sum();
@@ -5882,7 +6733,8 @@ fn run_transition_sequence(
         }
     };
 
-    let c_dec = unsafe {
+    // Primary decoders: fed the C-encoded stream.
+    let c_dec_cs = unsafe {
         let mut err: i32 = 0;
         let dec = bindings::opus_decoder_create(sample_rate, channels, &mut err);
         if dec.is_null() || err != 0 {
@@ -5892,30 +6744,73 @@ fn run_transition_sequence(
         }
         dec
     };
-    let mut rust_dec =
+    let mut rust_dec_cs =
         match mdopus::opus::decoder::OpusDecoder::new(sample_rate, channels) {
             Ok(d) => d,
             Err(_) => {
                 println!("SKIP (Rust decoder failed)");
                 unsafe {
                     bindings::opus_encoder_destroy(c_enc);
-                    bindings::opus_decoder_destroy(c_dec);
+                    bindings::opus_decoder_destroy(c_dec_cs);
                 };
                 return true;
             }
         };
 
+    // Cross-decode extras: separate decoders fed the Rust-encoded stream.
+    let c_dec_rs: *mut bindings::OpusDecoder = if cross_decode {
+        unsafe {
+            let mut err: i32 = 0;
+            let dec = bindings::opus_decoder_create(sample_rate, channels, &mut err);
+            if dec.is_null() || err != 0 {
+                println!("SKIP (C decoder for Rust stream failed)");
+                bindings::opus_encoder_destroy(c_enc);
+                bindings::opus_decoder_destroy(c_dec_cs);
+                return true;
+            }
+            dec
+        }
+    } else {
+        std::ptr::null_mut()
+    };
+    let mut rust_dec_rs_opt = if cross_decode {
+        match mdopus::opus::decoder::OpusDecoder::new(sample_rate, channels) {
+            Ok(d) => Some(d),
+            Err(_) => {
+                println!("SKIP (Rust decoder for Rust stream failed)");
+                unsafe {
+                    bindings::opus_encoder_destroy(c_enc);
+                    bindings::opus_decoder_destroy(c_dec_cs);
+                    if !c_dec_rs.is_null() {
+                        bindings::opus_decoder_destroy(c_dec_rs);
+                    }
+                }
+                return true;
+            }
+        }
+    } else {
+        None
+    };
+
     let max_dec_per_ch = sample_rate as usize * 120 / 1000;
+    let max_frame_samples = max_dec_per_ch * channels as usize;
     let mut c_pkt = vec![0u8; 4000];
     let mut rust_pkt = vec![0u8; 4000];
-    let mut c_pcm_buf = vec![0i16; max_dec_per_ch * channels as usize];
-    let mut rust_pcm_buf = vec![0i16; max_dec_per_ch * channels as usize];
+    let mut pcm_a = vec![0i16; max_frame_samples];
+    let mut pcm_b = vec![0i16; max_frame_samples];
+    let mut pcm_c = if cross_decode { vec![0i16; max_frame_samples] } else { Vec::new() };
+    let mut pcm_d = if cross_decode { vec![0i16; max_frame_samples] } else { Vec::new() };
 
     let frame_samples = frame_size * channels as usize;
     let mut pcm_pos: usize = 0;
     let mut frame_idx: usize = 0;
     let mut mismatches: usize = 0;
+    let mut cross_mismatches: usize = 0;
     let mut first_fail: Option<(usize, usize)> = None; // (step, frame_within_step)
+    // See cmd_torture for the rationale: the strong A==C / B==D checks
+    // are only meaningful while the four decoder instances share an
+    // identical input history. `prior_divergence_seen` gates them.
+    let mut prior_divergence_seen = false;
 
     for (step_idx, (cfg, num_frames)) in steps.iter().enumerate() {
         unsafe { apply_config_to_c_encoder(c_enc, cfg) };
@@ -5950,8 +6845,10 @@ fn run_transition_sequence(
             } else if c_len >= 0 && rust_len >= 0 {
                 let cl = c_len as usize;
                 let rl = rust_len as usize;
-                if cl != rl || c_pkt[..cl] != rust_pkt[..rl] {
+                let packets_equal = cl == rl && c_pkt[..cl] == rust_pkt[..rl];
+                if !packets_equal {
                     mismatches += 1;
+                    prior_divergence_seen = true;
                     if first_fail.is_none() {
                         first_fail = Some((step_idx, f));
                         // Dump first mismatch details
@@ -5977,42 +6874,120 @@ fn run_transition_sequence(
                     }
                 }
 
-                // Decode and compare
-                let c_dec_ret = unsafe {
-                    bindings::opus_decode(
-                        c_dec,
-                        c_pkt.as_ptr(),
-                        c_len,
-                        c_pcm_buf.as_mut_ptr(),
-                        max_dec_per_ch as i32,
-                        0,
-                    )
+                // 2x2 decode matrix. A/B always run; C/D only in cross-decode.
+                let a = unsafe {
+                    c_decode_packet(c_dec_cs, &c_pkt[..cl], &mut pcm_a, max_dec_per_ch as i32)
                 };
-                let rust_dec_ret = rust_dec
-                    .decode(
-                        Some(&c_pkt[..cl]),
-                        &mut rust_pcm_buf,
+                let b = rust_decode_packet(
+                    &mut rust_dec_cs,
+                    &c_pkt[..cl],
+                    &mut pcm_b,
+                    max_dec_per_ch as i32,
+                );
+                let c_res = if cross_decode {
+                    unsafe {
+                        c_decode_packet(c_dec_rs, &rust_pkt[..rl], &mut pcm_c, max_dec_per_ch as i32)
+                    }
+                } else {
+                    None
+                };
+                let d_res = if cross_decode {
+                    rust_decode_packet(
+                        rust_dec_rs_opt.as_mut().unwrap(),
+                        &rust_pkt[..rl],
+                        &mut pcm_d,
                         max_dec_per_ch as i32,
-                        false,
                     )
-                    .unwrap_or(-1);
+                } else {
+                    None
+                };
 
-                if c_dec_ret >= 0 && rust_dec_ret >= 0 {
-                    let n = (c_dec_ret as usize * channels as usize)
-                        .min(rust_dec_ret as usize * channels as usize);
-                    for j in 0..n {
-                        if c_pcm_buf[j] != rust_pcm_buf[j] {
+                // A vs B: existing check.
+                match (a, b) {
+                    (Some((an, ar)), Some((bn, br))) => {
+                        let n = (an as usize * channels as usize)
+                            .min(bn as usize * channels as usize);
+                        let mut pcm_diff = false;
+                        for j in 0..n {
+                            if pcm_a[j] != pcm_b[j] {
+                                pcm_diff = true;
+                                break;
+                            }
+                        }
+                        if pcm_diff || ar != br {
                             mismatches += 1;
                             if first_fail.is_none() {
                                 first_fail = Some((step_idx, f));
                             }
-                            break;
                         }
                     }
-                } else if c_dec_ret >= 0 || rust_dec_ret >= 0 {
-                    mismatches += 1;
-                    if first_fail.is_none() {
-                        first_fail = Some((step_idx, f));
+                    (None, None) => {}
+                    _ => {
+                        mismatches += 1;
+                        if first_fail.is_none() {
+                            first_fail = Some((step_idx, f));
+                        }
+                    }
+                }
+
+                // Cross-decode comparisons. Strong A/C + B/D checks
+                // gated on no prior divergence — see cmd_torture.
+                if cross_decode {
+                    if packets_equal && !prior_divergence_seen {
+                        // A vs C and B vs D must also match.
+                        let ac_fail = match (a, c_res) {
+                            (Some((an, ar)), Some((cn, cr))) => {
+                                let n = (an as usize * channels as usize)
+                                    .min(cn as usize * channels as usize);
+                                let mut diff = false;
+                                for j in 0..n {
+                                    if pcm_a[j] != pcm_c[j] { diff = true; break; }
+                                }
+                                diff || ar != cr
+                            }
+                            (None, None) => false,
+                            _ => true,
+                        };
+                        let bd_fail = match (b, d_res) {
+                            (Some((bn, br)), Some((dn, dr))) => {
+                                let n = (bn as usize * channels as usize)
+                                    .min(dn as usize * channels as usize);
+                                let mut diff = false;
+                                for j in 0..n {
+                                    if pcm_b[j] != pcm_d[j] { diff = true; break; }
+                                }
+                                diff || br != dr
+                            }
+                            (None, None) => false,
+                            _ => true,
+                        };
+                        if ac_fail || bd_fail {
+                            cross_mismatches += 1;
+                            if first_fail.is_none() {
+                                first_fail = Some((step_idx, f));
+                            }
+                        }
+                    } else if !packets_equal {
+                        // Weak: only C == D on divergent frames.
+                        let cd_fail = match (c_res, d_res) {
+                            (Some((cn, cr)), Some((dn, dr))) => {
+                                let n = (cn as usize * channels as usize)
+                                    .min(dn as usize * channels as usize);
+                                let mut diff = false;
+                                for j in 0..n {
+                                    if pcm_c[j] != pcm_d[j] { diff = true; break; }
+                                }
+                                diff || cr != dr
+                            }
+                            (None, None) => false,
+                            _ => true,
+                        };
+                        if cd_fail {
+                            cross_mismatches += 1;
+                            if first_fail.is_none() {
+                                first_fail = Some((step_idx, f));
+                            }
+                        }
                     }
                 }
             } else {
@@ -6030,24 +7005,43 @@ fn run_transition_sequence(
 
     unsafe {
         bindings::opus_encoder_destroy(c_enc);
-        bindings::opus_decoder_destroy(c_dec);
+        bindings::opus_decoder_destroy(c_dec_cs);
+        if !c_dec_rs.is_null() {
+            bindings::opus_decoder_destroy(c_dec_rs);
+        }
     }
+    drop(rust_dec_rs_opt);
 
-    if mismatches == 0 {
-        println!("PASS ({} frames)", frame_idx);
+    let total = mismatches + cross_mismatches;
+    if total == 0 {
+        if cross_decode {
+            println!("PASS ({} frames, cross-decode ok)", frame_idx);
+        } else {
+            println!("PASS ({} frames)", frame_idx);
+        }
         true
     } else {
         let (s, f) = first_fail.unwrap_or((0, 0));
-        println!(
-            "FAIL ({} mismatches in {} frames, first at step {} frame {})",
-            mismatches, frame_idx, s, f
-        );
+        if cross_decode {
+            println!(
+                "FAIL ({} primary + {} cross-decode mismatches in {} frames, first at step {} frame {})",
+                mismatches, cross_mismatches, frame_idx, s, f
+            );
+        } else {
+            println!(
+                "FAIL ({} mismatches in {} frames, first at step {} frame {})",
+                mismatches, frame_idx, s, f
+            );
+        }
         false
     }
 }
 
-fn cmd_transitions() {
+fn cmd_transitions(cross_decode: bool) {
     println!("=== Mode Transition Tests ===");
+    if cross_decode {
+        println!("(cross-decode enabled)");
+    }
     println!();
     let mut all_pass = true;
 
@@ -6072,6 +7066,7 @@ fn cmd_transitions() {
             "SILK->CELT->SILK->CELT (mono)",
             sr, ch,
             &[(silk.clone(), n), (celt.clone(), n), (silk.clone(), n), (celt.clone(), n)],
+            cross_decode,
         );
     }
 
@@ -6099,7 +7094,7 @@ fn cmd_transitions() {
                 (cfg, n / 2)
             })
             .collect();
-        all_pass &= run_transition_sequence("BW sweep NB->FB->NB (mono)", sr, ch, &steps);
+        all_pass &= run_transition_sequence("BW sweep NB->FB->NB (mono)", sr, ch, &steps, cross_decode);
     }
 
     // --- Test 3: VBR on/off cycling ---
@@ -6119,6 +7114,7 @@ fn cmd_transitions() {
             "VBR on->off->on->off (mono)",
             sr, ch,
             &[(vbr_on.clone(), n), (vbr_off.clone(), n), (vbr_on.clone(), n), (vbr_off.clone(), n)],
+            cross_decode,
         );
     }
 
@@ -6151,6 +7147,7 @@ fn cmd_transitions() {
                 (voip_like.clone(), n),
                 (audio_like.clone(), n),
             ],
+            cross_decode,
         );
     }
 
@@ -6171,6 +7168,7 @@ fn cmd_transitions() {
             "DTX on->off->on (mono)",
             sr, ch,
             &[(dtx_on.clone(), n), (dtx_off.clone(), n), (dtx_on.clone(), n)],
+            cross_decode,
         );
     }
 
@@ -6199,6 +7197,7 @@ fn cmd_transitions() {
                 (auto_ch.clone(), n),
                 (stereo.clone(), n),
             ],
+            cross_decode,
         );
     }
 
@@ -6215,7 +7214,7 @@ fn cmd_transitions() {
                 (cfg, n)
             })
             .collect();
-        all_pass &= run_transition_sequence("Bitrate extremes 6k->510k->6k (mono)", sr, ch, &steps);
+        all_pass &= run_transition_sequence("Bitrate extremes 6k->510k->6k (mono)", sr, ch, &steps, cross_decode);
     }
 
     // --- Test 8: FEC + packet loss cycling ---
@@ -6240,6 +7239,7 @@ fn cmd_transitions() {
             "FEC off->low_loss->high_loss->off (mono)",
             sr, ch,
             &[(fec_off.clone(), n), (fec_low.clone(), n), (fec_high.clone(), n), (fec_off.clone(), n)],
+            cross_decode,
         );
     }
 
@@ -8216,10 +9216,36 @@ fn main() {
             let interval = parse_option(&args, "--change-interval", 50);
             let sr = parse_option(&args, "--sample-rate", 48000);
             let ch = parse_option(&args, "--channels", 1);
-            cmd_torture(duration, seed_i as u64, interval as usize, sr, ch);
+            // Section 2: --cross-decode enables the 2x2 decoder matrix
+            // Section 3: --burst-interval controls the deterministic burst
+            //            scheduler (0 disables; default 200 = ~4s between
+            //            bursts at 20ms frames).
+            // Section 6: --state-check-interval enables periodic state
+            //            comparison (default 1000 frames ≈ 20s).
+            //            --state-check-loose downgrades state mismatches to
+            //            warnings. Strict-by-default per HLD Decision 5.
+            let cross_decode = args.iter().any(|a| a == "--cross-decode");
+            let burst_interval = parse_option(&args, "--burst-interval", 200) as usize;
+            let state_check_interval = parse_option(&args, "--state-check-interval", 1000) as usize;
+            let state_check_strict = !args.iter().any(|a| a == "--state-check-loose");
+            cmd_torture(
+                duration,
+                seed_i as u64,
+                interval as usize,
+                sr,
+                ch,
+                cross_decode,
+                burst_interval,
+                state_check_interval,
+                state_check_strict,
+            );
         }
         "transitions" => {
-            cmd_transitions();
+            // Section 2 (Decision 3): cross-decoding is also wired into
+            // cmd_transitions because that command is exactly where
+            // encoder divergence is most likely to hide.
+            let cross_decode = args.iter().any(|a| a == "--cross-decode");
+            cmd_transitions(cross_decode);
         }
         "quality" => {
             if args.len() < 3 {

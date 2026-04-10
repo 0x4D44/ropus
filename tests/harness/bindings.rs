@@ -60,8 +60,27 @@ pub const OPUS_SET_PREDICTION_DISABLED_REQUEST: c_int = 4042;
 pub const OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST: c_int = 4046;
 
 // Getter CTL request codes
-pub const OPUS_GET_FINAL_RANGE_REQUEST: c_int = 4031;
+pub const OPUS_GET_BITRATE_REQUEST: c_int = 4003;
+pub const OPUS_GET_MAX_BANDWIDTH_REQUEST: c_int = 4005;
+pub const OPUS_GET_VBR_REQUEST: c_int = 4007;
 pub const OPUS_GET_BANDWIDTH_REQUEST: c_int = 4009;
+pub const OPUS_GET_COMPLEXITY_REQUEST: c_int = 4011;
+pub const OPUS_GET_INBAND_FEC_REQUEST: c_int = 4013;
+pub const OPUS_GET_PACKET_LOSS_PERC_REQUEST: c_int = 4015;
+pub const OPUS_GET_DTX_REQUEST: c_int = 4017;
+pub const OPUS_GET_VBR_CONSTRAINT_REQUEST: c_int = 4021;
+pub const OPUS_GET_FORCE_CHANNELS_REQUEST: c_int = 4023;
+pub const OPUS_GET_SIGNAL_REQUEST: c_int = 4025;
+pub const OPUS_GET_LOOKAHEAD_REQUEST: c_int = 4027;
+pub const OPUS_GET_SAMPLE_RATE_REQUEST: c_int = 4029;
+pub const OPUS_GET_FINAL_RANGE_REQUEST: c_int = 4031;
+pub const OPUS_GET_PITCH_REQUEST: c_int = 4033;
+pub const OPUS_GET_LSB_DEPTH_REQUEST: c_int = 4037;
+pub const OPUS_GET_LAST_PACKET_DURATION_REQUEST: c_int = 4039;
+pub const OPUS_GET_PREDICTION_DISABLED_REQUEST: c_int = 4043;
+pub const OPUS_GET_GAIN_REQUEST: c_int = 4045;
+pub const OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST: c_int = 4047;
+pub const OPUS_GET_IN_DTX_REQUEST: c_int = 4049;
 
 // Internal CTL (from opus_private.h)
 pub const OPUS_SET_FORCE_MODE_REQUEST: c_int = 11002;

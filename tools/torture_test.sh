@@ -140,10 +140,25 @@ run_test "torture_stereo" \
     "Torture soak stereo 48k (${DURATION_MINS} min)" \
     "$COMPARE_BIN" torture --duration "$DURATION_SECS" --seed 43 --channels 2
 
-# 3. Mode transitions
+# 2b. Cross-decode torture soak — run at a shorter duration since we do
+#     roughly 2x the decoder work per frame. Per HLD 2026.04.08 Section 2
+#     and Decision 3, cross-decoding decouples the encoder and decoder
+#     checks so a matching bug in both decoders can't hide an encoder
+#     divergence. 10 minutes is the starting point from Decision 7 — tune
+#     after measurement if wall-clock is problematic.
+XDEC_SECS=$(( DURATION_MINS > 10 ? 600 : DURATION_SECS ))
+run_test "torture_crossdec" \
+    "Torture cross-decode mono 48k (${XDEC_SECS}s)" \
+    "$COMPARE_BIN" torture --duration "$XDEC_SECS" --seed 44 --cross-decode
+
+# 3. Mode transitions (plus cross-decode variant)
 run_test "mode_transitions" \
     "Mode transitions" \
     "$COMPARE_BIN" transitions
+
+run_test "mode_transitions_xdec" \
+    "Mode transitions (cross-decode)" \
+    "$COMPARE_BIN" transitions --cross-decode
 
 # 4. Full sweep
 run_test "full_sweep" \
