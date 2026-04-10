@@ -645,7 +645,12 @@ fn silk_decode_signs(
             let icdf: [u8; 2] = [icdf_ptr[icdf_idx], 0];
             let base = i * SHELL_CODEC_FRAME_LENGTH;
             for j in 0..SHELL_CODEC_FRAME_LENGTH {
-                if base + j < length && pulses[base + j] > 0 {
+                // C reference does NOT bounds-check against frame_length here.
+                // Shell decoder fills all `iter * SHELL_CODEC_FRAME_LENGTH` slots,
+                // including the tail beyond frame_length for non-multiple-of-16
+                // frames (e.g. 120 = 12kHz × 10ms). Sign bits must be consumed
+                // for those tail pulses too, or the range coder desyncs.
+                if pulses[base + j] > 0 {
                     let bit = rc.decode_icdf(&icdf, 8);
                     // dec_map: 0→-1, 1→+1
                     if bit == 0 {
@@ -1469,8 +1474,9 @@ pub fn silk_stereo_ms_to_lr(
     // C: denom_Q16 = silk_DIV32_16(1 << 16, STEREO_INTERP_LEN_MS * fs_kHz)
     let denom_q16 = (1i32 << 16) / interp_len as i32;
     // C: delta0_Q13 = silk_RSHIFT_ROUND(silk_SMULBB(pred_Q13[0] - pred_prev_Q13[0], denom_Q16), 16)
-    let delta0 = ((pred_q13[0] as i32 - pred0_q13).wrapping_mul(denom_q16) + (1 << 15)) >> 16;
-    let delta1 = ((pred_q13[1] as i32 - pred1_q13).wrapping_mul(denom_q16) + (1 << 15)) >> 16;
+    // silk_SMULBB truncates both operands to i16 before multiplying.
+    let delta0 = (silk_smulbb(pred_q13[0] as i32 - pred0_q13, denom_q16) + (1 << 15)) >> 16;
+    let delta1 = (silk_smulbb(pred_q13[1] as i32 - pred1_q13, denom_q16) + (1 << 15)) >> 16;
 
     // Interpolation region: predictors ramp from prev to current
     // C uses silk_SMLAWB(a, b, c) = a + ((b * (i64)(i16)c) >> 16)
