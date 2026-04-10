@@ -3540,17 +3540,16 @@ mod tests {
     /// Test with band_log_e values that exceed i16::MAX (the C reference bug).
     ///
     /// In the C reference, `x1` and `x2` are declared as `opus_val16` (int16_t).
-    /// When Q24 log-energy values like 52363264 (0x031E9A00) are assigned to
-    /// int16_t, they truncate to 0x9A00 = -26112, which clamps to 0 via MAX16.
-    /// This makes mean_diff ≈ 0, so C returns false (no transient).
+    /// When Q24 log-energy values like 52363264 (0x031F0000) are assigned to
+    /// int16_t, they truncate to 0x0000 = 0. After max(0, ..) this stays 0.
+    /// This makes mean_diff = 0, so C returns false (no transient).
     ///
-    /// The Rust code keeps full i32 values, so mean_diff stays large and the
-    /// function returns true. This test encodes the EXPECTED C behavior (false)
-    /// and should FAIL until the i16 truncation bug is fixed.
+    /// Our code reproduces this truncation via `as i16`, so the test encodes
+    /// the C behavior (false).
     #[test]
     fn test_patch_transient_large_values_should_match_c_reference() {
-        // Real value from the failing packet: 52363264 = 0x031E9A00 (Q24)
-        // When truncated to i16: (int16_t)0x9A00 = -26112 -> clamped to 0
+        // Real value from the failing packet: 52363264 = 0x031F0000 (Q24)
+        // When truncated to i16: (int16_t)0x0000 = 0 -> stays 0
         let large_energy: i32 = 52363264;
 
         let nb_ebands: i32 = 21;
@@ -3580,26 +3579,24 @@ mod tests {
         );
     }
 
-    /// Test with band_log_e values that fit in i16 range — normal operation.
+    /// Test where truncation changes the result: false WITH truncation, true WITHOUT.
     ///
-    /// Values within i16 range behave identically in C and Rust. With a modest
-    /// energy difference between current and old frames, the function should
-    /// return false (no transient detected). This test should PASS with the
-    /// current code.
+    /// band_log_e = 50000000 (0x02FAF080), truncates to i16: 0xF080 = -3968
+    /// old_band_e = 10000000 (0x00989680), truncates to i16: 0x9680 = -27008
+    /// After truncation: x1 = -3968, x2 = -27008, diff = 23040 per band.
+    /// mean_diff = 23040, well below threshold 16777216 → returns false.
+    /// Without truncation: x1 = 50000000, x2 = 10000000, diff = 40000000
+    /// → returns true. So truncation flips the result.
     #[test]
-    fn test_patch_transient_normal_values_no_transient() {
+    fn test_patch_transient_truncation_flips_result() {
         let nb_ebands: i32 = 21;
         let start: i32 = 0;
         let end: i32 = 17;
         let c: i32 = 1; // mono
 
-        // Small energy values well within i16 range (Q24 representation of ~0.25)
-        // gconst(0.25) = 0.25 * (1 << 24) = 4194304
-        let mild_energy: i32 = gconst(0.25);
-
-        // band_log_e and old_band_e nearly the same — no transient
-        let band_log_e = vec![mild_energy; nb_ebands as usize];
-        let old_band_e = vec![mild_energy; nb_ebands as usize];
+        // Both values exceed i16 range but have different low 16 bits
+        let band_log_e = vec![50_000_000i32; nb_ebands as usize]; // 0x02FAF080
+        let old_band_e = vec![10_000_000i32; nb_ebands as usize]; // 0x00989680
 
         let result = patch_transient_decision(
             &band_log_e,
@@ -3610,11 +3607,89 @@ mod tests {
             c,
         );
 
-        // No significant difference, so no transient detected
+        // With i16 truncation: mean_diff = 23040 < 16777216 → false
+        // Without truncation: mean_diff = 40000000 > 16777216 → true
         assert!(
             !result,
-            "patch_transient_decision incorrectly detected a transient \
-             with identical current and old band energies"
+            "patch_transient_decision returned true; i16 truncation should \
+             suppress the large Q24 difference to below threshold"
+        );
+    }
+
+    /// Test the i16 truncation boundary: 32767 survives, 32768 truncates to -32768.
+    ///
+    /// 32767 (i16::MAX) passes through truncation unchanged: x1 = 32767, x2 = 0.
+    /// mean_diff = 32767, far below threshold 16777216 → false.
+    /// 32768 (i16::MAX + 1) truncates to -32768, then max(0, x1-x2) = 0.
+    /// mean_diff = 0 → false. A single increment causes a dramatic cliff.
+    #[test]
+    fn test_patch_transient_boundary_value_at_i16_max() {
+        let nb_ebands: i32 = 21;
+        let start: i32 = 0;
+        let end: i32 = 17;
+        let c: i32 = 1;
+
+        let old_band_e = vec![0i32; nb_ebands as usize];
+
+        // 32767: largest value that survives i16 truncation intact
+        let band_log_e_max = vec![i16::MAX as i32; nb_ebands as usize];
+        let result_max = patch_transient_decision(
+            &band_log_e_max,
+            &old_band_e,
+            nb_ebands,
+            start,
+            end,
+            c,
+        );
+        // mean_diff = 32767, threshold = 16777216 → false
+        assert!(!result_max, "32767 should not exceed threshold");
+
+        // 32768: truncates to -32768, clamped to 0 by max(0, x1-x2)
+        let band_log_e_overflow = vec![i16::MAX as i32 + 1; nb_ebands as usize];
+        let result_overflow = patch_transient_decision(
+            &band_log_e_overflow,
+            &old_band_e,
+            nb_ebands,
+            start,
+            end,
+            c,
+        );
+        // mean_diff = 0 → false (truncation cliff)
+        assert!(!result_overflow, "32768 truncates to -32768; mean_diff should be 0");
+    }
+
+    /// Test stereo (C=2) with large energy values — truncation applies per-channel.
+    ///
+    /// With C=2, band_log_e has 2*nbEBands entries and the channel loop runs
+    /// twice. The same i16 truncation applies, so large values still produce
+    /// mean_diff = 0.
+    #[test]
+    fn test_patch_transient_stereo_truncation() {
+        let nb_ebands: i32 = 21;
+        let start: i32 = 0;
+        let end: i32 = 17;
+        let c: i32 = 2; // stereo
+
+        let large_energy: i32 = 52_363_264; // 0x031F0000, truncates to 0
+
+        // Stereo: band_log_e needs 2 * nbEBands entries (ch0 then ch1)
+        let band_log_e = vec![large_energy; 2 * nb_ebands as usize];
+        let old_band_e = vec![0i32; 2 * nb_ebands as usize];
+
+        let result = patch_transient_decision(
+            &band_log_e,
+            &old_band_e,
+            nb_ebands,
+            start,
+            end,
+            c,
+        );
+
+        // Both channels: x1 truncates to 0, x2 = 0, mean_diff = 0 → false
+        assert!(
+            !result,
+            "stereo patch_transient_decision should return false; \
+             i16 truncation zeroes both channels"
         );
     }
 }
