@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>mdopus Test Report - 2026.04.10 22:41</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 960px; margin: 0 auto; padding: 20px; background: #1a1a2e; color: #e0e0e0; }
+h1, h2 { border-bottom: 1px solid #333; padding-bottom: 8px; }
+table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+th, td { border: 1px solid #333; padding: 8px 12px; text-align: left; }
+th { background: #16213e; }
+tr:nth-child(even) { background: #0f3460; }
+.pass { color: #28a745; font-weight: bold; }
+.fail { color: #dc3545; font-weight: bold; }
+.skip { color: #ffc107; }
+.badge { display: inline-block; padding: 4px 12px; border-radius: 4px; color: white; font-weight: bold; }
+.meta { color: #888; font-size: 0.9em; }
+details { margin: 8px 0; }
+summary { cursor: pointer; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>mdopus Test Report <span class="badge" style="background:#dc3545">FAIL</span></h1>
+<p class="meta">Generated: 2026-04-10 22:41:13 &bull; Version: 0.2.0 &bull; Branch: <code>master</code> &bull; Commit: <code>41034de</code> — Add journal for remaining bugs fix session (bugs 11-13)</p>
+<p class="meta">Run mode: Quick, Quality Skipped, Harness Skipped, Coverage Skipped</p>
+<h2>Category Summary</h2>
+<table>
+<tr><th>Category</th><th>Total</th><th>Passed</th><th>Failed</th></tr>
+<tr><td>CELT</td><td>301</td><td class="pass">301</td><td class="pass">0</td></tr>
+<tr><td>Coverage</td><td>4</td><td class="pass">4</td><td class="pass">0</td></tr>
+<tr><td>DNN</td><td>136</td><td class="pass">134</td><td class="fail">2</td></tr>
+<tr><td>Opus</td><td>169</td><td class="pass">168</td><td class="fail">1</td></tr>
+<tr><td>SILK</td><td>166</td><td class="pass">166</td><td class="pass">0</td></tr>
+<tr><td>Types</td><td>19</td><td class="pass">19</td><td class="pass">0</td></tr>
+</table>
+<h2>Summary</h2>
+<table>
+<tr><th>Phase</th><th>Total</th><th>Passed</th><th>Failed</th><th>Skipped</th><th>Duration</th></tr>
+<tr><td>Unit Tests</td><td>795</td><td class="pass">792</td><td class="fail">3</td><td class="skip">0</td><td>32.59s</td></tr>
+</table>
+<h2>Module Breakdown</h2>
+<table>
+<tr><th>Module</th><th>Total</th><th>Passed</th><th>Failed</th></tr>
+<tr><td>celt::bands</td><td>13</td><td class="pass">13</td><td class="pass">0</td></tr>
+<tr><td>celt::cwrs</td><td>17</td><td class="pass">17</td><td class="pass">0</td></tr>
+<tr><td>celt::decoder</td><td>24</td><td class="pass">24</td><td class="pass">0</td></tr>
+<tr><td>celt::ec_ctx</td><td>4</td><td class="pass">4</td><td class="pass">0</td></tr>
+<tr><td>celt::encoder</td><td>17</td><td class="pass">17</td><td class="pass">0</td></tr>
+<tr><td>celt::fft</td><td>5</td><td class="pass">5</td><td class="pass">0</td></tr>
+<tr><td>celt::lpc</td><td>25</td><td class="pass">25</td><td class="pass">0</td></tr>
+<tr><td>celt::math_ops</td><td>65</td><td class="pass">65</td><td class="pass">0</td></tr>
+<tr><td>celt::mdct</td><td>8</td><td class="pass">8</td><td class="pass">0</td></tr>
+<tr><td>celt::modes</td><td>33</td><td class="pass">33</td><td class="pass">0</td></tr>
+<tr><td>celt::pitch</td><td>12</td><td class="pass">12</td><td class="pass">0</td></tr>
+<tr><td>celt::quant_bands</td><td>18</td><td class="pass">18</td><td class="pass">0</td></tr>
+<tr><td>celt::range_coder</td><td>15</td><td class="pass">15</td><td class="pass">0</td></tr>
+<tr><td>celt::rate</td><td>13</td><td class="pass">13</td><td class="pass">0</td></tr>
+<tr><td>celt::simd</td><td>21</td><td class="pass">21</td><td class="pass">0</td></tr>
+<tr><td>celt::vq</td><td>11</td><td class="pass">11</td><td class="pass">0</td></tr>
+<tr><td>coverage_tests::public_api_decode24_roundtrip</td><td>1</td><td class="pass">1</td><td class="pass">0</td></tr>
+<tr><td>coverage_tests::public_api_multistream_surround_roundtrip</td><td>1</td><td class="pass">1</td><td class="pass">0</td></tr>
+<tr><td>coverage_tests::public_api_restricted_lowdelay_float_roundtrip</td><td>1</td><td class="pass">1</td><td class="pass">0</td></tr>
+<tr><td>coverage_tests::public_api_silk_only_roundtrip_and_plc</td><td>1</td><td class="pass">1</td><td class="pass">0</td></tr>
+<tr><td>dnn::core</td><td>37</td><td class="pass">37</td><td class="pass">0</td></tr>
+<tr><td>dnn::fargan</td><td>14</td><td class="pass">14</td><td class="pass">0</td></tr>
+<tr><td>dnn::lossgen</td><td>22</td><td class="pass">22</td><td class="pass">0</td></tr>
+<tr><td>dnn::lpcnet</td><td>49</td><td class="pass">47</td><td class="fail">2</td></tr>
+<tr><td>dnn::pitchdnn</td><td>14</td><td class="pass">14</td><td class="pass">0</td></tr>
+<tr><td>opus::decoder</td><td>38</td><td class="pass">38</td><td class="pass">0</td></tr>
+<tr><td>opus::encoder</td><td>37</td><td class="pass">36</td><td class="fail">1</td></tr>
+<tr><td>opus::multistream</td><td>44</td><td class="pass">44</td><td class="pass">0</td></tr>
+<tr><td>opus::repacketizer</td><td>50</td><td class="pass">50</td><td class="pass">0</td></tr>
+<tr><td>silk::common</td><td>71</td><td class="pass">71</td><td class="pass">0</td></tr>
+<tr><td>silk::decoder</td><td>36</td><td class="pass">36</td><td class="pass">0</td></tr>
+<tr><td>silk::encoder</td><td>59</td><td class="pass">59</td><td class="pass">0</td></tr>
+<tr><td>types::tests</td><td>19</td><td class="pass">19</td><td class="pass">0</td></tr>
+</table>
+<h2>Failed Tests</h2>
+<ul>
+<li class="fail"><code>dnn::lpcnet::tests::test_compute_frame_features_updates_state_before_pitchdnn_panic</code></li>
+<li class="fail"><code>dnn::lpcnet::tests::test_plc_load_model_invalid_blob_returns_error</code></li>
+<li class="fail"><code>opus::encoder::tests::test_encode_multiframe_silk_special_frame_sizes</code></li>
+</ul>
+</body>
+</html>
