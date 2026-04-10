@@ -2072,11 +2072,13 @@ impl OpusEncoder {
                 }
 
                 // Prefill SILK on mode transition
-                // C: applies gain_fade onset ramp on delay_buffer, zeros before it,
-                // then feeds entire delay_buffer to silk_Encode for prefill.
+                // C: applies gain_fade onset ramp on delay_buffer IN-PLACE, zeros
+                // before it, then feeds entire delay_buffer to silk_Encode for prefill.
+                // The in-place modification is intentional — tmp_prefill (for CELT
+                // prefill) is copied from delay_buffer AFTER these modifications, so
+                // it must see the gain-faded data.
                 if prefill != 0 && self.application != OPUS_APPLICATION_RESTRICTED_SILK {
                     if let Some(ref mut silk) = self.silk_enc {
-                        let mut db = self.delay_buffer.clone();
                         let db_samples = (self.encoder_buffer * self.channels) as usize;
                         // C: prefill_offset = channels * (encoder_buffer - delay_compensation - Fs/400)
                         let prefill_offset = (self.channels
@@ -2084,7 +2086,7 @@ impl OpusEncoder {
                             as usize;
                         // Apply gain_fade onset ramp (0 → Q15ONE) on the last 2.5ms
                         if prefill_offset + (self.fs as usize / 400 * self.channels as usize)
-                            <= db.len()
+                            <= self.delay_buffer.len()
                         {
                             let celt_overlap = if let Some(ref celt) = self.celt_enc {
                                 celt.mode.overlap as i32
@@ -2092,24 +2094,24 @@ impl OpusEncoder {
                                 120
                             };
                             let celt_window = if let Some(ref celt) = self.celt_enc {
-                                celt.mode.window
+                                celt.mode.window.to_vec()
                             } else {
-                                &[]
+                                vec![]
                             };
                             if !celt_window.is_empty() {
                                 gain_fade(
-                                    &mut db[prefill_offset..],
+                                    &mut self.delay_buffer[prefill_offset..],
                                     0,
                                     Q15ONE,
                                     celt_overlap,
                                     self.fs / 400,
                                     self.channels,
-                                    celt_window,
+                                    &celt_window,
                                     self.fs,
                                 );
                             }
                             // Zero everything before the ramp
-                            for s in db[..prefill_offset].iter_mut() {
+                            for s in self.delay_buffer[..prefill_offset].iter_mut() {
                                 *s = 0;
                             }
                         }
@@ -2117,15 +2119,11 @@ impl OpusEncoder {
                         prefill_control.payload_size_ms = 10;
                         prefill_control.complexity = 0;
                         let mut zero = 0i32;
-                        let prefill_pcm = if db_samples > 0 {
-                            &db[..db_samples]
-                        } else {
-                            &[]
-                        };
+                        let prefill_pcm = self.delay_buffer[..db_samples].to_vec();
                         silk_encode(
                             silk,
                             &mut prefill_control,
-                            prefill_pcm,
+                            &prefill_pcm,
                             self.encoder_buffer * self.channels,
                             &mut enc,
                             &mut zero,

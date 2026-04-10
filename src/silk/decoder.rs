@@ -2171,6 +2171,10 @@ pub fn silk_decode_frame(
         // Packet lost: generate concealment
         silk_plc_conceal(dec, &mut p_out[..frame_length]);
 
+        // C: PLC.c:99 — increment loss counter AFTER conceal (which reads it
+        // for first-frame init) but BEFORE CNG/glue (which check loss_cnt > 0).
+        dec.loss_cnt += 1;
+
         // Neural PLC: replace classical concealment with neural output when available.
         #[cfg(feature = "dnn")]
         if let Some(lpcnet) = lpcnet {

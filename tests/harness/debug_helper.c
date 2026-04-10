@@ -140,6 +140,146 @@ void debug_dump_silk_indices(OpusEncoder *enc) {
         state->nFramesEncoded);
 }
 
+/* INSTRUMENT: Get SILK encoder LBRR and rate control state for comparison */
+void debug_get_silk_lbrr_state(OpusEncoder *enc,
+    opus_int32 *n_bits_used_lbrr,
+    opus_int32 *lbrr_flag,
+    opus_int32 *n_bits_exceeded,
+    opus_int32 *signal_type,
+    opus_int32 *quant_offset_type,
+    opus_int32 *gains_indices,       /* 4 elements */
+    opus_int32 *lag_index,
+    opus_int32 *contour_index,
+    opus_int32 *seed,
+    opus_int32 *ltp_scale_index,
+    opus_int32 *nlsf_interp_coef)
+{
+    OpusEncoderOffsets *hdr = (OpusEncoderOffsets *)enc;
+    silk_encoder *silk = (silk_encoder *)((char *)enc + hdr->silk_enc_offset);
+    silk_encoder_state *st = &silk->state_Fxx[0].sCmn;
+
+    *n_bits_used_lbrr = silk->nBitsUsedLBRR;
+    *lbrr_flag = st->LBRR_flag;
+    *n_bits_exceeded = silk->nBitsExceeded;
+    *signal_type = (opus_int32)st->indices.signalType;
+    *quant_offset_type = (opus_int32)st->indices.quantOffsetType;
+    gains_indices[0] = (opus_int32)st->indices.GainsIndices[0];
+    gains_indices[1] = (opus_int32)st->indices.GainsIndices[1];
+    gains_indices[2] = (opus_int32)st->indices.GainsIndices[2];
+    gains_indices[3] = (opus_int32)st->indices.GainsIndices[3];
+    *lag_index = (opus_int32)st->indices.lagIndex;
+    *contour_index = (opus_int32)st->indices.contourIndex;
+    *seed = (opus_int32)st->indices.Seed;
+    *ltp_scale_index = (opus_int32)st->indices.LTP_scaleIndex;
+    *nlsf_interp_coef = (opus_int32)st->indices.NLSFInterpCoef_Q2;
+}
+
+/* INSTRUMENT: Get SILK encoder NLSF indices, pulses, and additional state */
+void debug_get_silk_nlsf_and_pulses(OpusEncoder *enc,
+    opus_int32 *nlsf_indices,       /* MAX_LPC_ORDER+1 = 17 elements */
+    opus_int32 *ltp_indices,        /* MAX_NB_SUBFR = 4 elements */
+    opus_int32 *per_index,
+    opus_int32 *prev_signal_type,
+    opus_int32 *prev_lag,
+    opus_int32 *frame_counter,
+    opus_int32 *ec_prev_lag_index,
+    opus_int32 *ec_prev_signal_type,
+    opus_int32 *first_frame_after_reset,
+    opus_int32 *controlled_since_last_payload,
+    opus_int32 *pulses_sum)         /* sum of abs(pulses) for quick comparison */
+{
+    OpusEncoderOffsets *hdr = (OpusEncoderOffsets *)enc;
+    silk_encoder *silk = (silk_encoder *)((char *)enc + hdr->silk_enc_offset);
+    silk_encoder_state *st = &silk->state_Fxx[0].sCmn;
+    int i;
+
+    for (i = 0; i <= MAX_LPC_ORDER && i < 17; i++) {
+        nlsf_indices[i] = (opus_int32)st->indices.NLSFIndices[i];
+    }
+    for (i = 0; i < MAX_NB_SUBFR && i < 4; i++) {
+        ltp_indices[i] = (opus_int32)st->indices.LTPIndex[i];
+    }
+    *per_index = (opus_int32)st->indices.PERIndex;
+    *prev_signal_type = st->prevSignalType;
+    *prev_lag = st->prevLag;
+    *frame_counter = st->frameCounter;
+    *ec_prev_lag_index = (opus_int32)st->ec_prevLagIndex;
+    *ec_prev_signal_type = st->ec_prevSignalType;
+    *first_frame_after_reset = st->first_frame_after_reset;
+    *controlled_since_last_payload = st->controlled_since_last_payload;
+
+    /* Sum of absolute pulse values for quick comparison */
+    opus_int32 sum = 0;
+    for (i = 0; i < st->frame_length; i++) {
+        opus_int32 p = (opus_int32)st->pulses[i];
+        sum += (p < 0) ? -p : p;
+    }
+    *pulses_sum = sum;
+}
+
+/* INSTRUMENT: Get CELT encoder delayed_intra and loss_rate for comparison.
+ * We replicate the CELTEncoder struct layout to reach these fields. */
+struct CELTEncoder_trace {
+    const OpusCustomMode *mode;   /* pointer: 8 bytes on x86_64 */
+    int channels;
+    int stream_channels;
+    int force_intra;
+    int clip;
+    int disable_pf;
+    int complexity;
+    int upsample;
+    int start, end;
+    opus_int32 bitrate;
+    int vbr;
+    int signalling;
+    int constrained_vbr;
+    int loss_rate;
+    int lsb_depth;
+    int lfe;
+    int disable_inv;
+    int arch;
+    /* ENCODER_RESET_START */
+    opus_uint32 rng;
+    int spread_decision;
+    opus_int32 delayedIntra;   /* opus_val32 = opus_int32 in fixed-point */
+    int tonal_average;
+    int lastCodedBands;
+    int hf_average;
+    int tapset_decision;
+    int prefilter_period;
+    opus_int16 prefilter_gain;
+    int prefilter_tapset;
+    int consec_transient;
+};
+
+void debug_get_celt_encoder_state(OpusEncoder *enc,
+    opus_int32 *delayed_intra,
+    opus_int32 *loss_rate,
+    opus_int32 *prefilter_period,
+    opus_int32 *prefilter_gain,
+    opus_int32 *prefilter_tapset,
+    opus_int32 *force_intra,
+    opus_int32 *spread_decision,
+    opus_int32 *tonal_average,
+    opus_int32 *last_coded_bands,
+    opus_int32 *consec_transient)
+{
+    OpusEncoderOffsets *hdr = (OpusEncoderOffsets *)enc;
+    struct CELTEncoder_trace *celt =
+        (struct CELTEncoder_trace *)((char *)enc + hdr->celt_enc_offset);
+
+    *delayed_intra = celt->delayedIntra;
+    *loss_rate = celt->loss_rate;
+    *prefilter_period = celt->prefilter_period;
+    *prefilter_gain = (opus_int32)celt->prefilter_gain;
+    *prefilter_tapset = celt->prefilter_tapset;
+    *force_intra = celt->force_intra;
+    *spread_decision = celt->spread_decision;
+    *tonal_average = celt->tonal_average;
+    *last_coded_bands = celt->lastCodedBands;
+    *consec_transient = celt->consec_transient;
+}
+
 /* ======================================================================
  * Math function comparison helpers
  * ====================================================================== */
@@ -836,4 +976,37 @@ void debug_get_silk_state(OpusEncoder *enc,
     *speech_activity_q8 = st->speech_activity_Q8;
     *signal_type = st->indices.signalType;
     *input_quality_bands_q15 = st->input_quality_bands_Q15[0];
+}
+
+/* Local copy of silk_decoder layout from dec_API.c */
+typedef struct {
+    silk_decoder_state channel_state[ DECODER_NUM_CHANNELS ];
+    stereo_dec_state sStereo;
+    opus_int nChannelsAPI;
+    opus_int nChannelsInternal;
+    opus_int prev_decode_only_middle;
+} silk_decoder_local;
+
+/* Dump SILK decoder PLC state for comparison with Rust */
+void debug_dump_silk_plc_state(OpusDecoder *dec,
+    opus_int16 *rand_scale_q14,
+    opus_int32 *rand_seed,
+    opus_int32 *pitch_l_q8,
+    opus_int32 *loss_cnt,
+    opus_int32 *prev_signal_type)
+{
+    OpusDecoderOffsets *hdr = (OpusDecoderOffsets *)dec;
+    silk_decoder_local *silk_dec = (silk_decoder_local *)((char *)dec + hdr->silk_dec_offset);
+    silk_decoder_state *ch0 = &silk_dec->channel_state[0];
+
+    *rand_scale_q14 = ch0->sPLC.randScale_Q14;
+    *rand_seed = ch0->sPLC.rand_seed;
+    *pitch_l_q8 = ch0->sPLC.pitchL_Q8;
+    *loss_cnt = ch0->lossCnt;
+    *prev_signal_type = ch0->prevSignalType;
+    /* Also print outBuf, sLPC_Q14_buf, exc_Q14 for comparison */
+    fprintf(stderr, "INSTRUMENT C_EXTRA frame=? outbuf[0..4]=[%d,%d,%d,%d] lpc_buf[0..4]=[%d,%d,%d,%d] exc[0..4]=[%d,%d,%d,%d]\n",
+        ch0->outBuf[0], ch0->outBuf[1], ch0->outBuf[2], ch0->outBuf[3],
+        ch0->sLPC_Q14_buf[0], ch0->sLPC_Q14_buf[1], ch0->sLPC_Q14_buf[2], ch0->sLPC_Q14_buf[3],
+        ch0->exc_Q14[0], ch0->exc_Q14[1], ch0->exc_Q14[2], ch0->exc_Q14[3]);
 }

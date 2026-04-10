@@ -2920,7 +2920,9 @@ fn plc_decode_rust(
         if drops.contains(&i) {
             // PLC: decode with None
             match dec.decode(None, &mut pcm, frame_size as i32, false) {
-                Ok(ret) => output.extend_from_slice(&pcm[..ret as usize * ch as usize]),
+                Ok(ret) => {
+                    output.extend_from_slice(&pcm[..ret as usize * ch as usize]);
+                }
                 Err(_) => {} // PLC can fail on first frame etc.
             }
         } else {

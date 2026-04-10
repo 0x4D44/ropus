@@ -389,6 +389,62 @@ unsafe extern "C" {
         n_mdct: c_int,
     );
 
+    // INSTRUMENT: SILK LBRR and rate control state extraction
+    pub fn debug_get_silk_lbrr_state(
+        enc: *mut OpusEncoder,
+        n_bits_used_lbrr: *mut opus_int32,
+        lbrr_flag: *mut opus_int32,
+        n_bits_exceeded: *mut opus_int32,
+        signal_type: *mut opus_int32,
+        quant_offset_type: *mut opus_int32,
+        gains_indices: *mut opus_int32,
+        lag_index: *mut opus_int32,
+        contour_index: *mut opus_int32,
+        seed: *mut opus_int32,
+        ltp_scale_index: *mut opus_int32,
+        nlsf_interp_coef: *mut opus_int32,
+    );
+
+    // INSTRUMENT: SILK NLSF indices, pulses, and additional encoder state
+    pub fn debug_get_silk_nlsf_and_pulses(
+        enc: *mut OpusEncoder,
+        nlsf_indices: *mut opus_int32,      // 17 elements
+        ltp_indices: *mut opus_int32,       // 4 elements
+        per_index: *mut opus_int32,
+        prev_signal_type: *mut opus_int32,
+        prev_lag: *mut opus_int32,
+        frame_counter: *mut opus_int32,
+        ec_prev_lag_index: *mut opus_int32,
+        ec_prev_signal_type: *mut opus_int32,
+        first_frame_after_reset: *mut opus_int32,
+        controlled_since_last_payload: *mut opus_int32,
+        pulses_sum: *mut opus_int32,
+    );
+
+    // INSTRUMENT: CELT encoder state extraction
+    pub fn debug_get_celt_encoder_state(
+        enc: *mut OpusEncoder,
+        delayed_intra: *mut opus_int32,
+        loss_rate: *mut opus_int32,
+        prefilter_period: *mut opus_int32,
+        prefilter_gain: *mut opus_int32,
+        prefilter_tapset: *mut opus_int32,
+        force_intra: *mut opus_int32,
+        spread_decision: *mut opus_int32,
+        tonal_average: *mut opus_int32,
+        last_coded_bands: *mut opus_int32,
+        consec_transient: *mut opus_int32,
+    );
+
+    pub fn debug_dump_silk_plc_state(
+        dec: *mut OpusDecoder,
+        rand_scale_q14: *mut opus_int16,
+        rand_seed: *mut opus_int32,
+        pitch_l_q8: *mut opus_int32,
+        loss_cnt: *mut opus_int32,
+        prev_signal_type: *mut opus_int32,
+    );
+
 }
 
 // ---------------------------------------------------------------------------
