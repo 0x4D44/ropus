@@ -7938,6 +7938,8 @@ pub fn silk_encode(
             // VAD, and silk_encode_frame even during prefill. The Rust prefill
             // path must match to keep persistent state (s_vad, sMid) aligned.
             if prefill_flag != 0 {
+                // HP variable cutoff (C enc_API.c:409) — runs unconditionally
+                silk_hp_variable_cutoff(&mut enc.state_fxx[0]);
                 // sMid buffering for mono (C enc_API.c:476-478)
                 if n_channels_internal == 1 {
                     let fl = frame_length as usize;
