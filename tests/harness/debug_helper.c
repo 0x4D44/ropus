@@ -178,6 +178,25 @@ opus_int32 debug_c_celt_rsqrt_norm32(opus_int32 x) {
     return celt_rsqrt_norm32(x);
 }
 
+opus_int32 debug_c_celt_rsqrt_norm(opus_int32 x) {
+    return (opus_int32)celt_rsqrt_norm(x);
+}
+
+/* celt_rcp_norm16 has external linkage but is not declared in mathops.h */
+extern opus_val16 celt_rcp_norm16(opus_val16 x);
+
+opus_int32 debug_c_celt_rcp_norm16(opus_int32 x) {
+    return (opus_int32)celt_rcp_norm16((opus_int16)x);
+}
+
+opus_int32 debug_c_celt_rcp_norm32(opus_int32 x) {
+    return celt_rcp_norm32(x);
+}
+
+opus_int32 debug_c_celt_rcp(opus_int32 x) {
+    return celt_rcp(x);
+}
+
 opus_int32 debug_c_normalise_residual_g(opus_int32 ryy, opus_int32 gain) {
     /* Replicate the gain computation from normalise_residual */
     int k = celt_ilog2(ryy) >> 1;

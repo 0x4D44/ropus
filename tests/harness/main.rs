@@ -1511,35 +1511,50 @@ fn cmd_mathcompare() {
         println!("  celt_sqrt32 sweep: 16000 values PASS");
     }
 
-    // Exhaustive sweep: celt_rsqrt_norm32 over entire valid range
-    println!("--- Exhaustive celt_rsqrt_norm32 sweep ---");
-    let mut rsqrt32_mismatches = 0;
-    // Valid range is [2^30, 2^31) for Q31 in [0.5, 1.0)
-    // Test 20000 points spread across the range
-    for i in 0..20000 {
-        let x = 1_073_741_824 + (i as i64 * 1_073_741_823 / 20000) as i32;
+    // Exhaustive sweep: celt_rsqrt_norm32 over entire valid range (200K points)
+    println!("--- Exhaustive celt_rsqrt_norm32 sweep (200K) ---");
+    let mut rsqrt32_mismatches = 0u64;
+    let mut rsqrt32_tested = 0u64;
+    // Valid range is [2^29, 2^31-1] — test 200K uniform points
+    let rsqrt32_lo = 536_870_912i64; // 2^29
+    let rsqrt32_hi = 2_147_483_647i64; // 2^31-1
+    for i in 0..200_000 {
+        let x = (rsqrt32_lo + i * (rsqrt32_hi - rsqrt32_lo) / 200_000) as i32;
         let c_val = unsafe { bindings::debug_c_celt_rsqrt_norm32(x) };
         let r_val = math_ops::celt_rsqrt_norm32(x);
+        rsqrt32_tested += 1;
         if c_val != r_val {
             rsqrt32_mismatches += 1;
             if rsqrt32_mismatches <= 5 {
                 println!(
                     "  MISMATCH: celt_rsqrt_norm32({}) C={} R={} diff={}",
-                    x,
-                    c_val,
-                    r_val,
-                    c_val - r_val
+                    x, c_val, r_val, c_val - r_val
+                );
+            }
+        }
+    }
+    // Also test boundary values
+    for &x in &[536_870_912i32, 1_073_741_824, 2_147_483_647] {
+        let c_val = unsafe { bindings::debug_c_celt_rsqrt_norm32(x) };
+        let r_val = math_ops::celt_rsqrt_norm32(x);
+        rsqrt32_tested += 1;
+        if c_val != r_val {
+            rsqrt32_mismatches += 1;
+            if rsqrt32_mismatches <= 5 {
+                println!(
+                    "  MISMATCH: celt_rsqrt_norm32({}) C={} R={} diff={}",
+                    x, c_val, r_val, c_val - r_val
                 );
             }
         }
     }
     if rsqrt32_mismatches > 0 {
         println!(
-            "  celt_rsqrt_norm32 sweep: {} mismatches out of 20000!",
-            rsqrt32_mismatches
+            "  celt_rsqrt_norm32 sweep: {} mismatches out of {}!",
+            rsqrt32_mismatches, rsqrt32_tested
         );
     } else {
-        println!("  celt_rsqrt_norm32 sweep: 20000 values PASS");
+        println!("  celt_rsqrt_norm32 sweep: {} values PASS", rsqrt32_tested);
     }
 
     // Exhaustive sweep: normalise_residual gain computation
@@ -1623,36 +1638,213 @@ fn cmd_mathcompare() {
         println!("  celt_cos_norm32 sweep: 20000 values PASS");
     }
 
-    // Add a test for normalise_bands: compute g for band 13 with realistic energy values
-    println!("--- celt_rcp_norm32 sweep ---");
-    let mut rcp_mismatches = 0;
-    for i in 0..20000 {
-        let x = 1_073_741_824 + (i as i64 * 1_073_741_823 / 20000) as i32;
-        let c_val_sqrt = unsafe { bindings::debug_c_celt_sqrt32(x) };
-        let r_val_sqrt = math_ops::celt_sqrt32(x);
-        if c_val_sqrt != r_val_sqrt {
-            rcp_mismatches += 1;
-        }
-        // Also test celt_rcp_norm32 by constructing valid inputs
-        let c_val_rsq = unsafe { bindings::debug_c_celt_rsqrt_norm32(x) };
-        let r_val_rsq = math_ops::celt_rsqrt_norm32(x);
-        if c_val_rsq != r_val_rsq {
-            rcp_mismatches += 1;
-            if rcp_mismatches <= 5 {
+    // -----------------------------------------------------------------------
+    // celt_rsqrt_norm — exhaustive sweep over Q16 domain [0.25, ~1.0)
+    // -----------------------------------------------------------------------
+    println!("--- celt_rsqrt_norm exhaustive sweep ---");
+    let mut rsqrt_norm_mismatches = 0u64;
+    let rsqrt_norm_count: u64 = (65535 - 16384 + 1) as u64; // 49,152 values
+    for x in 16384..=65535i32 {
+        let c_val = unsafe { bindings::debug_c_celt_rsqrt_norm(x) };
+        let r_val = math_ops::celt_rsqrt_norm(x);
+        if c_val != r_val {
+            rsqrt_norm_mismatches += 1;
+            if rsqrt_norm_mismatches <= 5 {
                 println!(
-                    "  MISMATCH: rsqrt_norm32({}) C={} R={} diff={}",
-                    x,
-                    c_val_rsq,
-                    r_val_rsq,
-                    c_val_rsq - r_val_rsq
+                    "  MISMATCH: celt_rsqrt_norm({}) C={} R={} diff={}",
+                    x, c_val, r_val, c_val - r_val
                 );
             }
         }
     }
-    if rcp_mismatches > 0 {
-        println!("  rcp_norm32 sweep: {} mismatches found!", rcp_mismatches);
+    if rsqrt_norm_mismatches > 0 {
+        println!(
+            "  celt_rsqrt_norm sweep: {} mismatches out of {}!",
+            rsqrt_norm_mismatches, rsqrt_norm_count
+        );
     } else {
-        println!("  rcp_norm32 sweep: 40000 values PASS");
+        println!("  celt_rsqrt_norm sweep: {} values PASS", rsqrt_norm_count);
+    }
+
+    // -----------------------------------------------------------------------
+    // celt_rcp_norm16 — exhaustive sweep over Q15 domain [0.5, ~1.0)
+    // -----------------------------------------------------------------------
+    println!("--- celt_rcp_norm16 exhaustive sweep ---");
+    let mut rcp16_mismatches = 0u64;
+    let rcp16_count: u64 = (32767 - 16384 + 1) as u64; // 16,384 values
+    for x in 16384..=32767i32 {
+        let c_val = unsafe { bindings::debug_c_celt_rcp_norm16(x) };
+        let r_val = math_ops::celt_rcp_norm16(x);
+        if c_val != r_val {
+            rcp16_mismatches += 1;
+            if rcp16_mismatches <= 5 {
+                println!(
+                    "  MISMATCH: celt_rcp_norm16({}) C={} R={} diff={}",
+                    x, c_val, r_val, c_val - r_val
+                );
+            }
+        }
+    }
+    if rcp16_mismatches > 0 {
+        println!(
+            "  celt_rcp_norm16 sweep: {} mismatches out of {}!",
+            rcp16_mismatches, rcp16_count
+        );
+    } else {
+        println!("  celt_rcp_norm16 sweep: {} values PASS", rcp16_count);
+    }
+
+    // -----------------------------------------------------------------------
+    // celt_rcp_norm32 — 200K-point sweep over [2^30, 2^31-1]
+    // -----------------------------------------------------------------------
+    println!("--- celt_rcp_norm32 sweep (200K) ---");
+    let mut rcp32_mismatches = 0u64;
+    let mut rcp32_tested = 0u64;
+    let rcp32_lo = 1_073_741_824i64; // 2^30
+    let rcp32_hi = 2_147_483_647i64; // 2^31-1
+    for i in 0..200_000 {
+        let x = (rcp32_lo + i * (rcp32_hi - rcp32_lo) / 200_000) as i32;
+        let c_val = unsafe { bindings::debug_c_celt_rcp_norm32(x) };
+        let r_val = math_ops::celt_rcp_norm32(x);
+        rcp32_tested += 1;
+        if c_val != r_val {
+            rcp32_mismatches += 1;
+            if rcp32_mismatches <= 5 {
+                println!(
+                    "  MISMATCH: celt_rcp_norm32({}) C={} R={} diff={}",
+                    x, c_val, r_val, c_val - r_val
+                );
+            }
+        }
+    }
+    // Also test boundary values
+    for &x in &[1_073_741_824i32, 1_610_612_736, 2_147_483_647] {
+        let c_val = unsafe { bindings::debug_c_celt_rcp_norm32(x) };
+        let r_val = math_ops::celt_rcp_norm32(x);
+        rcp32_tested += 1;
+        if c_val != r_val {
+            rcp32_mismatches += 1;
+            if rcp32_mismatches <= 5 {
+                println!(
+                    "  MISMATCH: celt_rcp_norm32({}) C={} R={} diff={}",
+                    x, c_val, r_val, c_val - r_val
+                );
+            }
+        }
+    }
+    if rcp32_mismatches > 0 {
+        println!(
+            "  celt_rcp_norm32 sweep: {} mismatches out of {}!",
+            rcp32_mismatches, rcp32_tested
+        );
+    } else {
+        println!("  celt_rcp_norm32 sweep: {} values PASS", rcp32_tested);
+    }
+
+    // -----------------------------------------------------------------------
+    // celt_rcp — strategic multi-range sweep
+    // -----------------------------------------------------------------------
+    println!("--- celt_rcp strategic sweep ---");
+    let mut rcp_mismatches = 0u64;
+    let mut rcp_tested = 0u64;
+
+    // Small values: 1..=1000 (every value)
+    for x in 1..=1000i32 {
+        let c_val = unsafe { bindings::debug_c_celt_rcp(x) };
+        let r_val = math_ops::celt_rcp(x);
+        rcp_tested += 1;
+        if c_val != r_val {
+            rcp_mismatches += 1;
+            if rcp_mismatches <= 5 {
+                println!(
+                    "  MISMATCH: celt_rcp({}) C={} R={} diff={}",
+                    x, c_val, r_val, c_val - r_val
+                );
+            }
+        }
+    }
+
+    // Medium values: 1000..100_000, sampled at ~1000 points
+    for i in 0..1000 {
+        let x = 1000 + (i as i64 * 99_000 / 1000) as i32;
+        let c_val = unsafe { bindings::debug_c_celt_rcp(x) };
+        let r_val = math_ops::celt_rcp(x);
+        rcp_tested += 1;
+        if c_val != r_val {
+            rcp_mismatches += 1;
+            if rcp_mismatches <= 5 {
+                println!(
+                    "  MISMATCH: celt_rcp({}) C={} R={} diff={}",
+                    x, c_val, r_val, c_val - r_val
+                );
+            }
+        }
+    }
+
+    // Large values: 100_000..2_147_483_647, sampled at ~1000 points
+    for i in 0..1000 {
+        let x = (100_000i64 + i * (2_147_483_647i64 - 100_000) / 1000) as i32;
+        let c_val = unsafe { bindings::debug_c_celt_rcp(x) };
+        let r_val = math_ops::celt_rcp(x);
+        rcp_tested += 1;
+        if c_val != r_val {
+            rcp_mismatches += 1;
+            if rcp_mismatches <= 5 {
+                println!(
+                    "  MISMATCH: celt_rcp({}) C={} R={} diff={}",
+                    x, c_val, r_val, c_val - r_val
+                );
+            }
+        }
+    }
+
+    // Powers of 2: 1, 2, 4, ..., 2^30
+    for k in 0..=30 {
+        let x = 1i32 << k;
+        let c_val = unsafe { bindings::debug_c_celt_rcp(x) };
+        let r_val = math_ops::celt_rcp(x);
+        rcp_tested += 1;
+        if c_val != r_val {
+            rcp_mismatches += 1;
+            if rcp_mismatches <= 5 {
+                println!(
+                    "  MISMATCH: celt_rcp(2^{} = {}) C={} R={} diff={}",
+                    k, x, c_val, r_val, c_val - r_val
+                );
+            }
+        }
+    }
+
+    // Near powers: 2^k +/- 1 for k=1..30
+    for k in 1..=30 {
+        let base = 1i32 << k;
+        for &delta in &[-1i32, 1] {
+            let x = base + delta;
+            if x < 1 {
+                continue;
+            }
+            let c_val = unsafe { bindings::debug_c_celt_rcp(x) };
+            let r_val = math_ops::celt_rcp(x);
+            rcp_tested += 1;
+            if c_val != r_val {
+                rcp_mismatches += 1;
+                if rcp_mismatches <= 5 {
+                    println!(
+                        "  MISMATCH: celt_rcp(2^{}+{} = {}) C={} R={} diff={}",
+                        k, delta, x, c_val, r_val, c_val - r_val
+                    );
+                }
+            }
+        }
+    }
+
+    if rcp_mismatches > 0 {
+        println!(
+            "  celt_rcp sweep: {} mismatches out of {}!",
+            rcp_mismatches, rcp_tested
+        );
+    } else {
+        println!("  celt_rcp sweep: {} values PASS", rcp_tested);
     }
 }
 
