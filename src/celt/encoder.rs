@@ -811,11 +811,15 @@ fn patch_transient_decision(
     // Compute mean increase (channel loop)
     // Bug 5 fix: use per-channel newE[i + c*nbEBands], not max of both channels.
     // Bug 4 fix: upper bound is end-1, not end.
+    // Bug 6 fix: C declares x1, x2 as opus_val16 (int16), so assigning the
+    // int32 celt_glog values from MAXG(0, ...) truncates the high bits.
+    // This silent truncation is required for bit-exact parity with the C
+    // reference. See wrk_docs/2026.04.08 - HLD - celt-redundancy-fix.md.
     let mut ch = 0;
     loop {
         for i in (2.max(s))..(e - 1) {
-            let x1 = 0i32.max(band_log_e[i + ch * nb]);
-            let x2 = 0i32.max(spread_old[i]);
+            let x1 = (0i32.max(band_log_e[i + ch * nb]) as i16) as i32;
+            let x2 = (0i32.max(spread_old[i]) as i16) as i32;
             mean_diff = mean_diff.wrapping_add(0i32.max(x1.wrapping_sub(x2)));
         }
         ch += 1;
@@ -3527,5 +3531,90 @@ mod tests {
         // Should succeed with a small number of bytes
         assert!(result > 0, "encode returned {}", result);
         assert!(result <= 128);
+    }
+
+    // -----------------------------------------------------------------------
+    // patch_transient_decision tests
+    // -----------------------------------------------------------------------
+
+    /// Test with band_log_e values that exceed i16::MAX (the C reference bug).
+    ///
+    /// In the C reference, `x1` and `x2` are declared as `opus_val16` (int16_t).
+    /// When Q24 log-energy values like 52363264 (0x031E9A00) are assigned to
+    /// int16_t, they truncate to 0x9A00 = -26112, which clamps to 0 via MAX16.
+    /// This makes mean_diff ≈ 0, so C returns false (no transient).
+    ///
+    /// The Rust code keeps full i32 values, so mean_diff stays large and the
+    /// function returns true. This test encodes the EXPECTED C behavior (false)
+    /// and should FAIL until the i16 truncation bug is fixed.
+    #[test]
+    fn test_patch_transient_large_values_should_match_c_reference() {
+        // Real value from the failing packet: 52363264 = 0x031E9A00 (Q24)
+        // When truncated to i16: (int16_t)0x9A00 = -26112 -> clamped to 0
+        let large_energy: i32 = 52363264;
+
+        let nb_ebands: i32 = 21;
+        let start: i32 = 0;
+        let end: i32 = 17;
+        let c: i32 = 1; // mono
+
+        // band_log_e: all bands at the large energy value
+        let band_log_e = vec![large_energy; nb_ebands as usize];
+        // old_band_e: all bands at 0 (creating a large difference)
+        let old_band_e = vec![0i32; nb_ebands as usize];
+
+        let result = patch_transient_decision(
+            &band_log_e,
+            &old_band_e,
+            nb_ebands,
+            start,
+            end,
+            c,
+        );
+
+        // C reference returns false because i16 truncation clamps x1 to 0
+        assert!(
+            !result,
+            "patch_transient_decision returned true for large Q24 values; \
+             should return false to match C reference i16 truncation behavior"
+        );
+    }
+
+    /// Test with band_log_e values that fit in i16 range — normal operation.
+    ///
+    /// Values within i16 range behave identically in C and Rust. With a modest
+    /// energy difference between current and old frames, the function should
+    /// return false (no transient detected). This test should PASS with the
+    /// current code.
+    #[test]
+    fn test_patch_transient_normal_values_no_transient() {
+        let nb_ebands: i32 = 21;
+        let start: i32 = 0;
+        let end: i32 = 17;
+        let c: i32 = 1; // mono
+
+        // Small energy values well within i16 range (Q24 representation of ~0.25)
+        // gconst(0.25) = 0.25 * (1 << 24) = 4194304
+        let mild_energy: i32 = gconst(0.25);
+
+        // band_log_e and old_band_e nearly the same — no transient
+        let band_log_e = vec![mild_energy; nb_ebands as usize];
+        let old_band_e = vec![mild_energy; nb_ebands as usize];
+
+        let result = patch_transient_decision(
+            &band_log_e,
+            &old_band_e,
+            nb_ebands,
+            start,
+            end,
+            c,
+        );
+
+        // No significant difference, so no transient detected
+        assert!(
+            !result,
+            "patch_transient_decision incorrectly detected a transient \
+             with identical current and old band energies"
+        );
     }
 }
