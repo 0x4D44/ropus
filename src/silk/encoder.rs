@@ -7790,6 +7790,54 @@ pub fn silk_encode(
         0
     };
 
+    // C: enc_API.c:215-258 — prefill handling BEFORE control_encoder
+    let mut saved_payload_size_ms: i32 = 0;
+    let mut saved_complexity: i32 = 0;
+    if prefill_flag != 0 {
+        // Only accept input length of 10 ms
+        if n_blocks_of_10ms != 1 {
+            return SILK_ENC_INPUT_INVALID_NO_OF_SAMPLES;
+        }
+
+        // Save LP state if prefill_flag == 2 (bandwidth switch preservation)
+        let save_lp = if prefill_flag == 2 {
+            let mut lp = enc.state_fxx[0].s_cmn.s_lp.clone();
+            lp.saved_fs_khz = enc.state_fxx[0].s_cmn.fs_khz;
+            Some(lp)
+        } else {
+            None
+        };
+
+        // Reset encoder (C: enc_API.c:229-236 — second init during prefill)
+        for n in 0..n_channels_internal {
+            silk_init_encoder(&mut enc.state_fxx[n]);
+            if let Some(ref lp) = save_lp {
+                enc.state_fxx[n].s_cmn.s_lp = lp.clone();
+            }
+        }
+
+        // Save and override control params for prefill (C: enc_API.c:237-244)
+        saved_payload_size_ms = enc_control.payload_size_ms;
+        enc_control.payload_size_ms = 10;
+        saved_complexity = enc_control.complexity;
+        enc_control.complexity = 0;
+        for n in 0..n_channels_internal {
+            enc.state_fxx[n].s_cmn.controlled_since_last_payload = 0;
+            enc.state_fxx[n].s_cmn.prefill_flag = 1;
+        }
+    } else {
+        // Only accept input lengths that are a multiple of 10 ms (C: enc_API.c:246-251)
+        if n_blocks_of_10ms * enc_control.api_sample_rate != 100 * n_samples_in
+            || n_samples_in < 0
+        {
+            return SILK_ENC_INPUT_INVALID_NO_OF_SAMPLES;
+        }
+        // Make sure no more than one packet can be produced (C: enc_API.c:253-257)
+        if 1000 * n_samples_in > enc_control.payload_size_ms * enc_control.api_sample_rate {
+            return SILK_ENC_INPUT_INVALID_NO_OF_SAMPLES;
+        }
+    }
+
     // Control encoder per channel
     for n in 0..n_channels_internal {
         let force_fs_khz = if n == 1 {
@@ -7816,11 +7864,6 @@ pub fn silk_encode(
             }
         }
         enc.state_fxx[n].s_cmn.in_dtx = enc.state_fxx[n].s_cmn.use_dtx;
-    }
-
-    // Set prefill flag
-    for n in 0..n_channels_internal {
-        enc.state_fxx[n].s_cmn.prefill_flag = prefill_flag;
     }
 
     let fs_khz = enc.state_fxx[0].s_cmn.fs_khz;
@@ -7957,7 +8000,33 @@ pub fn silk_encode(
                     silk_vad_get_sa_q8(&mut enc.state_fxx[0].s_cmn, &input_copy);
                     silk_encode_do_vad_fix(&mut enc.state_fxx[0], activity);
                 }
+
+                // Compute target rate for prefill (C enc_API.c:412-443)
+                // LBRR subtraction and bit balance are skipped (guarded by !prefillFlag in C).
+                // Bit reservoir decay is included for structural parity with the normal
+                // path (n_bits_exceeded is 0 after init, so the subtraction is a no-op).
+                const BITRESERVOIR_DECAY_TIME_MS: i32 = 500;
+                let mut n_bits_target = silk_div32_16(
+                    silk_mul(enc_control.bit_rate, enc_control.payload_size_ms),
+                    1000,
+                );
+                n_bits_target = silk_div32_16(n_bits_target, n_frames_per_packet);
+                let mut target_rate = if enc_control.payload_size_ms == 10 {
+                    silk_smulbb(n_bits_target, 100)
+                } else {
+                    silk_smulbb(n_bits_target, 50)
+                };
+                target_rate -= silk_div32_16(
+                    silk_mul(enc.n_bits_exceeded, 1000),
+                    BITRESERVOIR_DECAY_TIME_MS,
+                );
+                let target_rate = target_rate.max(5000).min(enc_control.bit_rate);
+
                 for n in 0..n_channels_internal {
+                    if target_rate > 0 {
+                        silk_control_snr(&mut enc.state_fxx[n].s_cmn, target_rate);
+                    }
+
                     let mut dummy_bytes = 0i32;
                     silk_encode_frame_fix(
                         &mut enc.state_fxx[n],
@@ -8325,23 +8394,11 @@ pub fn silk_encode(
         curr_block += 1;
     } // end main encode loop
 
-    // Handle prefill cleanup (C enc_API.c:586-592)
-    if prefill_flag != 0 {
-        for n in 0..n_channels_internal {
-            enc.state_fxx[n].s_cmn.controlled_since_last_payload = 0;
-            enc.state_fxx[n].s_cmn.prefill_flag = 0;
-        }
-        *n_bytes_out = 0;
-    }
-
-    // If packet was never completed, n_bytes_out stays 0
-    // (it was already set if packet completed above, or initialized to 0 by caller)
-
-    // Query encoder status
-    silk_query_encoder(enc, enc_control);
-
     // C: psEnc->nPrevChannelsInternal = encControl->nChannelsInternal; (enc_API.c:580)
     enc.n_prev_channels_internal = n_channels_internal as i32;
+
+    // Query encoder status (C: enc_API.c:582-584)
+    silk_query_encoder(enc, enc_control);
 
     // Write back stereo width from SILK encoder state (C enc_API.c:585)
     enc_control.stereo_width_q14 = if enc_control.to_mono != 0 {
@@ -8350,7 +8407,18 @@ pub fn silk_encode(
         enc.s_stereo.smth_width_q14 as i32
     };
 
-    // Set signal type and quantization offset for CELT (matches C enc_API.c:603-606)
+    // Handle prefill cleanup (C enc_API.c:586-593)
+    if prefill_flag != 0 {
+        enc_control.payload_size_ms = saved_payload_size_ms;
+        enc_control.complexity = saved_complexity;
+        for n in 0..n_channels_internal {
+            enc.state_fxx[n].s_cmn.controlled_since_last_payload = 0;
+            enc.state_fxx[n].s_cmn.prefill_flag = 0;
+        }
+        *n_bytes_out = 0;
+    }
+
+    // Set signal type and quantization offset for CELT (matches C enc_API.c:595-598)
     enc_control.signal_type = enc.state_fxx[0].s_cmn.indices.signal_type as i32;
     enc_control.offset = SILK_QUANTIZATION_OFFSETS_Q10
         [(enc.state_fxx[0].s_cmn.indices.signal_type as usize) >> 1]
@@ -9558,5 +9626,52 @@ mod tests {
         // Quantized predictors should be close to input
         assert!(pred[0].abs() <= 15000);
         assert!(pred[1].abs() <= 15000);
+    }
+
+    /// Verify that prefill encoding computes target rate and calls silk_control_snr,
+    /// leaving target_rate_bps and snr_db_q7 nonzero on the encoder channel state.
+    #[test]
+    fn test_prefill_sets_target_rate_and_snr() {
+        let mut enc = SilkEncoder::new();
+        assert_eq!(silk_init_encoder_top(&mut enc, 1), 0);
+
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.n_channels_api = 1;
+        ctrl.n_channels_internal = 1;
+        ctrl.api_sample_rate = 16_000;
+        ctrl.max_internal_sample_rate = 16_000;
+        ctrl.min_internal_sample_rate = 8_000;
+        ctrl.desired_internal_sample_rate = 16_000;
+        ctrl.payload_size_ms = 20;
+        ctrl.bit_rate = 25_000;
+        ctrl.max_bits = 1_000;
+
+        let samples = vec![0i16; 160];
+        let mut payload = [0u8; 256];
+        let mut range_enc = RangeEncoder::new(&mut payload);
+        let mut n_bytes_out = 0i32;
+
+        let ret = silk_encode(
+            &mut enc,
+            &mut ctrl,
+            &samples,
+            160,
+            &mut range_enc,
+            &mut n_bytes_out,
+            1,
+            0,
+        );
+        assert_eq!(ret, SILK_NO_ERROR);
+
+        assert!(
+            enc.state_fxx[0].s_cmn.target_rate_bps > 0,
+            "target_rate_bps should be nonzero after prefill, got {}",
+            enc.state_fxx[0].s_cmn.target_rate_bps
+        );
+        assert!(
+            enc.state_fxx[0].s_cmn.snr_db_q7 > 0,
+            "snr_db_q7 should be nonzero after prefill, got {}",
+            enc.state_fxx[0].s_cmn.snr_db_q7
+        );
     }
 }
