@@ -512,6 +512,7 @@ pub fn celt_atan2p_norm(y: i32, x: i32) -> i32 {
 
 /// Atan approximation using 4th-order polynomial (Q15 in, Q15 out).
 /// Input normalized by π/4.
+#[cfg(test)]
 pub fn celt_atan01(x: i32) -> i32 {
     const M1: i32 = 32767;
     const M2: i32 = -21;
@@ -528,21 +529,6 @@ pub fn celt_atan01(x: i32) -> i32 {
             ),
         ),
     )
-}
-
-/// atan2 approximation for positive inputs (Q15 in, Q15 out).
-pub fn celt_atan2p(y: i32, x: i32) -> i32 {
-    if x == 0 && y == 0 {
-        0
-    } else if y < x {
-        let arg = celt_div(shl32(extend32(y), 15), x);
-        let arg = if arg >= 32767 { 32767 } else { arg };
-        shr16(celt_atan01(extract16(arg)), 1)
-    } else {
-        let arg = celt_div(shl32(extend32(x), 15), y);
-        let arg = if arg >= 32767 { 32767 } else { arg };
-        25736 - shr16(celt_atan01(extract16(arg)), 1)
-    }
 }
 
 // ===========================================================================
@@ -589,6 +575,7 @@ pub fn celt_maxabs32(x: &[i32]) -> i32 {
 // ===========================================================================
 
 /// Convert float samples to i16, with rounding and clamping.
+#[cfg(test)]
 pub fn celt_float2int16(input: &[f32], output: &mut [i16]) {
     for (inp, out) in input.iter().zip(output.iter_mut()) {
         *out = float2int16(*inp);
@@ -597,6 +584,7 @@ pub fn celt_float2int16(input: &[f32], output: &mut [i16]) {
 
 /// Clamp samples to [-2.0, 2.0]. Returns 0 (C implementation can't provide
 /// quick hint about whether all samples are within [-1, 1]).
+#[cfg(test)]
 pub fn opus_limit2_checkwithin1(samples: &mut [f32]) -> i32 {
     if samples.is_empty() {
         return 1;

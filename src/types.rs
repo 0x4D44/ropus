@@ -108,28 +108,12 @@ pub fn saturate(x: i32, a: i32) -> i32 {
     }
 }
 
-/// Saturate to i16 range, returned as i32.
-#[inline(always)]
-pub fn saturate16(x: i32) -> i32 {
-    if x > 32767 {
-        32767
-    } else if x < -32768 {
-        -32768
-    } else {
-        x
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Negate
 // ---------------------------------------------------------------------------
 
 #[inline(always)]
 pub fn neg16(x: i32) -> i32 {
-    -x
-}
-#[inline(always)]
-pub fn neg32(x: i32) -> i32 {
     -x
 }
 
@@ -202,28 +186,10 @@ pub fn vshr32(a: i32, shift: i32) -> i32 {
     }
 }
 
-/// Arithmetic right shift of 64-bit value.
-#[inline(always)]
-pub fn shr64(a: i64, shift: i32) -> i64 {
-    a >> shift
-}
-
 /// Raw shift right (matches C `SHR` macro).
 #[inline(always)]
 pub fn shr(a: i32, shift: i32) -> i32 {
     a >> shift
-}
-
-/// Raw shift left (same as shl32, matches C `SHL` macro).
-#[inline(always)]
-pub fn shl(a: i32, shift: i32) -> i32 {
-    shl32(a, shift)
-}
-
-/// Raw round-to-nearest shift (matches C `PSHR` macro).
-#[inline(always)]
-pub fn pshr(a: i32, shift: i32) -> i32 {
-    pshr32(a, shift)
 }
 
 // ---------------------------------------------------------------------------
@@ -319,19 +285,6 @@ pub fn half32(x: i32) -> i32 {
 // Multiply operations
 // ---------------------------------------------------------------------------
 
-/// 32×32 → 32 multiply (matches C `IMUL32`).
-#[inline(always)]
-pub fn imul32(a: i32, b: i32) -> i32 {
-    a * b
-}
-
-/// 16×16 → 16 multiply (result expected to fit in 16 bits).
-/// Matches C: `(opus_val16)(a) * (opus_val16)(b)`.
-#[inline(always)]
-pub fn mult16_16_16(a: i32, b: i32) -> i32 {
-    (a as i16 as i32) * (b as i16 as i32)
-}
-
 /// 32×32 → 32 multiply (lower 32 bits, wrapping).
 #[inline(always)]
 pub fn mult32_32_32(a: i32, b: i32) -> i32 {
@@ -345,13 +298,6 @@ pub fn mult16_16(a: i32, b: i32) -> i32 {
     (a as i16 as i32) * (b as i16 as i32)
 }
 
-/// 16-bit signed × 16-bit unsigned → 32 multiply.
-/// Matches C: `(opus_val16)(a) * (opus_uint16)(b)`.
-#[inline(always)]
-pub fn mult16_16su(a: i32, b: i32) -> i32 {
-    (a as i16 as i32) * (b as u16 as i32)
-}
-
 /// 16×16 multiply-accumulate (wrapping, matches C overflow semantics).
 #[inline(always)]
 pub fn mac16_16(c: i32, a: i32, b: i32) -> i32 {
@@ -359,24 +305,6 @@ pub fn mac16_16(c: i32, a: i32, b: i32) -> i32 {
 }
 
 // --- Shifted 16×16 multiplies ---
-
-/// 16×16 multiply, >> 11 (truncate).
-#[inline(always)]
-pub fn mult16_16_q11_32(a: i32, b: i32) -> i32 {
-    shr(mult16_16(a, b), 11)
-}
-
-/// 16×16 multiply, >> 11.
-#[inline(always)]
-pub fn mult16_16_q11(a: i32, b: i32) -> i32 {
-    shr(mult16_16(a, b), 11)
-}
-
-/// 16×16 multiply, >> 13.
-#[inline(always)]
-pub fn mult16_16_q13(a: i32, b: i32) -> i32 {
-    shr(mult16_16(a, b), 13)
-}
 
 /// 16×16 multiply, >> 14.
 #[inline(always)]
@@ -388,18 +316,6 @@ pub fn mult16_16_q14(a: i32, b: i32) -> i32 {
 #[inline(always)]
 pub fn mult16_16_q15(a: i32, b: i32) -> i32 {
     shr(mult16_16(a, b), 15)
-}
-
-/// 16×16 multiply, + 4096 then >> 13 (round-to-nearest).
-#[inline(always)]
-pub fn mult16_16_p13(a: i32, b: i32) -> i32 {
-    shr(4096 + mult16_16(a, b), 13)
-}
-
-/// 16×16 multiply, + 8192 then >> 14 (round-to-nearest).
-#[inline(always)]
-pub fn mult16_16_p14(a: i32, b: i32) -> i32 {
-    shr(8192 + mult16_16(a, b), 14)
 }
 
 /// 16×16 multiply, + 16384 then >> 15 (round-to-nearest).
@@ -442,24 +358,6 @@ pub fn mult32_32_q31(a: i32, b: i32) -> i32 {
     ((a as i64) * (b as i64) >> 31) as i32
 }
 
-/// 32×32 multiply, + 2^30 then >> 31 (round-to-nearest).
-#[inline(always)]
-pub fn mult32_32_p31(a: i32, b: i32) -> i32 {
-    ((1_073_741_824i64 + (a as i64) * (b as i64)) >> 31) as i32
-}
-
-/// Overflow-tolerant version of mult32_32_p31.
-#[inline(always)]
-pub fn mult32_32_p31_ovflw(a: i32, b: i32) -> i32 {
-    mult32_32_p31(a, b)
-}
-
-/// 32×32 multiply, >> 32.
-#[inline(always)]
-pub fn mult32_32_q32(a: i32, b: i32) -> i32 {
-    ((a as i64) * (b as i64) >> 32) as i32
-}
-
 // --- Multiply-accumulate (16×32) ---
 
 /// 16×32 MAC, >> 15. Uses decomposed form matching C `MAC16_32_Q15`.
@@ -467,12 +365,6 @@ pub fn mult32_32_q32(a: i32, b: i32) -> i32 {
 #[inline(always)]
 pub fn mac16_32_q15(c: i32, a: i32, b: i32) -> i32 {
     c + mult16_16(a, shr(b, 15)) + shr(mult16_16(a, b & 0x00007fff), 15)
-}
-
-/// 16×32 MAC, >> 16.
-#[inline(always)]
-pub fn mac16_32_q16(c: i32, a: i32, b: i32) -> i32 {
-    c + mult16_16(a, shr(b, 16)) + shr(mult16_16su(a, b & 0x0000ffff), 16)
 }
 
 // --- Division ---
@@ -537,16 +429,6 @@ pub fn float2int16(x: f32) -> i16 {
     let x = if x > 32767.0 { 32767.0 } else { x };
     let x = if x < -32768.0 { -32768.0 } else { x };
     float2int(x) as i16
-}
-
-/// Convert float to 24-bit integer.
-/// Matches C `FLOAT2INT24`.
-#[inline(always)]
-pub fn float2int24(x: f32) -> i32 {
-    let x = x * (CELT_SIG_SCALE * 256.0);
-    let x = if x > 16777216.0 { 16777216.0 } else { x };
-    let x = if x < -16777216.0 { -16777216.0 } else { x };
-    float2int(x)
 }
 
 // ---------------------------------------------------------------------------
@@ -683,10 +565,6 @@ mod tests {
         assert_eq!(saturate(2, 3), 2);
         assert_eq!(saturate(5, 3), 3);
         assert_eq!(saturate(-5, 3), -3);
-
-        assert_eq!(saturate16(2), 2);
-        assert_eq!(saturate16(40000), 32767);
-        assert_eq!(saturate16(-40000), -32768);
     }
 
     #[test]
@@ -696,10 +574,7 @@ mod tests {
         assert_eq!(shl16(-1, 1), -2);
         assert_eq!(shr32(-32, 3), -4);
         assert_eq!(shl32(3, 4), 48);
-        assert_eq!(shr64(-64, 3), -8);
         assert_eq!(shr(128, 5), 4);
-        assert_eq!(shl(2, 6), 128);
-        assert_eq!(pshr(5, 1), 3);
         assert_eq!(half16(9), 4);
         assert_eq!(half32(9), 4);
         assert_eq!(vshr32(256, 4), 16);
@@ -718,26 +593,17 @@ mod tests {
         assert_eq!(add32_ovflw(i32::MAX, 1), i32::MIN);
         assert_eq!(sub32_ovflw(i32::MIN, 1), i32::MAX);
         assert_eq!(neg16(7), -7);
-        assert_eq!(neg32(-7), 7);
         assert_eq!(neg32_ovflw(i32::MIN), i32::MIN);
     }
 
     #[test]
     fn test_multiply_and_mac_helpers() {
-        assert_eq!(imul32(3, -4), -12);
-        assert_eq!(mult16_16_16(200, 300), 60000);
         assert_eq!(mult32_32_32(12345, -6789), -83_810_205);
         assert_eq!(mult16_16(300, -200), -60000);
-        assert_eq!(mult16_16su(-2, 65535), -131070);
         assert_eq!(mac16_16(100, 300, -200), -59900);
 
-        assert_eq!(mult16_16_q11_32(1024, 1024), 512);
-        assert_eq!(mult16_16_q11(1024, 1024), 512);
-        assert_eq!(mult16_16_q13(1024, 1024), 128);
         assert_eq!(mult16_16_q14(1024, 1024), 64);
         assert_eq!(mult16_16_q15(1024, 1024), 32);
-        assert_eq!(mult16_16_p13(1024, 1024), 128);
-        assert_eq!(mult16_16_p14(1024, 1024), 64);
         assert_eq!(mult16_16_p15(1024, 1024), 32);
 
         assert_eq!(mult16_32_q15(1024, 1 << 20), 32768);
@@ -746,12 +612,8 @@ mod tests {
 
         assert_eq!(mult32_32_q16(1 << 16, 1 << 16), 65536);
         assert_eq!(mult32_32_q31(i32::MAX, i32::MAX), 2_147_483_646);
-        assert_eq!(mult32_32_p31(1 << 30, 2), 1);
-        assert_eq!(mult32_32_p31_ovflw(1 << 30, 2), 1);
-        assert_eq!(mult32_32_q32(1 << 16, 1 << 16), 1);
 
         assert_eq!(mac16_32_q15(100, 1024, 1 << 20), 32868);
-        assert_eq!(mac16_32_q16(100, 1024, 1 << 20), 16484);
     }
 
     #[test]
@@ -768,8 +630,5 @@ mod tests {
         assert_eq!(float2int16(0.5), 16384);
         assert_eq!(float2int16(1.0), 32767);
         assert_eq!(float2int16(-1.0), -32768);
-        assert_eq!(float2int24(0.5), 4_194_304);
-        assert_eq!(float2int24(1.0), 8_388_608);
-        assert_eq!(float2int24(-1.0), -8_388_608);
     }
 }
