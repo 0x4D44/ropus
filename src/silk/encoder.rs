@@ -7766,6 +7766,12 @@ pub fn silk_encode(
         }
     }
 
+    // C: transition = (encControl->payloadSize_ms != psEnc->state_Fxx[0].sCmn.PacketSize_ms)
+    //                || (psEnc->nChannelsInternal != encControl->nChannelsInternal);
+    // Must be computed BEFORE updating n_channels_internal.
+    let transition = enc_control.payload_size_ms != enc.state_fxx[0].s_cmn.packet_size_ms
+        || enc.n_channels_internal != n_channels_internal as i32;
+
     enc.n_channels_api = enc_control.n_channels_api;
     enc.n_channels_internal = n_channels_internal as i32;
 
@@ -7801,6 +7807,15 @@ pub fn silk_encode(
         if ret != SILK_NO_ERROR {
             return ret;
         }
+        // C: enc_API.c:268-273 — reset LBRR flags on transition or reset,
+        // then set inDTX = useDTX.
+        if enc.state_fxx[n].s_cmn.first_frame_after_reset != 0 || transition {
+            let n_frames = enc.state_fxx[0].s_cmn.n_frames_per_packet as usize;
+            for i in 0..n_frames {
+                enc.state_fxx[n].s_cmn.lbrr_flags[i] = 0;
+            }
+        }
+        enc.state_fxx[n].s_cmn.in_dtx = enc.state_fxx[n].s_cmn.use_dtx;
     }
 
     // Set prefill flag
@@ -7919,7 +7934,27 @@ pub fn silk_encode(
         // --- Encode if we have a full sub-frame ---
         if enc.state_fxx[0].s_cmn.input_buf_ix >= frame_length {
             // --- Prefill mode ---
+            // C (enc_API.c:409-532) runs HP variable cutoff, sMid buffering,
+            // VAD, and silk_encode_frame even during prefill. The Rust prefill
+            // path must match to keep persistent state (s_vad, sMid) aligned.
             if prefill_flag != 0 {
+                // sMid buffering for mono (C enc_API.c:476-478)
+                if n_channels_internal == 1 {
+                    let fl = frame_length as usize;
+                    enc.state_fxx[0].s_cmn.input_buf[0] = enc.s_stereo.s_mid[0];
+                    enc.state_fxx[0].s_cmn.input_buf[1] = enc.s_stereo.s_mid[1];
+                    if fl + 2 <= enc.state_fxx[0].s_cmn.input_buf.len() {
+                        enc.s_stereo.s_mid[0] = enc.state_fxx[0].s_cmn.input_buf[fl];
+                        enc.s_stereo.s_mid[1] = enc.state_fxx[0].s_cmn.input_buf[fl + 1];
+                    }
+                }
+                // VAD on channel 0 (C enc_API.c:480)
+                {
+                    let fl = frame_length as usize;
+                    let input_copy = enc.state_fxx[0].s_cmn.input_buf[1..1 + fl].to_vec();
+                    silk_vad_get_sa_q8(&mut enc.state_fxx[0].s_cmn, &input_copy);
+                    silk_encode_do_vad_fix(&mut enc.state_fxx[0], activity);
+                }
                 for n in 0..n_channels_internal {
                     let mut dummy_bytes = 0i32;
                     silk_encode_frame_fix(
@@ -8288,9 +8323,10 @@ pub fn silk_encode(
         curr_block += 1;
     } // end main encode loop
 
-    // Handle prefill cleanup (C enc_API.c:261-268)
+    // Handle prefill cleanup (C enc_API.c:586-592)
     if prefill_flag != 0 {
         for n in 0..n_channels_internal {
+            enc.state_fxx[n].s_cmn.controlled_since_last_payload = 0;
             enc.state_fxx[n].s_cmn.prefill_flag = 0;
         }
         *n_bytes_out = 0;
