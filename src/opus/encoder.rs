@@ -2004,6 +2004,34 @@ impl OpusEncoder {
                     self.silk_mode.min_internal_sample_rate = 8000;
                 }
                 self.silk_mode.max_internal_sample_rate = 16000;
+
+                // C: opus_encoder.c:2129-2143 — At very low bitrates in SILK_ONLY mode,
+                // cap the internal sample rate so SILK doesn't try to encode more
+                // bandwidth than the bitrate can support.
+                if self.mode == MODE_SILK_ONLY {
+                    let effective_max_rate =
+                        bits_to_bitrate(max_data_bytes * 8, self.fs, frame_size);
+                    let effective_max_rate = if frame_rate > 50 {
+                        effective_max_rate * 2 / 3
+                    } else {
+                        effective_max_rate
+                    };
+                    if effective_max_rate < 8000 {
+                        self.silk_mode.max_internal_sample_rate = 12000;
+                        self.silk_mode.desired_internal_sample_rate = imin(
+                            12000,
+                            self.silk_mode.desired_internal_sample_rate,
+                        );
+                    }
+                    if effective_max_rate < 7000 {
+                        self.silk_mode.max_internal_sample_rate = 8000;
+                        self.silk_mode.desired_internal_sample_rate = imin(
+                            8000,
+                            self.silk_mode.desired_internal_sample_rate,
+                        );
+                    }
+                }
+
                 self.silk_mode.use_cbr = if self.use_vbr != 0 { 0 } else { 1 };
                 self.silk_mode.max_bits = (max_data_bytes - 1) * 8;
                 if redundancy && redundancy_bytes >= 2 {
@@ -3924,5 +3952,148 @@ mod tests {
         enc.delay_buffer = vec![11, 12, 13, 14];
         enc.update_delay_buffer(&[1, 2], 6);
         assert_eq!(enc.delay_buffer, vec![11, 12, 13, 14]);
+    }
+
+    /// In SILK_ONLY mode at very low bitrates, the encoder should cap the
+    /// internal sample rate so SILK doesn't try to encode more bandwidth
+    /// than the bitrate can support (C: opus_encoder.c:2129-2143).
+    ///
+    /// effective_max_rate = bits_to_bitrate(max_data_bytes * 8, fs, frame_size)
+    /// For 48 kHz / 960 samples (20 ms, frame_rate=50):
+    ///   effective_max_rate = max_data_bytes * 400
+    ///
+    /// Thresholds: <8000 -> cap at 12000, <7000 -> cap at 8000.
+    #[test]
+    fn test_effective_max_rate_narrows_silk_internal_rate() {
+        // --- Case 1: effective_max_rate = 10000 (>= 8000) -> no narrowing ---
+        {
+            let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+            enc.mode = MODE_SILK_ONLY;
+            enc.prev_mode = MODE_SILK_ONLY;
+            enc.bandwidth = OPUS_BANDWIDTH_WIDEBAND;
+
+            let pcm = patterned_pcm_i16(960, 1, 501);
+            let mut packet = vec![0u8; 1500];
+            // max_data_bytes = 25 -> effective_max_rate = 25*400 = 10000
+            // Result ignored: we only inspect silk_mode state after the
+            // narrowing logic runs (encode may fail with tiny buffers).
+            let _ = enc.encode_frame_native(
+                &pcm, 960, &mut packet, 25, 25, false, false, false, 0, 6000, false,
+            );
+            assert_eq!(
+                enc.silk_mode.max_internal_sample_rate, 16000,
+                "rate >= 8000: max_internal_sample_rate should stay at 16000"
+            );
+        }
+
+        // --- Case 2: effective_max_rate = 7200 (< 8000, >= 7000) -> cap at 12000 ---
+        {
+            let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+            enc.mode = MODE_SILK_ONLY;
+            enc.prev_mode = MODE_SILK_ONLY;
+            enc.bandwidth = OPUS_BANDWIDTH_WIDEBAND;
+
+            let pcm = patterned_pcm_i16(960, 1, 502);
+            let mut packet = vec![0u8; 1500];
+            // max_data_bytes = 18 -> effective_max_rate = 18*400 = 7200
+            let _ = enc.encode_frame_native(
+                &pcm, 960, &mut packet, 18, 18, false, false, false, 0, 6000, false,
+            );
+            assert_eq!(
+                enc.silk_mode.max_internal_sample_rate, 12000,
+                "rate < 8000: max_internal_sample_rate should be capped at 12000"
+            );
+        }
+
+        // --- Case 3: effective_max_rate = 6000 (< 7000) -> cap at 8000 ---
+        {
+            let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+            enc.mode = MODE_SILK_ONLY;
+            enc.prev_mode = MODE_SILK_ONLY;
+            enc.bandwidth = OPUS_BANDWIDTH_WIDEBAND;
+
+            let pcm = patterned_pcm_i16(960, 1, 503);
+            let mut packet = vec![0u8; 1500];
+            // max_data_bytes = 15 -> effective_max_rate = 15*400 = 6000
+            let _ = enc.encode_frame_native(
+                &pcm, 960, &mut packet, 15, 15, false, false, false, 0, 6000, false,
+            );
+            assert_eq!(
+                enc.silk_mode.max_internal_sample_rate, 8000,
+                "rate < 7000: max_internal_sample_rate should be capped at 8000"
+            );
+        }
+    }
+
+    /// Verify that the frame_rate > 50 branch applies the 2/3 penalty
+    /// to effective_max_rate, making the narrowing kick in sooner.
+    #[test]
+    fn test_effective_max_rate_high_frame_rate_penalty() {
+        // With fs=48000, frame_size=480 (10 ms), frame_rate=100 (>50).
+        // effective_max_rate before penalty: max_data_bytes * 800
+        // after 2/3 penalty: max_data_bytes * 800 * 2/3
+        //
+        // max_data_bytes = 15 -> pre-penalty = 12000, post-penalty = 8000
+        // 8000 < 8000 is false -> no narrowing
+        //
+        // max_data_bytes = 14 -> pre-penalty = 11200, post-penalty = 7466
+        // 7466 < 8000 -> cap at 12000, >= 7000 -> no further cap
+        //
+        // max_data_bytes = 13 -> pre-penalty = 10400, post-penalty = 6933
+        // 6933 < 7000 -> cap at 8000
+
+        // --- post-penalty rate = 8000 -> NOT < 8000 -> no narrowing ---
+        {
+            let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+            enc.mode = MODE_SILK_ONLY;
+            enc.prev_mode = MODE_SILK_ONLY;
+            enc.bandwidth = OPUS_BANDWIDTH_WIDEBAND;
+
+            let pcm = patterned_pcm_i16(480, 1, 601);
+            let mut packet = vec![0u8; 1500];
+            let _ = enc.encode_frame_native(
+                &pcm, 480, &mut packet, 15, 15, false, false, false, 0, 6000, false,
+            );
+            assert_eq!(
+                enc.silk_mode.max_internal_sample_rate, 16000,
+                "post-penalty rate == 8000 should not trigger narrowing"
+            );
+        }
+
+        // --- post-penalty rate = 7466 -> < 8000 -> cap at 12000 ---
+        {
+            let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+            enc.mode = MODE_SILK_ONLY;
+            enc.prev_mode = MODE_SILK_ONLY;
+            enc.bandwidth = OPUS_BANDWIDTH_WIDEBAND;
+
+            let pcm = patterned_pcm_i16(480, 1, 602);
+            let mut packet = vec![0u8; 1500];
+            let _ = enc.encode_frame_native(
+                &pcm, 480, &mut packet, 14, 14, false, false, false, 0, 6000, false,
+            );
+            assert_eq!(
+                enc.silk_mode.max_internal_sample_rate, 12000,
+                "post-penalty rate 7466 < 8000 should cap at 12000"
+            );
+        }
+
+        // --- post-penalty rate = 6933 -> < 7000 -> cap at 8000 ---
+        {
+            let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+            enc.mode = MODE_SILK_ONLY;
+            enc.prev_mode = MODE_SILK_ONLY;
+            enc.bandwidth = OPUS_BANDWIDTH_WIDEBAND;
+
+            let pcm = patterned_pcm_i16(480, 1, 603);
+            let mut packet = vec![0u8; 1500];
+            let _ = enc.encode_frame_native(
+                &pcm, 480, &mut packet, 13, 13, false, false, false, 0, 6000, false,
+            );
+            assert_eq!(
+                enc.silk_mode.max_internal_sample_rate, 8000,
+                "post-penalty rate 6933 < 7000 should cap at 8000"
+            );
+        }
     }
 }
