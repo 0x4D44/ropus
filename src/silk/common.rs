@@ -1238,7 +1238,7 @@ pub fn silk_nlsf_residual_dequant(
     let mut out_q10: i32 = 0;
 
     for i in (0..order).rev() {
-        let pred_q10 = (out_q10 * pred_coef_q8[i] as i32) >> 8;
+        let pred_q10 = silk_smulbb(out_q10, pred_coef_q8[i] as i32) >> 8;
         out_q10 = (indices[i] as i32) << 10;
         if out_q10 > 0 {
             out_q10 -= 102; // SILK_FIX_CONST(NLSF_QUANT_LEVEL_ADJ, 10)
