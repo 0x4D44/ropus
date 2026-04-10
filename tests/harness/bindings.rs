@@ -358,6 +358,23 @@ unsafe extern "C" {
 
     pub fn debug_dump_silk_stereo(enc: *mut OpusEncoder);
 
+    pub fn debug_get_silk_state(
+        enc: *mut OpusEncoder,
+        fs_khz: *mut opus_int32,
+        frame_length: *mut opus_int32,
+        nb_subfr: *mut opus_int32,
+        input_buf_ix: *mut opus_int32,
+        n_frames_per_packet: *mut opus_int32,
+        packet_size_ms: *mut opus_int32,
+        first_frame_after_reset: *mut opus_int32,
+        controlled_since_last_payload: *mut opus_int32,
+        prefill_flag: *mut opus_int32,
+        n_frames_encoded: *mut opus_int32,
+        speech_activity_q8: *mut opus_int32,
+        signal_type: *mut opus_int32,
+        input_quality_bands_q15: *mut opus_int32,
+    );
+
     pub fn debug_clt_mdct_backward(
         input: *const opus_int32,
         output: *mut opus_int32,

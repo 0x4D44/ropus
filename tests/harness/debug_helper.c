@@ -783,3 +783,38 @@ void debug_dump_silk_stereo(OpusEncoder *enc)
         (int)st->pred_prev_Q13[0], (int)st->pred_prev_Q13[1],
         psEnc->nChannelsInternal);
 }
+
+/* Extract key SILK encoder internal state for comparison with Rust. */
+void debug_get_silk_state(OpusEncoder *enc,
+    opus_int32 *fs_khz,
+    opus_int32 *frame_length,
+    opus_int32 *nb_subfr,
+    opus_int32 *input_buf_ix,
+    opus_int32 *n_frames_per_packet,
+    opus_int32 *packet_size_ms,
+    opus_int32 *first_frame_after_reset,
+    opus_int32 *controlled_since_last_payload,
+    opus_int32 *prefill_flag,
+    opus_int32 *n_frames_encoded,
+    opus_int32 *speech_activity_q8,
+    opus_int32 *signal_type,
+    opus_int32 *input_quality_bands_q15)
+{
+    OpusEncoderOffsets *hdr = (OpusEncoderOffsets *)enc;
+    silk_encoder *psEnc = (silk_encoder *)((char *)enc + hdr->silk_enc_offset);
+    silk_encoder_state *st = &psEnc->state_Fxx[0].sCmn;
+
+    *fs_khz = st->fs_kHz;
+    *frame_length = st->frame_length;
+    *nb_subfr = st->nb_subfr;
+    *input_buf_ix = st->inputBufIx;
+    *n_frames_per_packet = st->nFramesPerPacket;
+    *packet_size_ms = st->PacketSize_ms;
+    *first_frame_after_reset = st->first_frame_after_reset;
+    *controlled_since_last_payload = st->controlled_since_last_payload;
+    *prefill_flag = st->prefillFlag;
+    *n_frames_encoded = st->nFramesEncoded;
+    *speech_activity_q8 = st->speech_activity_Q8;
+    *signal_type = st->indices.signalType;
+    *input_quality_bands_q15 = st->input_quality_bands_Q15[0];
+}

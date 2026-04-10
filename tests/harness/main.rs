@@ -5586,6 +5586,87 @@ fn state_checkpoint_diffs(
         if c_rng != r_rng {
             diffs.push(format!("enc.final_range: C=0x{:08x} R=0x{:08x}", c_rng, r_rng));
         }
+
+        // Internal HP/mode state via debug helper
+        let mut c_hp = [0i32; 4];
+        let mut c_hp_smth2 = 0i32;
+        let mut c_mode = 0i32;
+        let mut c_stream_ch = 0i32;
+        let mut c_bw = 0i32;
+        bindings::debug_get_encoder_hp_state(
+            c_enc,
+            c_hp.as_mut_ptr(),
+            &mut c_hp_smth2,
+            &mut c_mode,
+            &mut c_stream_ch,
+            &mut c_bw,
+        );
+        let r_hp = r_enc.get_hp_mem();
+        let r_hp_smth2 = r_enc.get_variable_hp_smth2();
+        if c_hp != r_hp {
+            diffs.push(format!("enc.hp_mem: C={:?} R={:?}", c_hp, r_hp));
+        }
+        if c_hp_smth2 != r_hp_smth2 {
+            diffs.push(format!("enc.variable_hp_smth2: C={} R={}", c_hp_smth2, r_hp_smth2));
+        }
+
+        // SILK encoder internal state
+        let mut c_silk_fs_khz = 0i32;
+        let mut c_silk_frame_length = 0i32;
+        let mut c_silk_nb_subfr = 0i32;
+        let mut c_silk_input_buf_ix = 0i32;
+        let mut c_silk_n_frames_per_packet = 0i32;
+        let mut c_silk_packet_size_ms = 0i32;
+        let mut c_silk_first_frame_after_reset = 0i32;
+        let mut c_silk_controlled_since_last_payload = 0i32;
+        let mut c_silk_prefill_flag = 0i32;
+        let mut c_silk_n_frames_encoded = 0i32;
+        let mut c_silk_speech_activity_q8 = 0i32;
+        let mut c_silk_signal_type = 0i32;
+        let mut c_silk_input_quality_bands_q15 = 0i32;
+        bindings::debug_get_silk_state(
+            c_enc,
+            &mut c_silk_fs_khz,
+            &mut c_silk_frame_length,
+            &mut c_silk_nb_subfr,
+            &mut c_silk_input_buf_ix,
+            &mut c_silk_n_frames_per_packet,
+            &mut c_silk_packet_size_ms,
+            &mut c_silk_first_frame_after_reset,
+            &mut c_silk_controlled_since_last_payload,
+            &mut c_silk_prefill_flag,
+            &mut c_silk_n_frames_encoded,
+            &mut c_silk_speech_activity_q8,
+            &mut c_silk_signal_type,
+            &mut c_silk_input_quality_bands_q15,
+        );
+        if let Some((r_fs_khz, r_frame_length, r_nb_subfr, r_input_buf_ix,
+                      r_n_frames_per_packet, r_packet_size_ms,
+                      r_first_frame_after_reset, r_controlled,
+                      r_prefill_flag, r_n_frames_encoded,
+                      r_speech_activity_q8, r_signal_type,
+                      r_input_quality_bands_q15)) = r_enc.get_silk_state() {
+            macro_rules! cmp_silk {
+                ($c:expr, $r:expr, $name:literal) => {
+                    if $c != $r {
+                        diffs.push(format!("SILK-{}: C={} R={}", $name, $c, $r));
+                    }
+                };
+            }
+            cmp_silk!(c_silk_fs_khz, r_fs_khz, "fs_khz");
+            cmp_silk!(c_silk_frame_length, r_frame_length, "frame_length");
+            cmp_silk!(c_silk_nb_subfr, r_nb_subfr, "nb_subfr");
+            cmp_silk!(c_silk_input_buf_ix, r_input_buf_ix, "input_buf_ix");
+            cmp_silk!(c_silk_n_frames_per_packet, r_n_frames_per_packet, "n_frames_per_packet");
+            cmp_silk!(c_silk_packet_size_ms, r_packet_size_ms, "packet_size_ms");
+            cmp_silk!(c_silk_first_frame_after_reset, r_first_frame_after_reset, "first_frame_after_reset");
+            cmp_silk!(c_silk_controlled_since_last_payload, r_controlled, "controlled_since_last_payload");
+            cmp_silk!(c_silk_prefill_flag, r_prefill_flag, "prefill_flag");
+            cmp_silk!(c_silk_n_frames_encoded, r_n_frames_encoded, "n_frames_encoded");
+            cmp_silk!(c_silk_speech_activity_q8, r_speech_activity_q8, "speech_activity_q8");
+            cmp_silk!(c_silk_signal_type, r_signal_type, "signal_type");
+            cmp_silk!(c_silk_input_quality_bands_q15, r_input_quality_bands_q15, "input_quality_bands_q15");
+        }
     }
 
     // ---- Decoder state ----
