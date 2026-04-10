@@ -1693,6 +1693,11 @@ impl OpusEncoder {
         equiv_rate: i32,
         to_celt: bool,
     ) -> Result<i32, i32> {
+        // Ensure self.mode matches the mode parameter.  In the normal encode
+        // path this is already set by the caller (line ~1628), but being
+        // explicit here keeps encode_multiframe self-contained.
+        self.mode = mode;
+
         // Determine sub-frame size
         let enc_frame_size = if mode == MODE_SILK_ONLY {
             if frame_size == 2 * self.fs / 25 {

@@ -1193,8 +1193,10 @@ impl PitchDNNState {
         self._initialized = true;
     }
     pub fn load_model(&mut self, data: &[u8]) -> i32 {
-        let _ = data;
-        0
+        match parse_weights(data) {
+            Ok(_) => 0,
+            Err(e) => e,
+        }
     }
     pub fn compute(&mut self, _if_features: &[f32], _xcorr_features: &[f32]) -> f32 {
         0.0
@@ -2013,6 +2015,7 @@ impl LPCNetPLCState {
                 self.loaded = true;
                 return 0;
             }
+            return ret2;
         }
         ret
     }
@@ -2212,6 +2215,7 @@ impl LPCNetPLCState {
 mod tests {
     use super::*;
     use crate::dnn::core;
+    #[cfg(feature = "dnn")]
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     fn patterned_pcm(seed: i32) -> [i16; FRAME_SIZE] {
@@ -2787,7 +2791,7 @@ mod tests {
         let blob = make_pitchdnn_weight_blob();
 
         let mut plc = LPCNetPLCState::new();
-        assert_eq!(plc.load_model(&blob), 0);
+        assert_eq!(plc.load_model(&blob), -1);
         assert!(!plc.loaded);
     }
 
@@ -3084,6 +3088,7 @@ mod tests {
         assert_eq!(blended, pcm_in);
     }
 
+    #[cfg(feature = "dnn")]
     #[test]
     fn test_compute_frame_features_updates_state_before_pitchdnn_panic() {
         let mut enc = LPCNetEncState::new();
