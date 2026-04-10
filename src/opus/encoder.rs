@@ -383,7 +383,7 @@ fn compute_frame_energy(pcm: &[i16], frame_size: i32, channels: i32) -> i32 {
 }
 
 /// Resolve user bitrate to effective bitrate.
-/// Matches C `user_bitrate_to_bitrate`.
+/// Matches C `user_bitrate_to_bitrate` — always caps at max_data_bytes capacity.
 fn user_bitrate_to_bitrate(
     user_bitrate_bps: i32,
     channels: i32,
@@ -391,13 +391,15 @@ fn user_bitrate_to_bitrate(
     frame_size: i32,
     max_data_bytes: i32,
 ) -> i32 {
-    if user_bitrate_bps == OPUS_AUTO {
+    let max_bitrate = bits_to_bitrate(max_data_bytes * 8, fs, frame_size);
+    let user_bitrate = if user_bitrate_bps == OPUS_AUTO {
         60 * fs / frame_size + fs * channels
     } else if user_bitrate_bps == OPUS_BITRATE_MAX {
-        max_data_bytes * 8 * fs / frame_size
+        1500000
     } else {
         user_bitrate_bps
-    }
+    };
+    imin(user_bitrate, max_bitrate)
 }
 
 /// Compute equivalent rate normalized to 20ms/complexity-10/VBR.
@@ -1275,9 +1277,6 @@ impl OpusEncoder {
             frame_size,
             max_data_bytes,
         );
-        // Cap by max_data_bytes
-        let max_rate = bits_to_bitrate(max_data_bytes * 8, self.fs, frame_size);
-        bitrate_bps = imin(bitrate_bps, max_rate);
         self.bitrate_bps = bitrate_bps;
 
         let frame_rate = self.fs / frame_size;
@@ -1293,6 +1292,9 @@ impl OpusEncoder {
             max_data_bytes = imax(1, cbr_bytes);
             self.bitrate_bps = bitrate_bps;
         }
+
+        // C: max_rate is computed AFTER CBR adjustment reduces max_data_bytes
+        let max_rate = bits_to_bitrate(max_data_bytes * 8, self.fs, frame_size);
 
         // --- PLC frame emission ---
         if max_data_bytes < 3
@@ -2898,6 +2900,30 @@ impl OpusEncoder {
 
     pub fn get_prev_mode(&self) -> i32 {
         self.prev_mode
+    }
+
+    /// Return key SILK encoder internal state for comparison testing.
+    /// Returns None if no SILK encoder is allocated.
+    pub fn get_silk_state(
+        &self,
+    ) -> Option<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)> {
+        let silk = self.silk_enc.as_ref()?;
+        let s = &silk.state_fxx[0].s_cmn;
+        Some((
+            s.fs_khz,
+            s.frame_length,
+            s.nb_subfr,
+            s.input_buf_ix,
+            s.n_frames_per_packet,
+            s.packet_size_ms,
+            s.first_frame_after_reset,
+            s.controlled_since_last_payload,
+            s.prefill_flag,
+            s.n_frames_encoded,
+            s.speech_activity_q8,
+            s.indices.signal_type as i32,
+            s.input_quality_bands_q15[0],
+        ))
     }
 }
 
