@@ -3127,4 +3127,252 @@ mod tests {
         assert_eq!(buf[0] & 1, 1);
         assert_eq!(buf[1], 3);
     }
+
+    // ===================================================================
+    // Targeted coverage tests for remaining uncovered lines
+    // ===================================================================
+
+    /// Test out_range_impl BUFFER_TOO_SMALL paths for Code 1 CBR (line 1169)
+    /// and Code 2 VBR (line 1177) with exactly 2 frames.
+    #[test]
+    fn test_out_range_impl_two_frame_buffer_too_small() {
+        // Code 1 CBR: 2 equal frames of 3 bytes each -> needs 1+3+3=7 bytes
+        let pkt = [0x08u8, 0xAA, 0xBB, 0xCC];
+        let mut rp = OpusRepacketizer::new();
+        assert_eq!(rp.cat(&pkt, 4), OPUS_OK);
+        assert_eq!(rp.cat(&pkt, 4), OPUS_OK);
+        let mut out = [0u8; 6]; // too small for 7
+        assert_eq!(rp.out(&mut out, 6), OPUS_BUFFER_TOO_SMALL);
+
+        // Code 2 VBR: frames of 2 and 3 bytes -> needs 1+1+2+3=7
+        let pkt_a = [0x08u8, 0xAA, 0xBB];
+        let pkt_b = [0x08u8, 0xCC, 0xDD, 0xEE];
+        let mut rp2 = OpusRepacketizer::new();
+        assert_eq!(rp2.cat(&pkt_a, 3), OPUS_OK);
+        assert_eq!(rp2.cat(&pkt_b, 4), OPUS_OK);
+        let mut out2 = [0u8; 6]; // too small for 7
+        assert_eq!(rp2.out(&mut out2, 6), OPUS_BUFFER_TOO_SMALL);
+    }
+
+    /// Test out_range_impl BUFFER_TOO_SMALL for Code 3 VBR (line 1211)
+    /// and Code 3 CBR (line 1220) with >2 frames.
+    #[test]
+    fn test_out_range_impl_code3_buffer_too_small() {
+        // Code 3 CBR: 3 frames of 2 bytes each -> needs 2+2+2+2=8
+        let pkt = [0x08u8, 0xAA, 0xBB];
+        let mut rp = OpusRepacketizer::new();
+        for _ in 0..3 {
+            assert_eq!(rp.cat(&pkt, 3), OPUS_OK);
+        }
+        let mut out = [0u8; 7]; // too small for 8
+        assert_eq!(rp.out(&mut out, 7), OPUS_BUFFER_TOO_SMALL);
+
+        // Code 3 VBR: frames of 1, 2, 3 bytes -> needs 2+1+1+1+1+2+3=11
+        let pkt1 = [0x08u8, 0x11];
+        let pkt2 = [0x08u8, 0x22, 0x33];
+        let pkt3 = [0x08u8, 0x44, 0x55, 0x66];
+        let mut rp2 = OpusRepacketizer::new();
+        assert_eq!(rp2.cat(&pkt1, 2), OPUS_OK);
+        assert_eq!(rp2.cat(&pkt2, 3), OPUS_OK);
+        assert_eq!(rp2.cat(&pkt3, 4), OPUS_OK);
+        let mut out2 = [0u8; 5]; // too small
+        assert_eq!(rp2.out(&mut out2, 5), OPUS_BUFFER_TOO_SMALL);
+    }
+
+    /// Test extension iterator calling next_ext() after curr_len becomes
+    /// negative (line 534), and frame_max limiting via set_frame_max mid-iteration
+    /// (line 545 / 577-579).
+    #[test]
+    fn test_extension_iterator_negative_curr_len_and_frame_max_mid_iter() {
+        // Craft data that makes curr_len go negative: a truncated long extension
+        let data = [0x41u8, 0xFF, 0xFF]; // id=32, L=1, lacing=255,255 -> wants 510 bytes
+        let mut iter = OpusExtensionIterator::new(&data, 3, 1);
+        let (ret, _) = iter.next_ext(); // Should fail with curr_len < 0
+        assert_eq!(ret, OPUS_INVALID_PACKET);
+        // Calling again should hit the curr_len < 0 early return (line 534)
+        let (ret, _) = iter.next_ext();
+        assert_eq!(ret, OPUS_INVALID_PACKET);
+
+        // Test frame_max applied mid-iteration via frame separator (lines 577-579):
+        // ext on frame 0, separator to frame 1, ext on frame 1
+        // With frame_max=1, the separator should stop iteration
+        let ext0 = OpusExtensionData { id: 5, frame: 0, data: &[0x11], len: 1 };
+        let ext1 = OpusExtensionData { id: 6, frame: 1, data: &[0x22], len: 1 };
+        let size = opus_packet_extensions_generate(None, 256, &[ext0, ext1], 2, false);
+        let mut buf = vec![0u8; size as usize];
+        opus_packet_extensions_generate(Some(&mut buf), size, &[ext0, ext1], 2, false);
+
+        let mut iter2 = OpusExtensionIterator::new(&buf, size, 2);
+        // Get first ext
+        let (ret, ext) = iter2.next_ext();
+        assert_eq!(ret, 1);
+        assert_eq!(ext.frame, 0);
+        // Now set frame_max to 1 before reading more — should stop
+        iter2.set_frame_max(1);
+        let (ret, _) = iter2.next_ext();
+        assert_eq!(ret, 0);
+    }
+
+    /// Test extension iterator repeat mode with padding/separator skipping
+    /// (line 466) and L=0 repeat ending advancing curr_frame (lines 517-521).
+    #[test]
+    fn test_extension_repeat_l0_long_extensions() {
+        // Two frames, each with a long extension (id=40). Using repeat with L=0.
+        let payload = [0x77u8; 10];
+        let ext0 = OpusExtensionData { id: 40, frame: 0, data: &payload, len: 10 };
+        let ext1 = OpusExtensionData { id: 40, frame: 1, data: &payload, len: 10 };
+        let size = opus_packet_extensions_generate(None, 256, &[ext0, ext1], 2, false);
+        assert!(size > 0);
+        let mut buf = vec![0u8; size as usize];
+        opus_packet_extensions_generate(Some(&mut buf), size, &[ext0, ext1], 2, false);
+
+        let mut iter = OpusExtensionIterator::new(&buf, size, 2);
+        let mut results = Vec::new();
+        loop {
+            let (ret, ext) = iter.next_ext();
+            if ret <= 0 { break; }
+            results.push((ext.id, ext.frame, ext.len));
+        }
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0], (40, 0, 10));
+        assert_eq!(results[1], (40, 1, 10));
+    }
+
+    /// Test multistream pad/unpad with 3 streams (exercises the
+    /// multistream_packet_unpad loop more thoroughly).
+    #[test]
+    fn test_multistream_three_streams_pad_unpad() {
+        // 3 streams: first two self-delimited, last normal
+        // Each stream: Code 0 packet with TOC=0x08
+        let mut pkt = Vec::new();
+        // Stream 1 (self-delimited): TOC + sd_size(2) + 2 bytes
+        pkt.extend_from_slice(&[0x08u8, 2, 0x11, 0x22]);
+        // Stream 2 (self-delimited): TOC + sd_size(1) + 1 byte
+        pkt.extend_from_slice(&[0x08u8, 1, 0x33]);
+        // Stream 3 (normal): TOC + 2 bytes
+        pkt.extend_from_slice(&[0x08u8, 0x44, 0x55]);
+
+        let original_len = pkt.len() as i32;
+        let padded_len = original_len + 20;
+        let mut buf = vec![0u8; padded_len as usize];
+        buf[..pkt.len()].copy_from_slice(&pkt);
+
+        let ret = opus_multistream_packet_pad(&mut buf, original_len, padded_len, 3);
+        assert_eq!(ret, OPUS_OK);
+
+        let ret = opus_multistream_packet_unpad(&mut buf, padded_len, 3);
+        assert!(ret > 0);
+        assert_eq!(ret, original_len);
+    }
+
+    /// Test parse_packet with self-delimited VBR Code 3 where the last frame
+    /// size bytes plus size exceeds last_size (line 222 error).
+    #[test]
+    fn test_self_delimited_code3_vbr_last_size_overflow() {
+        // Code 3 VBR self-delimited: TOC|0x03, count=2|0x80, size(f0)=5,
+        // sd_size=200, but not enough data -> should fail
+        let pkt = [0x08u8 | 0x03, 2 | 0x80, 5, 200, 0xAA];
+        assert!(matches!(
+            parse_packet(&pkt, pkt.len() as i32, true),
+            Err(OPUS_INVALID_PACKET)
+        ));
+    }
+
+    /// Test parse_packet Code 2 with self-delimited framing where the
+    /// sd_size itself is invalid (line 206).
+    #[test]
+    fn test_self_delimited_code2_bad_sd_size() {
+        // Code 2 self-delimited: TOC, size(f0)=1, then sd_size needs to be
+        // parsed but we provide only 1 remaining byte that's >= 252 (needs 2)
+        let pkt = [0x0Au8, 1, 0xAA, 253];
+        assert!(matches!(
+            parse_packet(&pkt, pkt.len() as i32, true),
+            Err(OPUS_INVALID_PACKET)
+        ));
+    }
+
+    /// Test extension generation with frame separator using multi-increment
+    /// (diff > 1, lines 887-890) and verify dry-run vs actual write match.
+    #[test]
+    fn test_extension_generate_multi_frame_separator_dryrun() {
+        // Extensions on frame 0 and frame 3 (skip 2 frames)
+        let ext0 = OpusExtensionData { id: 5, frame: 0, data: &[0xAA], len: 1 };
+        let ext3 = OpusExtensionData { id: 6, frame: 3, data: &[0xBB], len: 1 };
+        let size = opus_packet_extensions_generate(None, 64, &[ext0, ext3], 4, false);
+        assert!(size > 0);
+        let mut buf = vec![0u8; size as usize];
+        let ret = opus_packet_extensions_generate(Some(&mut buf), size, &[ext0, ext3], 4, false);
+        assert_eq!(ret, size);
+        // Parse back to verify correctness
+        let mut parsed = [OpusExtensionData::EMPTY; 4];
+        let mut nb = 4;
+        let ret = opus_packet_extensions_parse(&buf, size, &mut parsed, &mut nb, 4);
+        assert!(ret >= 0);
+        assert_eq!(nb, 2);
+        assert_eq!(parsed[0].frame, 0);
+        assert_eq!(parsed[1].frame, 3);
+    }
+
+    /// Test write_extension_payload dry-run mode (line 726).
+    #[test]
+    fn test_write_extension_payload_dryrun() {
+        let ext = OpusExtensionData { id: 40, frame: 0, data: &[1, 2, 3], len: 3 };
+        let mut buf = [0xFFu8; 8];
+        // dry_run=true: should advance position but not write
+        let ret = write_extension_payload(&mut buf, true, 8, 0, &ext, false);
+        assert_eq!(ret, 4); // 1 lacing byte + 3 data bytes
+        assert_eq!(buf[0], 0xFF); // unchanged because dry_run
+
+        // Short extension dry-run
+        let short = OpusExtensionData { id: 5, frame: 0, data: &[0x42], len: 1 };
+        let ret = write_extension_payload(&mut buf, true, 8, 0, &short, false);
+        assert_eq!(ret, 1);
+        assert_eq!(buf[0], 0xFF); // unchanged
+    }
+
+    /// Test long extension payload buffer too small (line 719).
+    #[test]
+    fn test_write_extension_payload_long_buffer_too_small() {
+        let ext = OpusExtensionData { id: 40, frame: 0, data: &[1, 2, 3, 4, 5], len: 5 };
+        let mut buf = [0u8; 4];
+        // Not last: needs 1 lacing + 5 data = 6, only 4 available
+        assert_eq!(
+            write_extension_payload(&mut buf, false, 4, 0, &ext, false),
+            OPUS_BUFFER_TOO_SMALL
+        );
+    }
+
+    /// Test parse_packet Code 3 with padding flag, where the padding
+    /// exhausts remaining bytes (line 166: remaining < 0 after padding).
+    #[test]
+    fn test_code3_padding_exhausts_remaining() {
+        // Code 3, count=1, padding flag set, padding value=255 (needs more)
+        // but only 1 byte remains after the 255 -> fails at line 152
+        let pkt = [0x08u8 | 0x03, 1 | 0x40, 255];
+        assert!(matches!(
+            parse_packet(&pkt, pkt.len() as i32, false),
+            Err(OPUS_INVALID_PACKET)
+        ));
+
+        // Padding consumes more than remaining audio data (line 166)
+        let pkt2 = [0x08u8 | 0x03, 1 | 0x40, 200, 0xAA];
+        assert!(matches!(
+            parse_packet(&pkt2, pkt2.len() as i32, false),
+            Err(OPUS_INVALID_PACKET)
+        ));
+    }
+
+    /// Test opus_packet_pad_impl with extensions that cause ext_len overflow
+    /// relative to available space (line 1259).
+    #[test]
+    fn test_pad_impl_ext_len_overflow() {
+        let big_payload = [0x11u8; 50];
+        let ext = OpusExtensionData { id: 40, frame: 0, data: &big_payload, len: 50 };
+        let mut buf = [0u8; 60];
+        buf[0] = 0x08;
+        buf[1] = 0xAA;
+        // Try to pad to 10 bytes with an extension that needs ~52 bytes
+        let ret = opus_packet_pad_impl(&mut buf, 2, 10, true, &[ext]);
+        assert!(ret < 0); // Should fail (buffer too small for extensions)
+    }
 }

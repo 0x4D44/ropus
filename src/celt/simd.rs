@@ -609,4 +609,48 @@ mod tests {
             assert_eq!(expected, actual, "mismatch at overlap={}", ov);
         }
     }
+
+    /// Exercise the scalar remainder loop in mdct_window_simd (lines 202-213).
+    /// The remainder fires when (overlap/2) % 4 != 0. We test overlap=6 (half=3,
+    /// remainder=3), overlap=10 (half=5, remainder=1), and overlap=2 (half=1,
+    /// remainder=1).
+    #[test]
+    fn mdct_window_simd_remainder_loop() {
+        let mut rng: u32 = 0xABCD_EF01;
+        let next32 = |rng: &mut u32| -> i32 {
+            *rng = rng.wrapping_mul(1103515245).wrapping_add(12345);
+            *rng as i32
+        };
+        let next16 = |rng: &mut u32| -> i16 {
+            *rng = rng.wrapping_mul(1103515245).wrapping_add(12345);
+            (*rng >> 16) as i16
+        };
+
+        // Overlaps where half%4 != 0, triggering the remainder path
+        for &ov in &[2, 6, 10, 14, 18, 22] {
+            let half = ov / 2;
+            assert_ne!(half % 4, 0, "overlap={ov} should have non-zero remainder");
+
+            let window: Vec<i16> = (0..ov).map(|_| next16(&mut rng)).collect();
+            let data: Vec<i32> = (0..ov).map(|_| next32(&mut rng)).collect();
+
+            // Scalar reference
+            let mut expected = data.clone();
+            for i in 0..half {
+                let yp = i;
+                let xp = ov - 1 - i;
+                let x_fwd = expected[xp];
+                let x_rev = expected[yp];
+                let w_asc = window[i] as i32;
+                let w_desc = window[ov - 1 - i] as i32;
+                expected[yp] = s_mul_inline(x_rev, w_desc).wrapping_sub(s_mul_inline(x_fwd, w_asc));
+                expected[xp] = s_mul_inline(x_rev, w_asc).wrapping_add(s_mul_inline(x_fwd, w_desc));
+            }
+
+            let mut actual = data.clone();
+            mdct_window_simd(&mut actual, &window, ov);
+
+            assert_eq!(expected, actual, "remainder mismatch at overlap={ov}");
+        }
+    }
 }

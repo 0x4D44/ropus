@@ -2685,4 +2685,145 @@ mod tests {
         assert!(band_e[0] > 0); // ch1 band 0
         assert!(band_e[mode.nb_ebands as usize] > 0); // ch2 band 0
     }
+
+    // -----------------------------------------------------------------------
+    // Targeted coverage for stereo_merge / stereo_split / intensity_stereo
+    // -----------------------------------------------------------------------
+
+    /// stereo_merge early return (lines 441-442): when el or er is below
+    /// the 6e-4 threshold, it copies X to Y and returns immediately.
+    #[test]
+    fn test_stereo_merge_near_zero_energy_copies_x_to_y() {
+        // When mid is tiny, el and er will both be below 6e-4 * 2^28
+        let mut x = [100i32, 200, 300, 400];
+        let mut y = [10i32, 20, 30, 40];
+        // mid ~0 makes el = shr32(0,3) + side - 0 = side, which for tiny y
+        // values will be below the threshold qconst32(6e-4, 28)
+        stereo_merge(&mut x, &mut y, 0, 4);
+        // With mid=0, el and er both equal side which is tiny -> early return
+        assert_eq!(y, x, "y should be a copy of x when energy is near zero");
+    }
+
+    /// stereo_merge normal path: non-trivial mid value and reasonable x/y
+    /// so we exercise the full rsqrt + rotation path (lines 445-460).
+    #[test]
+    fn test_stereo_merge_normal_path() {
+        let mut x = [1 << 20, -(1 << 19), 1 << 18, -(1 << 17)];
+        let mut y = [1 << 19, 1 << 18, -(1 << 17), 1 << 16];
+        let x_orig = x;
+        let y_orig = y;
+        // mid needs to be large enough that el and er exceed the threshold
+        stereo_merge(&mut x, &mut y, 1 << 28, 4);
+        // Should have modified both x and y (not just copied)
+        assert_ne!(x, x_orig, "x should be modified by stereo_merge");
+        assert_ne!(y, y_orig, "y should be modified by stereo_merge");
+    }
+
+    /// stereo_split basic validation
+    #[test]
+    fn test_stereo_split_roundtrip_property() {
+        let mut x = [1 << 24, -(1 << 23), 0, 1 << 22];
+        let mut y = [1 << 23, 1 << 22, -(1 << 21), 0];
+        let x_orig = x;
+        let y_orig = y;
+        stereo_split(&mut x, &mut y, 4);
+        // x should now be (L+R)/sqrt(2), y should be (R-L)/sqrt(2)
+        // Verify non-trivial transformation happened
+        assert_ne!(x, x_orig, "stereo_split should transform x");
+        assert_ne!(y, y_orig, "stereo_split should transform y");
+    }
+
+    /// intensity_stereo basic validation
+    #[test]
+    fn test_intensity_stereo_basic() {
+        let mode = mode_create(48000, 960).unwrap();
+        let nb = mode.nb_ebands as usize;
+        let band_w = (mode.ebands[1] - mode.ebands[0]) as usize;
+        let mut x = vec![1 << 20; band_w];
+        let y = vec![1 << 19; band_w];
+        let mut band_e = vec![0i32; nb * 2];
+        // Set band energies for band 0 in both channels
+        band_e[0] = 1 << 20;
+        band_e[nb] = 1 << 19;
+        intensity_stereo(mode, &mut x, &y, &band_e, 0, band_w as i32);
+        // x should be a weighted combination of x and y
+        assert!(x.iter().any(|&v| v != 1 << 20), "intensity_stereo should modify x");
+    }
+
+    /// compute_channel_weights basic check
+    #[test]
+    fn test_compute_channel_weights() {
+        let [wx, wy] = compute_channel_weights(1 << 20, 1 << 18);
+        assert!(wx > 0);
+        assert!(wy > 0);
+        assert!(wx > wy, "higher energy channel should have higher weight");
+
+        // Equal energies
+        let [wx2, wy2] = compute_channel_weights(1 << 20, 1 << 20);
+        assert_eq!(wx2, wy2, "equal energies should give equal weights");
+    }
+
+    /// anti_collapse with stereo (C=2), exercises the c_channels loop
+    /// and the mono-decode prev1/prev2 max logic (line 333 not-taken path).
+    #[test]
+    fn test_anti_collapse_stereo() {
+        let mode = mode_create(48000, 960).unwrap();
+        let n = mode.short_mdct_size as usize;
+        let nb_ebands = mode.nb_ebands as usize;
+
+        let mut x_dec = vec![0i32; n * 2]; // stereo
+        let old_log_e = vec![0i32; nb_ebands * 2];
+        let old_log_e2 = vec![0i32; nb_ebands * 2];
+        let pulses = vec![0i32; nb_ebands];
+        let mut collapsed_masks = vec![0xFFu8; nb_ebands * 2]; // 2 channels
+
+        anti_collapse(
+            mode,
+            &mut x_dec,
+            &mut collapsed_masks,
+            1,
+            2,       // stereo
+            (n * 2) as i32,
+            0,
+            nb_ebands as i32 - 1,
+            &old_log_e,
+            &old_log_e2,
+            &old_log_e,
+            &pulses,
+            42,
+            true,
+        );
+    }
+
+    /// anti_collapse decode path with C=1, exercises the mono decode
+    /// prev max logic (line 332-334).
+    #[test]
+    fn test_anti_collapse_mono_decode() {
+        let mode = mode_create(48000, 960).unwrap();
+        let n = mode.short_mdct_size as usize;
+        let nb_ebands = mode.nb_ebands as usize;
+
+        let mut x_dec = vec![0i32; n];
+        let old_log_e = vec![0i32; nb_ebands * 2]; // need 2x for mono decode path
+        let old_log_e2 = vec![0i32; nb_ebands * 2];
+        let pulses = vec![0i32; nb_ebands];
+        let mut collapsed_masks = vec![0xFFu8; nb_ebands];
+
+        anti_collapse(
+            mode,
+            &mut x_dec,
+            &mut collapsed_masks,
+            1,
+            1,       // mono
+            n as i32,
+            0,
+            nb_ebands as i32 - 1,
+            &old_log_e,
+            &old_log_e2,
+            &old_log_e,
+            &pulses,
+            42,
+            false,   // decode path: exercises the C==1 && !encode branch
+        );
+    }
 }
