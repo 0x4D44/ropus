@@ -530,7 +530,7 @@ pub fn silk_lpc_inverse_pred_gain(a_q12: &[i16], order: usize) -> i32 {
 
             // MUL32_FRAC_Q(tmp2, rc_Q31, 31)
             let mul_frac_2 = ((tmp2 as i64 * rc_q31 as i64 + (1i64 << 30)) >> 31) as i32;
-            let sub1 = silk_add_sat32(tmp1, -mul_frac_2);
+            let sub1 = silk_sub_sat32(tmp1, mul_frac_2);
             let tmp64_a =
                 ((sub1 as i64 * rc_mult2 as i64 + (1i64 << (mult2q - 1))) >> mult2q) as i64;
             if tmp64_a > i32::MAX as i64 || tmp64_a < i32::MIN as i64 {
@@ -539,7 +539,7 @@ pub fn silk_lpc_inverse_pred_gain(a_q12: &[i16], order: usize) -> i32 {
             a_qa[n] = tmp64_a as i32;
 
             let mul_frac_1 = ((tmp1 as i64 * rc_q31 as i64 + (1i64 << 30)) >> 31) as i32;
-            let sub2 = silk_add_sat32(tmp2, -mul_frac_1);
+            let sub2 = silk_sub_sat32(tmp2, mul_frac_1);
             let tmp64_b =
                 ((sub2 as i64 * rc_mult2 as i64 + (1i64 << (mult2q - 1))) >> mult2q) as i64;
             if tmp64_b > i32::MAX as i64 || tmp64_b < i32::MIN as i64 {

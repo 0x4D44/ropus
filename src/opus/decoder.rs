@@ -2357,4 +2357,161 @@ mod tests {
             );
         }
     }
+
+    // -----------------------------------------------------------------------
+    // FFI differential test: garbage hybrid SWB packets
+    // -----------------------------------------------------------------------
+
+    // Minimal FFI declarations for C reference (already linked via build.rs)
+    unsafe extern "C" {
+        fn opus_decoder_create(
+            fs: i32,
+            channels: std::os::raw::c_int,
+            error: *mut std::os::raw::c_int,
+        ) -> *mut std::ffi::c_void;
+        fn opus_decode(
+            st: *mut std::ffi::c_void,
+            data: *const u8,
+            len: i32,
+            pcm: *mut i16,
+            frame_size: std::os::raw::c_int,
+            decode_fec: std::os::raw::c_int,
+        ) -> std::os::raw::c_int;
+        fn opus_decoder_destroy(st: *mut std::ffi::c_void);
+        fn silk_LPC_inverse_pred_gain_c(
+            a_q12: *const i16,
+            order: std::os::raw::c_int,
+        ) -> i32;
+    }
+
+    /// Decode a packet with the C reference, returning PCM or error.
+    fn c_ref_decode(packet: &[u8], sr: i32, ch: i32) -> Result<Vec<i16>, i32> {
+        unsafe {
+            let mut err: std::os::raw::c_int = 0;
+            let dec = opus_decoder_create(sr, ch, &mut err);
+            if dec.is_null() || err != 0 {
+                if !dec.is_null() {
+                    opus_decoder_destroy(dec);
+                }
+                return Err(err);
+            }
+            let max_frame = 5760;
+            let mut pcm = vec![0i16; max_frame as usize * ch as usize];
+            let ret = opus_decode(
+                dec,
+                packet.as_ptr(),
+                packet.len() as i32,
+                pcm.as_mut_ptr(),
+                max_frame,
+                0,
+            );
+            opus_decoder_destroy(dec);
+            if ret < 0 {
+                Err(ret)
+            } else {
+                pcm.truncate(ret as usize * ch as usize);
+                Ok(pcm)
+            }
+        }
+    }
+
+    #[test]
+    fn test_lpc_inverse_pred_gain_matches_c_reference() {
+        use crate::silk::common::silk_lpc_inverse_pred_gain;
+        // Test with many different coefficient patterns to find divergences
+        let mut mismatches = 0u32;
+        let patterns: &[(&str, Vec<i16>)] = &[
+            // Patterns that exercise extreme values
+            ("all_max", vec![i16::MAX; 16]),
+            ("all_min", vec![i16::MIN; 16]),
+            ("alternating", (0..16).map(|i| if i % 2 == 0 { 4000i16 } else { -4000 }).collect()),
+            ("near_unity_sum", {
+                // Sum close to 4096 (DC stability boundary)
+                let mut v = vec![256i16; 16];
+                v[0] = 4095 - 15 * 256;
+                v
+            }),
+            ("garbage_ff", vec![0x0FFFu16 as i16; 16]),
+            ("extreme_mixed", {
+                let mut v = vec![0i16; 16];
+                for i in 0..16 { v[i] = ((i as i32 * 8191 + 3) % 8191 - 4095) as i16; }
+                v
+            }),
+        ];
+        for (name, coeffs) in patterns {
+            let order = coeffs.len().min(16);
+            let rust_result = silk_lpc_inverse_pred_gain(&coeffs[..order], order);
+            let c_result = unsafe {
+                silk_LPC_inverse_pred_gain_c(coeffs.as_ptr(), order as std::os::raw::c_int)
+            };
+            if rust_result != c_result {
+                eprintln!(
+                    "MISMATCH {name}: rust={rust_result}, c={c_result}, \
+                     coeffs={:?}",
+                    &coeffs[..order]
+                );
+                mismatches += 1;
+            }
+        }
+
+        // Also brute-force random-looking patterns
+        for seed in 0u32..1000 {
+            let mut coeffs = [0i16; 16];
+            for i in 0..16 {
+                let v = ((seed.wrapping_mul(2654435761).wrapping_add(i as u32 * 7919)) >> 16) as i16;
+                coeffs[i] = v;
+            }
+            let rust_result = silk_lpc_inverse_pred_gain(&coeffs, 16);
+            let c_result = unsafe {
+                silk_LPC_inverse_pred_gain_c(coeffs.as_ptr(), 16)
+            };
+            if rust_result != c_result {
+                eprintln!(
+                    "MISMATCH seed={seed}: rust={rust_result}, c={c_result}, \
+                     coeffs={coeffs:?}"
+                );
+                mismatches += 1;
+                if mismatches >= 5 {
+                    break;
+                }
+            }
+        }
+
+        assert_eq!(mismatches, 0, "{mismatches} mismatches found between Rust and C silk_lpc_inverse_pred_gain");
+    }
+
+    #[test]
+    fn test_garbage_hybrid_swb_decode_matches_c_reference() {
+        // TOC 0x60 = config 12 = Hybrid SWB, 10ms, mono, code 0 (1 frame)
+        // Use the 0xFF pattern which triggers the mismatch found by fuzz testing.
+        // The bug was in silk_decode_pulses: missing ICDF table offset after 10
+        // LSB shifts, causing different bit consumption from the range coder.
+        let toc = 0x60u8;
+        let sr = 48000;
+        let ch = 1;
+        let max_frame = 5760;
+        let payload = vec![0xFFu8; 255];
+
+        let mut packet = vec![toc];
+        packet.extend_from_slice(&payload);
+
+        // Rust decode
+        let mut rust_dec = OpusDecoder::new(sr, ch).unwrap();
+        let mut rust_pcm = vec![0i16; max_frame as usize * ch as usize];
+        let rust_ret = rust_dec.decode(Some(&packet), &mut rust_pcm, max_frame, false);
+
+        // C reference decode
+        let c_ret = c_ref_decode(&packet, sr, ch);
+
+        let rust_samples = rust_ret.unwrap() as usize;
+        let c_pcm = c_ret.unwrap();
+        let c_samples = c_pcm.len() / ch as usize;
+        assert_eq!(rust_samples, c_samples, "Sample count mismatch");
+
+        let rust_slice = &rust_pcm[..rust_samples * ch as usize];
+        assert_eq!(
+            rust_slice, &c_pcm[..],
+            "Garbage hybrid SWB (0xFF payload) PCM mismatch: Rust and C differ"
+        );
+    }
 }

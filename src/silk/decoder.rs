@@ -685,8 +685,11 @@ fn silk_decode_pulses(
         // Handle overflow: while sum_pulses == SILK_MAX_PULSES + 1
         while sum_pulses[i] == SILK_MAX_PULSES + 1 {
             n_lshifts[i] += 1;
+            // C: after 10 LSB shifts, offset the ICDF table by 1 byte to
+            // prevent decoding another SILK_MAX_PULSES+1 (avoids infinite loop).
+            let table_offset = if n_lshifts[i] == 10 { 1 } else { 0 };
             sum_pulses[i] =
-                rc.decode_icdf(&SILK_PULSES_PER_BLOCK_ICDF[N_RATE_LEVELS - 1], 8);
+                rc.decode_icdf(&SILK_PULSES_PER_BLOCK_ICDF[N_RATE_LEVELS - 1][table_offset..], 8);
         }
     }
 

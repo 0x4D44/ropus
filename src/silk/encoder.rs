@@ -3111,11 +3111,11 @@ pub fn silk_encode_pulses(
 /// Inner product with automatic scaling.
 /// Matches C: `silk_inner_prod_aligned_scale`.
 fn silk_inner_prod_aligned_scale(x: &[i16], y: &[i16], scale: i32, len: usize) -> i32 {
-    let mut sum: i64 = 0;
+    let mut sum: i32 = 0;
     for i in 0..len {
-        sum += (x[i] as i64 * y[i] as i64) >> scale;
+        sum = sum.wrapping_add((x[i] as i32 * y[i] as i32) >> scale);
     }
-    sum as i32
+    sum
 }
 
 /// Find stereo predictor for one frequency band.
@@ -9673,5 +9673,116 @@ mod tests {
             "snr_db_q7 should be nonzero after prefill, got {}",
             enc.state_fxx[0].s_cmn.snr_db_q7
         );
+    }
+
+    /// Regression test for Bug #5: encode mismatch at 8kHz/stereo/71kbps.
+    ///
+    /// `silk_inner_prod_aligned_scale` used i64 accumulation, but the C reference
+    /// uses i32 accumulation that wraps on overflow. This produces different
+    /// stereo predictor values, cascading into different rate allocation and
+    /// trailing zeros in the Rust output.
+    #[test]
+    fn test_bug5_encode_8khz_stereo_71kbps_matches_c_reference() {
+        use std::os::raw::c_int;
+
+        // FFI declarations — symbols are available crate-wide via opus_ref
+        unsafe extern "C" {
+            fn opus_encoder_create(
+                fs: i32,
+                channels: c_int,
+                application: c_int,
+                error: *mut c_int,
+            ) -> *mut u8;
+            fn opus_encode(
+                st: *mut u8,
+                pcm: *const i16,
+                frame_size: c_int,
+                data: *mut u8,
+                max_data_bytes: i32,
+            ) -> i32;
+            fn opus_encoder_destroy(st: *mut u8);
+            fn opus_encoder_ctl(st: *mut u8, request: c_int, ...) -> c_int;
+        }
+
+        const OPUS_SET_BITRATE_REQUEST: c_int = 4002;
+        const OPUS_SET_VBR_REQUEST: c_int = 4006;
+        const OPUS_SET_COMPLEXITY_REQUEST: c_int = 4010;
+
+        let sample_rate: i32 = 8000;
+        let channels: i32 = 2;
+        let application: i32 = 2048; // OPUS_APPLICATION_VOIP
+        let bitrate: i32 = 71535;
+        let complexity: i32 = 2;
+        let frame_size: i32 = sample_rate / 50; // 20ms = 160 samples
+
+        // Deterministic stereo PCM using a simple LCG for reproducibility.
+        // The fuzz campaign found the mismatch with pseudo-random data that
+        // exercises the stereo predictor path where i32 accumulation wrapping
+        // in silk_inner_prod_aligned_scale diverges from i64.
+        let total_samples = frame_size as usize * channels as usize; // 320
+        let mut pcm = vec![0i16; total_samples];
+        let mut rng: u64 = 0xDEAD_BEEF_CAFE_BABE;
+        for s in pcm.iter_mut() {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            *s = (rng >> 33) as i16;
+        }
+
+        // --- Create both encoders with identical config ---
+        let c_enc = unsafe {
+            let mut error: c_int = 0;
+            let enc = opus_encoder_create(sample_rate, channels, application, &mut error);
+            assert!(!enc.is_null() && error == 0, "C encoder create failed: {error}");
+            opus_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, bitrate);
+            opus_encoder_ctl(enc, OPUS_SET_VBR_REQUEST, 0 as c_int);
+            opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY_REQUEST, complexity);
+            enc
+        };
+
+        let mut rust_enc =
+            crate::opus::encoder::OpusEncoder::new(sample_rate, channels, application)
+                .expect("Rust encoder create failed");
+        rust_enc.set_bitrate(bitrate);
+        rust_enc.set_vbr(0);
+        rust_enc.set_complexity(complexity);
+
+        // Encode several frames to build up encoder state (stereo predictor
+        // smoothing, HP filter state, etc.) — the overflow may only manifest
+        // after the encoder has warmed up.
+        let num_frames = 10;
+        for frame_idx in 0..num_frames {
+            // Generate per-frame PCM from the running RNG
+            for s in pcm.iter_mut() {
+                rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                *s = (rng >> 33) as i16;
+            }
+
+            let c_out = unsafe {
+                let mut out = vec![0u8; 4000];
+                let ret = opus_encode(c_enc, pcm.as_ptr(), frame_size, out.as_mut_ptr(), 4000);
+                assert!(ret > 0, "C encode failed on frame {frame_idx}: {ret}");
+                out.truncate(ret as usize);
+                out
+            };
+
+            let mut rust_out = vec![0u8; 4000];
+            let rust_len = rust_enc
+                .encode(&pcm, frame_size, &mut rust_out, 4000)
+                .unwrap_or_else(|e| panic!("Rust encode failed on frame {frame_idx}: {e}"))
+                as usize;
+
+            assert_eq!(
+                rust_len,
+                c_out.len(),
+                "Frame {frame_idx}: output length mismatch: Rust={rust_len}, C={}",
+                c_out.len()
+            );
+            assert_eq!(
+                &rust_out[..rust_len],
+                &c_out[..],
+                "Frame {frame_idx}: byte mismatch (bug #5: silk_inner_prod_aligned_scale overflow)"
+            );
+        }
+
+        unsafe { opus_encoder_destroy(c_enc) };
     }
 }
