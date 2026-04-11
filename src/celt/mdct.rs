@@ -1155,4 +1155,100 @@ mod tests {
             println!("FAIL: TDAC reconstruction has significant scaling/structural issues.");
         }
     }
+
+    // --- Coverage additions: different shift levels, stride, overlap paths ---
+
+    #[test]
+    fn test_mdct_backward_shift_0_full_size() {
+        let l = &MDCT_48000_960;
+        let mode = &crate::celt::modes::MODE_48000_960_120;
+        let overlap = 120;
+        let shift = 0; // Full size: N=1920, N2=960
+        let n2 = 960;
+        let n = 1920;
+
+        let mut input = vec![0i32; n2];
+        input[0] = 1 << 15;
+        let mut output = vec![0i32; n];
+        clt_mdct_backward(l, &input, &mut output, mode.window, overlap, shift, 1);
+        let max_abs = output.iter().map(|x| x.abs()).max().unwrap_or(0);
+        assert!(max_abs < i32::MAX / 2, "shift=0 output should be bounded, got {max_abs}");
+        assert!(output.iter().any(|&v| v != 0), "shift=0 impulse should produce non-zero output");
+    }
+
+    #[test]
+    fn test_mdct_backward_shift_1() {
+        let l = &MDCT_48000_960;
+        let mode = &crate::celt::modes::MODE_48000_960_120;
+        let overlap = 120;
+        let shift = 1; // N=960, N2=480
+        let n2 = 480;
+        let n = 960;
+
+        let mut input = vec![0i32; n2];
+        input[0] = 1 << 15;
+        let mut output = vec![0i32; n];
+        clt_mdct_backward(l, &input, &mut output, mode.window, overlap, shift, 1);
+        let max_abs = output.iter().map(|x| x.abs()).max().unwrap_or(0);
+        assert!(max_abs < i32::MAX / 2, "shift=1 output should be bounded, got {max_abs}");
+        assert!(output.iter().any(|&v| v != 0), "shift=1 impulse should produce non-zero output");
+    }
+
+    #[test]
+    fn test_mdct_backward_shift_2() {
+        let l = &MDCT_48000_960;
+        let mode = &crate::celt::modes::MODE_48000_960_120;
+        let overlap = 120;
+        let shift = 2; // N=480, N2=240
+        let n2 = 240;
+        let n = 480;
+
+        let mut input = vec![0i32; n2];
+        input[0] = 1 << 15;
+        let mut output = vec![0i32; n];
+        clt_mdct_backward(l, &input, &mut output, mode.window, overlap, shift, 1);
+        let max_abs = output.iter().map(|x| x.abs()).max().unwrap_or(0);
+        assert!(max_abs < i32::MAX / 2, "shift=2 output should be bounded, got {max_abs}");
+        assert!(output.iter().any(|&v| v != 0), "shift=2 impulse should produce non-zero output");
+    }
+
+    #[test]
+    fn test_mdct_backward_shift_3_zero_vs_impulse() {
+        let l = &MDCT_48000_960;
+        let mode = &crate::celt::modes::MODE_48000_960_120;
+        let overlap = 120;
+        let shift = 3; // N=240, N2=120
+        let n2 = 120;
+        let n = 240;
+
+        // Zero input
+        let input_zero = vec![0i32; n2];
+        let mut output_zero = vec![0i32; n];
+        clt_mdct_backward(l, &input_zero, &mut output_zero, mode.window, overlap, shift, 1);
+        assert!(output_zero.iter().all(|&v| v == 0), "zero input should give zero output");
+
+        // Impulse input
+        let mut input_imp = vec![0i32; n2];
+        input_imp[n2 / 2] = 1 << 15;
+        let mut output_imp = vec![0i32; n];
+        clt_mdct_backward(l, &input_imp, &mut output_imp, mode.window, overlap, shift, 1);
+        assert!(output_imp.iter().any(|&v| v != 0), "impulse input at mid-band should produce output");
+    }
+
+    #[test]
+    fn test_mdct_backward_stride_2() {
+        let l = &MDCT_48000_960;
+        let mode = &crate::celt::modes::MODE_48000_960_120;
+        let overlap = 120;
+        let shift = 3; // N=240, N2=120
+        let n2 = 120;
+        let n = 240;
+
+        let mut input = vec![0i32; n2 * 2]; // stride=2 means every other sample
+        input[0] = 1 << 15;
+        let mut output = vec![0i32; n];
+        clt_mdct_backward(l, &input, &mut output, mode.window, overlap, shift, 2);
+        let max_abs = output.iter().map(|x| x.abs()).max().unwrap_or(0);
+        assert!(max_abs < i32::MAX / 2, "stride=2 output should be bounded");
+    }
 }

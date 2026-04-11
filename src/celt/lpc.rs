@@ -771,4 +771,69 @@ mod tests {
             "feedback should produce non-zero tail"
         );
     }
+
+    // --- Coverage additions: lpc_fit, iir/fir edge cases ---
+
+    #[test]
+    fn test_lpc_order_2_symmetric() {
+        // Symmetric AC: real signal, coefficients should be real-valued and stable
+        let mut lpc_out = [0; 2];
+        let ac = [1 << 22, 1 << 20, 1 << 18];
+        celt_lpc(&mut lpc_out, &ac, 2);
+        // Coefficients should be non-zero and within Q12 range
+        assert!(lpc_out[0] != 0, "first coeff should be non-zero");
+        assert!(lpc_out[0].abs() <= 32767, "first coeff should fit Q12");
+        assert!(lpc_out[1].abs() <= 32767, "second coeff should fit Q12");
+    }
+
+    #[test]
+    fn test_fir_all_ones_coefficients() {
+        // FIR with all-ones coefficients should sum history
+        let ord = 3;
+        let n = 4;
+        let mut x = vec![0i32; n + ord];
+        x[ord] = 1 << SIG_SHIFT;
+        x[ord + 1] = 2 << SIG_SHIFT;
+        let num = vec![4096i32; ord]; // Q12 = 1.0
+        let mut y = vec![0i32; n];
+        celt_fir(&x, &num, &mut y, n, ord);
+        // First output should include the impulse
+        assert!(y[0] != 0, "FIR output should be non-zero with unit coefficients");
+    }
+
+    #[test]
+    fn test_iir_stability_with_large_feedback() {
+        // Large feedback coefficients should still produce finite output
+        let den = [4000i32, -3000, 2000, -1000];
+        let n = 16;
+        let mut x = vec![0i32; n];
+        x[0] = 1 << SIG_SHIFT;
+        let mut y = vec![0i32; n];
+        let mut mem = [0i32; 4];
+        celt_iir(&x, &den, &mut y, n, 4, &mut mem);
+        // Output should be non-zero due to feedback
+        assert!(y.iter().any(|&v| v != 0), "IIR with feedback should produce non-zero output");
+    }
+
+    #[test]
+    fn test_autocorr_with_window() {
+        // Windowed autocorrelation with a simple rectangular window
+        let x = [1000i32; 16];
+        let window = [32767i32; 4]; // full-scale window
+        let mut ac = [0i32; 3];
+        let _shift = celt_autocorr(&x, &mut ac, Some(&window), 4, 2, 16);
+        assert!(ac[0] > 0, "windowed autocorr R(0) should be positive");
+        // DC signal: all lags should be similar
+        assert!(ac[1] > 0, "DC with window: R(1) should be positive");
+    }
+
+    #[test]
+    fn test_lpc_single_order() {
+        // Single coefficient: should be -ac[1]/ac[0]
+        let mut lpc_out = [0; 1];
+        let ac = [1 << 22, -(1 << 20)]; // negative correlation
+        celt_lpc(&mut lpc_out, &ac, 1);
+        // Should predict positive correlation
+        assert!(lpc_out[0] > 0, "negative ac[1] should give positive lpc[0], got {}", lpc_out[0]);
+    }
 }

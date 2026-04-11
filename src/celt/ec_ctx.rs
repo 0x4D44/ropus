@@ -213,4 +213,92 @@ mod tests {
         let dec = RangeDecoder::new(&[0x80u8]);
         let _ = dec.ec_snapshot();
     }
+
+    // --- Coverage additions: more panic paths, restore on decoder ---
+
+    #[test]
+    #[should_panic(expected = "ec_dec_update called on encoder")]
+    fn test_encoder_panics_on_dec_update() {
+        let mut buffer = [0u8; 8];
+        let mut enc = RangeEncoder::new(&mut buffer);
+        enc.ec_dec_update(0, 1, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "ec_dec_uint called on encoder")]
+    fn test_encoder_panics_on_dec_uint() {
+        let mut buffer = [0u8; 8];
+        let mut enc = RangeEncoder::new(&mut buffer);
+        let _ = enc.ec_dec_uint(10);
+    }
+
+    #[test]
+    #[should_panic(expected = "ec_dec_bits called on encoder")]
+    fn test_encoder_panics_on_dec_bits() {
+        let mut buffer = [0u8; 8];
+        let mut enc = RangeEncoder::new(&mut buffer);
+        let _ = enc.ec_dec_bits(4);
+    }
+
+    #[test]
+    #[should_panic(expected = "ec_dec_bit_logp called on encoder")]
+    fn test_encoder_panics_on_dec_bit_logp() {
+        let mut buffer = [0u8; 8];
+        let mut enc = RangeEncoder::new(&mut buffer);
+        let _ = enc.ec_dec_bit_logp(2);
+    }
+
+    #[test]
+    #[should_panic(expected = "ec_enc_uint called on decoder")]
+    fn test_decoder_panics_on_enc_uint() {
+        let mut dec = RangeDecoder::new(&[0x80u8]);
+        dec.ec_enc_uint(5, 10);
+    }
+
+    #[test]
+    #[should_panic(expected = "ec_enc_bits called on decoder")]
+    fn test_decoder_panics_on_enc_bits() {
+        let mut dec = RangeDecoder::new(&[0x80u8]);
+        dec.ec_enc_bits(0, 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "ec_enc_bit_logp called on decoder")]
+    fn test_decoder_panics_on_enc_bit_logp() {
+        let mut dec = RangeDecoder::new(&[0x80u8]);
+        dec.ec_enc_bit_logp(true, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "encoder-only")]
+    fn test_decoder_panics_on_restore() {
+        let mut dec = RangeDecoder::new(&[0x80u8]);
+        // Get a valid snapshot from an encoder to pass to the decoder
+        let mut buf = [0u8; 8];
+        let enc = RangeEncoder::new(&mut buf);
+        let snap = enc.snapshot();
+        dec.ec_restore(&snap);
+    }
+
+    #[test]
+    fn test_encoder_snapshot_and_restore_via_trait() {
+        let mut buffer = [0u8; 64];
+        let mut enc = RangeEncoder::new(&mut buffer);
+        EcCoder::ec_encode(&mut enc, 0, 1, 4);
+        let snap = EcCoder::ec_snapshot(&enc);
+        let tell_before = EcCoder::ec_tell(&enc);
+        EcCoder::ec_encode(&mut enc, 0, 1, 4);
+        EcCoder::ec_restore(&mut enc, &snap);
+        assert_eq!(EcCoder::ec_tell(&enc), tell_before);
+    }
+
+    #[test]
+    fn test_encoder_ec_buffer_and_storage_via_trait() {
+        let mut data = [0x55u8; 32];
+        let enc = RangeEncoder::new(&mut data);
+        assert_eq!(EcCoder::ec_storage_usize(&enc), 32);
+        let buf = EcCoder::ec_buffer(&enc);
+        assert_eq!(buf.len(), 32);
+        assert_eq!(buf[0], 0x55);
+    }
 }

@@ -2561,4 +2561,73 @@ mod tests {
             assert_eq!(row.len(), 8);
         }
     }
+
+    // --- Coverage additions: PLC paths, stereo, downsample ---
+
+    #[test]
+    fn decode_lost_progressive_decay_over_many_losses() {
+        let mut dec = CeltDecoder::new(48000, 2).unwrap();
+        let mut pcm = vec![0i16; 960 * 2];
+        // Feed one good frame
+        let _ = dec.decode_with_ec(Some(&[0u8; 16]), &mut pcm, 960, None, false, plc_arg());
+        // Now simulate 5 consecutive losses
+        for i in 0..5 {
+            let prev_duration = dec.loss_duration;
+            let _ = dec.decode_with_ec(None, &mut pcm, 960, None, false, plc_arg());
+            if i > 0 {
+                assert!(dec.loss_duration >= prev_duration,
+                    "loss_duration should grow: was {prev_duration}, now {}", dec.loss_duration);
+            }
+        }
+    }
+
+    #[test]
+    fn decode_with_ec_stereo_packet_v2() {
+        let mut dec = CeltDecoder::new(48000, 2).unwrap();
+        let mut pcm = vec![0i16; 960 * 2];
+        let result = dec.decode_with_ec(Some(&[0xFFu8; 4]), &mut pcm, 960, None, false, plc_arg());
+        // Should not panic regardless of result
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn plc_stereo_null_data() {
+        let mut dec = CeltDecoder::new(48000, 2).unwrap();
+        let mut pcm = vec![0i16; 960 * 2];
+        let result = dec.decode_with_ec(None, &mut pcm, 960, None, false, plc_arg());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn decode_lost_periodic_then_noise_transition() {
+        let mut dec = CeltDecoder::new(48000, 1).unwrap();
+        let mut pcm = vec![0i16; 960];
+        // Feed one good frame
+        let _ = dec.decode_with_ec(Some(&[0x80u8; 32]), &mut pcm, 960, None, false, plc_arg());
+        // First loss
+        let _ = dec.decode_with_ec(None, &mut pcm, 960, None, false, plc_arg());
+        // Many more losses
+        for _ in 0..20 {
+            let _ = dec.decode_with_ec(None, &mut pcm, 960, None, false, plc_arg());
+        }
+        assert!(dec.loss_duration > 10);
+    }
+
+    #[test]
+    fn decoder_downsample_rates() {
+        let cases = [(48000, 1), (24000, 2), (16000, 3), (12000, 4), (8000, 6)];
+        for (rate, expected_ds) in cases {
+            let dec = CeltDecoder::new(rate, 1).unwrap();
+            assert_eq!(dec.downsample, expected_ds,
+                "rate={rate}: expected ds={expected_ds}, got {}", dec.downsample);
+        }
+    }
+
+    #[test]
+    fn celt_synthesis_stereo_to_stereo() {
+        let mut dec = CeltDecoder::new(48000, 2).unwrap();
+        let mut pcm = vec![0i16; 960 * 2];
+        let result = dec.decode_with_ec(None, &mut pcm, 960, None, false, plc_arg());
+        assert!(result.is_ok());
+    }
 }

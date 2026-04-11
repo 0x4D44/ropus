@@ -1289,4 +1289,134 @@ mod tests {
             assert!(!dec.error());
         }
     }
+
+    // --- Coverage additions: snapshot/restore, error handling, uint boundaries ---
+
+    #[test]
+    fn snapshot_restore_rewinds_encoder_state() {
+        let mut buf = vec![0u8; 256];
+        {
+            let mut enc = RangeEncoder::new(&mut buf);
+            enc.encode_bit_logp(true, 2);
+            enc.encode_bit_logp(false, 2);
+            let snap = enc.save_snapshot();
+            let tell_at_snap = enc.tell();
+            enc.encode_bit_logp(true, 2);
+            enc.encode_bit_logp(true, 2);
+            assert!(enc.tell() > tell_at_snap);
+            enc.restore_snapshot(&snap);
+            assert_eq!(enc.tell(), tell_at_snap);
+            enc.encode_bit_logp(false, 2);
+            enc.encode_bit_logp(false, 2);
+            enc.done();
+            assert!(!enc.error());
+        }
+        {
+            let mut dec = RangeDecoder::new(&buf);
+            assert!(dec.decode_bit_logp(2));
+            assert!(!dec.decode_bit_logp(2));
+            assert!(!dec.decode_bit_logp(2));
+            assert!(!dec.decode_bit_logp(2));
+            assert!(!dec.error());
+        }
+    }
+
+    #[test]
+    fn encoder_tiny_buffer_sets_error() {
+        let mut buf = vec![0u8; 4];
+        let mut enc = RangeEncoder::new(&mut buf);
+        for _ in 0..100 {
+            enc.encode_bit_logp(true, 1);
+        }
+        enc.done();
+        assert!(enc.error(), "tiny buffer should cause error");
+    }
+
+    #[test]
+    fn encode_decode_uint_boundary_ft_2() {
+        let mut buf = vec![0u8; 64];
+        {
+            let mut enc = RangeEncoder::new(&mut buf);
+            enc.encode_uint(0, 2);
+            enc.encode_uint(1, 2);
+            enc.done();
+            assert!(!enc.error());
+        }
+        {
+            let mut dec = RangeDecoder::new(&buf);
+            assert_eq!(dec.decode_uint(2), 0);
+            assert_eq!(dec.decode_uint(2), 1);
+            assert!(!dec.error());
+        }
+    }
+
+    #[test]
+    fn encode_decode_uint_boundary_ft_256() {
+        let mut buf = vec![0u8; 64];
+        {
+            let mut enc = RangeEncoder::new(&mut buf);
+            enc.encode_uint(0, 256);
+            enc.encode_uint(255, 256);
+            enc.encode_uint(128, 256);
+            enc.done();
+            assert!(!enc.error());
+        }
+        {
+            let mut dec = RangeDecoder::new(&buf);
+            assert_eq!(dec.decode_uint(256), 0);
+            assert_eq!(dec.decode_uint(256), 255);
+            assert_eq!(dec.decode_uint(256), 128);
+            assert!(!dec.error());
+        }
+    }
+
+    #[test]
+    fn encode_decode_uint_boundary_ft_257() {
+        let mut buf = vec![0u8; 64];
+        {
+            let mut enc = RangeEncoder::new(&mut buf);
+            enc.encode_uint(0, 257);
+            enc.encode_uint(256, 257);
+            enc.encode_uint(100, 257);
+            enc.done();
+            assert!(!enc.error());
+        }
+        {
+            let mut dec = RangeDecoder::new(&buf);
+            assert_eq!(dec.decode_uint(257), 0);
+            assert_eq!(dec.decode_uint(257), 256);
+            assert_eq!(dec.decode_uint(257), 100);
+            assert!(!dec.error());
+        }
+    }
+
+    #[test]
+    fn decoder_reduce_storage() {
+        let data = vec![0xAAu8; 64];
+        let mut dec = RangeDecoder::new(&data);
+        let orig_storage = dec.storage;
+        dec.reduce_storage(10);
+        assert!(dec.storage <= orig_storage);
+    }
+
+    #[test]
+    fn encode_decode_many_bits_fills_window() {
+        let mut buf = vec![0u8; 256];
+        let values: Vec<u32> = (0..20).map(|i| i * 13 % 256).collect();
+        {
+            let mut enc = RangeEncoder::new(&mut buf);
+            for &v in &values {
+                enc.encode_bits(v, 8);
+            }
+            enc.done();
+            assert!(!enc.error());
+        }
+        {
+            let mut dec = RangeDecoder::new(&buf);
+            for &expected in &values {
+                assert_eq!(dec.decode_bits(8), expected);
+            }
+            assert!(!dec.error());
+        }
+    }
 }

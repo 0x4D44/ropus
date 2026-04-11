@@ -2452,4 +2452,106 @@ mod tests {
         assert_eq!(silk_clz32(1), 31);
         assert_eq!(silk_clz32(i32::MAX), 1);
     }
+
+    // --- Coverage additions: resampler, NLSF stabilization, utilities ---
+
+    #[test]
+    fn test_down2_impulse_response() {
+        let mut state = [0i32; 2];
+        let input = [32767i16, 0, 0, 0, 0, 0, 0, 0];
+        let mut output = [0i16; 4];
+        silk_resampler_down2(&mut state, &mut output, &input);
+        assert!(output[0] != 0, "impulse response should be non-zero");
+    }
+
+    #[test]
+    fn test_down2_alternating_signal() {
+        let mut state = [0i32; 2];
+        let input: Vec<i16> = (0..16).map(|i| if i % 2 == 0 { 10000 } else { -10000 }).collect();
+        let mut output = [0i16; 8];
+        silk_resampler_down2(&mut state, &mut output, &input);
+        let max_out = output.iter().map(|x| x.abs()).max().unwrap();
+        assert!(max_out < 10000, "alternating signal should be attenuated, got max={max_out}");
+    }
+
+    #[test]
+    fn test_down2_3_dc_convergence() {
+        let mut state = [0i32; 6];
+        // down2_3 produces 2 outputs per 3 inputs, so in_len=90 -> 60 outputs
+        let input = [5000i16; 90];
+        let mut output = [0i16; 60];
+        silk_resampler_down2_3(&mut state, &mut output, &input, 90);
+        let last = output[59];
+        assert!((last as i32 - 5000).abs() < 2000, "DC 5000 should converge near 5000, got {last}");
+    }
+
+    #[test]
+    fn test_stabilize_reversed_nlsfs() {
+        let mut nlsf = [30000i16, 25000, 20000, 15000, 10000];
+        let ndelta_min = [250i16, 200, 200, 200, 200, 250];
+        silk_nlsf_stabilize(&mut nlsf, &ndelta_min, 5);
+        for i in 1..5 {
+            assert!(nlsf[i] > nlsf[i - 1], "NLSF[{i}]={} should be > NLSF[{}]={}", nlsf[i], i - 1, nlsf[i - 1]);
+        }
+    }
+
+    #[test]
+    fn test_stabilize_extreme_low() {
+        let mut nlsf = [0i16; 5];
+        let ndelta_min = [250i16, 200, 200, 200, 200, 250];
+        silk_nlsf_stabilize(&mut nlsf, &ndelta_min, 5);
+        assert!(nlsf[0] > 0, "NLSF[0] should be positive after stabilization");
+        for i in 1..5 {
+            assert!(nlsf[i] > nlsf[i - 1]);
+        }
+    }
+
+    #[test]
+    fn test_stabilize_extreme_high() {
+        let mut nlsf = [32767i16; 5];
+        let ndelta_min = [250i16, 200, 200, 200, 200, 250];
+        silk_nlsf_stabilize(&mut nlsf, &ndelta_min, 5);
+        let upper_bound = 32768i32 - ndelta_min[5] as i32;
+        assert!((nlsf[4] as i32) <= upper_bound, "last NLSF {} should respect upper bound {}", nlsf[4], upper_bound);
+    }
+
+    #[test]
+    fn test_silk_rand_produces_varying_output() {
+        let mut seed = 12345i32;
+        let mut values = Vec::new();
+        for _ in 0..10 {
+            seed = silk_rand(seed);
+            values.push(seed);
+        }
+        assert!(values.windows(2).any(|w| w[0] != w[1]), "PRNG should produce varying values");
+    }
+
+    #[test]
+    fn test_silk_inner_prod16_basic() {
+        let a = [1i16, 2, 3, 4, 5];
+        let b = [1i16, 2, 3, 4, 5];
+        let result = silk_inner_prod16(&a, &b, 5);
+        assert_eq!(result, 55, "1+4+9+16+25 = 55");
+    }
+
+    #[test]
+    fn test_silk_log2lin_boundary_values() {
+        let max_val = silk_log2lin(3966);
+        assert!(max_val > 0, "log2lin(3966) should be positive");
+        let mid_val = silk_log2lin(3840);
+        assert!(mid_val > 0, "log2lin(3840) should be positive");
+        assert!(max_val >= mid_val, "log2lin(3966) >= log2lin(3840)");
+    }
+
+    #[test]
+    fn test_silk_gains_dequant_negative_delta_clamp() {
+        let mut gain_q16 = [0i32; 4];
+        let ind = [5i8, -3, -3, -3];
+        let mut prev_ind = 0i8;
+        let conditional = false;
+        silk_gains_dequant(&mut gain_q16, &ind, &mut prev_ind, conditional, 4);
+        for i in 0..4 {
+            assert!(gain_q16[i] > 0, "gain_q16[{i}]={} should be positive", gain_q16[i]);
+        }
+    }
 }

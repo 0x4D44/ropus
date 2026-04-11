@@ -3547,4 +3547,76 @@ mod tests {
         let mut rng2 = Kiss99Ctx::default();
         assert_eq!(sample_mdense(&mdense, &state, &zero_sum_logits, &mut rng2), 255);
     }
+
+    // --- Coverage additions: PLC, encoder features, LPC analysis ---
+
+    #[test]
+    fn test_preemphasis_basic() {
+        let x = [0.5f32, 0.3, 0.1, 0.0, -0.1];
+        let mut y = [0.0f32; 5];
+        let mut mem = 0.0f32;
+        preemphasis(&mut y, &mut mem, &x, 0.85, 5);
+        // First output: y[0] = x[0] + mem = 0.5 + 0.0 = 0.5
+        assert!((y[0] - 0.5).abs() < 1e-5, "first preemph output should be 0.5, got {}", y[0]);
+        // mem should be -coef * x[last] = -0.85 * (-0.1) = 0.085
+        assert!((mem - 0.085).abs() < 1e-5, "mem should be -coef * x[last], got {}", mem);
+    }
+
+    #[test]
+    fn test_lpc_from_cepstrum_basic() {
+        let mut lpc = [0.0f32; LPC_ORDER];
+        let cepstrum = [0.0f32; NB_BANDS]; // zero cepstrum -> flat spectrum
+        let _gain = lpc_from_cepstrum(&mut lpc, &cepstrum);
+        // With zero cepstrum, LPC should be near zero (white spectrum)
+        assert!(lpc.iter().all(|&c| c.is_finite()), "LPC coefficients should be finite");
+    }
+
+    #[test]
+    fn test_dct_basic() {
+        let input = [1.0f32; NB_BANDS]; // DC input
+        let mut output = [0.0f32; NB_BANDS];
+        dct(&mut output, &input);
+        // DC component should be non-zero
+        assert!(output[0].abs() > 0.0, "DCT of DC signal should have non-zero DC component");
+        assert!(output[0].is_finite());
+    }
+
+    #[test]
+    fn test_apply_window_basic() {
+        let mut x = [1.0f32; WINDOW_SIZE];
+        apply_window(&mut x);
+        // Windowed signal: edges should be attenuated, middle should be near 1.0
+        assert!(x[0].abs() < 1.0, "window should attenuate edges");
+        let mid = WINDOW_SIZE / 2;
+        assert!(x[mid].abs() > 0.5, "window should preserve middle: got {}", x[mid]);
+    }
+
+    #[test]
+    fn test_lpc_weighting_reduces_coefficients() {
+        let mut lpc = [1.0f32; LPC_ORDER];
+        lpc_weighting(&mut lpc, 0.9);
+        // Each coefficient should be scaled by gamma^(i+1)
+        assert!((lpc[0] - 0.9).abs() < 1e-5, "lpc[0] should be 0.9, got {}", lpc[0]);
+        assert!(lpc[LPC_ORDER - 1].abs() < lpc[0].abs(), "later coefficients should be smaller");
+    }
+
+    #[test]
+    fn test_encoder_state_new_and_compute_features() {
+        let mut enc = LPCNetEncState::new();
+        // Compute features on a patterned frame
+        let input = patterned_frame(42);
+        enc.compute_frame_features(&input);
+        // Features should be finite
+        assert!(enc.features[0..NB_BANDS].iter().all(|f| f.is_finite()),
+            "encoder features should be finite after compute");
+    }
+
+    #[test]
+    fn test_kiss99_determinism() {
+        let mut rng1 = Kiss99Ctx::default();
+        let mut rng2 = Kiss99Ctx::default();
+        let v1: Vec<u32> = (0..10).map(|_| rng1.rand()).collect();
+        let v2: Vec<u32> = (0..10).map(|_| rng2.rand()).collect();
+        assert_eq!(v1, v2, "same seed should produce same sequence");
+    }
 }

@@ -2464,4 +2464,143 @@ mod tests {
         );
         assert!(approx_eq(adashape_state.interpolate_state[0], 0.0, EPS));
     }
+
+    // --- Coverage additions: bias-only, boundary activations, conv2d, GRU ---
+
+    #[test]
+    fn test_compute_linear_bias_only_no_weights() {
+        let layer = LinearLayer {
+            bias: Some(vec![7.0, -3.0, 1.5]),
+            nb_inputs: 4,
+            nb_outputs: 3,
+            ..Default::default()
+        };
+        let input = vec![100.0, 200.0, 300.0, 400.0];
+        let mut out = vec![0.0; 3];
+        compute_linear(&layer, &mut out, &input);
+        assert!(approx_eq(out[0], 7.0, EPS));
+        assert!(approx_eq(out[1], -3.0, EPS));
+        assert!(approx_eq(out[2], 1.5, EPS));
+    }
+
+    #[test]
+    fn test_compute_linear_no_bias_no_weights() {
+        let layer = LinearLayer {
+            nb_inputs: 3,
+            nb_outputs: 2,
+            ..Default::default()
+        };
+        let input = vec![1.0, 2.0, 3.0];
+        let mut out = vec![999.0; 2];
+        compute_linear(&layer, &mut out, &input);
+        assert!(approx_eq(out[0], 0.0, EPS));
+        assert!(approx_eq(out[1], 0.0, EPS));
+    }
+
+    #[test]
+    fn test_activation_relu_boundary_values() {
+        let mut data = vec![-1e-10, 0.0, 1e-10, -100.0, 100.0];
+        let n = data.len();
+        compute_activation(&mut data, n, ACTIVATION_RELU);
+        assert!(data[0] == 0.0);
+        assert!(data[1] == 0.0);
+        assert!(data[2] > 0.0);
+        assert!(data[3] == 0.0);
+        assert!(approx_eq(data[4], 100.0, EPS));
+    }
+
+    #[test]
+    fn test_activation_tanh_boundary_values() {
+        let mut data = vec![-50.0, -1.0, 0.0, 1.0, 50.0];
+        let n = data.len();
+        compute_activation(&mut data, n, ACTIVATION_TANH);
+        assert!(data[0] >= -1.0 && data[0] <= -0.99);
+        assert!(data[2].abs() < 0.001);
+        assert!(data[4] >= 0.99 && data[4] <= 1.0);
+    }
+
+    #[test]
+    fn test_activation_sigmoid_boundary_saturation() {
+        let mut data = vec![-100.0, 100.0];
+        let n = data.len();
+        compute_activation(&mut data, n, ACTIVATION_SIGMOID);
+        assert!(data[0] < 0.01);
+        assert!(data[1] > 0.99);
+    }
+
+    #[test]
+    fn test_conv2d_ktime1_kheight1_multiple_channels() {
+        let weights = vec![1.0f32, 0.0, 0.0, 1.0];
+        let input = vec![3.0, 7.0];
+        let mut out = vec![0.0; 2];
+        conv2d_float(&mut out, &weights, 2, 2, 1, 1, &input, 1, 1);
+        assert!(approx_eq(out[0], 3.0, EPS));
+        assert!(approx_eq(out[1], 7.0, EPS));
+    }
+
+    #[test]
+    fn test_gru_nonzero_bias_drives_state() {
+        let n = 2;
+        let mut input_bias = vec![0.0f32; 6];
+        input_bias[0] = 10.0;
+        input_bias[1] = 10.0;
+        let input_w = LinearLayer {
+            bias: Some(input_bias),
+            float_weights: Some(vec![0.0; 12]),
+            nb_inputs: 2,
+            nb_outputs: 6,
+            ..Default::default()
+        };
+        let recur_w = LinearLayer {
+            bias: Some(vec![0.0; 6]),
+            float_weights: Some(vec![0.0; 12]),
+            nb_inputs: n,
+            nb_outputs: 3 * n,
+            ..Default::default()
+        };
+        let mut state = vec![5.0f32; n];
+        let input = vec![0.0f32; 2];
+        compute_generic_gru(&input_w, &recur_w, &mut state, &input);
+        assert!(state[0] > 4.0);
+    }
+
+    #[test]
+    fn test_gru_saturated_initial_state() {
+        let n = 2;
+        let input_w = LinearLayer {
+            bias: Some(vec![0.0; 6]),
+            float_weights: Some(vec![0.0; 12]),
+            nb_inputs: 2,
+            nb_outputs: 6,
+            ..Default::default()
+        };
+        let recur_w = LinearLayer {
+            bias: Some(vec![0.0; 6]),
+            float_weights: Some(vec![0.0; 12]),
+            nb_inputs: n,
+            nb_outputs: 3 * n,
+            ..Default::default()
+        };
+        let mut state = vec![1000.0f32; n];
+        let input = vec![0.0f32; 2];
+        compute_generic_gru(&input_w, &recur_w, &mut state, &input);
+        assert!(state[0].is_finite());
+        assert!(state[0].abs() < 1001.0);
+    }
+
+    #[test]
+    fn test_conv1d_zero_memory_single_input() {
+        let layer = LinearLayer {
+            bias: Some(vec![0.0]),
+            float_weights: Some(vec![3.0]),
+            nb_inputs: 1,
+            nb_outputs: 1,
+            ..Default::default()
+        };
+        let input = vec![2.0];
+        let mut output = vec![0.0];
+        let mut mem = vec![];
+        compute_generic_conv1d(&layer, &mut output, &mut mem, &input, 1, ACTIVATION_LINEAR);
+        assert!(approx_eq(output[0], 6.0, EPS));
+    }
 }

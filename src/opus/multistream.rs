@@ -3172,4 +3172,77 @@ mod tests {
         dec.reset();
         assert_eq!(dec.get_final_range(), 0);
     }
+
+    // --- Coverage additions: ambisonics, coupled streams, error handling ---
+
+    #[test]
+    fn test_ambisonics_invalid_channel_counts() {
+        // Family 2 = ambisonics. Invalid channel counts for ambisonics.
+        for ch in [0, 2, 5, 7, 8, 10] {
+            let result = OpusMSEncoder::new_surround(48000, ch, 2, OPUS_APPLICATION_AUDIO);
+            assert!(result.is_err(), "channels={ch} should be invalid for ambisonics family 2");
+        }
+    }
+
+    #[test]
+    fn test_ambisonics_valid_channel_counts() {
+        // Family 2 = ambisonics. Valid: N^2 or N^2 + 2.
+        // N=1: 1, 3; N=2: 4, 6; N=3: 9, 11; N=4: 16
+        for ch in [1, 3, 4, 6, 9, 11, 16] {
+            let result = OpusMSEncoder::new_surround(48000, ch, 2, OPUS_APPLICATION_AUDIO);
+            assert!(result.is_ok(), "channels={ch} should be valid for ambisonics, got {:?}", result.err());
+        }
+    }
+
+    #[test]
+    fn test_ms_encoder_coupled_stereo_roundtrip() {
+        let mut enc = OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO).expect("stereo ms encoder");
+        let mut dec = OpusMSDecoder::new(48000, 2, 1, 1, &[0, 1]).expect("stereo ms decoder");
+        let pcm = patterned_pcm_i16(960, 2, 42);
+        let mut packet = vec![0u8; 4000];
+        let len = enc.encode(&pcm, 960, &mut packet, 4000).expect("encode");
+        assert!(len > 0);
+        let mut out = vec![0i16; 960 * 2];
+        let decoded = dec.decode(Some(&packet[..len as usize]), len, &mut out, 960, false).expect("decode");
+        assert_eq!(decoded, 960);
+        assert!(out.iter().any(|&s| s != 0));
+    }
+
+    #[test]
+    fn test_ms_encoder_zero_channels_error() {
+        let result = OpusMSEncoder::new(48000, 0, 0, 0, &[], OPUS_APPLICATION_AUDIO);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ms_decoder_coupled_exceeds_streams_v2() {
+        let result = OpusMSDecoder::new(48000, 2, 1, 2, &[0, 1]);
+        assert!(result.is_err(), "coupled=2 > streams=1 should fail");
+    }
+
+    #[test]
+    fn test_ms_surround_invalid_family_v2() {
+        let result = OpusMSEncoder::new_surround(48000, 2, 3, OPUS_APPLICATION_AUDIO);
+        assert!(result.is_err(), "family=3 should be UNIMPLEMENTED");
+    }
+
+    #[test]
+    fn test_ms_decoder_plc_stereo() {
+        let mut enc = OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO).expect("stereo ms encoder");
+        let mut dec = OpusMSDecoder::new(48000, 2, 1, 1, &[0, 1]).expect("stereo ms decoder");
+        let pcm = patterned_pcm_i16(960, 2, 99);
+        let mut packet = vec![0u8; 4000];
+        let len = enc.encode(&pcm, 960, &mut packet, 4000).expect("encode");
+        let mut out = vec![0i16; 960 * 2];
+        dec.decode(Some(&packet[..len as usize]), len, &mut out, 960, false).expect("decode");
+        let mut plc_out = vec![0i16; 960 * 2];
+        let result = dec.decode(None, 0, &mut plc_out, 960, false);
+        assert!(result.is_ok(), "PLC decode should succeed");
+    }
+
+    #[test]
+    fn test_validate_layout_max_channels_boundary() {
+        let result = OpusMSDecoder::new(48000, 2, 255, 1, &[0, 1]);
+        assert!(result.is_err(), "streams=255 + coupled=1 = 256 > 255 should fail");
+    }
 }

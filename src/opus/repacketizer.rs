@@ -2786,4 +2786,345 @@ mod tests {
             OPUS_INVALID_PACKET
         );
     }
+
+    // ===================================================================
+    // Additional coverage tests
+    // ===================================================================
+
+    #[test]
+    fn test_extension_long_lacing_n255_payload() {
+        let payload: Vec<u8> = (0..260).map(|i| (i & 0xFF) as u8).collect();
+        let ext = OpusExtensionData { id: 40, frame: 0, data: &payload, len: 260 };
+        let size = opus_packet_extensions_generate(None, 512, &[ext], 1, false);
+        assert!(size > 0);
+        let mut buf = vec![0u8; size as usize];
+        opus_packet_extensions_generate(Some(&mut buf), size, &[ext], 1, false);
+        let mut parsed = [OpusExtensionData::EMPTY; 4];
+        let mut nb = 4;
+        opus_packet_extensions_parse(&buf, size, &mut parsed, &mut nb, 1);
+        assert_eq!(nb, 1);
+        assert_eq!(parsed[0].id, 40);
+        assert_eq!(parsed[0].len, 260);
+        assert_eq!(parsed[0].data, &payload[..]);
+    }
+
+    #[test]
+    fn test_extension_variable_length_data_multiple_ids() {
+        let ext_short0 = OpusExtensionData { id: 3, frame: 0, data: &[], len: 0 };
+        let ext_short1 = OpusExtensionData { id: 5, frame: 0, data: &[0xAB], len: 1 };
+        let long_payload = [0x11u8; 20];
+        let ext_long = OpusExtensionData { id: 64, frame: 0, data: &long_payload, len: 20 };
+        let exts = [ext_short0, ext_short1, ext_long];
+        let size = opus_packet_extensions_generate(None, 256, &exts, 1, false);
+        let mut buf = vec![0u8; size as usize];
+        opus_packet_extensions_generate(Some(&mut buf), size, &exts, 1, false);
+        let mut parsed = [OpusExtensionData::EMPTY; 8];
+        let mut nb = 8;
+        opus_packet_extensions_parse(&buf, size, &mut parsed, &mut nb, 1);
+        assert_eq!(nb, 3);
+        assert_eq!(parsed[0].id, 3);
+        assert_eq!(parsed[1].id, 5);
+        assert_eq!(parsed[2].id, 64);
+        assert_eq!(parsed[2].len, 20);
+    }
+
+    #[test]
+    fn test_extension_cascade_repeat_across_three_frames() {
+        let payload = [0x99u8; 5];
+        let exts: Vec<OpusExtensionData> = (0..3)
+            .map(|f| OpusExtensionData { id: 40, frame: f, data: &payload, len: 5 })
+            .collect();
+        let size = opus_packet_extensions_generate(None, 256, &exts, 3, false);
+        let mut buf = vec![0u8; size as usize];
+        opus_packet_extensions_generate(Some(&mut buf), size, &exts, 3, false);
+        let mut iter = OpusExtensionIterator::new(&buf, size, 3);
+        let mut results = Vec::new();
+        loop {
+            let (ret, ext) = iter.next_ext();
+            if ret <= 0 { break; }
+            results.push((ext.id, ext.frame, ext.len));
+        }
+        assert_eq!(results.len(), 3);
+        for (i, &(id, frame, len)) in results.iter().enumerate() {
+            assert_eq!(id, 40);
+            assert_eq!(frame, i as i32);
+            assert_eq!(len, 5);
+        }
+    }
+
+    #[test]
+    fn test_self_delimited_code0_large_frame_size() {
+        let payload = vec![0xBBu8; 300];
+        let mut pkt = vec![0x08u8];
+        let mut sz_buf = [0u8; 2];
+        let n = encode_size(300, &mut sz_buf);
+        pkt.extend_from_slice(&sz_buf[..n]);
+        pkt.extend_from_slice(&payload);
+        let parsed = parse_packet(&pkt, pkt.len() as i32, true).unwrap();
+        assert_eq!(parsed.count, 1);
+        assert_eq!(parsed.sizes[0], 300);
+    }
+
+    #[test]
+    fn test_self_delimited_cbr_size_mismatch_rejected() {
+        let pkt = [0x09u8, 10, 0xAA, 0xBB];
+        assert!(matches!(parse_packet(&pkt, pkt.len() as i32, true), Err(OPUS_INVALID_PACKET)));
+    }
+
+    #[test]
+    fn test_self_delimited_vbr_code2_size_overflow() {
+        let pkt = [0x0Au8, 2, 0xAA, 0xBB, 100];
+        assert!(matches!(parse_packet(&pkt, pkt.len() as i32, true), Err(OPUS_INVALID_PACKET)));
+    }
+
+    #[test]
+    fn test_padding_with_non_zero_content() {
+        let pkt = [0x08u8 | 0x03, 0x01 | 0x40, 3, 0xAA, 0xDE, 0xAD, 0xBE];
+        let parsed = parse_packet(&pkt, pkt.len() as i32, false).unwrap();
+        assert_eq!(parsed.count, 1);
+        assert_eq!(parsed.sizes[0], 1);
+        assert_eq!(parsed.padding_len, 3);
+        assert_eq!(parsed.padding, &[0xDE, 0xAD, 0xBE]);
+    }
+
+    #[test]
+    fn test_padding_255_encoding() {
+        let mut pkt = vec![0x08u8 | 0x03, 0x01 | 0x40, 255, 10];
+        pkt.extend_from_slice(&[0x42u8; 2]);
+        pkt.extend_from_slice(&[0x01u8; 264]);
+        let parsed = parse_packet(&pkt, pkt.len() as i32, false).unwrap();
+        assert_eq!(parsed.count, 1);
+        assert_eq!(parsed.sizes[0], 2);
+        assert_eq!(parsed.padding_len, 264);
+    }
+
+    #[test]
+    fn test_multi_frame_repacketization_four_frames() {
+        let pkt = [0x08u8, 0xAA, 0xBB];
+        let mut rp = OpusRepacketizer::new();
+        for _ in 0..4 { assert_eq!(rp.cat(&pkt, pkt.len() as i32), OPUS_OK); }
+        assert_eq!(rp.get_nb_frames(), 4);
+        let mut out = [0u8; 256];
+        let ret = rp.out(&mut out, 256);
+        assert!(ret > 0);
+        assert_eq!(out[0] & 0x3, 0x3);
+        assert_eq!(out[1] & 0x3F, 4);
+        let parsed = parse_packet(&out[..ret as usize], ret, false).unwrap();
+        assert_eq!(parsed.count, 4);
+        for i in 0..4 { assert_eq!(parsed.frames[i], &[0xAA, 0xBB]); }
+    }
+
+    #[test]
+    fn test_multi_frame_vbr_different_sizes() {
+        let pkt1 = [0x08u8, 0x11];
+        let pkt2 = [0x08u8, 0x22, 0x33];
+        let pkt3 = [0x08u8, 0x44, 0x55, 0x66];
+        let mut rp = OpusRepacketizer::new();
+        assert_eq!(rp.cat(&pkt1, pkt1.len() as i32), OPUS_OK);
+        assert_eq!(rp.cat(&pkt2, pkt2.len() as i32), OPUS_OK);
+        assert_eq!(rp.cat(&pkt3, pkt3.len() as i32), OPUS_OK);
+        let mut out = [0u8; 256];
+        let ret = rp.out(&mut out, 256);
+        assert!(ret > 0);
+        assert_eq!(out[0] & 0x3, 0x3);
+        assert_ne!(out[1] & 0x80, 0);
+        let parsed = parse_packet(&out[..ret as usize], ret, false).unwrap();
+        assert_eq!(parsed.count, 3);
+        assert_eq!(parsed.frames[0], &[0x11]);
+        assert_eq!(parsed.frames[1], &[0x22, 0x33]);
+        assert_eq!(parsed.frames[2], &[0x44, 0x55, 0x66]);
+    }
+
+    #[test]
+    fn test_code3_vbr_manual_parse() {
+        let mut pkt = vec![0x08u8 | 0x03, 3 | 0x80, 1, 3];
+        pkt.push(0xAA);
+        pkt.extend_from_slice(&[0xBB, 0xCC, 0xDD]);
+        pkt.extend_from_slice(&[0xEE, 0xFF]);
+        let parsed = parse_packet(&pkt, pkt.len() as i32, false).unwrap();
+        assert_eq!(parsed.count, 3);
+        assert_eq!(parsed.sizes[0], 1);
+        assert_eq!(parsed.sizes[1], 3);
+        assert_eq!(parsed.sizes[2], 2);
+    }
+
+    #[test]
+    fn test_code3_cbr_with_padding_stripping() {
+        let pkt = vec![
+            0x08u8 | 0x03, 2 | 0x40, 5,
+            0xAA, 0xBB, 0xCC, 0xDD,
+            0x01, 0x01, 0x01, 0x01, 0x01,
+        ];
+        let mut rp = OpusRepacketizer::new();
+        assert_eq!(rp.cat(&pkt, pkt.len() as i32), OPUS_OK);
+        let mut out = [0u8; 256];
+        let ret = rp.out(&mut out, 256);
+        assert!(ret > 0);
+        assert_eq!(out[0] & 0x3, 0x1);
+    }
+
+    #[test]
+    fn test_toc_configurations_silk_celt_hybrid() {
+        assert_eq!(parse_packet(&[0x00u8, 0xAA], 2, false).unwrap().toc, 0x00);
+        assert_eq!(parse_packet(&[0x48u8, 0xBB, 0xCC], 3, false).unwrap().toc, 0x48);
+        assert_eq!(parse_packet(&[0x80u8, 0xDD], 2, false).unwrap().toc, 0x80);
+        assert_eq!(parse_packet(&[0x60u8, 0xEE, 0xFF], 3, false).unwrap().toc, 0x60);
+        assert_eq!(parse_packet(&[0x18u8, 0xAA, 0xBB], 3, false).unwrap().toc, 0x18);
+    }
+
+    #[test]
+    fn test_out_range_impl_various_ranges() {
+        let pkts = [[0x08u8, 0x11], [0x08u8, 0x22], [0x08u8, 0x33], [0x08u8, 0x44]];
+        let mut rp = OpusRepacketizer::new();
+        for pkt in &pkts { assert_eq!(rp.cat(pkt, pkt.len() as i32), OPUS_OK); }
+        let mut out = [0u8; 256];
+        let _ret = rp.out_range(0, 1, &mut out, 256);
+        assert_eq!(out[0] & 0x3, 0x0);
+        assert_eq!(out[1], 0x11);
+        let ret = rp.out_range(2, 4, &mut out, 256);
+        assert!(ret > 0);
+        let _ret = rp.out_range(0, 4, &mut out, 256);
+        assert_eq!(out[0] & 0x3, 0x3);
+    }
+
+    #[test]
+    fn test_out_range_impl_with_pad_to_max() {
+        let pkt = [0x08u8, 0xAA, 0xBB];
+        let mut rp = OpusRepacketizer::new();
+        assert_eq!(rp.cat(&pkt, pkt.len() as i32), OPUS_OK);
+        let mut out = [0u8; 64];
+        let ret = rp.out_range_impl(0, 1, &mut out, 64, false, true, &[]);
+        assert_eq!(ret, 64);
+        assert_eq!(out[0] & 0x3, 0x3);
+        assert_ne!(out[1] & 0x40, 0);
+    }
+
+    #[test]
+    fn test_code3_vbr_large_frame_size_encoding() {
+        let small_payload = [0x11u8; 10];
+        let large_payload = vec![0x22u8; 300];
+        let mut pkt_small = vec![0x08u8];
+        pkt_small.extend_from_slice(&small_payload);
+        let mut pkt_large = vec![0x08u8];
+        pkt_large.extend_from_slice(&large_payload);
+        let mut rp = OpusRepacketizer::new();
+        assert_eq!(rp.cat(&pkt_small, pkt_small.len() as i32), OPUS_OK);
+        assert_eq!(rp.cat(&pkt_large, pkt_large.len() as i32), OPUS_OK);
+        let mut out = [0u8; 512];
+        let ret = rp.out(&mut out, 512);
+        let parsed = parse_packet(&out[..ret as usize], ret, false).unwrap();
+        assert_eq!(parsed.count, 2);
+        assert_eq!(parsed.sizes[0] as usize, 10);
+        assert_eq!(parsed.sizes[1] as usize, 300);
+    }
+
+    #[test]
+    fn test_parse_negative_len_returns_bad_arg() {
+        assert!(matches!(parse_packet(&[0x08u8, 0xAA], -1, false), Err(OPUS_BAD_ARG)));
+    }
+
+    #[test]
+    fn test_parse_code3_vbr_last_size_negative() {
+        let pkt = [0x08u8 | 0x03, 2 | 0x80, 250, 0xAA, 0xBB];
+        assert!(matches!(parse_packet(&pkt, pkt.len() as i32, false), Err(OPUS_INVALID_PACKET)));
+    }
+
+    #[test]
+    fn test_parse_code3_cbr_non_divisible_rejected() {
+        let pkt = [0x08u8 | 0x03, 3, 0xAA, 0xBB, 0xCC, 0xDD];
+        assert!(matches!(parse_packet(&pkt, pkt.len() as i32, false), Err(OPUS_INVALID_PACKET)));
+    }
+
+    #[test]
+    fn test_parse_code3_exceeds_duration_limit() {
+        let pkt = [0x08u8 | 0x03, 13];
+        assert!(matches!(parse_packet(&pkt, pkt.len() as i32, false), Err(OPUS_INVALID_PACKET)));
+    }
+
+    #[test]
+    fn test_parse_frame_size_above_1275_rejected() {
+        let mut pkt = vec![0x08u8];
+        pkt.extend(vec![0xAA; 1276]);
+        assert!(matches!(parse_packet(&pkt, pkt.len() as i32, false), Err(OPUS_INVALID_PACKET)));
+    }
+
+    #[test]
+    fn test_multistream_two_streams_pad_unpad_roundtrip() {
+        let pkt = vec![0x08u8, 3, 0x11, 0x22, 0x33, 0x08u8, 0x44, 0x55];
+        let original_len = pkt.len() as i32;
+        let padded_len = original_len + 30;
+        let mut buf = vec![0u8; padded_len as usize];
+        buf[..pkt.len()].copy_from_slice(&pkt);
+        assert_eq!(opus_multistream_packet_pad(&mut buf, original_len, padded_len, 2), OPUS_OK);
+        assert_eq!(opus_multistream_packet_unpad(&mut buf, padded_len, 2), original_len);
+    }
+
+    #[test]
+    fn test_extension_frame_separator_multi_increment() {
+        let ext0 = OpusExtensionData { id: 5, frame: 0, data: &[0x11], len: 1 };
+        let ext3 = OpusExtensionData { id: 5, frame: 3, data: &[0x44], len: 1 };
+        let size = opus_packet_extensions_generate(None, 256, &[ext0, ext3], 4, false);
+        let mut buf = vec![0u8; size as usize];
+        opus_packet_extensions_generate(Some(&mut buf), size, &[ext0, ext3], 4, false);
+        let mut parsed = [OpusExtensionData::EMPTY; 8];
+        let mut nb = 8;
+        opus_packet_extensions_parse(&buf, size, &mut parsed, &mut nb, 4);
+        assert_eq!(nb, 2);
+        assert_eq!(parsed[0].frame, 0);
+        assert_eq!(parsed[1].frame, 3);
+    }
+
+    #[test]
+    fn test_skip_extension_payload_short_insufficient() {
+        let mut pos = 0usize;
+        let mut header_size = 0;
+        assert_eq!(skip_extension_payload(&[], &mut pos, 0, &mut header_size, 0x0B, 0), -1);
+    }
+
+    #[test]
+    fn test_skip_extension_payload_long_l0_with_trailing() {
+        let data = [0x11u8, 0x22, 0x33, 0x44, 0x55];
+        let mut pos = 0usize;
+        let mut header_size = 0;
+        let rem = skip_extension_payload(&data, &mut pos, 5, &mut header_size, 0x40, 2);
+        assert_eq!(rem, 2);
+        assert_eq!(pos, 3);
+    }
+
+    #[test]
+    fn test_skip_extension_payload_long_l0_insufficient_trailing() {
+        let mut pos = 0usize;
+        let mut header_size = 0;
+        assert_eq!(skip_extension_payload(&[], &mut pos, 1, &mut header_size, 0x40, 5), -1);
+    }
+
+    #[test]
+    fn test_skip_extension_negative_remaining() {
+        let mut pos = 0usize;
+        let mut header_size = 0;
+        assert_eq!(skip_extension(&[], &mut pos, -1, &mut header_size), -1);
+        assert_eq!(pos, 0);
+    }
+
+    #[test]
+    fn test_write_extension_buffer_too_small_for_id() {
+        let ext = OpusExtensionData { id: 5, frame: 0, data: &[0x11], len: 1 };
+        let mut buf = [0u8; 0];
+        assert_eq!(write_extension(&mut buf, false, 0, 0, &ext, false), OPUS_BUFFER_TOO_SMALL);
+    }
+
+    #[test]
+    fn test_write_extension_long_last_vs_not_last() {
+        let payload = [0x11u8, 0x22, 0x33];
+        let ext = OpusExtensionData { id: 40, frame: 0, data: &payload, len: 3 };
+        let mut buf = [0u8; 8];
+        let ret = write_extension(&mut buf, false, 8, 0, &ext, true);
+        assert_eq!(ret, 4);
+        assert_eq!(buf[0] & 1, 0);
+        let mut buf = [0u8; 8];
+        let ret = write_extension(&mut buf, false, 8, 0, &ext, false);
+        assert_eq!(ret, 5);
+        assert_eq!(buf[0] & 1, 1);
+        assert_eq!(buf[1], 3);
+    }
 }

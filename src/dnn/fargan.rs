@@ -1389,4 +1389,65 @@ mod tests {
         st.synthesize_int(&mut pcm_i16, &features);
         assert!(pcm_i16.iter().all(|&x| x == 0));
     }
+
+    // --- Coverage additions: continuation, synthesis edge cases ---
+
+    #[test]
+    fn test_cont_with_dc_signal_sets_deemph_mem() {
+        let mut st = FarganState::new(&valid_zero_weight_arrays()).expect("zero model");
+        let dc_val = 0.5f32;
+        let pcm = vec![dc_val; FARGAN_CONT_SAMPLES];
+        let features = vec![0.0f32; 5 * NB_FEATURES];
+        st.cont(&pcm, &features);
+        assert!(st.cont_initialized);
+        assert!((st.deemph_mem - dc_val).abs() < 1e-5, "deemph_mem should be {dc_val}, got {}", st.deemph_mem);
+    }
+
+    #[test]
+    fn test_synthesize_multiple_frames_stays_finite() {
+        let mut st = FarganState::new(&valid_zero_weight_arrays()).expect("zero model");
+        let pcm0 = vec![0.0f32; FARGAN_CONT_SAMPLES];
+        let features0 = vec![0.0f32; 5 * NB_FEATURES];
+        st.cont(&pcm0, &features0);
+        for _ in 0..5 {
+            let mut pcm = [0.0f32; FARGAN_FRAME_SIZE];
+            let features = [0.0f32; NB_FEATURES];
+            st.synthesize(&mut pcm, &features);
+            assert!(pcm.iter().all(|x| x.is_finite()), "synthesized samples should be finite");
+        }
+    }
+
+    #[test]
+    fn test_synthesize_int_clamps_to_i16_range() {
+        let mut st = FarganState::new(&valid_zero_weight_arrays()).expect("zero model");
+        let pcm0 = vec![0.0f32; FARGAN_CONT_SAMPLES];
+        let features0 = vec![0.0f32; 5 * NB_FEATURES];
+        st.cont(&pcm0, &features0);
+        let mut pcm_i16 = [0i16; LPCNET_FRAME_SIZE];
+        let features = [0.0f32; NB_FEATURES];
+        st.synthesize_int(&mut pcm_i16, &features);
+        assert!(pcm_i16.iter().all(|&s| s >= i16::MIN && s <= i16::MAX), "all samples should be within i16 range");
+    }
+
+    #[test]
+    fn test_new_empty_state_fields() {
+        let st = FarganState::new(&valid_zero_weight_arrays()).expect("zero model");
+        assert!(!st.cont_initialized);
+        assert_eq!(st.deemph_mem, 0.0);
+        assert_eq!(st.last_period, 0);
+    }
+
+    #[test]
+    fn test_decode_pitch_period_clamping() {
+        let mut features = [0.0f32; NB_FEATURES];
+        features[NB_BANDS] = 100.0;
+        let period = decode_pitch_period(&features);
+        assert!(period >= 0, "period should be >= 0, got {period}");
+        features[NB_BANDS] = -100.0;
+        let period2 = decode_pitch_period(&features);
+        assert!(period2 >= 0, "period should be >= 0 for negative input, got {period2}");
+        features[NB_BANDS] = 2.0;
+        let period3 = decode_pitch_period(&features);
+        assert!(period3 >= 0, "moderate value should give period >= 0, got {period3}");
+    }
 }
