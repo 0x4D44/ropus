@@ -19,6 +19,7 @@ notes/*.log
 
 # Mutation testing output directories (cargo-mutants runs)
 /mutants_*/
+/mutants.out*/
 
 # Fuzz build artifacts (keep crashes/, fuzz_targets/, Cargo.*)
 /tests/fuzz/target/

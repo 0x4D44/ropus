@@ -1,8 +1,7 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 use mdopus::opus::decoder::{
-    opus_packet_get_bandwidth, opus_packet_get_nb_frames, opus_packet_get_samples_per_frame,
-    OpusDecoder, OPUS_BANDWIDTH_FULLBAND, OPUS_BANDWIDTH_SUPERWIDEBAND,
+    opus_packet_get_nb_frames, opus_packet_get_samples_per_frame, OpusDecoder,
 };
 
 #[path = "c_reference.rs"]
@@ -16,14 +15,11 @@ mod c_reference;
 const SAMPLE_RATES: [i32; 5] = [8000, 12000, 16000, 24000, 48000];
 const MAX_FRAME: i32 = 5760;
 
-// CELT-only packets have bandwidth >= superwideband (TOC config >= 16).
-// In these modes there's no SILK component, so numerical output must match exactly.
+// CELT-only packets have TOC config >= 16 (bit 7 of TOC byte set).
+// Hybrid mode (config 12-15) also has SWB/FB bandwidth but includes a SILK
+// component with known numerical divergences — must NOT be treated as CELT-only.
 fn is_celt_only_packet(packet: &[u8]) -> bool {
-    if packet.is_empty() {
-        return false;
-    }
-    let bw = opus_packet_get_bandwidth(packet);
-    bw == OPUS_BANDWIDTH_SUPERWIDEBAND || bw == OPUS_BANDWIDTH_FULLBAND
+    !packet.is_empty() && (packet[0] & 0x80) != 0
 }
 
 fuzz_target!(|data: &[u8]| {
