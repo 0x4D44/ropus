@@ -1117,17 +1117,17 @@ impl<'a> OpusRepacketizer<'a> {
         for i in 0..nb_caller_ext as usize {
             all_extensions.push(extensions[i]);
         }
-        // Parse padding extensions, renumbering frame indices
+        // Parse padding extensions, renumbering frame indices.
+        // Must always attempt parse when padding exists (even with 0 capacity)
+        // so malformed extensions trigger OPUS_INTERNAL_ERROR, matching C.
         for i in begin..end {
             if self.padding_len[i] <= 0 {
                 continue;
             }
-            let remaining_capacity = total_ext_count - all_extensions.len() as i32;
-            if remaining_capacity <= 0 {
-                continue;
-            }
-            let mut frame_exts = vec![OpusExtensionData::EMPTY; remaining_capacity as usize];
-            let mut frame_ext_count = remaining_capacity;
+            let remaining_capacity =
+                (total_ext_count - all_extensions.len() as i32).max(0) as usize;
+            let mut frame_exts = vec![OpusExtensionData::EMPTY; remaining_capacity];
+            let mut frame_ext_count = remaining_capacity as i32;
             let ret = opus_packet_extensions_parse(
                 self.paddings[i],
                 self.padding_len[i],
