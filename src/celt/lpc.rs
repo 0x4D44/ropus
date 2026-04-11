@@ -244,10 +244,12 @@ pub fn celt_fir(x: &[i32], num: &[i32], y: &mut [i32], n: usize, ord: usize) {
         // = xcorr_kernel(rnum, x + i, sum, ord)
         xcorr_kernel(&rnum, &x[i..], &mut sum, ord);
 
-        y[i] = sround16(sum[0], SIG_SHIFT);
-        y[i + 1] = sround16(sum[1], SIG_SHIFT);
-        y[i + 2] = sround16(sum[2], SIG_SHIFT);
-        y[i + 3] = sround16(sum[3], SIG_SHIFT);
+        // C SSE4.1 uses packssdw which saturates to [-32768,32767].
+        // Match with sat16 instead of sround16's [-32767,32767].
+        y[i] = sat16(pshr32(sum[0], SIG_SHIFT)) as i32;
+        y[i + 1] = sat16(pshr32(sum[1], SIG_SHIFT)) as i32;
+        y[i + 2] = sat16(pshr32(sum[2], SIG_SHIFT)) as i32;
+        y[i + 3] = sat16(pshr32(sum[3], SIG_SHIFT)) as i32;
         i += 4;
     }
 
@@ -257,7 +259,7 @@ pub fn celt_fir(x: &[i32], num: &[i32], y: &mut [i32], n: usize, ord: usize) {
         for j in 0..ord {
             sum = mac16_16(sum, rnum[j], x[i + j]);
         }
-        y[i] = sround16(sum, SIG_SHIFT);
+        y[i] = sat16(pshr32(sum, SIG_SHIFT)) as i32;
         i += 1;
     }
 }

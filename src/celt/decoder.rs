@@ -1554,7 +1554,12 @@ impl CeltDecoder {
             &mut owned_dec
         };
 
-        let mut total_bits = (data_len as i32) * 8;
+        // Use range decoder storage (not data slice length) for bit budget.
+        // In hybrid mode, Opus reduces storage by redundancy_bytes before
+        // calling CELT; the data slice stays full-length but the decoder
+        // knows the correct byte budget.  Matches C: total_bits = len*8.
+        let len = dec.storage() as i32;
+        let mut total_bits = len * 8;
         let mut tell = dec.tell();
 
         // --- For mono, ensure consistency across channel energy slots ---
@@ -1714,7 +1719,7 @@ impl CeltDecoder {
 
         // Anti-collapse reservation
         let tell_frac_here = dec.tell_frac() as i32;
-        let bits_pre_acr = ((data_len as i32) << 3 << BITRES) - tell_frac_here - 1;
+        let bits_pre_acr = (len << 3 << BITRES) - tell_frac_here - 1;
         let anti_collapse_rsv = if is_transient && lm >= 2 && bits_pre_acr >= (lm + 2) << BITRES {
             1 << BITRES
         } else {
@@ -1780,7 +1785,7 @@ impl CeltDecoder {
         let cm_len = c_stream as usize * nb_ebands as usize;
         let mut x = [0i32; MAX_X];
         let mut collapse_masks = [0u8; MAX_COLLAPSE];
-        let total_bits_alloc = (data_len as i32) * (8 << BITRES) - anti_collapse_rsv;
+        let total_bits_alloc = len * (8 << BITRES) - anti_collapse_rsv;
 
         // For stereo, quant_all_bands needs X and Y as separate mutable slices.
         // We use split_at_mut to avoid double-borrow, and pass the parts directly.
@@ -1851,7 +1856,7 @@ impl CeltDecoder {
             Some(&mut self.old_band_e),
             &fine_quant,
             &fine_priority,
-            (data_len as i32) * 8 - dec.tell(),
+            len * 8 - dec.tell(),
             dec,
             c_stream,
         );
@@ -2039,7 +2044,7 @@ impl CeltDecoder {
         self.skip_plc = 0;
 
         // Verify bitstream consistency
-        if dec.tell() > (data_len as i32) * 8 {
+        if dec.tell() > len * 8 {
             self.error = 1;
         }
 
