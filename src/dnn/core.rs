@@ -2603,4 +2603,334 @@ mod tests {
         compute_generic_conv1d(&layer, &mut output, &mut mem, &input, 1, ACTIVATION_LINEAR);
         assert!(approx_eq(output[0], 6.0, EPS));
     }
+
+    // --- sparse_sgemv8x4 via compute_linear ---
+
+    #[test]
+    fn test_sparse_sgemv8x4_identity_via_compute_linear() {
+        // 8 outputs, 4 inputs, 1 sparse block at position 0.
+        // Weight layout (input-major): w[s*8 + k] for input s, output k.
+        // Build an "identity-ish" matrix: output[k] = x[k] for k < 4, output[k] = 0 for k >= 4.
+        let mut weights = vec![0.0f32; 32]; // 4 inputs * 8 outputs
+        // For input s=0: w[0*8+0] = 1.0 (output 0 gets x[0])
+        weights[0 * 8 + 0] = 1.0;
+        // For input s=1: w[1*8+1] = 1.0 (output 1 gets x[1])
+        weights[1 * 8 + 1] = 1.0;
+        // For input s=2: w[2*8+2] = 1.0 (output 2 gets x[2])
+        weights[2 * 8 + 2] = 1.0;
+        // For input s=3: w[3*8+3] = 1.0 (output 3 gets x[3])
+        weights[3 * 8 + 3] = 1.0;
+
+        let idx = vec![1i32, 0]; // 1 block at column position 0
+        let layer = LinearLayer {
+            float_weights: Some(weights),
+            weights_idx: Some(idx),
+            nb_inputs: 4,
+            nb_outputs: 8,
+            ..Default::default()
+        };
+        let x = vec![10.0, 20.0, 30.0, 40.0];
+        let mut out = vec![0.0; 8];
+        compute_linear(&layer, &mut out, &x);
+        assert!(approx_eq(out[0], 10.0, EPS));
+        assert!(approx_eq(out[1], 20.0, EPS));
+        assert!(approx_eq(out[2], 30.0, EPS));
+        assert!(approx_eq(out[3], 40.0, EPS));
+        for k in 4..8 {
+            assert!(approx_eq(out[k], 0.0, EPS));
+        }
+    }
+
+    #[test]
+    fn test_sparse_sgemv8x4_uniform_weights_with_bias() {
+        // 8 outputs, 8 inputs, 2 sparse blocks per row-group (at columns 0 and 4).
+        // All weights = 1.0, so each output = sum of all 8 inputs = 36.0
+        let weights = vec![1.0f32; 64]; // 2 blocks * 32 weights each
+        let idx = vec![2i32, 0, 4]; // 2 blocks: at position 0 and position 4
+        let bias = vec![100.0f32; 8];
+        let layer = LinearLayer {
+            float_weights: Some(weights),
+            weights_idx: Some(idx),
+            bias: Some(bias),
+            nb_inputs: 8,
+            nb_outputs: 8,
+            ..Default::default()
+        };
+        let x = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let mut out = vec![0.0; 8];
+        compute_linear(&layer, &mut out, &x);
+        // Each output = sum(1..8) + 100 = 36 + 100 = 136
+        for k in 0..8 {
+            assert!(approx_eq(out[k], 136.0, EPS));
+        }
+    }
+
+    #[test]
+    fn test_sparse_sgemv8x4_16_outputs_two_row_groups() {
+        // 16 outputs, 4 inputs. Two row groups of 8 each, each with 1 block.
+        // First group: all weights = 2.0, second group: all weights = -1.0
+        let mut weights = vec![0.0f32; 64];
+        weights[..32].fill(2.0);
+        weights[32..64].fill(-1.0);
+        // idx: [1, 0] for first group, [1, 0] for second group
+        let idx = vec![1i32, 0, 1, 0];
+        let layer = LinearLayer {
+            float_weights: Some(weights),
+            weights_idx: Some(idx),
+            nb_inputs: 4,
+            nb_outputs: 16,
+            ..Default::default()
+        };
+        let x = vec![1.0, 1.0, 1.0, 1.0];
+        let mut out = vec![0.0; 16];
+        compute_linear(&layer, &mut out, &x);
+        // First 8 outputs: 2*1 + 2*1 + 2*1 + 2*1 = 8.0
+        for k in 0..8 {
+            assert!(approx_eq(out[k], 8.0, EPS));
+        }
+        // Last 8 outputs: -1*1 + -1*1 + -1*1 + -1*1 = -4.0
+        for k in 8..16 {
+            assert!(approx_eq(out[k], -4.0, EPS));
+        }
+    }
+
+    // --- compute_glu_inplace ---
+
+    #[test]
+    fn test_compute_glu_inplace_zero_weights() {
+        // With W=0, bias=0: sigmoid(0) = 0.5, so data *= 0.5
+        let layer = LinearLayer {
+            bias: Some(vec![0.0, 0.0, 0.0]),
+            float_weights: Some(vec![0.0; 9]),
+            nb_inputs: 3,
+            nb_outputs: 3,
+            ..Default::default()
+        };
+        let mut data = vec![10.0, -6.0, 0.0];
+        compute_glu_inplace(&layer, &mut data);
+        assert!(approx_eq(data[0], 5.0, 0.01));
+        assert!(approx_eq(data[1], -3.0, 0.01));
+        assert!(approx_eq(data[2], 0.0, EPS));
+    }
+
+    #[test]
+    fn test_compute_glu_inplace_large_positive_bias() {
+        // With W=0, bias=+100: sigmoid(100) ~ 1.0, so data is nearly unchanged
+        let layer = LinearLayer {
+            bias: Some(vec![100.0, 100.0]),
+            float_weights: Some(vec![0.0; 4]),
+            nb_inputs: 2,
+            nb_outputs: 2,
+            ..Default::default()
+        };
+        let mut data = vec![7.0, -3.0];
+        compute_glu_inplace(&layer, &mut data);
+        assert!(approx_eq(data[0], 7.0, 0.01));
+        assert!(approx_eq(data[1], -3.0, 0.01));
+    }
+
+    // --- compute_gated_activation ---
+
+    #[test]
+    fn test_compute_gated_activation_with_relu() {
+        // output = input * relu(W*input + bias)
+        // W=0, bias=[-1, 2]: relu(-1)=0, relu(2)=2
+        // output[0] = input[0] * 0 = 0, output[1] = input[1] * 2
+        let layer = LinearLayer {
+            bias: Some(vec![-1.0, 2.0]),
+            float_weights: Some(vec![0.0; 4]),
+            nb_inputs: 2,
+            nb_outputs: 2,
+            ..Default::default()
+        };
+        let input = vec![5.0, 3.0];
+        let mut output = vec![0.0; 2];
+        compute_gated_activation(&layer, &mut output, &input, ACTIVATION_RELU);
+        assert!(approx_eq(output[0], 0.0, EPS));
+        assert!(approx_eq(output[1], 6.0, EPS));
+    }
+
+    #[test]
+    fn test_compute_gated_activation_with_tanh() {
+        // output = input * tanh(W*input + bias)
+        // W=0, bias=0: tanh(0) = 0, so output should be ~0
+        let layer = LinearLayer {
+            bias: Some(vec![0.0, 0.0]),
+            float_weights: Some(vec![0.0; 4]),
+            nb_inputs: 2,
+            nb_outputs: 2,
+            ..Default::default()
+        };
+        let input = vec![100.0, -50.0];
+        let mut output = vec![0.0; 2];
+        compute_gated_activation(&layer, &mut output, &input, ACTIVATION_TANH);
+        assert!(approx_eq(output[0], 0.0, 0.01));
+        assert!(approx_eq(output[1], 0.0, 0.01));
+    }
+
+    // --- conv2d_init ---
+
+    #[test]
+    fn test_conv2d_init_with_bias_and_weights() {
+        let in_ch = 2;
+        let out_ch = 3;
+        let kt = 2;
+        let kh = 2;
+        let weight_count = in_ch * out_ch * kt * kh; // 24
+        let weight_values: Vec<f32> = (0..weight_count).map(|i| i as f32 * 0.1).collect();
+        let bias_values = vec![1.0f32, 2.0, 3.0];
+        let arrays = vec![
+            WeightArray {
+                name: "conv_bias".into(),
+                weight_type: WEIGHT_TYPE_FLOAT,
+                size: out_ch * 4, // 12
+                data: f32_bytes(&bias_values),
+            },
+            WeightArray {
+                name: "conv_weights".into(),
+                weight_type: WEIGHT_TYPE_FLOAT,
+                size: weight_count * 4, // 96
+                data: f32_bytes(&weight_values),
+            },
+        ];
+        let layer = conv2d_init(
+            &arrays,
+            Some("conv_bias"),
+            Some("conv_weights"),
+            in_ch,
+            out_ch,
+            kt,
+            kh,
+        )
+        .expect("conv2d_init should succeed");
+        assert_eq!(layer.in_channels, 2);
+        assert_eq!(layer.out_channels, 3);
+        assert_eq!(layer.ktime, 2);
+        assert_eq!(layer.kheight, 2);
+        assert_eq!(layer.bias.as_ref().unwrap(), &bias_values);
+        assert_eq!(layer.float_weights.as_ref().unwrap().len(), weight_count);
+        assert!(approx_eq(
+            layer.float_weights.as_ref().unwrap()[5],
+            0.5,
+            EPS,
+        ));
+    }
+
+    #[test]
+    fn test_conv2d_init_no_bias_no_weights() {
+        let arrays: Vec<WeightArray> = vec![];
+        let layer = conv2d_init(&arrays, None, None, 1, 1, 1, 1)
+            .expect("conv2d_init with no arrays should succeed");
+        assert!(layer.bias.is_none());
+        assert!(layer.float_weights.is_none());
+        assert_eq!(layer.in_channels, 1);
+    }
+
+    // --- linear_init sparse float path ---
+
+    #[test]
+    fn test_linear_init_sparse_float_weights() {
+        // 8 outputs, 4 inputs, 1 sparse block at position 0.
+        // idx = [1, 0] → 1 block at col 0, total_blocks = 1
+        // float_weights size = SPARSE_BLOCK_SIZE * total_blocks * 4 = 32 * 1 * 4 = 128 bytes
+        let float_weight_values = vec![1.0f32; SPARSE_BLOCK_SIZE]; // 32 floats
+        let bias_values = vec![0.5f32; 8];
+        let arrays = vec![
+            WeightArray {
+                name: "sp_idx".into(),
+                weight_type: WEIGHT_TYPE_INT,
+                size: 8, // 2 i32s = 8 bytes
+                data: i32_bytes(&[1, 0]),
+            },
+            WeightArray {
+                name: "sp_fw".into(),
+                weight_type: WEIGHT_TYPE_FLOAT,
+                size: SPARSE_BLOCK_SIZE * 1 * 4,
+                data: f32_bytes(&float_weight_values),
+            },
+            WeightArray {
+                name: "sp_bias".into(),
+                weight_type: WEIGHT_TYPE_FLOAT,
+                size: 8 * 4,
+                data: f32_bytes(&bias_values),
+            },
+        ];
+        let layer = linear_init(
+            &arrays,
+            Some("sp_bias"),
+            None,
+            None,           // no int8 weights
+            Some("sp_fw"),  // float weights
+            Some("sp_idx"), // sparse index
+            None,
+            None,
+            4,
+            8,
+        )
+        .expect("sparse float linear_init should succeed");
+        assert!(layer.weights_idx.is_some());
+        assert!(layer.float_weights.is_some());
+        assert!(layer.weights.is_none());
+        assert_eq!(layer.float_weights.as_ref().unwrap().len(), SPARSE_BLOCK_SIZE);
+        assert_eq!(layer.bias.as_ref().unwrap().len(), 8);
+
+        // Verify it works through compute_linear (exercises sparse_sgemv8x4)
+        let x = vec![1.0, 2.0, 3.0, 4.0];
+        let mut out = vec![0.0; 8];
+        compute_linear(&layer, &mut out, &x);
+        // All weights = 1.0, each output = 1+2+3+4 = 10, plus bias 0.5 = 10.5
+        for k in 0..8 {
+            assert!(approx_eq(out[k], 10.5, EPS));
+        }
+    }
+
+    #[test]
+    fn test_linear_init_sparse_int8_and_float_together() {
+        // Test the path where both int8 weights AND float weights are provided
+        // with a sparse index. Int8 should be loaded, float should be loaded too.
+        let arrays = vec![
+            WeightArray {
+                name: "sp_idx".into(),
+                weight_type: WEIGHT_TYPE_INT,
+                size: 8,
+                data: i32_bytes(&[1, 0]),
+            },
+            WeightArray {
+                name: "sp_w".into(),
+                weight_type: WEIGHT_TYPE_INT8,
+                size: SPARSE_BLOCK_SIZE * 1, // 32 bytes of i8
+                data: i8_bytes(&[1i8; SPARSE_BLOCK_SIZE]),
+            },
+            WeightArray {
+                name: "sp_fw".into(),
+                weight_type: WEIGHT_TYPE_FLOAT,
+                size: SPARSE_BLOCK_SIZE * 1 * 4,
+                data: f32_bytes(&vec![2.0f32; SPARSE_BLOCK_SIZE]),
+            },
+            WeightArray {
+                name: "sp_scale".into(),
+                weight_type: WEIGHT_TYPE_FLOAT,
+                size: 8 * 4,
+                data: f32_bytes(&[1.0f32; 8]),
+            },
+        ];
+        let layer = linear_init(
+            &arrays,
+            None,
+            None,
+            Some("sp_w"),   // int8 weights
+            Some("sp_fw"),  // float weights
+            Some("sp_idx"), // sparse index
+            None,
+            Some("sp_scale"),
+            4,
+            8,
+        )
+        .expect("sparse int8+float linear_init should succeed");
+        assert!(layer.weights_idx.is_some());
+        assert!(layer.weights.is_some());
+        assert!(layer.float_weights.is_some());
+        assert_eq!(layer.weights.as_ref().unwrap().len(), SPARSE_BLOCK_SIZE);
+        assert_eq!(layer.float_weights.as_ref().unwrap().len(), SPARSE_BLOCK_SIZE);
+    }
 }

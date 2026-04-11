@@ -2630,4 +2630,79 @@ mod tests {
         let result = dec.decode_with_ec(None, &mut pcm, 960, None, false, plc_arg());
         assert!(result.is_ok());
     }
+
+    // --- Coverage additions: debug accessors and phase inversion ---
+
+    #[test]
+    fn debug_old_band_e_returns_nonempty_slice() {
+        let dec = CeltDecoder::new(48000, 2).unwrap();
+        let slice = dec.debug_old_band_e();
+        assert!(!slice.is_empty());
+        // After construction (before reset), values are zero-initialized
+        assert!(slice.iter().all(|&v| v == 0));
+    }
+
+    #[test]
+    fn debug_old_log_e_returns_expected_defaults() {
+        let dec = CeltDecoder::new(48000, 1).unwrap();
+        let slice = dec.debug_old_log_e();
+        // old_log_e has 2 * nb_ebands entries (42 for 48kHz)
+        assert_eq!(slice.len(), 42);
+        // After construction, initialized to -GCONST(28)
+        for &e in slice {
+            assert_eq!(e, -gconst(28.0));
+        }
+    }
+
+    #[test]
+    fn debug_old_log_e2_returns_expected_defaults() {
+        let dec = CeltDecoder::new(48000, 2).unwrap();
+        let slice = dec.debug_old_log_e2();
+        assert!(!slice.is_empty());
+        // After construction, initialized to -GCONST(28)
+        for &e in slice {
+            assert_eq!(e, -gconst(28.0));
+        }
+    }
+
+    #[test]
+    fn debug_old_log_e_after_reset_is_neg28() {
+        let mut dec = CeltDecoder::new(48000, 1).unwrap();
+        dec.reset();
+        let slice = dec.debug_old_log_e();
+        // After reset, old_log_e should be -GCONST(28)
+        for &e in slice {
+            assert_eq!(e, -gconst(28.0));
+        }
+        let slice2 = dec.debug_old_log_e2();
+        for &e in slice2 {
+            assert_eq!(e, -gconst(28.0));
+        }
+    }
+
+    #[test]
+    fn debug_get_decode_mem_slice() {
+        let dec = CeltDecoder::new(48000, 2).unwrap();
+        let total_len = dec.decode_mem.len();
+        // Request a small slice from the start
+        let slice = dec.debug_get_decode_mem(0, 10);
+        assert_eq!(slice.len(), 10);
+        // Request a slice from the middle
+        let mid = total_len / 2;
+        let slice = dec.debug_get_decode_mem(mid, 5);
+        assert_eq!(slice.len(), 5);
+    }
+
+    #[test]
+    fn phase_inversion_disabled_round_trip() {
+        let mut dec = CeltDecoder::new(48000, 2).unwrap();
+        // Default should be false
+        assert!(!dec.get_phase_inversion_disabled());
+        // Set to true
+        dec.set_phase_inversion_disabled(true);
+        assert!(dec.get_phase_inversion_disabled());
+        // Set back to false
+        dec.set_phase_inversion_disabled(false);
+        assert!(!dec.get_phase_inversion_disabled());
+    }
 }

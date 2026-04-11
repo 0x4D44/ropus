@@ -3245,4 +3245,211 @@ mod tests {
         let result = OpusMSDecoder::new(48000, 2, 255, 1, &[0, 1]);
         assert!(result.is_err(), "streams=255 + coupled=1 = 256 > 255 should fail");
     }
+
+    #[test]
+    fn test_ms_decoder_ctls_fresh() {
+        // Exercise multistream decoder CTL/accessor paths on a freshly-created decoder
+        let mut dec = OpusMSDecoder::new(48000, 2, 1, 1, &[0, 1]).unwrap();
+        assert_eq!(dec.get_sample_rate(), 48000);
+        assert_eq!(dec.get_bandwidth(), 0); // no packet decoded yet
+        assert_eq!(dec.get_last_packet_duration(), 0);
+        assert_eq!(dec.get_final_range(), 0);
+        assert_eq!(dec.nb_streams(), 1);
+        assert_eq!(dec.nb_coupled_streams(), 1);
+
+        // Gain round-trip
+        assert_eq!(dec.set_gain(500), OPUS_OK);
+        assert_eq!(dec.get_gain(), 500);
+        assert_eq!(dec.set_gain(-300), OPUS_OK);
+        assert_eq!(dec.get_gain(), -300);
+
+        // Phase inversion round-trip
+        assert_eq!(dec.set_phase_inversion_disabled(1), OPUS_OK);
+        assert_eq!(dec.get_phase_inversion_disabled(), 1);
+        assert_eq!(dec.set_phase_inversion_disabled(0), OPUS_OK);
+        assert_eq!(dec.get_phase_inversion_disabled(), 0);
+
+        // Complexity round-trip
+        assert_eq!(dec.set_complexity(3), OPUS_OK);
+        assert_eq!(dec.get_complexity(), 3);
+
+        // Child decoder access
+        assert!(dec.get_decoder(0).is_some());
+        assert!(dec.get_decoder(1).is_none());
+        assert!(dec.get_decoder_mut(0).is_some());
+        assert!(dec.get_decoder_mut(1).is_none());
+
+        // Reset preserves settings but clears state
+        dec.reset();
+        assert_eq!(dec.get_final_range(), 0);
+        assert_eq!(dec.get_last_packet_duration(), 0);
+        // Settings are preserved through reset
+        assert_eq!(dec.get_gain(), -300);
+        assert_eq!(dec.get_complexity(), 3);
+    }
+
+    #[test]
+    fn test_ms_decode_with_fec() {
+        // Encode a packet, decode normally, then decode the next with FEC=true
+        let mut enc = OpusMSEncoder::new(48000, 1, 1, 0, &[0], OPUS_APPLICATION_AUDIO).unwrap();
+        enc.set_inband_fec(1);
+        enc.set_packet_loss_perc(25);
+
+        let mut dec = OpusMSDecoder::new(48000, 1, 1, 0, &[0]).unwrap();
+
+        let frame_size = 960;
+        // Encode two frames to have FEC data in the second
+        let pcm1 = patterned_pcm_i16(frame_size, 1, 11);
+        let pcm2 = patterned_pcm_i16(frame_size, 1, 22);
+        let mut pkt1 = vec![0u8; 4000];
+        let mut pkt2 = vec![0u8; 4000];
+
+        let len1 = enc
+            .encode(&pcm1, frame_size as i32, &mut pkt1, 4000)
+            .unwrap();
+        let len2 = enc
+            .encode(&pcm2, frame_size as i32, &mut pkt2, 4000)
+            .unwrap();
+
+        // Decode first packet normally
+        let mut out = vec![0i16; frame_size];
+        let samples = dec
+            .decode(
+                Some(&pkt1[..len1 as usize]),
+                len1,
+                &mut out,
+                frame_size as i32,
+                false,
+            )
+            .unwrap();
+        assert_eq!(samples, frame_size as i32);
+
+        // Decode second packet with FEC=true (exercises the FEC decode path)
+        let samples_fec = dec
+            .decode(
+                Some(&pkt2[..len2 as usize]),
+                len2,
+                &mut out,
+                frame_size as i32,
+                true,
+            )
+            .unwrap();
+        assert_eq!(samples_fec, frame_size as i32);
+    }
+
+    #[test]
+    fn test_ms_decoder_create_zero_channels() {
+        // 0 channels should fail
+        let result = OpusMSDecoder::new(48000, 0, 1, 0, &[0]);
+        assert!(matches!(result, Err(OPUS_BAD_ARG)));
+    }
+
+    #[test]
+    fn test_ms_decoder_create_256_channels() {
+        // > 255 channels should fail
+        let result = OpusMSDecoder::new(48000, 256, 1, 0, &[0]);
+        assert!(matches!(result, Err(OPUS_BAD_ARG)));
+    }
+
+    #[test]
+    fn test_ms_decoder_create_zero_streams() {
+        // 0 streams should fail
+        let result = OpusMSDecoder::new(48000, 1, 0, 0, &[0]);
+        assert!(matches!(result, Err(OPUS_BAD_ARG)));
+    }
+
+    #[test]
+    fn test_ms_decoder_create_negative_coupled() {
+        // negative coupled_streams should fail
+        let result = OpusMSDecoder::new(48000, 2, 1, -1, &[0, 1]);
+        assert!(matches!(result, Err(OPUS_BAD_ARG)));
+    }
+
+    #[test]
+    fn test_surround_encode_non48k_upsample_path() {
+        // Using a non-48kHz sample rate (24kHz) with surround (family 1) triggers
+        // the upsample != 1 path in surround_analysis (lines 431-438).
+        let (mut enc, streams, coupled, _mapping) =
+            OpusMSEncoder::new_surround(24000, 6, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(streams, 4);
+        assert_eq!(coupled, 2);
+
+        let frame_size = 480; // 20ms at 24kHz
+        let pcm = patterned_pcm_i16(frame_size, 6, 55);
+        let mut packet = vec![0u8; 4000];
+        let len = enc
+            .encode(&pcm, frame_size as i32, &mut packet, 4000)
+            .unwrap();
+        assert!(len > 0, "surround encode at 24kHz should produce output");
+    }
+
+    #[test]
+    fn test_ms_decode_fec_stereo_coupled() {
+        // Exercise FEC decode path with a coupled stereo stream
+        let mut enc =
+            OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO).unwrap();
+        enc.set_inband_fec(1);
+        enc.set_packet_loss_perc(20);
+
+        let mut dec = OpusMSDecoder::new(48000, 2, 1, 1, &[0, 1]).unwrap();
+        let frame_size = 960;
+
+        // Encode two frames
+        let pcm1 = patterned_pcm_i16(frame_size, 2, 33);
+        let pcm2 = patterned_pcm_i16(frame_size, 2, 44);
+        let mut pkt1 = vec![0u8; 4000];
+        let mut pkt2 = vec![0u8; 4000];
+
+        let len1 = enc
+            .encode(&pcm1, frame_size as i32, &mut pkt1, 4000)
+            .unwrap();
+        let len2 = enc
+            .encode(&pcm2, frame_size as i32, &mut pkt2, 4000)
+            .unwrap();
+
+        // Decode first normally
+        let mut out = vec![0i16; frame_size * 2];
+        dec.decode(
+            Some(&pkt1[..len1 as usize]),
+            len1,
+            &mut out,
+            frame_size as i32,
+            false,
+        )
+        .unwrap();
+
+        // Decode second with FEC
+        let samples = dec
+            .decode(
+                Some(&pkt2[..len2 as usize]),
+                len2,
+                &mut out,
+                frame_size as i32,
+                true,
+            )
+            .unwrap();
+        assert_eq!(samples, frame_size as i32);
+    }
+
+    #[test]
+    fn test_ms_encoder_invalid_sample_rate() {
+        // Bad sample rate should fail
+        let result = OpusMSEncoder::new(44100, 1, 1, 0, &[0], OPUS_APPLICATION_AUDIO);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_demixing_matrix_for_all_orders() {
+        // Exercise all order branches for demixing matrix lookup
+        for order in 2..=6 {
+            let result = get_demixing_matrix_for_order(order);
+            assert!(result.is_ok(), "order_plus_one={order} should have a demixing matrix");
+            let mat = result.unwrap();
+            assert!(mat.rows > 0);
+            assert!(mat.cols > 0);
+        }
+        // Invalid order
+        assert!(get_demixing_matrix_for_order(1).is_err());
+        assert!(get_demixing_matrix_for_order(7).is_err());
+    }
 }

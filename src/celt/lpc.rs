@@ -836,4 +836,60 @@ mod tests {
         // Should predict positive correlation
         assert!(lpc_out[0] > 0, "negative ac[1] should give positive lpc[0], got {}", lpc_out[0]);
     }
+
+    #[test]
+    fn test_lpc_bw_expansion_converges() {
+        // Craft autocorrelation that produces large coefficients which need
+        // bandwidth expansion but still converge within 10 iterations.
+        // Nearly-DC signal: ac values very close, forcing large first coefficient.
+        let base = 1 << 26;
+        let ac = [base, base - 1, base - 3, base - 6, base - 10];
+        let mut lpc_out = [0i32; 4];
+        celt_lpc(&mut lpc_out, &ac, 4);
+        // After bandwidth expansion converges, all coefficients must fit in Q12 i16 range
+        for (i, &c) in lpc_out.iter().enumerate() {
+            assert!(
+                c.abs() <= 32767,
+                "lpc_out[{i}] = {c} should fit in Q12 range after BW expansion"
+            );
+        }
+        // Should NOT be the A(z)=1 fallback (at least one non-trivial coefficient)
+        let is_fallback = lpc_out[0] == 4096 && lpc_out[1..].iter().all(|&c| c == 0);
+        assert!(
+            !is_fallback,
+            "expected BW expansion to converge, not fall back to A(z)=1"
+        );
+    }
+
+    #[test]
+    fn test_lpc_bw_expansion_fallback_az1() {
+        // Force the A(z)=1 fallback by creating coefficients so extreme that
+        // 10 iterations of chirp bandwidth expansion cannot bring them into range.
+        //
+        // Alternating-sign autocorrelation with nearly-full-scale magnitudes
+        // produces oscillating LPC coefficients that resist chirp damping.
+        let p = CELT_LPC_ORDER; // 24
+        let mut ac = [0i32; CELT_LPC_ORDER + 1];
+        ac[0] = 1 << 28;
+        for k in 1..=p {
+            let sign = if k % 2 == 0 { 1 } else { -1 };
+            ac[k] = sign * (ac[0] - k as i32);
+        }
+        let mut lpc_out = [0i32; CELT_LPC_ORDER];
+        celt_lpc(&mut lpc_out, &ac, p);
+
+        // Should have fallen back to A(z)=1: lpc_out[0]=4096, rest=0
+        assert_eq!(
+            lpc_out[0], 4096,
+            "fallback should set lpc_out[0]=4096 (Q12 for 1.0), got {}",
+            lpc_out[0]
+        );
+        for i in 1..p {
+            assert_eq!(
+                lpc_out[i], 0,
+                "fallback should zero lpc_out[{i}], got {}",
+                lpc_out[i]
+            );
+        }
+    }
 }

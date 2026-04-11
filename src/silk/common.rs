@@ -2554,4 +2554,202 @@ mod tests {
             assert!(gain_q16[i] > 0, "gain_q16[{i}]={} should be positive", gain_q16[i]);
         }
     }
+
+    // ===================================================================
+    // silk_inner_prod_aligned
+    // ===================================================================
+
+    #[test]
+    fn test_silk_inner_prod_aligned_basic() {
+        let x = [1i32, 2, 3, 4, 5];
+        let y = [10i32, 20, 30, 40, 50];
+        // 10 + 40 + 90 + 160 + 250 = 550
+        assert_eq!(silk_inner_prod_aligned(&x, &y, 5), 550);
+    }
+
+    #[test]
+    fn test_silk_inner_prod_aligned_negative() {
+        let x = [100i32, -200, 300];
+        let y = [-1i32, 2, -3];
+        // -100 + -400 + -900 = -1400
+        assert_eq!(silk_inner_prod_aligned(&x, &y, 3), -1400);
+    }
+
+    // ===================================================================
+    // silk_lshift32 / silk_rshift32
+    // ===================================================================
+
+    #[test]
+    fn test_silk_lshift32() {
+        assert_eq!(silk_lshift32(1, 10), 1024);
+        assert_eq!(silk_lshift32(3, 4), 48);
+        assert_eq!(silk_lshift32(0, 31), 0);
+    }
+
+    #[test]
+    fn test_silk_rshift32() {
+        assert_eq!(silk_rshift32(1024, 10), 1);
+        assert_eq!(silk_rshift32(48, 4), 3);
+        assert_eq!(silk_rshift32(-16, 2), -4); // arithmetic shift
+    }
+
+    // ===================================================================
+    // silk_rshift_round64
+    // ===================================================================
+
+    #[test]
+    fn test_silk_rshift_round64_positive_shift() {
+        // 100 >> 3 with rounding = (100 + 4) >> 3 = 13
+        assert_eq!(silk_rshift_round64(100, 3), 13);
+        // Exact: 8 >> 1 = (8 + 1) >> 1 = 4 (rounds 4.5 up)
+        assert_eq!(silk_rshift_round64(9, 1), 5);
+    }
+
+    #[test]
+    fn test_silk_rshift_round64_zero_or_negative_shift() {
+        // shift <= 0 returns a unchanged
+        assert_eq!(silk_rshift_round64(42, 0), 42);
+        assert_eq!(silk_rshift_round64(42, -5), 42);
+    }
+
+    // ===================================================================
+    // silk_lpc_inverse_pred_gain early returns (instability detection)
+    // ===================================================================
+
+    #[test]
+    fn test_ipg_dc_unstable() {
+        // DC response >= 4096 triggers early return 0 (line 493-494).
+        // Sum of a_q12 >= 4096 means dc_resp >= 4096.
+        let mut a_q12 = [0i16; MAX_LPC_ORDER];
+        // Set coefficients so they sum to exactly 4096
+        a_q12[0] = 4096;
+        let result = silk_lpc_inverse_pred_gain(&a_q12, 2);
+        assert_eq!(result, 0, "DC-unstable filter should return 0");
+    }
+
+    #[test]
+    fn test_ipg_unstable_filter_returns_zero() {
+        // Second-order filter with poles on the unit circle at angle pi/4:
+        //   a1 = -2*cos(pi/4)*Q12 = -5793, a2 = Q12 = 4096
+        // DC response = -5793 + 4096 = -1697 (passes DC check).
+        // Poles at r=1.0 → gain blows up → function should detect instability.
+        let mut a_q12 = [0i16; MAX_LPC_ORDER];
+        a_q12[0] = -5793; // -1.414 in Q12
+        a_q12[1] = 4096;  //  1.0   in Q12
+        let result = silk_lpc_inverse_pred_gain(&a_q12, 2);
+        assert_eq!(result, 0, "unit-circle poles should return 0 (unstable)");
+    }
+
+    #[test]
+    fn test_ipg_nearly_unstable_filter() {
+        // Coefficients that push the prediction gain close to the limit.
+        // a_q12 = [4095, 0, 0, ...] has dc_resp=4095 < 4096, passes DC check
+        // but puts huge energy in LPC, likely triggering gain threshold.
+        let mut a_q12 = [0i16; MAX_LPC_ORDER];
+        a_q12[0] = 4095;
+        let result = silk_lpc_inverse_pred_gain(&a_q12, 4);
+        // Either returns 0 (unstable) or a very small positive value
+        assert!(result >= 0, "should be non-negative: {result}");
+    }
+
+    // ===================================================================
+    // silk_lpc_fit reached_max_iter path
+    // ===================================================================
+
+    #[test]
+    fn test_lpc_fit_reached_max_iter() {
+        // Exercise the reached_max_iter (SAT16 + write-back) path in silk_lpc_fit.
+        //
+        // The BWE chirp is gentlest when the max coefficient is at a high index
+        // (idx = d-1). With the max at the last position of a 16-element array,
+        // the chirp formula produces chirp ≈ 0.999, and BWE shrinks values only
+        // ~0.1% per round. With large enough starting values, 10 rounds are
+        // insufficient to bring maxabs below i16::MAX.
+        //
+        // Chirp formula: chirp = 65471 - shl32(maxabs - 32767, 14) / ((maxabs * (idx+1)) >> 2)
+        // With idx=15 and maxabs=100000:
+        //   chirp = 65471 - (67233 * 16384) / (100000 * 16 / 4) = 65471 - 2753 = 62718
+        //   chirp_ratio = 62718/65536 = 0.957
+        //   After 10 rounds: 0.957^10 ≈ 0.646 → still above threshold.
+        let d = 16;
+        let q_from = 13;
+        let q_to = 12;
+        // rshift = 1, so maxabs = abs(a_q_from[k]) >> 1. Need maxabs > 32767.
+        // Small values (1000) for indices 0..14 so the max is always at index 15.
+        let mut a_q_from = [1000i32; 16];
+        a_q_from[15] = 200_000; // maxabs = 100_000 >> is clamped, idx = 15
+        let mut a_q_to = [0i16; 16];
+        silk_lpc_fit(&mut a_q_to, &mut a_q_from, q_to, q_from, d);
+
+        // The reached_max_iter path clips via SAT16 and writes back to a_q_from.
+        // After write-back: a_q_from[k] = shl32(a_q_to[k], rshift).
+        // Verify output is non-zero and reasonable.
+        assert!(
+            a_q_to.iter().any(|&v| v != 0),
+            "output should contain non-zero coefficients"
+        );
+        // The write-back path sets a_q_from = shl32(sat16(round(a_q_from)), rshift).
+        // Verify write-back occurred for the large coefficient by checking a_q_from
+        // is now consistent with a_q_to.
+        assert_eq!(
+            a_q_from[15],
+            shl32(a_q_to[15] as i32, 1),
+            "a_q_from[15] should be written back from a_q_to[15]"
+        );
+    }
+
+    // ===================================================================
+    // silk_nlsf2a stabilization loop (BWE when IPG fails)
+    // ===================================================================
+
+    #[test]
+    fn test_nlsf2a_unstable_nlsf_triggers_stabilization() {
+        // Clustered NLSFs near zero produce LPC coefficients that may initially
+        // fail the inverse prediction gain check, forcing the stabilization loop
+        // at lines 1448-1458 to apply bandwidth expansion.
+        let nlsf: [i16; 10] = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
+        let mut a_q12 = [0i16; 10];
+        silk_nlsf2a(&mut a_q12, &nlsf, 10);
+
+        // After stabilization the filter must be stable (or at least not crash)
+        let ipg = silk_lpc_inverse_pred_gain(&a_q12, 10);
+        // The stabilization loop should eventually make it stable
+        assert!(
+            ipg >= 0,
+            "stabilized filter should have non-negative IPG, got {ipg}"
+        );
+    }
+
+    // ===================================================================
+    // silk_nlsf_stabilize: fallback sort-and-clamp path
+    // ===================================================================
+
+    #[test]
+    fn test_nlsf_stabilize_fallback_clamp() {
+        // Reversed NLSFs should force the main loop to exhaust MAX_LOOPS=20
+        // iterations, hitting the fallback sort-and-clamp path (lines 1354-1370).
+        let mut nlsf = [32000i16, 29000, 26000, 23000, 20000, 17000, 14000, 11000, 8000, 5000];
+        silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
+
+        // After stabilization, must satisfy all delta_min constraints
+        assert!(
+            nlsf[0] as i32 >= SILK_NLSF_DELTA_MIN_NB_MB_Q15[0] as i32,
+            "nlsf[0]={} < delta_min[0]={}",
+            nlsf[0],
+            SILK_NLSF_DELTA_MIN_NB_MB_Q15[0]
+        );
+        for i in 1..10 {
+            let diff = nlsf[i] as i32 - nlsf[i - 1] as i32;
+            assert!(
+                diff >= SILK_NLSF_DELTA_MIN_NB_MB_Q15[i] as i32,
+                "gap nlsf[{i}]-nlsf[{}]={diff} < delta_min={}", i - 1,
+                SILK_NLSF_DELTA_MIN_NB_MB_Q15[i]
+            );
+        }
+        let upper = (1i32 << 15) - SILK_NLSF_DELTA_MIN_NB_MB_Q15[10] as i32;
+        assert!(
+            (nlsf[9] as i32) <= upper,
+            "nlsf[9]={} > upper={upper}", nlsf[9]
+        );
+    }
 }
