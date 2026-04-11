@@ -3341,4 +3341,183 @@ mod tests {
         let mut out = vec![0i16; 320];
         dec.decode(Some(&pkts[4]), &mut out, 320, false).unwrap();
     }
+
+    /// Targeted test: narrow down whether divergence is in SILK WB or the resampler.
+    /// Test WB 20ms at both 8kHz (needs resampler) and 16kHz (native WB, no resampler).
+    #[test]
+    fn test_silk_subframe_boundary_divergence() {
+        let max_frame = 5760;
+        let payload = vec![0xFFu8; 50];
+
+        // Test WB 20ms mono (config 9, toc=0x48) at different output sample rates
+        let configs: &[(&str, u8, i32, i32)] = &[
+            // (label, toc, sr, ch)
+            ("NB 20ms @ 8kHz", 0x08, 8000, 1),
+            ("WB 20ms @ 8kHz", 0x48, 8000, 1),   // resamples 16k→8k
+            ("WB 20ms @ 16kHz", 0x48, 16000, 1),  // native 16k, no resampler
+            ("WB 20ms @ 24kHz", 0x48, 24000, 1),  // resamples 16k→24k
+            ("WB 20ms @ 48kHz", 0x48, 48000, 1),  // resamples 16k→48k
+            ("MB 20ms @ 8kHz", 0x28, 8000, 1),    // resamples 12k→8k
+            ("MB 20ms @ 12kHz", 0x28, 12000, 1),  // native 12k
+            ("Hyb SWB 20ms @ 48kHz", 0x68, 48000, 1), // hybrid, native
+            ("NB 20ms stereo @ 8kHz", 0x0C, 8000, 1),  // stereo TOC on mono dec
+            ("NB 20ms stereo @ 8kHz ch2", 0x0C, 8000, 2),  // actual stereo
+        ];
+
+        for &(label, toc, sr, ch) in configs {
+            let mut packet = vec![toc];
+            packet.extend_from_slice(&payload);
+
+            let mut rust_dec = OpusDecoder::new(sr, ch).unwrap();
+            let mut rust_pcm = vec![0i16; max_frame as usize * ch as usize];
+            let rust_ret = rust_dec.decode(Some(&packet), &mut rust_pcm, max_frame, false);
+
+            let c_ret = c_ref_decode(&packet, sr, ch);
+
+            match (&rust_ret, &c_ret) {
+                (Ok(rn), Ok(cp)) => {
+                    let n = *rn as usize;
+                    let rust_slice = &rust_pcm[..n];
+                    if rust_slice != &cp[..] {
+                        let first = rust_slice
+                            .iter()
+                            .zip(cp.iter())
+                            .position(|(a, b)| a != b)
+                            .unwrap_or(0);
+                        let max_d = rust_slice
+                            .iter()
+                            .zip(cp.iter())
+                            .map(|(a, b)| (*a as i32 - *b as i32).unsigned_abs())
+                            .max()
+                            .unwrap_or(0);
+                        eprintln!(
+                            "  {label}: DIVERGES — samples={n}, first_diff={first}, max_diff={max_d}"
+                        );
+                        // Show first 5 mismatching pairs
+                        for (i, (r, c)) in
+                            rust_slice.iter().zip(cp.iter()).enumerate().filter(|(_, (r, c))| r != c).take(5)
+                        {
+                            eprintln!("    [{i}]: Rust={r}, C={c}, diff={}", *r as i32 - *c as i32);
+                        }
+                    } else {
+                        eprintln!("  {label}: MATCHES — samples={n}");
+                    }
+                }
+                _ => {
+                    eprintln!("  {label}: error result — skipping");
+                }
+            }
+        }
+    }
+
+    /// Broad scan: decode garbage packets at every TOC config × sample rate × channel count.
+    /// Reports which configurations diverge between Rust and C.
+    /// Ignored by default: known SILK garbage-input divergences (Bug #8).
+    /// Run with `cargo test -- --ignored test_fuzz_decode_scan_all_configs` to diagnose.
+    #[test]
+    #[ignore]
+    fn test_fuzz_decode_scan_all_configs() {
+        let sample_rates = [8000, 12000, 16000, 24000, 48000];
+        let channels_opts = [1, 2];
+        // Test a few payload patterns that are likely to exercise edge cases
+        let payloads: &[(&str, Vec<u8>)] = &[
+            ("0xFF×50", vec![0xFF; 50]),
+            ("0x00×50", vec![0x00; 50]),
+            ("ramp", (0u8..50).collect()),
+            ("0x80×50", vec![0x80; 50]),
+        ];
+        let mut mismatches = Vec::new();
+
+        for &sr in &sample_rates {
+            for &ch in &channels_opts {
+                for toc in 0u8..=255 {
+                    // Only test every 4th TOC (the frame code bits don't affect
+                    // the mode/bandwidth, just framing)
+                    if toc & 0x03 != 0 {
+                        continue;
+                    }
+                    for (pat_name, payload) in payloads {
+                        let mut packet = vec![toc];
+                        packet.extend_from_slice(payload);
+
+                        // Rust decode
+                        let mut rust_dec = match OpusDecoder::new(sr, ch) {
+                            Ok(d) => d,
+                            Err(_) => continue,
+                        };
+                        let max_frame = 5760;
+                        let mut rust_pcm = vec![0i16; max_frame as usize * ch as usize];
+                        let rust_ret =
+                            rust_dec.decode(Some(&packet), &mut rust_pcm, max_frame, false);
+
+                        // C decode
+                        let c_ret = c_ref_decode(&packet, sr, ch);
+
+                        match (&rust_ret, &c_ret) {
+                            (Ok(rust_n), Ok(c_pcm)) => {
+                                let n = *rust_n as usize * ch as usize;
+                                let c_n = c_pcm.len();
+                                if n != c_n {
+                                    mismatches.push(format!(
+                                        "sr={sr} ch={ch} toc=0x{toc:02X} pat={pat_name}: \
+                                         sample count Rust={} C={}",
+                                        rust_n,
+                                        c_n / ch as usize
+                                    ));
+                                    continue;
+                                }
+                                let rust_slice = &rust_pcm[..n];
+                                if rust_slice != &c_pcm[..] {
+                                    // Find first mismatch index
+                                    let first_diff = rust_slice
+                                        .iter()
+                                        .zip(c_pcm.iter())
+                                        .position(|(a, b)| a != b)
+                                        .unwrap_or(0);
+                                    let max_diff = rust_slice
+                                        .iter()
+                                        .zip(c_pcm.iter())
+                                        .map(|(a, b)| (*a as i32 - *b as i32).unsigned_abs())
+                                        .max()
+                                        .unwrap_or(0);
+                                    mismatches.push(format!(
+                                        "sr={sr} ch={ch} toc=0x{toc:02X} pat={pat_name}: \
+                                         PCM mismatch first_diff_idx={first_diff} max_diff={max_diff} \
+                                         samples={}",
+                                        rust_n
+                                    ));
+                                }
+                            }
+                            (Err(_), Err(_)) => {} // both error — fine
+                            (Ok(n), Err(e)) => {
+                                mismatches.push(format!(
+                                    "sr={sr} ch={ch} toc=0x{toc:02X} pat={pat_name}: \
+                                     Rust OK({n}) but C err({e})"
+                                ));
+                            }
+                            (Err(e), Ok(c_pcm)) => {
+                                mismatches.push(format!(
+                                    "sr={sr} ch={ch} toc=0x{toc:02X} pat={pat_name}: \
+                                     Rust err({e}) but C OK({})",
+                                    c_pcm.len() / ch as usize
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !mismatches.is_empty() {
+            eprintln!("\n=== DECODE DIVERGENCES FOUND: {} ===", mismatches.len());
+            for m in &mismatches {
+                eprintln!("  {m}");
+            }
+            panic!(
+                "{} decode divergence(s) found — see stderr for details",
+                mismatches.len()
+            );
+        }
+    }
+
 }
