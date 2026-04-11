@@ -1038,7 +1038,7 @@ pub fn silk_div32_varq(a32: i32, b32: i32, q_res: i32) -> i32 {
 /// `silk_ADD_POS_SAT32(a, b)`: saturating add for positive values.
 #[inline(always)]
 pub fn silk_add_pos_sat32(a: i32, b: i32) -> i32 {
-    let result = a as u32 + b as u32;
+    let result = (a as u32).wrapping_add(b as u32);
     if result & 0x80000000 != 0 {
         i32::MAX
     } else {
