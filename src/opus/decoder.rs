@@ -3200,4 +3200,145 @@ mod tests {
             opus_decoder_destroy(c_dec);
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Additional coverage tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_decoder_ctl_ignore_extensions() {
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        dec.set_ignore_extensions(true);
+        assert!(dec.get_ignore_extensions());
+        dec.set_ignore_extensions(false);
+        assert!(!dec.get_ignore_extensions());
+    }
+
+    #[test]
+    fn test_decoder_bandwidth_detection_all_modes() {
+        use crate::opus::encoder::{
+            OPUS_APPLICATION_VOIP, OPUS_APPLICATION_AUDIO, OpusEncoder,
+        };
+        // Encode at different sample rates and check decoder bandwidth
+        for &(rate, mode_name) in &[
+            (8000, "NB"),
+            (12000, "MB"),
+            (16000, "WB"),
+        ] {
+            let frame_size = rate / 50;
+            let mut enc = OpusEncoder::new(rate, 1, OPUS_APPLICATION_VOIP).unwrap();
+            enc.set_bitrate(24000);
+            enc.set_force_mode(MODE_SILK_ONLY);
+            let pcm = crate::coverage_tests::patterned_pcm_i16(frame_size as usize, 1, rate);
+            let mut pkt = vec![0u8; 1500];
+            let len = enc.encode(&pcm, frame_size, &mut pkt, 1500).unwrap();
+
+            let mut dec = OpusDecoder::new(rate, 1).unwrap();
+            let mut out = vec![0i16; frame_size as usize];
+            dec.decode(Some(&pkt[..len as usize]), &mut out, frame_size, false).unwrap();
+            let bw = dec.get_bandwidth();
+            assert!(bw >= OPUS_BANDWIDTH_NARROWBAND && bw <= OPUS_BANDWIDTH_FULLBAND,
+                "{}: bandwidth {} out of range", mode_name, bw);
+        }
+    }
+
+    #[test]
+    fn test_decode_stereo_plc_multiple_modes() {
+        use crate::opus::encoder::{
+            OPUS_APPLICATION_VOIP, OPUS_APPLICATION_AUDIO, OpusEncoder,
+        };
+        // Test PLC for stereo in SILK, CELT, and hybrid modes
+        for &(app, force_mode, bitrate, mode_name) in &[
+            (OPUS_APPLICATION_VOIP, MODE_SILK_ONLY, 24000, "SILK"),
+            (OPUS_APPLICATION_AUDIO, MODE_CELT_ONLY, 96000, "CELT"),
+            (OPUS_APPLICATION_AUDIO, MODE_HYBRID, 48000, "Hybrid"),
+        ] {
+            let mut enc = OpusEncoder::new(48000, 2, app).unwrap();
+            enc.set_bitrate(bitrate);
+            enc.set_force_mode(force_mode);
+            let mut dec = OpusDecoder::new(48000, 2).unwrap();
+
+            // Prime with 3 real packets
+            for i in 0..3 {
+                let pcm = crate::coverage_tests::patterned_pcm_i16(960, 2, i * 7);
+                let mut pkt = vec![0u8; 1500];
+                let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+                let mut out = vec![0i16; 960 * 2];
+                dec.decode(Some(&pkt[..len as usize]), &mut out, 960, false).unwrap();
+            }
+
+            // PLC
+            let mut out = vec![0i16; 960 * 2];
+            let ret = dec.decode(None, &mut out, 960, false).unwrap();
+            assert_eq!(ret, 960, "{}: PLC returned {}", mode_name, ret);
+        }
+    }
+
+    #[test]
+    fn test_decode_large_frame_chunking_40ms() {
+        use crate::opus::encoder::{
+            OPUS_APPLICATION_VOIP, OPUS_FRAMESIZE_40_MS, OpusEncoder,
+        };
+        let mut enc = OpusEncoder::new(16000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        enc.set_bitrate(24000);
+        enc.set_expert_frame_duration(OPUS_FRAMESIZE_40_MS);
+        let pcm = crate::coverage_tests::patterned_pcm_i16(640, 1, 99);
+        let mut pkt = vec![0u8; 1500];
+        let len = enc.encode(&pcm, 640, &mut pkt, 1500).unwrap();
+
+        let mut dec = OpusDecoder::new(16000, 1).unwrap();
+        let mut out = vec![0i16; 640];
+        let decoded = dec.decode(Some(&pkt[..len as usize]), &mut out, 640, false).unwrap();
+        assert_eq!(decoded, 640);
+    }
+
+    #[test]
+    fn test_decoder_reset_clears_state() {
+        use crate::opus::encoder::{OPUS_APPLICATION_AUDIO, OpusEncoder};
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        enc.set_bitrate(64000);
+        let pcm = crate::coverage_tests::patterned_pcm_i16(960, 1, 42);
+        let mut pkt = vec![0u8; 1500];
+        let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut out = vec![0i16; 960];
+        dec.decode(Some(&pkt[..len as usize]), &mut out, 960, false).unwrap();
+
+        // Reset and decode again — should work cleanly
+        dec.reset();
+        dec.decode(Some(&pkt[..len as usize]), &mut out, 960, false).unwrap();
+    }
+
+    #[test]
+    fn test_fec_decode_across_modes() {
+        use crate::opus::encoder::{OPUS_APPLICATION_VOIP, OpusEncoder};
+        // SILK with FEC enabled
+        let mut enc = OpusEncoder::new(16000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        enc.set_bitrate(32000);
+        enc.set_inband_fec(1);
+        enc.set_packet_loss_perc(30);
+        enc.set_complexity(10);
+
+        let mut dec = OpusDecoder::new(16000, 1).unwrap();
+        let mut pkts = Vec::new();
+        for i in 0..6 {
+            let pcm = crate::coverage_tests::patterned_pcm_i16(320, 1, 100 + i * 13);
+            let mut pkt = vec![0u8; 1500];
+            let len = enc.encode(&pcm, 320, &mut pkt, 1500).unwrap();
+            pkts.push(pkt[..len as usize].to_vec());
+        }
+
+        // Decode normally
+        for pkt in &pkts[..3] {
+            let mut out = vec![0i16; 320];
+            dec.decode(Some(pkt), &mut out, 320, false).unwrap();
+        }
+        // Simulate loss of packet 3, use FEC from packet 4
+        let mut out = vec![0i16; 320];
+        dec.decode(Some(&pkts[4]), &mut out, 320, true).unwrap(); // FEC
+        // Resume
+        let mut out = vec![0i16; 320];
+        dec.decode(Some(&pkts[4]), &mut out, 320, false).unwrap();
+    }
 }

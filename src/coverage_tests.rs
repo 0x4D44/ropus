@@ -6,7 +6,7 @@ use crate::opus::encoder::{
 };
 use crate::opus::multistream::{OpusMSDecoder, OpusMSEncoder};
 
-fn patterned_pcm_i16(frame_size: usize, channels: usize, seed: i32) -> Vec<i16> {
+pub fn patterned_pcm_i16(frame_size: usize, channels: usize, seed: i32) -> Vec<i16> {
     (0..frame_size * channels)
         .map(|i| {
             let base = ((i as i32 * 7919 + seed * 911) % 28000) - 14000;

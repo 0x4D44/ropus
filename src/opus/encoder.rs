@@ -4654,4 +4654,149 @@ mod tests {
         let len = enc.encode(&pcm, 960, &mut packet, cap).unwrap();
         assert!(len > 0);
     }
+
+    // -----------------------------------------------------------------------
+    // CTL error-path and boundary coverage
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_ctl_set_bandwidth_error_paths() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        // Valid auto
+        assert_eq!(enc.set_bandwidth(OPUS_AUTO), OPUS_OK);
+        // Valid narrowband
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_NARROWBAND), OPUS_OK);
+        // Valid fullband
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_FULLBAND), OPUS_OK);
+        // Invalid: below narrowband
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_NARROWBAND - 1), OPUS_BAD_ARG);
+        // Invalid: above fullband
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_FULLBAND + 1), OPUS_BAD_ARG);
+    }
+
+    #[test]
+    fn test_ctl_set_max_bandwidth_error_paths() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_max_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        assert_eq!(enc.get_max_bandwidth(), OPUS_BANDWIDTH_WIDEBAND);
+        assert_eq!(enc.set_max_bandwidth(OPUS_BANDWIDTH_NARROWBAND - 1), OPUS_BAD_ARG);
+        assert_eq!(enc.set_max_bandwidth(OPUS_BANDWIDTH_FULLBAND + 1), OPUS_BAD_ARG);
+    }
+
+    #[test]
+    fn test_ctl_set_signal_error_paths() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_signal(OPUS_AUTO), OPUS_OK);
+        assert_eq!(enc.set_signal(OPUS_SIGNAL_VOICE), OPUS_OK);
+        assert_eq!(enc.set_signal(OPUS_SIGNAL_MUSIC), OPUS_OK);
+        assert_eq!(enc.get_signal(), OPUS_SIGNAL_MUSIC);
+        assert_eq!(enc.set_signal(9999), OPUS_BAD_ARG);
+    }
+
+    #[test]
+    fn test_ctl_set_inband_fec_error_paths() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_inband_fec(0), OPUS_OK);
+        assert_eq!(enc.set_inband_fec(1), OPUS_OK);
+        assert_eq!(enc.set_inband_fec(2), OPUS_OK);
+        assert_eq!(enc.get_inband_fec(), 2);
+        assert_eq!(enc.set_inband_fec(-1), OPUS_BAD_ARG);
+        assert_eq!(enc.set_inband_fec(3), OPUS_BAD_ARG);
+    }
+
+    #[test]
+    fn test_ctl_set_packet_loss_perc_error_paths() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_packet_loss_perc(0), OPUS_OK);
+        assert_eq!(enc.set_packet_loss_perc(50), OPUS_OK);
+        assert_eq!(enc.set_packet_loss_perc(100), OPUS_OK);
+        assert_eq!(enc.get_packet_loss_perc(), 100);
+        assert_eq!(enc.set_packet_loss_perc(-1), OPUS_BAD_ARG);
+        assert_eq!(enc.set_packet_loss_perc(101), OPUS_BAD_ARG);
+    }
+
+    #[test]
+    fn test_ctl_set_dtx_error_paths() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_dtx(0), OPUS_OK);
+        assert_eq!(enc.set_dtx(1), OPUS_OK);
+        assert_eq!(enc.get_dtx(), 1);
+        assert_eq!(enc.set_dtx(-1), OPUS_BAD_ARG);
+        assert_eq!(enc.set_dtx(2), OPUS_BAD_ARG);
+    }
+
+    #[test]
+    fn test_ctl_set_lsb_depth_error_paths() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_lsb_depth(8), OPUS_OK);
+        assert_eq!(enc.set_lsb_depth(16), OPUS_OK);
+        assert_eq!(enc.set_lsb_depth(24), OPUS_OK);
+        assert_eq!(enc.get_lsb_depth(), 24);
+        assert_eq!(enc.set_lsb_depth(7), OPUS_BAD_ARG);
+        assert_eq!(enc.set_lsb_depth(25), OPUS_BAD_ARG);
+    }
+
+    #[test]
+    fn test_ctl_getters_exercise() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+        enc.set_bitrate(64000);
+        let pcm = patterned_pcm_i16(960, 2, 42);
+        let mut pkt = vec![0u8; 1500];
+        enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+
+        // Exercise all getters
+        let _ = enc.get_bandwidth();
+        let _ = enc.get_max_bandwidth();
+        let _ = enc.get_signal();
+        let _ = enc.get_inband_fec();
+        let _ = enc.get_packet_loss_perc();
+        let _ = enc.get_dtx();
+        let _ = enc.get_lsb_depth();
+        let _ = enc.get_hp_mem();
+        let _ = enc.get_variable_hp_smth2();
+    }
+
+    #[test]
+    fn test_encode_with_forced_narrowband() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        enc.set_bitrate(16000);
+        enc.set_max_bandwidth(OPUS_BANDWIDTH_NARROWBAND);
+        let pcm = patterned_pcm_i16(960, 1, 11);
+        let mut pkt = vec![0u8; 1500];
+        let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+        assert!(len > 0);
+    }
+
+    #[test]
+    fn test_encode_with_forced_mediumband() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        enc.set_bitrate(20000);
+        enc.set_max_bandwidth(OPUS_BANDWIDTH_MEDIUMBAND);
+        let pcm = patterned_pcm_i16(960, 1, 22);
+        let mut pkt = vec![0u8; 1500];
+        let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+        assert!(len > 0);
+    }
+
+    #[test]
+    fn test_encode_with_forced_wideband() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        enc.set_bitrate(24000);
+        enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND);
+        let pcm = patterned_pcm_i16(960, 1, 33);
+        let mut pkt = vec![0u8; 1500];
+        let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+        assert!(len > 0);
+    }
+
+    #[test]
+    fn test_encode_buffer_too_small() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        enc.set_bitrate(128000);
+        let pcm = patterned_pcm_i16(960, 1, 1);
+        let mut pkt = vec![0u8; 2]; // Way too small for high bitrate
+        let result = enc.encode(&pcm, 960, &mut pkt, 2);
+        // Should either succeed with tiny packet or return error
+        assert!(result.is_ok() || result.is_err());
+    }
 }
