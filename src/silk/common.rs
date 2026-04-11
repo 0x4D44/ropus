@@ -1412,7 +1412,9 @@ pub fn silk_nlsf2a(a_q12: &mut [i16], nlsf: &[i16], d: usize) {
     let mut cos_lsf_qa: [i32; 24] = [0; 24]; // SILK_MAX_ORDER_LPC
     for k in 0..d {
         let nlsf_k = nlsf[k] as i32;
-        let f_int = nlsf_k >> (15 - 7); // Integer part (0-127)
+        // C asserts NLSF[k] >= 0 and f_int < LSF_COS_TAB_SZ_FIX (128).
+        // With garbage input, nlsf_k can be negative → clamp to valid range.
+        let f_int = (nlsf_k >> (15 - 7)).clamp(0, (LSF_COS_TAB_SZ_FIX - 1) as i32);
         let f_frac = nlsf_k - (f_int << (15 - 7)); // Fractional part
 
         let f_int_u = f_int as usize;
