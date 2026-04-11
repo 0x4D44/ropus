@@ -1,4 +1,6 @@
-use crate::opus::decoder::{MODE_CELT_ONLY, MODE_HYBRID, MODE_SILK_ONLY, OPUS_OK, OpusDecoder};
+use crate::opus::decoder::{
+    MODE_CELT_ONLY, MODE_HYBRID, MODE_SILK_ONLY, OPUS_BANDWIDTH_WIDEBAND, OPUS_OK, OpusDecoder,
+};
 use crate::opus::encoder::{
     OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY, OPUS_APPLICATION_VOIP,
     OPUS_FRAMESIZE_5_MS, OPUS_FRAMESIZE_10_MS, OPUS_FRAMESIZE_40_MS, OPUS_FRAMESIZE_60_MS,
@@ -638,4 +640,240 @@ fn coverage_cbr_40ms_celt_stereo() {
         let mut out = vec![0i16; 1920 * 2];
         dec.decode(Some(pkt), &mut out, 1920, false).unwrap();
     }
+}
+
+// ===========================================================================
+// Additional coverage: deep encoder/decoder path tests
+// ===========================================================================
+
+/// DTX with SILK — encode silence frames at VOIP mode until DTX 1-byte packets appear.
+/// Targets encoder.rs lines 2202-2206 (SILK DTX producing 0-byte → 1-byte TOC-only).
+#[test]
+fn coverage_dtx_silk_voip_silence_packets() {
+    let mut enc = OpusEncoder::new(16000, 1, OPUS_APPLICATION_VOIP).unwrap();
+    enc.set_force_mode(MODE_SILK_ONLY);
+    enc.set_bitrate(16000);
+    enc.set_dtx(1);
+    enc.set_vbr(1);
+    enc.set_signal(OPUS_SIGNAL_VOICE);
+
+    // Prime with active speech first to build up state
+    for i in 0..5 {
+        let pcm = patterned_pcm_i16(320, 1, 5000 + i * 13);
+        let mut pkt = vec![0u8; 1500];
+        enc.encode(&pcm, 320, &mut pkt, 1500).unwrap();
+    }
+
+    // Now encode silence — SILK DTX should eventually produce 1-byte packets
+    let silence = vec![0i16; 320];
+    let mut dtx_found = false;
+    for _ in 0..40 {
+        let mut pkt = vec![0u8; 1500];
+        let len = enc.encode(&silence, 320, &mut pkt, 1500).unwrap();
+        if len == 1 {
+            dtx_found = true;
+            break;
+        }
+    }
+    assert!(dtx_found, "DTX should produce 1-byte TOC-only packet after sustained silence");
+}
+
+/// Low bitrate stereo width: stereo encoder at 12000bps.
+/// Targets encoder.rs lines 1552-1565 (stereo width at low equiv_rate < 16000).
+#[test]
+fn coverage_stereo_width_low_bitrate() {
+    let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_VOIP).unwrap();
+    enc.set_bitrate(12000);
+    enc.set_vbr(1);
+    enc.set_signal(OPUS_SIGNAL_VOICE);
+
+    let mut dec = OpusDecoder::new(48000, 2).unwrap();
+    // Encode several frames to let stereo width stabilize at low rate
+    for i in 0..5 {
+        let pcm = patterned_pcm_i16(960, 2, 5100 + i * 7);
+        let mut pkt = vec![0u8; 1500];
+        let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+        assert!(len > 0);
+        let mut out = vec![0i16; 960 * 2];
+        dec.decode(Some(&pkt[..len as usize]), &mut out, 960, false).unwrap();
+    }
+}
+
+/// High bitrate stereo width: stereo encoder at 64000bps CELT mode.
+/// Targets encoder.rs lines 1552-1565 (stereo width at high equiv_rate > 32000).
+#[test]
+fn coverage_stereo_width_high_bitrate_celt() {
+    let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+    enc.set_force_mode(MODE_CELT_ONLY);
+    enc.set_bitrate(64000);
+    enc.set_vbr(1);
+    enc.set_signal(OPUS_SIGNAL_MUSIC);
+
+    let mut dec = OpusDecoder::new(48000, 2).unwrap();
+    for i in 0..5 {
+        let pcm = patterned_pcm_i16(960, 2, 5200 + i * 11);
+        let mut pkt = vec![0u8; 1500];
+        let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+        assert!(len > 0);
+        let mut out = vec![0i16; 960 * 2];
+        dec.decode(Some(&pkt[..len as usize]), &mut out, 960, false).unwrap();
+    }
+}
+
+/// 5ms SILK override: set SILK mode + 5ms frames, should internally force CELT.
+/// Targets encoder.rs lines 1447-1449 (frame_size < fs/100 forces CELT_ONLY).
+#[test]
+fn coverage_5ms_silk_override_to_celt() {
+    let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+    enc.set_force_mode(MODE_SILK_ONLY);
+    enc.set_bitrate(32000);
+    enc.set_expert_frame_duration(OPUS_FRAMESIZE_5_MS);
+
+    // 5ms at 48kHz = 240 samples, which is < fs/100 = 480
+    let pcm = patterned_pcm_i16(240, 1, 5300);
+    let mut pkt = vec![0u8; 1500];
+    let len = enc.encode(&pcm, 240, &mut pkt, 1500).unwrap();
+    assert!(len > 0);
+    // Even though we forced SILK, 5ms frames must force CELT
+    assert_eq!(enc.get_mode(), MODE_CELT_ONLY);
+}
+
+/// Voice ratio positive path: encode VOIP with voice_ratio >= 0.
+/// Targets encoder.rs lines 1341-1346 (voice_ratio >= 0 path in voice estimation).
+/// Note: voice_ratio is reset to -1 at the start of each encode call (fixed-point path),
+/// so we verify it was set before encoding (the encode path reads it internally).
+#[test]
+fn coverage_voice_ratio_positive() {
+    let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+    enc.set_voice_ratio(50);
+    assert_eq!(enc.get_voice_ratio(), 50);
+    enc.set_bitrate(32000);
+    enc.set_vbr(1);
+
+    let pcm = patterned_pcm_i16(960, 1, 5400);
+    let mut pkt = vec![0u8; 1500];
+    let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+    assert!(len > 0);
+    // voice_ratio is reset to -1 after encoding (C reference behavior)
+    assert_eq!(enc.get_voice_ratio(), -1);
+}
+
+/// Mode transition SILK→CELT with redundancy: encode several SILK frames,
+/// then force CELT to trigger the redundancy path.
+/// Targets encoder.rs lines 1460-1472 and decoder.rs lines 812-823
+/// (CELT redundancy decode, silk→celt transition).
+#[test]
+fn coverage_silk_to_celt_redundancy() {
+    let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+    enc.set_bitrate(48000);
+    enc.set_vbr(1);
+    enc.set_complexity(10);
+    let mut dec = OpusDecoder::new(48000, 1).unwrap();
+
+    // Establish SILK mode
+    enc.set_force_mode(MODE_SILK_ONLY);
+    for i in 0..5 {
+        let pcm = patterned_pcm_i16(960, 1, 5500 + i * 13);
+        let mut pkt = vec![0u8; 1500];
+        let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+        decode_packet(&mut dec, Some(&pkt[..len as usize]), 960);
+    }
+
+    // Now switch to CELT — should trigger silk→celt transition with redundancy.
+    // The first frame after transition uses the prev mode (SILK) with a to_celt flag;
+    // subsequent frames will be CELT_ONLY.
+    enc.set_force_mode(MODE_CELT_ONLY);
+    for i in 0..5 {
+        let pcm = patterned_pcm_i16(960, 1, 5600 + i * 7);
+        let mut pkt = vec![0u8; 1500];
+        let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+        decode_packet(&mut dec, Some(&pkt[..len as usize]), 960);
+    }
+    assert_eq!(enc.get_mode(), MODE_CELT_ONLY);
+}
+
+/// Mode transition CELT→SILK with short frames (redundancy = false).
+/// Targets encoder.rs lines 1470-1472 (frame_size < fs/100 → redundancy=false).
+#[test]
+fn coverage_celt_to_silk_short_frames_no_redundancy() {
+    let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+    enc.set_bitrate(32000);
+    enc.set_vbr(1);
+    enc.set_expert_frame_duration(OPUS_FRAMESIZE_5_MS);
+    let mut dec = OpusDecoder::new(48000, 1).unwrap();
+
+    // Establish CELT mode with 5ms frames
+    enc.set_force_mode(MODE_CELT_ONLY);
+    for i in 0..5 {
+        let pcm = patterned_pcm_i16(240, 1, 5700 + i * 11);
+        let mut pkt = vec![0u8; 1500];
+        let len = enc.encode(&pcm, 240, &mut pkt, 1500).unwrap();
+        let mut out = vec![0i16; 240];
+        dec.decode(Some(&pkt[..len as usize]), &mut out, 240, false).unwrap();
+    }
+
+    // Switch to SILK — but 5ms < fs/100, so SILK is overridden to CELT
+    // and no redundancy happens due to short frame size
+    enc.set_force_mode(MODE_SILK_ONLY);
+    for i in 0..3 {
+        let pcm = patterned_pcm_i16(240, 1, 5800 + i * 7);
+        let mut pkt = vec![0u8; 1500];
+        let len = enc.encode(&pcm, 240, &mut pkt, 1500).unwrap();
+        let mut out = vec![0i16; 240];
+        dec.decode(Some(&pkt[..len as usize]), &mut out, 240, false).unwrap();
+    }
+    // With 5ms frames, mode should be CELT regardless of SILK request
+    assert_eq!(enc.get_mode(), MODE_CELT_ONLY);
+}
+
+/// Hybrid→SILK transition: encode hybrid mode, then switch to SILK.
+/// Targets decoder.rs lines 962-969 (CELT fade-out on hybrid→SILK transition).
+#[test]
+fn coverage_hybrid_to_silk_transition() {
+    let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+    enc.set_bitrate(48000);
+    enc.set_vbr(1);
+    enc.set_complexity(10);
+    let mut dec = OpusDecoder::new(48000, 1).unwrap();
+
+    // Establish hybrid mode
+    enc.set_force_mode(MODE_HYBRID);
+    for i in 0..5 {
+        let pcm = patterned_pcm_i16(960, 1, 5900 + i * 13);
+        let mut pkt = vec![0u8; 1500];
+        let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+        decode_packet(&mut dec, Some(&pkt[..len as usize]), 960);
+    }
+    assert_eq!(enc.get_mode(), MODE_HYBRID);
+
+    // Switch to SILK — decoder should exercise the hybrid→SILK fade-out path
+    enc.set_force_mode(MODE_SILK_ONLY);
+    enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND);
+    for i in 0..3 {
+        let pcm = patterned_pcm_i16(960, 1, 6000 + i * 7);
+        let mut pkt = vec![0u8; 1500];
+        let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+        decode_packet(&mut dec, Some(&pkt[..len as usize]), 960);
+    }
+}
+
+/// CBR constraint test: CBR mode with constrained bitrate.
+/// Targets encoder.rs lines 1607-1608, 2577-2583 (CBR padding path).
+#[test]
+fn coverage_cbr_constraint_padding() {
+    let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+    enc.set_force_mode(MODE_CELT_ONLY);
+    enc.set_bitrate(32000);
+    enc.set_vbr(0); // CBR
+
+    let pcm = patterned_pcm_i16(960, 1, 6100);
+    let mut pkt = vec![0u8; 1500];
+    let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+    assert!(len > 0);
+
+    // Encode a second frame — CBR should produce consistent sizes
+    let pcm2 = patterned_pcm_i16(960, 1, 6101);
+    let mut pkt2 = vec![0u8; 1500];
+    let len2 = enc.encode(&pcm2, 960, &mut pkt2, 1500).unwrap();
+    assert!(len2 > 0);
 }

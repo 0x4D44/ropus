@@ -4799,4 +4799,75 @@ mod tests {
         // Should either succeed with tiny packet or return error
         assert!(result.is_ok() || result.is_err());
     }
+
+    // -----------------------------------------------------------------------
+    // Additional CTL/accessor error path coverage
+    // -----------------------------------------------------------------------
+
+    /// Test complexity setter boundary values and error paths.
+    #[test]
+    fn test_ctl_set_complexity_error_paths() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_complexity(0), OPUS_OK);
+        assert_eq!(enc.get_complexity(), 0);
+        assert_eq!(enc.set_complexity(10), OPUS_OK);
+        assert_eq!(enc.get_complexity(), 10);
+        assert_eq!(enc.set_complexity(-1), OPUS_BAD_ARG);
+        assert_eq!(enc.set_complexity(11), OPUS_BAD_ARG);
+    }
+
+    /// Test prediction_disabled setter boundary values.
+    #[test]
+    fn test_ctl_set_prediction_disabled_error_paths() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_prediction_disabled(0), OPUS_OK);
+        assert_eq!(enc.get_prediction_disabled(), 0);
+        assert_eq!(enc.set_prediction_disabled(1), OPUS_OK);
+        assert_eq!(enc.get_prediction_disabled(), 1);
+        assert_eq!(enc.set_prediction_disabled(-1), OPUS_BAD_ARG);
+        assert_eq!(enc.set_prediction_disabled(2), OPUS_BAD_ARG);
+    }
+
+    /// Test voice_ratio setter boundary with encoding to verify path coverage.
+    #[test]
+    fn test_ctl_voice_ratio_boundary_with_encode() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+        // voice_ratio=0 → ve = 0*327>>8 = 0, capped at 115 → still 0
+        assert_eq!(enc.set_voice_ratio(0), OPUS_OK);
+        assert_eq!(enc.get_voice_ratio(), 0);
+        enc.set_bitrate(32000);
+        let pcm = patterned_pcm_i16(960, 2, 9001);
+        let mut pkt = vec![0u8; 1500];
+        let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+        assert!(len > 0);
+
+        // voice_ratio at max boundary
+        assert_eq!(enc.set_voice_ratio(100), OPUS_OK);
+        let len2 = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+        assert!(len2 > 0);
+    }
+
+    /// Test force_channels setter error paths for mono encoder.
+    #[test]
+    fn test_ctl_force_channels_mono_encoder() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_force_channels(1), OPUS_OK);
+        assert_eq!(enc.get_force_channels(), 1);
+        // mono encoder cannot force 2 channels
+        assert_eq!(enc.set_force_channels(2), OPUS_BAD_ARG);
+        assert_eq!(enc.set_force_channels(0), OPUS_BAD_ARG);
+        assert_eq!(enc.set_force_channels(OPUS_AUTO), OPUS_OK);
+    }
+
+    /// Test expert_frame_duration at FRAMESIZE_ARG boundary.
+    #[test]
+    fn test_ctl_expert_frame_duration_arg_value() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_ARG), OPUS_OK);
+        assert_eq!(enc.get_expert_frame_duration(), OPUS_FRAMESIZE_ARG);
+        // Verify all valid frame durations
+        assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_2_5_MS), OPUS_OK);
+        assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_120_MS), OPUS_OK);
+        assert_eq!(enc.get_expert_frame_duration(), OPUS_FRAMESIZE_120_MS);
+    }
 }
