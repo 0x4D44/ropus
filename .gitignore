@@ -20,5 +20,6 @@ notes/*.log
 # Mutation testing output directories (cargo-mutants runs)
 /mutants_*/
 
-# Fuzz build artifacts (keep corpus/, crashes/, fuzz_targets/, Cargo.*)
+# Fuzz build artifacts (keep crashes/, fuzz_targets/, Cargo.*)
 /tests/fuzz/target/
+/tests/fuzz/corpus/
