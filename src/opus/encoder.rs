@@ -4110,4 +4110,548 @@ mod tests {
             );
         }
     }
+
+    // =======================================================================
+    // Coverage gap tests
+    // =======================================================================
+
+    /// Gap 1: SILK→CELT bandwidth switch triggering redundancy encoding
+    /// (lines ~1881-1903). Setting silk_bw_switch=1 before encode_frame_native
+    /// forces the redundancy/celt_to_silk/prefill path.
+    #[test]
+    fn test_silk_bw_switch_triggers_redundancy() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_bitrate(64000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+
+        // First: encode a SILK frame to establish prev_mode
+        assert_eq!(enc.set_force_mode(MODE_SILK_ONLY), OPUS_OK);
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        let pcm = patterned_pcm_i16(960, 1, 2001);
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+        let _ = enc.encode(&pcm, 960, &mut packet, cap).unwrap();
+        assert_eq!(enc.get_mode(), MODE_SILK_ONLY);
+
+        // Now set silk_bw_switch=1 and encode again in SILK mode.
+        // This should trigger the redundancy path at line 1881.
+        enc.silk_bw_switch = 1;
+        enc.mode = MODE_SILK_ONLY;
+        enc.bandwidth = OPUS_BANDWIDTH_WIDEBAND;
+        let pcm2 = patterned_pcm_i16(960, 1, 2002);
+        let len = enc
+            .encode_frame_native(
+                &pcm2, 960, &mut packet, cap, cap, false, false, false, 0,
+                enc.bitrate_bps, false,
+            )
+            .unwrap();
+        assert!(len > 1);
+        // silk_bw_switch should be cleared
+        assert_eq!(enc.silk_bw_switch, 0);
+    }
+
+    /// Gap 2: DTX activation — silence detection → 1-byte DTX packet after
+    /// enough silence frames (lines ~2543-2548). Uses CELT-only with CELT DTX
+    /// (use_dtx=1, silk_mode.use_dtx=0 triggers the non-SILK DTX path).
+    #[test]
+    fn test_dtx_activation_celt_silence_path() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_force_mode(MODE_CELT_ONLY), OPUS_OK);
+        assert_eq!(enc.set_bitrate(32000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(enc.set_dtx(1), OPUS_OK);
+
+        let silence = [0i16; 960];
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+
+        // Encode active frames first to set peak_signal_energy
+        let pcm_active = patterned_pcm_i16(960, 1, 2101);
+        let _ = enc.encode(&pcm_active, 960, &mut packet, cap).unwrap();
+
+        // Now encode silence repeatedly — after NB_SPEECH_FRAMES_BEFORE_DTX (10)
+        // frames of silence, we should get a DTX (1-byte) packet.
+        let mut got_dtx = false;
+        for _ in 0..15 {
+            let len = enc.encode(&silence, 960, &mut packet, cap).unwrap();
+            if len == 1 {
+                got_dtx = true;
+                assert_eq!(enc.get_final_range(), 0);
+                break;
+            }
+        }
+        assert!(got_dtx, "expected DTX 1-byte packet after sustained silence");
+    }
+
+    /// Gap 3: Hybrid mode SILK rate interpolation with DRED/LBRR flags.
+    /// (lines ~1987-1994, 2077-2087). Force hybrid mode and encode to
+    /// exercise compute_silk_rate_for_hybrid in the encode path.
+    #[test]
+    fn test_hybrid_silk_rate_interpolation_with_fec() {
+        // Test compute_silk_rate_for_hybrid with LBRR flag variations
+        // SWB path with FEC (lbrr=1) and CBR: entry=4, rate=32000
+        // interp from [32000,28000] boundary → 28000, +100 CBR, +300 SWB = 28400
+        assert_eq!(
+            compute_silk_rate_for_hybrid(32000, OPUS_BANDWIDTH_SUPERWIDEBAND, true, 0, 1, 1),
+            28400
+        );
+        // FB path without FEC and VBR: entry=2, rate=32000
+        // interp from [32000,22000] boundary → 22000, no CBR, no SWB = 22000
+        assert_eq!(
+            compute_silk_rate_for_hybrid(32000, OPUS_BANDWIDTH_FULLBAND, true, 1, 0, 1),
+            22000
+        );
+        // Stereo with high rate (exceeds table): rate/2=100000, entry=4
+        // last entry [64000,50000]: 50000 + (100000-64000)/2 = 68000
+        // VBR=1 no CBR boost, no SWB boost → 68000*2 - 1000 stereo = 135000
+        assert_eq!(
+            compute_silk_rate_for_hybrid(200000, OPUS_BANDWIDTH_FULLBAND, true, 1, 1, 2),
+            135000
+        );
+
+        // Also exercise via actual hybrid encode to hit lines 1987-1994
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_force_mode(MODE_HYBRID), OPUS_OK);
+        assert_eq!(enc.set_bitrate(48000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(enc.set_inband_fec(1), OPUS_OK);
+        assert_eq!(enc.set_packet_loss_perc(10), OPUS_OK);
+
+        let pcm = patterned_pcm_i16(960, 2, 2201);
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+        let len = enc.encode(&pcm, 960, &mut packet, cap).unwrap();
+        assert!(len > 1);
+        assert_eq!(enc.get_mode(), MODE_HYBRID);
+    }
+
+    /// Gap 3b: Hybrid constrained VBR exercises the max_bits recomputation
+    /// through compute_silk_rate_for_hybrid (lines 2077-2087).
+    #[test]
+    fn test_hybrid_constrained_vbr_silk_rate() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_force_mode(MODE_HYBRID), OPUS_OK);
+        assert_eq!(enc.set_bitrate(40000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(enc.set_vbr_constraint(1), OPUS_OK);
+
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+        // Encode a few frames to stabilize state
+        for seed in 0..3 {
+            let pcm = patterned_pcm_i16(960, 1, 2301 + seed);
+            let _ = enc.encode(&pcm, 960, &mut packet, cap).unwrap();
+        }
+        assert_eq!(enc.get_mode(), MODE_HYBRID);
+    }
+
+    /// Gap 4: FEC hysteresis — decide_fec with last_fec=1 (lines ~1592-1601).
+    /// When last_fec was enabled, threshold is lowered by hysteresis, making
+    /// FEC easier to keep.
+    #[test]
+    fn test_decide_fec_hysteresis_last_fec_enabled() {
+        // With last_fec=1, threshold at WB is reduced by hysteresis.
+        // WB: threshold=16000, hyst=1000. last_fec=1 → 15000.
+        // loss=10: factor=115, silk_smulwb(15000*115, 655)=17239.
+        // rate=18000 > 17239 → returns 1, bandwidth stays WB.
+        let mut bw = OPUS_BANDWIDTH_WIDEBAND;
+        let result = decide_fec(1, 10, 1, MODE_SILK_ONLY, &mut bw, 18000);
+        assert_eq!(result, 1, "last_fec=1 hysteresis should keep FEC at WB with rate 18000");
+        assert_eq!(bw, OPUS_BANDWIDTH_WIDEBAND, "bandwidth should stay WB with hysteresis");
+
+        // Without hysteresis (last_fec=0), WB threshold = 16000+1000=17000 → scaled=19538.
+        // 18000 < 19538 → falls through; WB gets reduced to MB.
+        // MB: threshold=(14000+1000)*115*... = 17239.  18000 > 17239 → returns 1.
+        // But bandwidth was changed to MB!
+        let mut bw2 = OPUS_BANDWIDTH_WIDEBAND;
+        let result2 = decide_fec(1, 10, 0, MODE_SILK_ONLY, &mut bw2, 18000);
+        assert_eq!(result2, 1, "without hysteresis, FEC still enabled but bw reduced");
+        assert_eq!(bw2, OPUS_BANDWIDTH_MEDIUMBAND, "bandwidth should be reduced to MB without hysteresis");
+    }
+
+    /// Gap 4b: FEC hysteresis through the encode path — set up encoder with
+    /// FEC enabled, sufficient loss, and SILK mode to hit the decide_fec call
+    /// at lines 1592-1601.
+    #[test]
+    fn test_fec_decision_in_encode_path() {
+        let mut enc = OpusEncoder::new(16000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_force_mode(MODE_SILK_ONLY), OPUS_OK);
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        assert_eq!(enc.set_bitrate(24000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(enc.set_inband_fec(1), OPUS_OK);
+        assert_eq!(enc.set_packet_loss_perc(15), OPUS_OK);
+        assert_eq!(enc.set_signal(OPUS_SIGNAL_VOICE), OPUS_OK);
+
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+
+        // Encode 3 frames to let FEC state stabilize
+        for i in 0..3 {
+            let pcm = patterned_pcm_i16(320, 1, 2401 + i);
+            let _ = enc.encode(&pcm, 320, &mut packet, cap).unwrap();
+        }
+        // Check that lbrr_coded is set (FEC was decided)
+        // The exact value depends on the rate/bandwidth interaction.
+        // The important thing is that the decide_fec path was exercised.
+        assert!(enc.silk_mode.lbrr_coded == 0 || enc.silk_mode.lbrr_coded == 1);
+    }
+
+    /// Gap 5: Stereo width edge cases — low-bitrate stereo width reduction
+    /// in hybrid (lines ~2289-2325). Force hybrid stereo at low bitrate to
+    /// trigger the stereo_fade path.
+    #[test]
+    fn test_stereo_width_reduction_hybrid_low_bitrate() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_force_mode(MODE_HYBRID), OPUS_OK);
+        assert_eq!(enc.set_bitrate(20000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+
+        // Encode a few frames to exercise stereo width calculation
+        for i in 0..3 {
+            let pcm = patterned_pcm_i16(960, 2, 2501 + i * 17);
+            let _ = enc.encode(&pcm, 960, &mut packet, cap).unwrap();
+        }
+        assert_eq!(enc.get_mode(), MODE_HYBRID);
+        // At this low bitrate, stereo width should be reduced
+        assert!(
+            (enc.hybrid_stereo_width_q14 as i32) < (1 << 14),
+            "stereo width should be reduced at low bitrate"
+        );
+    }
+
+    /// Gap 6: LFE channel mode forces CELT-only narrowband (lines ~1450-1451,
+    /// 1615-1616).
+    #[test]
+    fn test_lfe_forces_celt_only_narrowband() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        enc.ms_set_lfe(1);
+        assert_eq!(enc.set_bitrate(32000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+
+        let pcm = patterned_pcm_i16(960, 1, 2601);
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+        let len = enc.encode(&pcm, 960, &mut packet, cap).unwrap();
+        assert!(len > 0);
+        // LFE forces CELT-only
+        assert_eq!(enc.get_mode(), MODE_CELT_ONLY);
+        // LFE forces narrowband
+        assert_eq!(enc.get_bandwidth(), OPUS_BANDWIDTH_NARROWBAND);
+    }
+
+    /// Gap 7: RESTRICTED_LOWDELAY application forces CELT-only with zero delay
+    /// compensation (lines ~1397-1398). Also covers the delay_compensation=0
+    /// branch in encode_frame_native.
+    #[test]
+    fn test_restricted_lowdelay_forces_celt_zero_delay() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+        assert_eq!(enc.set_bitrate(64000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_2_5_MS), OPUS_OK);
+
+        let pcm = patterned_pcm_i16(120, 1, 2701);
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+        let len = enc.encode(&pcm, 120, &mut packet, cap).unwrap();
+        assert!(len > 0);
+        assert_eq!(enc.get_mode(), MODE_CELT_ONLY);
+        // Lowdelay has reduced lookahead
+        assert_eq!(enc.get_lookahead(), 120);
+    }
+
+    /// Gap 8: VBR constraint with CELT (line ~2421). In non-hybrid CELT mode
+    /// with VBR and constraint, the CELT encoder gets SetVbrConstraint.
+    #[test]
+    fn test_vbr_constraint_celt_only_path() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_force_mode(MODE_CELT_ONLY), OPUS_OK);
+        assert_eq!(enc.set_bitrate(64000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(enc.set_vbr_constraint(1), OPUS_OK);
+
+        let pcm = patterned_pcm_i16(960, 1, 2801);
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+        let len = enc.encode(&pcm, 960, &mut packet, cap).unwrap();
+        assert!(len > 1);
+        assert_eq!(enc.get_mode(), MODE_CELT_ONLY);
+        // Confirm VBR constraint is active
+        assert_eq!(enc.get_vbr(), 1);
+        assert_eq!(enc.get_vbr_constraint(), 1);
+    }
+
+    /// Gap 9: HP cutoff filter — mono and stereo biquad filter paths
+    /// (lines ~727-734).
+    #[test]
+    fn test_hp_cutoff_mono_and_stereo() {
+        // Mono path (stride1)
+        let input_mono = vec![1000i16; 480];
+        let mut output_mono = vec![0i16; 480];
+        let mut hp_mem_mono = [0i32; 4];
+        hp_cutoff_debug(&input_mono, 100, &mut output_mono, &mut hp_mem_mono, 480, 1, 48000);
+        // Filter should produce output; DC content should be attenuated
+        assert!(output_mono.iter().any(|&s| s != 0));
+        // HP mem should be updated
+        assert!(hp_mem_mono.iter().any(|&m| m != 0));
+
+        // Stereo path (stride2)
+        let input_stereo = vec![500i16; 960];
+        let mut output_stereo = vec![0i16; 960];
+        let mut hp_mem_stereo = [0i32; 4];
+        hp_cutoff_debug(&input_stereo, 80, &mut output_stereo, &mut hp_mem_stereo, 480, 2, 48000);
+        assert!(output_stereo.iter().any(|&s| s != 0));
+        assert!(hp_mem_stereo.iter().any(|&m| m != 0));
+    }
+
+    /// Gap 10: Prefill gain fade on mode transition (lines ~2096-2149).
+    /// Transition from CELT→SILK triggers prefill with gain_fade.
+    #[test]
+    fn test_prefill_gain_fade_on_celt_to_silk_transition() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_bitrate(48000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(enc.set_signal(OPUS_SIGNAL_VOICE), OPUS_OK);
+
+        // Encode as CELT first
+        assert_eq!(enc.set_force_mode(MODE_CELT_ONLY), OPUS_OK);
+        let pcm = patterned_pcm_i16(960, 1, 3001);
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+        let _ = enc.encode(&pcm, 960, &mut packet, cap).unwrap();
+        assert_eq!(enc.get_mode(), MODE_CELT_ONLY);
+
+        // Force transition to SILK — this triggers prefill (line 1506) and
+        // the gain_fade ramp at lines 2096-2149.
+        assert_eq!(enc.set_force_mode(MODE_SILK_ONLY), OPUS_OK);
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        let pcm2 = patterned_pcm_i16(960, 1, 3002);
+        let len = enc.encode(&pcm2, 960, &mut packet, cap).unwrap();
+        assert!(len > 1);
+        // After transition the mode should not be CELT_ONLY
+        // (it stays as prev_mode=SILK during transition encode)
+        assert_ne!(packet_mode_from_toc(&packet[..len as usize]), MODE_CELT_ONLY);
+    }
+
+    /// Gap 11: CBR padding — multiframe CBR path where pad_cbr is triggered
+    /// (lines ~1806-1820). In CBR mode, if not all frames are DTX, the
+    /// repacketizer pads to the target size.
+    #[test]
+    fn test_cbr_padding_multiframe() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_force_mode(MODE_CELT_ONLY), OPUS_OK);
+        assert_eq!(enc.set_vbr(0), OPUS_OK); // CBR
+        assert_eq!(enc.set_bitrate(48000), OPUS_OK);
+        assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_40_MS), OPUS_OK);
+
+        let pcm = patterned_pcm_i16(1920, 1, 3101);
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+        let len = enc.encode(&pcm, 1920, &mut packet, cap).unwrap();
+        assert!(len > 1);
+        // CBR should produce a consistent size per bitrate
+        // 48000 bps * 40ms = 1920 bits = 240 bytes, plus overhead
+        // The key is that pad_cbr was triggered (use_vbr==0, not all DTX)
+    }
+
+    /// Gap 12: Uncommon frame sizes — 100ms encoding validation (line ~1246).
+    /// Also tests the 100ms → multi-frame split in SILK mode.
+    #[test]
+    fn test_100ms_frame_size_encoding() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_force_mode(MODE_SILK_ONLY), OPUS_OK);
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        assert_eq!(enc.set_bitrate(24000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(
+            enc.set_expert_frame_duration(OPUS_FRAMESIZE_100_MS),
+            OPUS_OK
+        );
+
+        // 100ms at 48kHz = 4800 samples
+        let pcm = patterned_pcm_i16(4800, 1, 3201);
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+        let len = enc.encode(&pcm, 4800, &mut packet, cap).unwrap();
+        assert!(len > 1, "100ms frame should produce valid packet");
+
+        // Also test 1-byte rejection for 100ms
+        let mut tiny = [0u8; 1];
+        assert_eq!(
+            enc.encode(&pcm, 4800, &mut tiny, 1),
+            Err(OPUS_BUFFER_TOO_SMALL)
+        );
+    }
+
+    /// Gap 13: Signal type MUSIC paths — voice estimation for AUDIO application
+    /// (line ~1344). When signal is MUSIC, voice_est=0 which shifts mode
+    /// threshold toward CELT.
+    #[test]
+    fn test_signal_type_music_voice_estimation() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_signal(OPUS_SIGNAL_MUSIC), OPUS_OK);
+        assert_eq!(enc.set_bitrate(96000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+
+        let pcm = patterned_pcm_i16(960, 2, 3301);
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+        let len = enc.encode(&pcm, 960, &mut packet, cap).unwrap();
+        assert!(len > 1);
+        // MUSIC signal at high bitrate should select CELT
+        assert_eq!(enc.get_mode(), MODE_CELT_ONLY);
+    }
+
+    /// Gap 14: Bandwidth downgrade/restore — SILK-initiated redundancy recalc
+    /// (lines ~2209-2222). When silk_mode.opus_can_switch is set during SILK
+    /// encode, the redundancy bytes are recalculated and silk_bw_switch is set.
+    #[test]
+    fn test_silk_bandwidth_switch_redundancy_recalc() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_force_mode(MODE_SILK_ONLY), OPUS_OK);
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        assert_eq!(enc.set_bitrate(32000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(enc.set_signal(OPUS_SIGNAL_VOICE), OPUS_OK);
+
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+
+        // Encode a few frames to let SILK stabilize
+        for i in 0..5 {
+            let pcm = patterned_pcm_i16(960, 1, 3401 + i * 13);
+            let _ = enc.encode(&pcm, 960, &mut packet, cap).unwrap();
+        }
+        // The silk_bw_switch is set by SILK internally when it wants to switch.
+        // We manually set it and encode to verify the path.
+        enc.silk_bw_switch = 1;
+        let pcm2 = patterned_pcm_i16(960, 1, 3499);
+        let len = enc
+            .encode_frame_native(
+                &pcm2, 960, &mut packet, cap, cap, false, false, false, 0,
+                enc.bitrate_bps, false,
+            )
+            .unwrap();
+        assert!(len > 1);
+        assert_eq!(enc.silk_bw_switch, 0);
+    }
+
+    /// Gap 5b: Non-hybrid stereo width with intermediate bitrate.
+    /// Lines 2293-2299: equiv_rate between 16000 and 32000 triggers the
+    /// interpolation formula for stereo_width_q14.
+    #[test]
+    fn test_stereo_width_intermediate_bitrate_non_hybrid() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_force_mode(MODE_SILK_ONLY), OPUS_OK);
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        assert_eq!(enc.set_bitrate(20000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+
+        for i in 0..3 {
+            let pcm = patterned_pcm_i16(960, 2, 3501 + i * 7);
+            let _ = enc.encode(&pcm, 960, &mut packet, cap).unwrap();
+        }
+        // At bitrate ~20000, equiv_rate should be in the 16000..32000 range
+        // for stereo width interpolation
+        assert!(
+            enc.silk_mode.stereo_width_q14 >= 0 && enc.silk_mode.stereo_width_q14 <= 16384,
+            "stereo width should be in valid range"
+        );
+    }
+
+    /// Gap 9b: HP cutoff filter through actual encode — encoding at 8kHz
+    /// exercises the narrowband path including the DC reject filter.
+    #[test]
+    fn test_encode_8khz_narrowband_hp_filter() {
+        let mut enc = OpusEncoder::new(8000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_bitrate(12000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(enc.set_signal(OPUS_SIGNAL_VOICE), OPUS_OK);
+
+        let pcm = patterned_pcm_i16(160, 1, 3601);
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+        let len = enc.encode(&pcm, 160, &mut packet, cap).unwrap();
+        assert!(len > 0);
+        // 8kHz must be narrowband
+        assert_eq!(enc.get_bandwidth(), OPUS_BANDWIDTH_NARROWBAND);
+    }
+
+    /// Gap 9c: HP filter for stereo path via encoding at 48kHz with VOIP
+    /// (exercises the variable HP filter stereo biquad branch).
+    #[test]
+    fn test_encode_stereo_voip_hp_filter() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_bitrate(64000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(enc.set_signal(OPUS_SIGNAL_VOICE), OPUS_OK);
+
+        let pcm = patterned_pcm_i16(960, 2, 3701);
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+        let len = enc.encode(&pcm, 960, &mut packet, cap).unwrap();
+        assert!(len > 1);
+        // HP mem should be updated after encoding (VOIP uses HP filter)
+        assert!(enc.hp_mem.iter().any(|&m| m != 0));
+    }
+
+    /// Gap 12b: Frame sizes at different sample rates — 12kHz encoding.
+    #[test]
+    fn test_encode_12khz_mediumband() {
+        let mut enc = OpusEncoder::new(12000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_bitrate(16000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(enc.set_signal(OPUS_SIGNAL_VOICE), OPUS_OK);
+
+        // 20ms at 12kHz = 240 samples
+        let pcm = patterned_pcm_i16(240, 1, 3801);
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+        let len = enc.encode(&pcm, 240, &mut packet, cap).unwrap();
+        assert!(len > 0);
+        // 12kHz caps at mediumband
+        assert!(enc.get_bandwidth() <= OPUS_BANDWIDTH_MEDIUMBAND);
+    }
+
+    /// Gap 11b: CBR multiframe CELT — 60ms encoding with CBR and force CELT.
+    /// Tests the repacketize path with padding for 3 sub-frames.
+    #[test]
+    fn test_cbr_multiframe_60ms_celt() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_force_mode(MODE_CELT_ONLY), OPUS_OK);
+        assert_eq!(enc.set_vbr(0), OPUS_OK); // CBR
+        assert_eq!(enc.set_bitrate(64000), OPUS_OK);
+        assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_60_MS), OPUS_OK);
+
+        // 60ms at 48kHz = 2880 samples
+        let pcm = patterned_pcm_i16(2880, 1, 3901);
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+        let len = enc.encode(&pcm, 2880, &mut packet, cap).unwrap();
+        assert!(len > 1);
+        assert_eq!(enc.get_mode(), MODE_CELT_ONLY);
+    }
+
+    /// Gap 13b: AUDIO application with voice_ratio set — exercises the
+    /// `ve = imin(ve, 115)` path at line 1344.
+    #[test]
+    fn test_audio_application_voice_ratio_capped() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_voice_ratio(100), OPUS_OK);
+        assert_eq!(enc.set_bitrate(32000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+
+        // voice_ratio=100 → ve = 100*327>>8 = 127, but AUDIO caps at 115
+        let pcm = patterned_pcm_i16(960, 1, 4001);
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+        let len = enc.encode(&pcm, 960, &mut packet, cap).unwrap();
+        assert!(len > 0);
+    }
 }

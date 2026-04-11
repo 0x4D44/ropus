@@ -9785,4 +9785,1205 @@ mod tests {
 
         unsafe { opus_encoder_destroy(c_enc) };
     }
+
+    // =========================================================================
+    // New tests for improved coverage
+    // =========================================================================
+
+    /// Helper: create a fully-initialized encoder at given sample rate with
+    /// the given complexity. Returns (SilkEncoderStateFix, SilkEncControlStruct).
+    fn make_initialized_encoder(
+        fs_khz_target: i32,
+        complexity: i32,
+        packet_ms: i32,
+    ) -> (SilkEncoderStateFix, SilkEncControlStruct) {
+        let mut enc = SilkEncoderStateFix::default();
+        silk_init_encoder(&mut enc);
+
+        let api_rate = fs_khz_target * 1000;
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.api_sample_rate = api_rate;
+        ctrl.max_internal_sample_rate = api_rate;
+        ctrl.min_internal_sample_rate = 8000;
+        ctrl.desired_internal_sample_rate = api_rate;
+        ctrl.payload_size_ms = packet_ms;
+        ctrl.complexity = complexity;
+        ctrl.lbrr_coded = 0;
+        ctrl.packet_loss_percentage = 0;
+        ctrl.n_channels_api = 1;
+        ctrl.n_channels_internal = 1;
+
+        let ret = silk_control_encoder(&mut enc, &mut ctrl, 0, 0, 0);
+        assert_eq!(ret, 0, "silk_control_encoder failed");
+        (enc, ctrl)
+    }
+
+    /// Helper: fill x_buf with deterministic pseudo-random speech-like signal
+    fn fill_x_buf_with_signal(enc: &mut SilkEncoderStateFix) {
+        let mut rng: u64 = 0x1234_5678_9ABC_DEF0;
+        for s in enc.x_buf.iter_mut() {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            *s = ((rng >> 33) as i16).wrapping_mul(3) / 4; // ~75% amplitude
+        }
+    }
+
+    #[test]
+    fn test_setup_complexity_high_tiers_5_6_7_8_10() {
+        // Cover complexity >=5 branches that need warping and interpolated NLSFs
+        for (complexity, expected_delayed, expected_survivors) in
+            [(5, 2, 6), (6, 3, 8), (7, 3, 8), (8, 4, 16), (10, 4, 16)]
+        {
+            let mut state = SilkEncoderState::default();
+            state.fs_khz = 16;
+            state.predict_lpc_order = 16;
+
+            silk_setup_complexity(&mut state, complexity);
+
+            assert_eq!(state.n_states_delayed_decision, expected_delayed);
+            assert_eq!(state.nlsf_msvq_survivors, expected_survivors);
+            assert_eq!(state.use_interpolated_nlsfs, 1);
+            assert!(state.warping_q16 > 0, "warping should be >0 at complexity {complexity}");
+            assert!(
+                state.shaping_lpc_order >= 16,
+                "shaping_lpc_order should be >=16 at complexity {complexity}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_setup_lbrr_fec_enabled_with_various_loss_rates() {
+        // Cover LBRR with FEC enabled and different packet loss percentages
+        for loss_perc in [0, 10, 25, 50, 100] {
+            let mut state = SilkEncoderState::default();
+            state.lbrr_enabled = 1;  // was enabled in previous packet
+            state.packet_loss_perc = loss_perc;
+
+            let ctrl = SilkEncControlStruct {
+                lbrr_coded: 1,
+                ..SilkEncControlStruct::default()
+            };
+
+            let ret = silk_setup_lbrr(&mut state, &ctrl);
+            assert_eq!(ret, SILK_NO_ERROR);
+            assert_eq!(state.lbrr_enabled, 1);
+            // gain_increases should be in [3..7] range
+            assert!(
+                state.lbrr_gain_increases >= 3 && state.lbrr_gain_increases <= 7,
+                "loss={loss_perc}, gain_increases={}",
+                state.lbrr_gain_increases
+            );
+        }
+    }
+
+    #[test]
+    fn test_setup_lbrr_first_enable_always_7() {
+        // When LBRR was not enabled in previous packet, gain_increases = 7
+        let mut state = SilkEncoderState::default();
+        state.lbrr_enabled = 0;
+        let ctrl = SilkEncControlStruct {
+            lbrr_coded: 1,
+            ..SilkEncControlStruct::default()
+        };
+        silk_setup_lbrr(&mut state, &ctrl);
+        assert_eq!(state.lbrr_gain_increases, 7);
+    }
+
+    #[test]
+    fn test_setup_fs_all_sample_rates_and_packet_sizes() {
+        // Cover various (fs_khz, packet_size_ms) combinations
+        for &fs_khz in &[8, 12, 16] {
+            for &pkt_ms in &[10, 20, 40, 60] {
+                let mut enc = SilkEncoderStateFix::default();
+                silk_init_encoder(&mut enc);
+                enc.s_cmn.fs_khz = 0; // force fresh init
+
+                let ret = silk_setup_fs(&mut enc, fs_khz, pkt_ms);
+                assert_eq!(ret, SILK_NO_ERROR, "fs={fs_khz}kHz pkt={pkt_ms}ms");
+
+                if pkt_ms <= 10 {
+                    assert_eq!(enc.s_cmn.nb_subfr, 2);
+                    assert_eq!(enc.s_cmn.frame_length, pkt_ms * fs_khz);
+                } else {
+                    assert_eq!(enc.s_cmn.nb_subfr, MAX_NB_SUBFR as i32);
+                    assert_eq!(enc.s_cmn.frame_length, 20 * fs_khz);
+                }
+
+                // Check LPC order setting
+                if fs_khz == 16 {
+                    assert_eq!(enc.s_cmn.predict_lpc_order, MAX_LPC_ORDER as i32);
+                } else {
+                    assert_eq!(enc.s_cmn.predict_lpc_order, MIN_LPC_ORDER as i32);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_control_audio_bandwidth_switch_down_with_opus_can_switch() {
+        // Cover the opus_can_switch downward branch: orig_khz=16 → 12
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.opus_can_switch = 1;
+
+        let mut state = SilkEncoderState::default();
+        state.fs_khz = 16;
+        state.api_fs_hz = 48_000;
+        state.desired_internal_fs_hz = 8_000;
+        state.max_internal_fs_hz = 16_000;
+        state.min_internal_fs_hz = 8_000;
+        state.allow_bandwidth_switch = 1;
+        state.s_lp.mode = 0;
+
+        let result = silk_control_audio_bandwidth(&mut state, &mut ctrl);
+        assert_eq!(result, 12, "should switch 16 → 12 kHz");
+        assert_eq!(state.s_lp.mode, 0);
+    }
+
+    #[test]
+    fn test_control_audio_bandwidth_switch_down_transition_pending() {
+        // Cover the s_lp.mode = -2 (transition pending) branch
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.opus_can_switch = 0;
+        ctrl.payload_size_ms = 20;
+        ctrl.max_bits = 1000;
+
+        let mut state = SilkEncoderState::default();
+        state.fs_khz = 16;
+        state.api_fs_hz = 48_000;
+        state.desired_internal_fs_hz = 8_000;
+        state.max_internal_fs_hz = 16_000;
+        state.min_internal_fs_hz = 8_000;
+        state.allow_bandwidth_switch = 1;
+        state.s_lp.mode = 0;
+        state.s_lp.transition_frame_no = 5; // > 0, triggers mode = -2
+
+        let result = silk_control_audio_bandwidth(&mut state, &mut ctrl);
+        assert_eq!(result, 16, "should not actually switch yet");
+        assert_eq!(state.s_lp.mode, -2);
+    }
+
+    #[test]
+    fn test_control_audio_bandwidth_clamped_by_min_max() {
+        // Cover the branch where fs_hz > max_internal or < min_internal
+        let mut ctrl = SilkEncControlStruct::default();
+        let mut state = SilkEncoderState::default();
+        state.fs_khz = 16;
+        state.api_fs_hz = 48_000;
+        state.desired_internal_fs_hz = 16_000;
+        state.max_internal_fs_hz = 12_000; // max < current → clamp
+        state.min_internal_fs_hz = 8_000;
+
+        let result = silk_control_audio_bandwidth(&mut state, &mut ctrl);
+        assert_eq!(result, 12, "should clamp to max_internal 12kHz");
+    }
+
+    #[test]
+    fn test_stereo_find_predictor_with_correlated_signals() {
+        let frame_len = 160;
+        let mid: Vec<i16> = (0..frame_len).map(|i| ((i as f32 * 0.1).sin() * 10000.0) as i16).collect();
+        let side: Vec<i16> = mid.iter().map(|&s| s / 3).collect();
+
+        let mut ratio_q14 = 0i32;
+        let mut mid_res_amp = [100i32, 50];
+
+        let pred = silk_stereo_find_predictor(
+            &mut ratio_q14,
+            &mid,
+            &side,
+            &mut mid_res_amp,
+            frame_len,
+            655,
+        );
+
+        // With side = mid/3, predictor should be roughly 1/3 (Q13 ~2730)
+        assert!(pred.abs() > 0, "predictor should be nonzero");
+        assert!(ratio_q14 >= 0 && ratio_q14 <= 32767, "ratio out of range");
+        assert!(mid_res_amp[0] > 0, "mid norm should be positive");
+    }
+
+    #[test]
+    fn test_stereo_lr_to_ms_basic_conversion() {
+        let frame_len = 160usize;
+        let mut state = StereoEncState::default();
+        state.mid_side_amp_q0 = [100, 100, 100, 100];
+        state.smth_width_q14 = 16384; // 1.0 in Q14
+        state.width_prev_q14 = 16384;
+
+        let mut x1: Vec<i16> = (0..frame_len).map(|i| (i as i16 * 100) % 5000).collect();
+        let mut x2: Vec<i16> = (0..frame_len).map(|i| (i as i16 * 80) % 4000).collect();
+        let orig_x1 = x1.clone();
+        let orig_x2 = x2.clone();
+
+        let mut pred_ix = [[0i8; 3]; 2];
+        let mut mid_only_flag = 0i8;
+        let mut mid_side_rates = [0i32; 2];
+
+        silk_stereo_lr_to_ms(
+            &mut state,
+            &mut x1,
+            &mut x2,
+            &mut pred_ix,
+            &mut mid_only_flag,
+            &mut mid_side_rates,
+            20000,
+            128,
+            false,
+            16,
+            frame_len,
+        );
+
+        // x1 should now be mid, x2 should now be side
+        assert_ne!(x1, orig_x1, "x1 should be modified to mid");
+        assert_ne!(x2, orig_x2, "x2 should be modified to side");
+        assert_eq!(mid_only_flag, 0, "should not be mid-only");
+        assert!(mid_side_rates[0] > 0, "mid rate should be positive");
+        assert!(mid_side_rates[1] > 0, "side rate should be positive");
+    }
+
+    #[test]
+    fn test_stereo_lr_to_ms_to_mono_transition() {
+        let frame_len = 160usize;
+        let mut state = StereoEncState::default();
+        state.mid_side_amp_q0 = [100, 100, 100, 100];
+        state.smth_width_q14 = 16384;
+        state.width_prev_q14 = 16384;
+
+        let mut x1: Vec<i16> = vec![1000; frame_len];
+        let mut x2: Vec<i16> = vec![1000; frame_len]; // identical channels = no side
+
+        let mut pred_ix = [[0i8; 3]; 2];
+        let mut mid_only_flag = 0i8;
+        let mut mid_side_rates = [0i32; 2];
+
+        silk_stereo_lr_to_ms(
+            &mut state,
+            &mut x1,
+            &mut x2,
+            &mut pred_ix,
+            &mut mid_only_flag,
+            &mut mid_side_rates,
+            20000,
+            128,
+            true, // force to_mono
+            16,
+            frame_len,
+        );
+
+        // When to_mono=true, width should be 0
+        assert_eq!(state.width_prev_q14, 0, "width should be 0 for mono transition");
+    }
+
+    #[test]
+    fn test_stereo_lr_to_ms_mid_only_flag_branches() {
+        let frame_len = 160usize;
+        let mut state = StereoEncState::default();
+        state.mid_side_amp_q0 = [100, 1, 100, 1]; // very low side energy
+        state.smth_width_q14 = 100; // small width
+        state.width_prev_q14 = 0; // was mono
+
+        let mut x1: Vec<i16> = (0..frame_len).map(|i| ((i as f32 * 0.3).sin() * 8000.0) as i16).collect();
+        let mut x2 = x1.clone(); // identical = no side info
+
+        let mut pred_ix = [[0i8; 3]; 2];
+        let mut mid_only_flag = 0i8;
+        let mut mid_side_rates = [0i32; 2];
+
+        // Very low bitrate should trigger Branch B (was mono, stay mono)
+        silk_stereo_lr_to_ms(
+            &mut state,
+            &mut x1,
+            &mut x2,
+            &mut pred_ix,
+            &mut mid_only_flag,
+            &mut mid_side_rates,
+            2000, // very low rate
+            128,
+            false,
+            16,
+            frame_len,
+        );
+
+        // Either mid_only_flag=1 (Branch B) or width_prev_q14=0 (stayed mono)
+        // The key is that we exercised the decision tree
+        assert!(mid_only_flag == 1 || state.width_prev_q14 == 0);
+    }
+
+    #[test]
+    fn test_stereo_lr_to_ms_10ms_frame() {
+        // Test the is_10ms_frame path (smooth_coef_q16 = 328)
+        let frame_len = 160usize;
+        let fs_khz = 16;
+        let frame_10ms = 10 * fs_khz as usize; // 160
+
+        let mut state = StereoEncState::default();
+        state.mid_side_amp_q0 = [100, 100, 100, 100];
+        state.smth_width_q14 = 16384;
+        state.width_prev_q14 = 16384;
+
+        let mut x1: Vec<i16> = (0..frame_10ms).map(|i| (i as i16 * 50) % 3000).collect();
+        let mut x2: Vec<i16> = (0..frame_10ms).map(|i| (i as i16 * 30) % 2000).collect();
+
+        let mut pred_ix = [[0i8; 3]; 2];
+        let mut mid_only_flag = 0i8;
+        let mut mid_side_rates = [0i32; 2];
+
+        silk_stereo_lr_to_ms(
+            &mut state,
+            &mut x1,
+            &mut x2,
+            &mut pred_ix,
+            &mut mid_only_flag,
+            &mut mid_side_rates,
+            20000,
+            200,
+            false,
+            fs_khz,
+            frame_10ms,
+        );
+
+        assert!(mid_side_rates[0] > 0);
+    }
+
+    #[test]
+    fn test_nlsf_encode_basic() {
+        let mut nlsf_q15: [i16; MAX_LPC_ORDER] = [
+            3277, 6554, 9830, 13107, 16384, 19660, 22937, 26214, 29491, 32000,
+            0, 0, 0, 0, 0, 0,
+        ];
+        let mut nlsf_indices = [0i8; MAX_LPC_ORDER + 1];
+        let mut w_q2 = [0i16; MAX_LPC_ORDER];
+        silk_nlsf_vq_weights_laroia(&mut w_q2, &nlsf_q15, 10);
+
+        let rd = silk_nlsf_encode(
+            &mut nlsf_indices,
+            &mut nlsf_q15,
+            &SILK_NLSF_CB_NB_MB,
+            &w_q2,
+            3146, // nlsf_mu_q20
+            4,    // n_survivors
+            TYPE_UNVOICED,
+        );
+
+        assert!(rd > 0, "rate-distortion should be positive");
+        // NLSFs should still be valid (monotonically increasing)
+        assert!(nlsf_q15[..10].windows(2).all(|w| w[0] <= w[1]));
+    }
+
+    #[test]
+    fn test_nlsf_encode_wideband() {
+        let mut nlsf_q15: [i16; MAX_LPC_ORDER] = [
+            2048, 4096, 6144, 8192, 10240, 12288, 14336, 16384,
+            18432, 20480, 22528, 24576, 26624, 28672, 30720, 32000,
+        ];
+        let mut nlsf_indices = [0i8; MAX_LPC_ORDER + 1];
+        let mut w_q2 = [0i16; MAX_LPC_ORDER];
+        silk_nlsf_vq_weights_laroia(&mut w_q2, &nlsf_q15, 16);
+
+        let rd = silk_nlsf_encode(
+            &mut nlsf_indices,
+            &mut nlsf_q15,
+            &SILK_NLSF_CB_WB,
+            &w_q2,
+            3146,
+            8, // more survivors
+            TYPE_VOICED,
+        );
+
+        assert!(rd > 0);
+        assert!(nlsf_q15[..16].windows(2).all(|w| w[0] <= w[1]));
+    }
+
+    #[test]
+    fn test_quant_ltp_gains_basic() {
+        let nb_subfr = 4;
+        let subfr_len = 40;
+        let mut b_q14 = [0i16; LTP_ORDER * MAX_NB_SUBFR];
+        let mut cbk_index = [0i8; MAX_NB_SUBFR];
+        let mut per_index = 0i8;
+        let mut sum_log_gain_q7 = 0i32;
+        let mut pred_gain_db_q7 = 0i32;
+
+        // Simple correlation matrix and vector (diagonal-ish)
+        let mut xx_q17 = vec![0i32; nb_subfr * LTP_ORDER * LTP_ORDER];
+        let mut xx_q17_vec = vec![0i32; nb_subfr * LTP_ORDER];
+        for j in 0..nb_subfr {
+            let base = j * LTP_ORDER * LTP_ORDER;
+            for k in 0..LTP_ORDER {
+                xx_q17[base + k * LTP_ORDER + k] = 1 << 17; // diagonal
+            }
+            // cross-correlation: center tap
+            xx_q17_vec[j * LTP_ORDER + 2] = 1 << 16;
+        }
+
+        silk_quant_ltp_gains(
+            &mut b_q14,
+            &mut cbk_index,
+            &mut per_index,
+            &mut sum_log_gain_q7,
+            &mut pred_gain_db_q7,
+            &xx_q17,
+            &xx_q17_vec,
+            subfr_len,
+            nb_subfr,
+        );
+
+        assert!(per_index >= 0 && per_index < NB_LTP_CBKS as i8);
+        // At least some LTP coefficients should be nonzero
+        assert!(b_q14.iter().any(|&b| b != 0), "LTP coefficients all zero");
+    }
+
+    #[test]
+    fn test_encode_indices_voiced_independent() {
+        let (mut enc, _ctrl) = make_initialized_encoder(16, 5, 20);
+        // Manually set up indices for voiced frame
+        enc.s_cmn.indices.signal_type = TYPE_VOICED as i8;
+        enc.s_cmn.indices.quant_offset_type = 1;
+        enc.s_cmn.indices.gains_indices = [20, 5, 3, 7];
+        enc.s_cmn.indices.nlsf_indices = [3, 0, 1, -1, 0, 2, 0, -1, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+        enc.s_cmn.indices.nlsf_interp_coef_q2 = 2;
+        enc.s_cmn.indices.lag_index = 50;
+        enc.s_cmn.indices.contour_index = 2;
+        enc.s_cmn.indices.per_index = 1;
+        enc.s_cmn.indices.ltp_index = [3, 5, 2, 1];
+        enc.s_cmn.indices.ltp_scale_index = 1;
+        enc.s_cmn.indices.seed = 2;
+
+        let mut payload = [0u8; 256];
+        let mut range_enc = RangeEncoder::new(&mut payload);
+
+        silk_encode_indices(
+            &enc.s_cmn,
+            &mut range_enc,
+            0,
+            false,
+            CODE_INDEPENDENTLY,
+        );
+
+        let bytes_written = range_enc.tell();
+        assert!(bytes_written > 0, "should have encoded some bits");
+    }
+
+    #[test]
+    fn test_encode_indices_unvoiced_conditional() {
+        let (mut enc, _ctrl) = make_initialized_encoder(8, 0, 20);
+        enc.s_cmn.indices.signal_type = TYPE_UNVOICED as i8;
+        enc.s_cmn.indices.quant_offset_type = 0;
+        enc.s_cmn.indices.gains_indices = [15, 3, 2, 4];
+        enc.s_cmn.indices.seed = 1;
+        enc.s_cmn.ec_prev_signal_type = TYPE_UNVOICED;
+        enc.s_cmn.ec_prev_lag_index = 0;
+
+        let mut payload = [0u8; 256];
+        let mut range_enc = RangeEncoder::new(&mut payload);
+
+        silk_encode_indices(
+            &enc.s_cmn,
+            &mut range_enc,
+            0,
+            false,
+            CODE_CONDITIONALLY,
+        );
+
+        let bytes_written = range_enc.tell();
+        assert!(bytes_written > 0);
+    }
+
+    #[test]
+    fn test_encode_indices_lbrr_mode() {
+        let (mut enc, _ctrl) = make_initialized_encoder(16, 5, 20);
+        enc.s_cmn.indices_lbrr[0].signal_type = TYPE_VOICED as i8;
+        enc.s_cmn.indices_lbrr[0].quant_offset_type = 1;
+        enc.s_cmn.indices_lbrr[0].gains_indices = [10, 3, 2, 5];
+        enc.s_cmn.indices_lbrr[0].lag_index = 40;
+        enc.s_cmn.indices_lbrr[0].contour_index = 1;
+        enc.s_cmn.indices_lbrr[0].per_index = 0;
+        enc.s_cmn.indices_lbrr[0].seed = 0;
+
+        let mut payload = [0u8; 256];
+        let mut range_enc = RangeEncoder::new(&mut payload);
+
+        silk_encode_indices(
+            &enc.s_cmn,
+            &mut range_enc,
+            0,
+            true, // encode_lbrr = true
+            CODE_INDEPENDENTLY,
+        );
+
+        assert!(range_enc.tell() > 0);
+    }
+
+    #[test]
+    fn test_encode_pulses_basic() {
+        let frame_length = 160;
+        let mut pulses = [0i8; 160];
+        // Create some pulses
+        for i in 0..frame_length {
+            pulses[i] = if i % 7 == 0 {
+                2
+            } else if i % 11 == 0 {
+                -1
+            } else {
+                0
+            };
+        }
+
+        let mut payload = [0u8; 512];
+        let mut range_enc = RangeEncoder::new(&mut payload);
+
+        silk_encode_pulses(
+            &mut range_enc,
+            TYPE_UNVOICED,
+            1,
+            &pulses,
+            frame_length,
+        );
+
+        assert!(range_enc.tell() > 0, "should encode pulse data");
+    }
+
+    #[test]
+    fn test_encode_pulses_large_values_trigger_scale_down() {
+        // Use large pulse values to trigger the nrshifts scale-down path
+        let frame_length = 160;
+        let mut pulses = [0i8; 160];
+        for i in 0..frame_length {
+            pulses[i] = if i % 3 == 0 { 9 } else if i % 5 == 0 { -7 } else { 4 };
+        }
+
+        let mut payload = [0u8; 1024];
+        let mut range_enc = RangeEncoder::new(&mut payload);
+
+        silk_encode_pulses(
+            &mut range_enc,
+            TYPE_VOICED,
+            0,
+            &pulses,
+            frame_length,
+        );
+
+        assert!(range_enc.tell() > 0);
+    }
+
+    #[test]
+    fn test_encode_pulses_120_frame_length() {
+        // frame_length=120 triggers the extra shell block path (12kHz/10ms)
+        let frame_length = 120;
+        let mut pulses = [0i8; 120];
+        for i in 0..frame_length {
+            pulses[i] = if i % 5 == 0 { 1 } else { 0 };
+        }
+
+        let mut payload = [0u8; 512];
+        let mut range_enc = RangeEncoder::new(&mut payload);
+
+        silk_encode_pulses(
+            &mut range_enc,
+            TYPE_UNVOICED,
+            0,
+            &pulses,
+            frame_length,
+        );
+
+        assert!(range_enc.tell() > 0);
+    }
+
+    #[test]
+    fn test_nsq_del_dec_unvoiced() {
+        // Test the delayed-decision NSQ path with unvoiced signal.
+        // For unvoiced, lag comes from nsq.lag_prev. We need s_ltp_shp_buf_idx >= lag
+        // to avoid underflow in the shp_lag_ptr computation.
+        let mut ps_enc = SilkEncoderState::default();
+        ps_enc.nb_subfr = 2;
+        ps_enc.subfr_length = 8;
+        ps_enc.frame_length = 16;
+        ps_enc.ltp_mem_length = 40;
+        ps_enc.predict_lpc_order = 4;
+        ps_enc.shaping_lpc_order = 4;
+        ps_enc.n_states_delayed_decision = 2;
+        ps_enc.warping_q16 = 0;
+
+        let mut nsq = NsqState::default();
+        for i in 0..60 {
+            nsq.xq[i] = (i as i16).wrapping_sub(20);
+        }
+        nsq.lag_prev = 10; // reasonable lag within buffer bounds
+        nsq.prev_gain_q16 = 65_536;
+
+        let mut indices = SideInfoIndices::default();
+        indices.signal_type = TYPE_NO_VOICE_ACTIVITY as i8;
+        indices.nlsf_interp_coef_q2 = 4; // no interpolation
+        indices.seed = 3;
+
+        let x16 = [120i16, -180, 240, -300, 360, -420, 480, -540,
+                    100, -150, 200, -250, 300, -350, 400, -450];
+        let mut pulses = [0i8; 16];
+        let mut pred_coef_q12 = [[0i16; MAX_LPC_ORDER]; 2];
+        pred_coef_q12[0][..4].copy_from_slice(&[512, -256, 128, -64]);
+        pred_coef_q12[1][..4].copy_from_slice(&[384, -192, 96, -48]);
+        let ltp_coef_q14 = [0i16; LTP_ORDER * MAX_NB_SUBFR];
+        let ar_q13 = [0i16; MAX_NB_SUBFR * MAX_SHAPE_LPC_ORDER];
+        let harm_shape_gain_q14 = [0; 4];
+        let tilt_q14 = [128, 64, 0, 0];
+        let lf_shp_q14 = [256, 128, 0, 0];
+        let gains_q16 = [65_536, 49_152, 65_536, 65_536];
+        let pitch_l = [10, 10, 10, 10];
+
+        silk_nsq_del_dec(
+            &ps_enc,
+            &mut nsq,
+            &mut indices,
+            &x16,
+            &mut pulses,
+            &pred_coef_q12,
+            &ltp_coef_q14,
+            &ar_q13,
+            &harm_shape_gain_q14,
+            &tilt_q14,
+            &lf_shp_q14,
+            &gains_q16,
+            &pitch_l,
+            1_536,
+            16_384,
+        );
+
+        assert!(pulses.iter().any(|&p| p != 0), "del_dec should produce pulses");
+    }
+
+    #[test]
+    fn test_nsq_del_dec_voiced_with_warping() {
+        // Test the delayed-decision NSQ path with voiced signal and warping
+        let mut ps_enc = SilkEncoderState::default();
+        ps_enc.nb_subfr = 4;
+        ps_enc.subfr_length = 8;
+        ps_enc.frame_length = 32;
+        ps_enc.ltp_mem_length = 32;
+        ps_enc.predict_lpc_order = 4;
+        ps_enc.shaping_lpc_order = 4;
+        ps_enc.n_states_delayed_decision = 2;
+        ps_enc.warping_q16 = 983; // 16kHz warping
+
+        let mut nsq = NsqState::default();
+        for i in 0..64 {
+            nsq.xq[i] = (i as i16).wrapping_sub(30);
+        }
+        nsq.lag_prev = 8;
+        nsq.prev_gain_q16 = 65_536;
+
+        let mut indices = SideInfoIndices::default();
+        indices.signal_type = TYPE_VOICED as i8;
+        indices.nlsf_interp_coef_q2 = 4;
+        indices.seed = 1;
+
+        let x16: Vec<i16> = (0..32).map(|i| ((i as f32 * 0.5).sin() * 1000.0) as i16).collect();
+        let mut pulses = [0i8; 32];
+        let mut pred_coef_q12 = [[0i16; MAX_LPC_ORDER]; 2];
+        pred_coef_q12[0][..4].copy_from_slice(&[2048, -1024, 512, -256]);
+        pred_coef_q12[1][..4].copy_from_slice(&[2048, -1024, 512, -256]);
+        let mut ltp_coef_q14 = [0i16; LTP_ORDER * MAX_NB_SUBFR];
+        // Center tap for LTP
+        for k in 0..4 {
+            ltp_coef_q14[k * LTP_ORDER + 2] = 8192;
+        }
+        let ar_q13 = [100i16; MAX_NB_SUBFR * MAX_SHAPE_LPC_ORDER];
+        let harm_shape_gain_q14 = [512; 4];
+        let tilt_q14 = [128; 4];
+        let lf_shp_q14 = [256; 4];
+        let gains_q16 = [65_536; 4];
+        let pitch_l = [8; 4];
+
+        silk_nsq_del_dec(
+            &ps_enc,
+            &mut nsq,
+            &mut indices,
+            &x16,
+            &mut pulses,
+            &pred_coef_q12,
+            &ltp_coef_q14,
+            &ar_q13,
+            &harm_shape_gain_q14,
+            &tilt_q14,
+            &lf_shp_q14,
+            &gains_q16,
+            &pitch_l,
+            1_536,
+            16_384,
+        );
+
+        assert!(pulses.iter().any(|&p| p != 0), "voiced del_dec should produce pulses");
+        assert_eq!(nsq.lag_prev, 8);
+    }
+
+    #[test]
+    fn test_encode_do_vad_fix_speech_active() {
+        let mut enc = SilkEncoderStateFix::default();
+        silk_init_encoder(&mut enc);
+        enc.s_cmn.speech_activity_q8 = 200; // above threshold
+
+        silk_encode_do_vad_fix(&mut enc, 1);
+
+        assert_eq!(enc.s_cmn.indices.signal_type, TYPE_UNVOICED as i8);
+        assert_eq!(enc.s_cmn.no_speech_counter, 0);
+        assert_eq!(enc.s_cmn.vad_flags[0], 1);
+    }
+
+    #[test]
+    fn test_encode_do_vad_fix_speech_inactive_dtx_branches() {
+        // Test no-speech counter progression toward DTX
+        let mut enc = SilkEncoderStateFix::default();
+        silk_init_encoder(&mut enc);
+        enc.s_cmn.speech_activity_q8 = 5; // below threshold (13)
+
+        // activity=1 means Opus VAD says active, but SILK says inactive
+        silk_encode_do_vad_fix(&mut enc, 1);
+        assert_eq!(enc.s_cmn.indices.signal_type, TYPE_NO_VOICE_ACTIVITY as i8);
+        assert_eq!(enc.s_cmn.no_speech_counter, 1);
+        assert_eq!(enc.s_cmn.in_dtx, 0);
+
+        // Simulate crossing DTX threshold
+        enc.s_cmn.no_speech_counter = NB_SPEECH_FRAMES_BEFORE_DTX + 1;
+        enc.s_cmn.speech_activity_q8 = 5;
+        silk_encode_do_vad_fix(&mut enc, 1);
+        // no_speech_counter should still be > threshold but not reset
+
+        // Simulate exceeding MAX_CONSECUTIVE_DTX
+        enc.s_cmn.no_speech_counter = MAX_CONSECUTIVE_DTX + NB_SPEECH_FRAMES_BEFORE_DTX + 1;
+        enc.s_cmn.speech_activity_q8 = 5;
+        silk_encode_do_vad_fix(&mut enc, 1);
+        assert_eq!(enc.s_cmn.no_speech_counter, NB_SPEECH_FRAMES_BEFORE_DTX);
+        assert_eq!(enc.s_cmn.in_dtx, 0);
+    }
+
+    #[test]
+    fn test_encode_do_vad_fix_opus_vad_overrides() {
+        // Test Opus VAD inactive override: if activity=0 and SILK says active, lower
+        let mut enc = SilkEncoderStateFix::default();
+        silk_init_encoder(&mut enc);
+        enc.s_cmn.speech_activity_q8 = 200; // above threshold
+
+        silk_encode_do_vad_fix(&mut enc, 0); // Opus VAD says inactive
+        // speech_activity_q8 should be lowered below threshold
+        assert!(enc.s_cmn.speech_activity_q8 < 13);
+        assert_eq!(enc.s_cmn.indices.signal_type, TYPE_NO_VOICE_ACTIVITY as i8);
+    }
+
+    #[test]
+    fn test_process_gains_fix_basic() {
+        let (mut enc, _ctrl) = make_initialized_encoder(16, 5, 20);
+        enc.s_cmn.snr_db_q7 = 3000;
+        enc.s_cmn.indices.signal_type = TYPE_UNVOICED as i8;
+        enc.s_cmn.indices.quant_offset_type = 1;
+        enc.s_cmn.speech_activity_q8 = 128;
+        enc.s_cmn.n_states_delayed_decision = 2;
+
+        let mut ctrl = SilkEncoderControl::default();
+        ctrl.gains_q16 = [65536, 50000, 70000, 65536];
+        ctrl.res_nrg = [1000, 2000, 1500, 1800];
+        ctrl.res_nrg_q = [0, 0, 0, 0];
+        ctrl.input_quality_q14 = 8192;
+        ctrl.coding_quality_q14 = 8192;
+
+        silk_process_gains_fix(&mut enc, &mut ctrl, CODE_INDEPENDENTLY);
+
+        // Gains should be quantized and lambda should be computed
+        assert!(ctrl.lambda_q10 > 0);
+        assert!(ctrl.gains_q16.iter().all(|&g| g > 0));
+    }
+
+    #[test]
+    fn test_process_gains_fix_voiced_with_ltp_reduction() {
+        let (mut enc, _ctrl) = make_initialized_encoder(16, 5, 20);
+        enc.s_cmn.snr_db_q7 = 3000;
+        enc.s_cmn.indices.signal_type = TYPE_VOICED as i8;
+        enc.s_cmn.indices.quant_offset_type = 0;
+        enc.s_cmn.input_tilt_q15 = 5000;
+
+        let mut ctrl = SilkEncoderControl::default();
+        ctrl.gains_q16 = [65536; 4];
+        ctrl.res_nrg = [5000; 4];
+        ctrl.res_nrg_q = [0; 4];
+        ctrl.ltp_pred_cod_gain_q7 = 2000; // high LTP prediction gain → gain reduction
+        ctrl.input_quality_q14 = 12000;
+        ctrl.coding_quality_q14 = 12000;
+
+        silk_process_gains_fix(&mut enc, &mut ctrl, CODE_INDEPENDENTLY);
+
+        // Voiced: gain reduction should have been applied
+        assert!(ctrl.gains_q16.iter().all(|&g| g > 0));
+        // quant_offset_type should reflect tilt decision
+        assert!(enc.s_cmn.indices.quant_offset_type == 0 || enc.s_cmn.indices.quant_offset_type == 1);
+    }
+
+    #[test]
+    fn test_find_ltp_basic() {
+        let nb_subfr = 2;
+        let subfr_length = 40;
+        let lag = [10i32, 10];
+        let ltp_mem = 80;
+
+        // Create a signal buffer large enough
+        let total_len = ltp_mem + nb_subfr * subfr_length + LTP_ORDER;
+        let mut r_ptr: Vec<i16> = (0..total_len).map(|i| ((i as f32 * 0.2).sin() * 5000.0) as i16).collect();
+
+        let mut xxltp_q17 = vec![0i32; nb_subfr * LTP_ORDER * LTP_ORDER];
+        let mut xxltp_q17_vec = vec![0i32; nb_subfr * LTP_ORDER];
+
+        silk_find_ltp(
+            &mut xxltp_q17,
+            nb_subfr * LTP_ORDER * LTP_ORDER,
+            &mut xxltp_q17_vec,
+            &r_ptr,
+            ltp_mem,
+            &lag,
+            subfr_length,
+            nb_subfr,
+        );
+
+        // Correlation matrix diagonal should be positive
+        for k in 0..nb_subfr {
+            let base = k * LTP_ORDER * LTP_ORDER;
+            for i in 0..LTP_ORDER {
+                assert!(
+                    xxltp_q17[base + i * LTP_ORDER + i] >= 0,
+                    "diagonal [{k}][{i}] should be non-negative"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_full_encode_frame_fix_exercises_encode_pipeline() {
+        // This test exercises: silk_encode_frame_fix → silk_find_pitch_lags_fix,
+        // silk_noise_shape_analysis_fix, silk_find_pred_coefs_fix (→ silk_find_ltp,
+        // silk_quant_ltp_gains, silk_find_lpc_fix), silk_process_gains_fix,
+        // silk_nsq or silk_nsq_del_dec, silk_encode_indices, silk_encode_pulses
+        let (mut enc, _ctrl) = make_initialized_encoder(16, 2, 20);
+        fill_x_buf_with_signal(&mut enc);
+
+        // Set up target rate / SNR so the encode has meaningful output
+        silk_control_snr(&mut enc.s_cmn, 20000);
+
+        // Run VAD to set up speech activity
+        enc.s_cmn.speech_activity_q8 = 128;
+        enc.s_cmn.indices.signal_type = TYPE_UNVOICED as i8;
+
+        // Fill input_buf with some signal data
+        for i in 0..enc.s_cmn.frame_length as usize {
+            if i + 1 < enc.s_cmn.input_buf.len() {
+                enc.s_cmn.input_buf[i + 1] = enc.x_buf[enc.s_cmn.ltp_mem_length as usize + (enc.s_cmn.la_shape as usize) + i];
+            }
+        }
+
+        let mut payload = [0u8; 1024];
+        let mut range_enc = RangeEncoder::new(&mut payload);
+        let mut n_bytes_out = 0i32;
+
+        let ret = silk_encode_frame_fix(
+            &mut enc,
+            &mut n_bytes_out,
+            &mut range_enc,
+            CODE_INDEPENDENTLY,
+            2000, // max_bits
+            0,    // use_cbr
+        );
+
+        assert_eq!(ret, 0, "silk_encode_frame_fix should succeed");
+        assert!(n_bytes_out > 0, "should produce output bytes: {n_bytes_out}");
+    }
+
+    #[test]
+    fn test_full_encode_frame_fix_complexity_8_del_dec_path() {
+        // Complexity 8 triggers n_states_delayed_decision=4 and warping,
+        // exercising silk_nsq_del_dec
+        let (mut enc, _ctrl) = make_initialized_encoder(16, 8, 20);
+        fill_x_buf_with_signal(&mut enc);
+        silk_control_snr(&mut enc.s_cmn, 20000);
+        enc.s_cmn.speech_activity_q8 = 128;
+        enc.s_cmn.indices.signal_type = TYPE_UNVOICED as i8;
+
+        for i in 0..enc.s_cmn.frame_length as usize {
+            if i + 1 < enc.s_cmn.input_buf.len() {
+                enc.s_cmn.input_buf[i + 1] = enc.x_buf[enc.s_cmn.ltp_mem_length as usize + (enc.s_cmn.la_shape as usize) + i];
+            }
+        }
+
+        let mut payload = [0u8; 1024];
+        let mut range_enc = RangeEncoder::new(&mut payload);
+        let mut n_bytes_out = 0i32;
+
+        let ret = silk_encode_frame_fix(
+            &mut enc,
+            &mut n_bytes_out,
+            &mut range_enc,
+            CODE_INDEPENDENTLY,
+            4000,
+            0,
+        );
+
+        assert_eq!(ret, 0);
+        assert!(n_bytes_out > 0, "complexity-8 encode should produce bytes");
+        assert!(enc.s_cmn.n_states_delayed_decision >= 2,
+            "complexity 8 should use delayed decision");
+    }
+
+    #[test]
+    fn test_full_encode_through_silk_encode_mono_20ms() {
+        // Exercise the full silk_encode path for mono, 20ms, which covers
+        // VAD, control, encode_frame_fix, indices, pulses, etc.
+        let mut enc = SilkEncoder::new();
+        assert_eq!(silk_init_encoder_top(&mut enc, 1), 0);
+
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.n_channels_api = 1;
+        ctrl.n_channels_internal = 1;
+        ctrl.api_sample_rate = 16_000;
+        ctrl.max_internal_sample_rate = 16_000;
+        ctrl.min_internal_sample_rate = 8_000;
+        ctrl.desired_internal_sample_rate = 16_000;
+        ctrl.payload_size_ms = 20;
+        ctrl.bit_rate = 20_000;
+        ctrl.max_bits = 2_000;
+        ctrl.complexity = 5;
+        ctrl.use_in_band_fec = 0;
+        ctrl.lbrr_coded = 0;
+
+        // Generate 20ms of samples at 16kHz = 320 samples
+        let n_samples = 320;
+        let mut samples = vec![0i16; n_samples];
+        let mut rng: u64 = 0xCAFE_BABE;
+        for s in samples.iter_mut() {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            *s = (rng >> 33) as i16;
+        }
+
+        // First: prefill
+        let mut payload = [0u8; 1024];
+        let mut range_enc = RangeEncoder::new(&mut payload);
+        let mut n_bytes_out = 0i32;
+        let ret = silk_encode(
+            &mut enc,
+            &mut ctrl,
+            &samples[..160],
+            160,
+            &mut range_enc,
+            &mut n_bytes_out,
+            1, // prefill
+            0,
+        );
+        assert_eq!(ret, SILK_NO_ERROR, "prefill failed");
+
+        // Now actual encode
+        ctrl.payload_size_ms = 20;
+        ctrl.complexity = 5;
+        let mut payload2 = [0u8; 1024];
+        let mut range_enc2 = RangeEncoder::new(&mut payload2);
+        let mut n_bytes_out2 = 0i32;
+        let ret = silk_encode(
+            &mut enc,
+            &mut ctrl,
+            &samples,
+            n_samples as i32,
+            &mut range_enc2,
+            &mut n_bytes_out2,
+            0, // not prefill
+            1, // activity
+        );
+        assert_eq!(ret, SILK_NO_ERROR, "encode failed");
+        assert!(n_bytes_out2 > 0, "encode should produce output");
+    }
+
+    #[test]
+    fn test_full_encode_stereo_exercises_lr_to_ms() {
+        // Stereo encode exercises silk_stereo_lr_to_ms and stereo encoding paths
+        let mut enc = SilkEncoder::new();
+        assert_eq!(silk_init_encoder_top(&mut enc, 2), 0);
+
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.n_channels_api = 2;
+        ctrl.n_channels_internal = 2;
+        ctrl.api_sample_rate = 16_000;
+        ctrl.max_internal_sample_rate = 16_000;
+        ctrl.min_internal_sample_rate = 8_000;
+        ctrl.desired_internal_sample_rate = 16_000;
+        ctrl.payload_size_ms = 20;
+        ctrl.bit_rate = 40_000;
+        ctrl.max_bits = 4_000;
+        ctrl.complexity = 2;
+        ctrl.lbrr_coded = 0;
+
+        // Stereo samples: 320 per channel, interleaved = 640 total
+        let n_samples_per_ch = 320;
+        let mut samples = vec![0i16; n_samples_per_ch * 2];
+        let mut rng: u64 = 0xDEAD_BEEF;
+        for i in 0..n_samples_per_ch {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let l = (rng >> 33) as i16;
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let r = (rng >> 33) as i16;
+            samples[i * 2] = l;
+            samples[i * 2 + 1] = r;
+        }
+
+        // Prefill (10ms = 160 samples per channel, 320 interleaved)
+        let mut payload = [0u8; 1024];
+        let mut range_enc = RangeEncoder::new(&mut payload);
+        let mut n_bytes_out = 0i32;
+        let ret = silk_encode(
+            &mut enc,
+            &mut ctrl,
+            &samples[..320],
+            320,
+            &mut range_enc,
+            &mut n_bytes_out,
+            1, // prefill
+            0,
+        );
+        assert_eq!(ret, SILK_NO_ERROR, "stereo prefill failed");
+
+        // Actual encode
+        ctrl.payload_size_ms = 20;
+        ctrl.complexity = 2;
+        let mut payload2 = [0u8; 2048];
+        let mut range_enc2 = RangeEncoder::new(&mut payload2);
+        let mut n_bytes_out2 = 0i32;
+        let ret = silk_encode(
+            &mut enc,
+            &mut ctrl,
+            &samples,
+            (n_samples_per_ch * 2) as i32,
+            &mut range_enc2,
+            &mut n_bytes_out2,
+            0,
+            1,
+        );
+        assert_eq!(ret, SILK_NO_ERROR, "stereo encode failed");
+        assert!(n_bytes_out2 > 0, "stereo encode should produce output");
+    }
+
+    #[test]
+    fn test_full_encode_8khz_narrowband() {
+        // Cover 8kHz narrowband path
+        let mut enc = SilkEncoder::new();
+        assert_eq!(silk_init_encoder_top(&mut enc, 1), 0);
+
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.n_channels_api = 1;
+        ctrl.n_channels_internal = 1;
+        ctrl.api_sample_rate = 8_000;
+        ctrl.max_internal_sample_rate = 8_000;
+        ctrl.min_internal_sample_rate = 8_000;
+        ctrl.desired_internal_sample_rate = 8_000;
+        ctrl.payload_size_ms = 20;
+        ctrl.bit_rate = 12_000;
+        ctrl.max_bits = 1_000;
+        ctrl.complexity = 0;
+        ctrl.lbrr_coded = 0;
+
+        let n_samples = 160; // 20ms @ 8kHz
+        let mut samples = vec![0i16; n_samples];
+        let mut rng: u64 = 0xFACE;
+        for s in samples.iter_mut() {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            *s = (rng >> 33) as i16;
+        }
+
+        // Prefill
+        let mut payload = [0u8; 512];
+        let mut range_enc = RangeEncoder::new(&mut payload);
+        let mut n_bytes_out = 0i32;
+        let ret = silk_encode(
+            &mut enc,
+            &mut ctrl,
+            &samples[..80],
+            80,
+            &mut range_enc,
+            &mut n_bytes_out,
+            1,
+            0,
+        );
+        assert_eq!(ret, SILK_NO_ERROR);
+
+        // Encode
+        ctrl.payload_size_ms = 20;
+        ctrl.complexity = 0;
+        let mut payload2 = [0u8; 512];
+        let mut range_enc2 = RangeEncoder::new(&mut payload2);
+        let mut n_bytes_out2 = 0i32;
+        let ret = silk_encode(
+            &mut enc,
+            &mut ctrl,
+            &samples,
+            n_samples as i32,
+            &mut range_enc2,
+            &mut n_bytes_out2,
+            0,
+            1,
+        );
+        assert_eq!(ret, SILK_NO_ERROR);
+        assert!(n_bytes_out2 > 0);
+    }
+
+    #[test]
+    fn test_full_encode_with_fec_enabled() {
+        // Cover LBRR/FEC code paths
+        let mut enc = SilkEncoder::new();
+        assert_eq!(silk_init_encoder_top(&mut enc, 1), 0);
+
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.n_channels_api = 1;
+        ctrl.n_channels_internal = 1;
+        ctrl.api_sample_rate = 16_000;
+        ctrl.max_internal_sample_rate = 16_000;
+        ctrl.min_internal_sample_rate = 8_000;
+        ctrl.desired_internal_sample_rate = 16_000;
+        ctrl.payload_size_ms = 20;
+        ctrl.bit_rate = 25_000;
+        ctrl.max_bits = 2_000;
+        ctrl.complexity = 5;
+        ctrl.use_in_band_fec = 1;
+        ctrl.lbrr_coded = 1;
+        ctrl.packet_loss_percentage = 20;
+
+        let n_samples = 320;
+        let mut samples = vec![0i16; n_samples];
+        let mut rng: u64 = 0xBEEF_CAFE;
+        for s in samples.iter_mut() {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            *s = (rng >> 33) as i16;
+        }
+
+        // Prefill
+        let mut payload = [0u8; 1024];
+        let mut range_enc = RangeEncoder::new(&mut payload);
+        let mut n_bytes_out = 0i32;
+        silk_encode(
+            &mut enc,
+            &mut ctrl,
+            &samples[..160],
+            160,
+            &mut range_enc,
+            &mut n_bytes_out,
+            1,
+            0,
+        );
+
+        // Encode
+        ctrl.payload_size_ms = 20;
+        ctrl.complexity = 5;
+        let mut payload2 = [0u8; 1024];
+        let mut range_enc2 = RangeEncoder::new(&mut payload2);
+        let mut n_bytes_out2 = 0i32;
+        let ret = silk_encode(
+            &mut enc,
+            &mut ctrl,
+            &samples,
+            n_samples as i32,
+            &mut range_enc2,
+            &mut n_bytes_out2,
+            0,
+            1,
+        );
+        assert_eq!(ret, SILK_NO_ERROR);
+        // FEC should have been set up
+        assert_eq!(enc.state_fxx[0].s_cmn.lbrr_enabled, 1);
+    }
 }
