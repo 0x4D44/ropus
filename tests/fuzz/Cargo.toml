@@ -56,3 +56,8 @@ doc = false
 name = "fuzz_roundtrip_safety"
 path = "fuzz_targets/fuzz_roundtrip_safety.rs"
 doc = false
+
+[[bin]]
+name = "fuzz_encode_multiframe"
+path = "fuzz_targets/fuzz_encode_multiframe.rs"
+doc = false

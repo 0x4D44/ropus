@@ -216,6 +216,102 @@ pub fn c_encode(
     }
 }
 
+/// Encode multiple sequential frames using the C reference, keeping encoder state
+/// across frames. Returns a Vec of compressed packets (one per frame) or an error.
+pub fn c_encode_multiframe(
+    pcm_frames: &[&[i16]],
+    frame_size: i32,
+    sample_rate: i32,
+    channels: i32,
+    bitrate: i32,
+    complexity: i32,
+    application: i32,
+) -> Result<Vec<Vec<u8>>, i32> {
+    unsafe {
+        let mut error: c_int = 0;
+        let enc = opus_encoder_create(sample_rate, channels, application, &mut error);
+        if enc.is_null() || error != OPUS_OK {
+            if !enc.is_null() {
+                opus_encoder_destroy(enc);
+            }
+            return Err(error);
+        }
+
+        opus_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, bitrate);
+        opus_encoder_ctl(enc, OPUS_SET_VBR_REQUEST, 0 as c_int);
+        opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY_REQUEST, complexity);
+
+        let max_data_bytes: opus_int32 = 4000;
+        let mut results = Vec::with_capacity(pcm_frames.len());
+
+        for pcm in pcm_frames {
+            let mut out = vec![0u8; max_data_bytes as usize];
+            let ret = opus_encode(
+                enc,
+                pcm.as_ptr(),
+                frame_size,
+                out.as_mut_ptr(),
+                max_data_bytes,
+            );
+
+            if ret < 0 {
+                opus_encoder_destroy(enc);
+                return Err(ret as i32);
+            }
+            out.truncate(ret as usize);
+            results.push(out);
+        }
+
+        opus_encoder_destroy(enc);
+        Ok(results)
+    }
+}
+
+/// Decode multiple sequential packets using the C reference, keeping decoder state
+/// across frames. Returns a Vec of decoded PCM buffers (one per packet) or an error.
+pub fn c_decode_multiframe(
+    packets: &[&[u8]],
+    sample_rate: i32,
+    channels: i32,
+    frame_size: i32,
+) -> Result<Vec<Vec<i16>>, i32> {
+    unsafe {
+        let mut error: c_int = 0;
+        let dec = opus_decoder_create(sample_rate, channels, &mut error);
+        if dec.is_null() || error != OPUS_OK {
+            if !dec.is_null() {
+                opus_decoder_destroy(dec);
+            }
+            return Err(error);
+        }
+
+        let max_pcm = frame_size as usize * channels as usize;
+        let mut results = Vec::with_capacity(packets.len());
+
+        for pkt in packets {
+            let mut pcm = vec![0i16; max_pcm];
+            let ret = opus_decode(
+                dec,
+                pkt.as_ptr(),
+                pkt.len() as opus_int32,
+                pcm.as_mut_ptr(),
+                frame_size,
+                0,
+            );
+
+            if ret < 0 {
+                opus_decoder_destroy(dec);
+                return Err(ret as i32);
+            }
+            pcm.truncate(ret as usize * channels as usize);
+            results.push(pcm);
+        }
+
+        opus_decoder_destroy(dec);
+        Ok(results)
+    }
+}
+
 /// Get bandwidth from first byte of a packet using the C reference.
 pub fn c_packet_get_bandwidth(data: &[u8]) -> i32 {
     if data.is_empty() {

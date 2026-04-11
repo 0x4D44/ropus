@@ -100,6 +100,10 @@ ALL_TARGETS=(
     fuzz_roundtrip
     fuzz_repacketizer
     fuzz_packet_parse
+    fuzz_decode_safety
+    fuzz_encode_safety
+    fuzz_roundtrip_safety
+    fuzz_encode_multiframe
 )
 
 # Defaults

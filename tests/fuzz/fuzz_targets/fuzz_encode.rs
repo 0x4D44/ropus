@@ -1,5 +1,6 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
+use mdopus::opus::decoder::{opus_packet_get_nb_frames, opus_packet_get_nb_samples};
 use mdopus::opus::encoder::{
     OpusEncoder, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
     OPUS_APPLICATION_VOIP,
@@ -86,6 +87,44 @@ fuzz_target!(|data: &[u8]| {
                 "Output byte mismatch at sr={sample_rate}, ch={channels}, \
                  app={application}, br={bitrate}, cx={complexity}, len={rust_len}"
             );
+
+            // --- Semantic invariant: encoded packet is parseable ---
+            let packet = &rust_out[..rust_len];
+            if !packet.is_empty() {
+                let nb_frames = opus_packet_get_nb_frames(packet);
+                assert!(
+                    nb_frames.is_ok() && nb_frames.unwrap() > 0,
+                    "Encoded packet not parseable: len={rust_len}, sr={sample_rate}"
+                );
+                let nb_samples = opus_packet_get_nb_samples(packet, sample_rate);
+                if let Ok(ns) = nb_samples {
+                    assert_eq!(
+                        ns, frame_size,
+                        "Encoded packet nb_samples ({ns}) != frame_size ({frame_size})"
+                    );
+                }
+            }
+
+            // --- Semantic invariant: CBR determinism ---
+            let mut enc2 = match OpusEncoder::new(sample_rate, channels, application) {
+                Ok(e) => e,
+                Err(_) => return,
+            };
+            enc2.set_bitrate(bitrate);
+            enc2.set_vbr(0);
+            enc2.set_complexity(complexity);
+            let mut out2 = vec![0u8; 4000];
+            if let Ok(len2) = enc2.encode(&pcm, frame_size, &mut out2, 4000) {
+                let len2 = len2 as usize;
+                assert_eq!(
+                    rust_len, len2,
+                    "CBR determinism: length differs ({rust_len} vs {len2})"
+                );
+                assert_eq!(
+                    &rust_out[..rust_len], &out2[..len2],
+                    "CBR determinism: bytes differ, len={rust_len}"
+                );
+            }
         }
         (Err(_), Err(_)) => {
             // Both errored — fine

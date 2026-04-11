@@ -1,6 +1,8 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use mdopus::opus::decoder::OpusDecoder;
+use mdopus::opus::decoder::{
+    opus_packet_get_nb_frames, opus_packet_get_nb_samples, OpusDecoder,
+};
 use mdopus::opus::encoder::{
     OpusEncoder, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
     OPUS_APPLICATION_VOIP,
@@ -97,6 +99,23 @@ fuzz_target!(|data: &[u8]| {
         c_compressed.len()
     );
 
+    // --- Semantic invariant: encoded packet is parseable ---
+    let packet = &rust_compressed[..rust_enc_len];
+    if !packet.is_empty() {
+        let nb_frames = opus_packet_get_nb_frames(packet);
+        assert!(
+            nb_frames.is_ok() && nb_frames.unwrap() > 0,
+            "Encoded packet not parseable: len={rust_enc_len}"
+        );
+        let nb_samples = opus_packet_get_nb_samples(packet, sample_rate);
+        if let Ok(ns) = nb_samples {
+            assert_eq!(
+                ns, frame_size,
+                "Encoded packet nb_samples ({ns}) != frame_size ({frame_size})"
+            );
+        }
+    }
+
     // Decoded output must match
     match rust_dec_ret {
         Ok(rust_samples) => {
@@ -110,6 +129,12 @@ fuzz_target!(|data: &[u8]| {
                 &rust_decoded[..rust_samples * channels as usize],
                 &c_decoded[..],
                 "Decoded PCM mismatch at sr={sample_rate}, ch={channels}"
+            );
+
+            // --- Semantic invariant: decoded sample count == frame_size ---
+            assert_eq!(
+                rust_samples, frame_size as usize,
+                "Decoded samples ({rust_samples}) != frame_size ({frame_size})"
             );
         }
         Err(e) => {

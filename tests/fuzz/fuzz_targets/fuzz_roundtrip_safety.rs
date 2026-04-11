@@ -1,13 +1,20 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use mdopus::opus::decoder::OpusDecoder;
+use mdopus::opus::decoder::{
+    opus_packet_get_nb_frames, opus_packet_get_nb_samples, OpusDecoder,
+};
 use mdopus::opus::encoder::{
     OpusEncoder, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
     OPUS_APPLICATION_VOIP,
 };
 
-/// Rust-only safety fuzz target for encode+decode roundtrip.
-/// Tests for panics, OOB, infinite loops — no C comparison.
+#[path = "c_reference.rs"]
+mod c_reference;
+
+// Rust-only safety fuzz target for encode+decode roundtrip — extended with
+// semantic invariants and LOWDELAY differential comparison.
+//
+// Tests: panics, OOB, sample count correctness, decode determinism, LOWDELAY diff.
 
 const SAMPLE_RATES: [i32; 5] = [8000, 12000, 16000, 24000, 48000];
 const APPLICATIONS: [i32; 3] = [
@@ -60,12 +67,84 @@ fuzz_target!(|data: &[u8]| {
         Ok(l) => l as usize,
         Err(_) => return,
     };
+    let packet = &compressed[..enc_len];
 
-    // Decode what we just encoded — must not panic
+    // --- Semantic invariant: encoded packet is parseable ---
+    if !packet.is_empty() {
+        let nb_frames = opus_packet_get_nb_frames(packet);
+        assert!(
+            nb_frames.is_ok() && nb_frames.unwrap() > 0,
+            "Encoded packet not parseable: len={enc_len}"
+        );
+        let nb_samples = opus_packet_get_nb_samples(packet, sample_rate);
+        if let Ok(ns) = nb_samples {
+            assert_eq!(
+                ns, frame_size,
+                "Encoded packet nb_samples ({ns}) != frame_size ({frame_size})"
+            );
+        }
+    }
+
+    // Decode — must not panic
     let mut dec = match OpusDecoder::new(sample_rate, channels) {
         Ok(d) => d,
         Err(_) => return,
     };
     let mut decoded = vec![0i16; samples_needed];
-    let _ = dec.decode(Some(&compressed[..enc_len]), &mut decoded, frame_size, false);
+    let dec_ret = dec.decode(Some(packet), &mut decoded, frame_size, false);
+
+    // --- Semantic invariant: decoded sample count == frame_size ---
+    if let Ok(dec_samples) = dec_ret {
+        assert_eq!(
+            dec_samples, frame_size,
+            "Decoded sample count ({dec_samples}) != frame_size ({frame_size}), \
+             sr={sample_rate}, ch={channels}"
+        );
+
+        // --- Semantic invariant: decode determinism ---
+        let mut dec2 = match OpusDecoder::new(sample_rate, channels) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        let mut decoded2 = vec![0i16; samples_needed];
+        if let Ok(n2) = dec2.decode(Some(packet), &mut decoded2, frame_size, false) {
+            assert_eq!(
+                dec_samples, n2,
+                "Decode determinism: sample count differs ({dec_samples} vs {n2})"
+            );
+            assert_eq!(
+                &decoded[..dec_samples as usize * channels as usize],
+                &decoded2[..n2 as usize * channels as usize],
+                "Decode determinism: PCM output differs for same encoded packet"
+            );
+        }
+    }
+
+    // --- Differential for LOWDELAY (CELT-only) ---
+    if application == OPUS_APPLICATION_RESTRICTED_LOWDELAY {
+        // Compare compressed output
+        let c_compressed = c_reference::c_encode(
+            &pcm, frame_size, sample_rate, channels, bitrate, complexity, application,
+        );
+        if let Ok(c_pkt) = &c_compressed {
+            assert_eq!(
+                packet, &c_pkt[..],
+                "LOWDELAY roundtrip: compressed output mismatch, \
+                 sr={sample_rate}, ch={channels}, br={bitrate}"
+            );
+        }
+
+        // Compare decoded output
+        if let (Ok(dec_samples), Ok(c_pkt)) = (dec_ret, c_compressed) {
+            let c_decoded = c_reference::c_decode(&c_pkt, sample_rate, channels);
+            if let Ok(c_pcm) = c_decoded {
+                let n = dec_samples as usize * channels as usize;
+                assert_eq!(
+                    &decoded[..n], &c_pcm[..],
+                    "LOWDELAY roundtrip: decoded PCM mismatch, \
+                     sr={sample_rate}, ch={channels}, br={bitrate}"
+                );
+            }
+        }
+    }
 });
