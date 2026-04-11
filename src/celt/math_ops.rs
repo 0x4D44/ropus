@@ -330,38 +330,6 @@ pub fn celt_cos_norm(x: i32) -> i32 {
     }
 }
 
-/// Cosine with Q30 phase input → Q31 output.
-/// Computes `cos(π/2 · x)` where x is Q30 in [-1.0, 1.0].
-pub fn celt_cos_norm32(x: i32) -> i32 {
-    const COS_NORM_COEFF_A0: i32 = 134_217_720; // Q27
-    const COS_NORM_COEFF_A1: i32 = -662_336_704; // Q29
-    const COS_NORM_COEFF_A2: i32 = 544_710_848; // Q31
-    const COS_NORM_COEFF_A3: i32 = -178_761_936; // Q33
-    const COS_NORM_COEFF_A4: i32 = 29_487_206; // Q35
-
-    debug_assert!(
-        x >= -1_073_741_824 && x <= 1_073_741_824,
-        "celt_cos_norm32: x out of range"
-    );
-
-    // Make cos(±π/2) exactly zero
-    if abs32(x) == (1 << 30) {
-        return 0;
-    }
-
-    let x_sq_q29 = mult32_32_q31(x, x);
-
-    // Horner evaluation with step-by-step expansion
-    let mut tmp = add32(
-        COS_NORM_COEFF_A3,
-        mult32_32_q31(x_sq_q29, COS_NORM_COEFF_A4),
-    );
-    tmp = add32(COS_NORM_COEFF_A2, mult32_32_q31(x_sq_q29, tmp));
-    tmp = add32(COS_NORM_COEFF_A1, mult32_32_q31(x_sq_q29, tmp));
-
-    shl32(add32(COS_NORM_COEFF_A0, mult32_32_q31(x_sq_q29, tmp)), 4)
-}
-
 // ===========================================================================
 // Logarithm (base-2)
 // ===========================================================================
@@ -725,17 +693,6 @@ mod tests {
                 "Symmetry failed for x={x}: cos(x)={pos}, cos(2π-x)={neg}"
             );
         }
-    }
-
-    // --- celt_cos_norm32 ---
-
-    #[test]
-    fn test_celt_cos_norm32_boundaries() {
-        // cos(0) = max positive
-        assert!(celt_cos_norm32(0) > 2_000_000_000);
-        // cos(±π/2) = 0
-        assert_eq!(celt_cos_norm32(1 << 30), 0);
-        assert_eq!(celt_cos_norm32(-(1 << 30)), 0);
     }
 
     // --- celt_log2 / celt_exp2 ---

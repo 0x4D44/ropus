@@ -590,7 +590,7 @@ fn coverage_decoder_gain_and_pitch() {
     let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
 
     let mut dec = OpusDecoder::new(48000, 1).unwrap();
-    dec.set_gain(256); // +1 dB
+    dec.set_gain(256).unwrap(); // +1 dB
     let mut out = vec![0i16; 960];
     dec.decode(Some(&pkt[..len as usize]), &mut out, 960, false)
         .unwrap();

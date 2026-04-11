@@ -310,10 +310,6 @@ opus_int32 debug_c_celt_inner_prod_norm_shift(const opus_int32 *x,
     return celt_inner_prod_norm_shift(x, y, len, 0);
 }
 
-opus_int32 debug_c_celt_cos_norm32(opus_int32 x) {
-    return celt_cos_norm32(x);
-}
-
 opus_int32 debug_c_celt_rsqrt_norm32(opus_int32 x) {
     return celt_rsqrt_norm32(x);
 }

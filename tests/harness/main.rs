@@ -1317,41 +1317,6 @@ fn cmd_mathcompare() {
         println!("  stereo_itheta: {} vectors PASS", test_vectors.len());
     }
 
-    // Test celt_cos_norm32
-    println!("--- celt_cos_norm32 comparison ---");
-    let cos_tests: Vec<i32> = vec![
-        0,
-        1,
-        -1,
-        1_073_741_824,
-        -1_073_741_824, // boundaries
-        536_870_912,
-        -536_870_912, // pi/4
-        268_435_456,
-        805_306_368, // pi/8, 3*pi/8
-        100_000_000,
-        500_000_000,
-        900_000_000,
-    ];
-    let mut cos_pass = true;
-    for &x in &cos_tests {
-        let c_val = unsafe { bindings::debug_c_celt_cos_norm32(x) };
-        let r_val = math_ops::celt_cos_norm32(x);
-        if c_val != r_val {
-            println!(
-                "  MISMATCH: celt_cos_norm32({}) C={} R={} diff={}",
-                x,
-                c_val,
-                r_val,
-                c_val - r_val
-            );
-            cos_pass = false;
-        }
-    }
-    if cos_pass {
-        println!("  celt_cos_norm32: {} values PASS", cos_tests.len());
-    }
-
     // Test celt_rsqrt_norm32
     println!("--- celt_rsqrt_norm32 comparison ---");
     let rsqrt_tests: Vec<i32> = vec![
@@ -1613,35 +1578,6 @@ fn cmd_mathcompare() {
         println!("  normalise_g sweep: {} mismatches found!", gain_mismatches);
     } else {
         println!("  normalise_g sweep: 17999 values PASS");
-    }
-
-    // Exhaustive sweep: celt_cos_norm32
-    println!("--- Exhaustive celt_cos_norm32 sweep ---");
-    let mut cos_mismatches = 0;
-    for i in 0..20000 {
-        let x = (-1_073_741_824i64 + (i as i64 * 2_147_483_648 / 20000)) as i32;
-        let c_val = unsafe { bindings::debug_c_celt_cos_norm32(x) };
-        let r_val = math_ops::celt_cos_norm32(x);
-        if c_val != r_val {
-            cos_mismatches += 1;
-            if cos_mismatches <= 5 {
-                println!(
-                    "  MISMATCH: celt_cos_norm32({}) C={} R={} diff={}",
-                    x,
-                    c_val,
-                    r_val,
-                    c_val - r_val
-                );
-            }
-        }
-    }
-    if cos_mismatches > 0 {
-        println!(
-            "  celt_cos_norm32 sweep: {} mismatches found!",
-            cos_mismatches
-        );
-    } else {
-        println!("  celt_cos_norm32 sweep: 20000 values PASS");
     }
 
     // -----------------------------------------------------------------------

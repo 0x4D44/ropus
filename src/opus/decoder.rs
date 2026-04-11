@@ -2367,13 +2367,7 @@ mod tests {
         // With window=Q15ONE squared = Q15ONE, w ~= 1.0
         // out = 1.0 * in2 + 0.0 * in1 = in2
         for i in 0..4 {
-            assert!(
-                (out[i] as i32 - in2[i] as i32).unsigned_abs() <= 1,
-                "out[{}] = {}, expected ~{}",
-                i,
-                out[i],
-                in2[i]
-            );
+            assert!((out[i] as i32 - in2[i] as i32).unsigned_abs() <= 1, "smooth_fade mismatch at {i}");
         }
     }
 
@@ -2499,10 +2493,7 @@ mod tests {
             }
         }
 
-        assert_eq!(
-            mismatches, 0,
-            "{mismatches} mismatches found between Rust and C silk_lpc_inverse_pred_gain"
-        );
+        assert_eq!(mismatches, 0, "mismatches found between Rust and C silk_lpc_inverse_pred_gain");
     }
 
     #[test]
@@ -2812,10 +2803,7 @@ mod tests {
 
             // Prime decoder
             dec.decode(Some(pkt), &mut pcm, 960, false).unwrap();
-            assert_eq!(
-                dec.prev_mode, expected_mode,
-                "{name}: wrong prev_mode after prime"
-            );
+            assert_eq!(dec.prev_mode, expected_mode, "wrong prev_mode after prime");
 
             // PLC — decoder should conceal without error
             let ret = dec.decode(None, &mut pcm, 960, false);
@@ -2886,13 +2874,9 @@ mod tests {
             let mut pcm = vec![0i16; out_frame as usize * 2]; // extra room
 
             let ret = dec.decode(Some(&packets[0]), &mut pcm, out_frame, false);
-            assert!(ret.is_ok(), "Decode at {}Hz failed: {:?}", out_rate, ret);
+            assert!(ret.is_ok(), "decode failed at output rate");
             let decoded = ret.unwrap();
-            assert_eq!(
-                decoded, out_frame,
-                "Wrong sample count at {}Hz: got {}",
-                out_rate, decoded
-            );
+            assert_eq!(decoded, out_frame, "wrong sample count at output rate");
         }
     }
 
@@ -2927,14 +2911,8 @@ mod tests {
             assert!(ret.is_ok(), "{name} decode24 failed: {:?}", ret);
             assert_eq!(ret.unwrap(), 960);
             // 24-bit samples are i16 << 8, so should be multiples of 256
-            assert!(
-                pcm24.iter().any(|&s| s != 0),
-                "{name} decode24 produced all zeros"
-            );
-            assert!(
-                pcm24.iter().all(|&s| s % 256 == 0),
-                "{name} decode24 samples not aligned to 256"
-            );
+            assert!(pcm24.iter().any(|&s| s != 0), "decode24 produced all zeros");
+            assert!(pcm24.iter().all(|&s| s % 256 == 0), "decode24 samples not aligned to 256");
         }
     }
 
@@ -2968,15 +2946,9 @@ mod tests {
             let ret = dec.decode_float(Some(pkt), &mut pcmf, 960, false);
             assert!(ret.is_ok(), "{name} decode_float failed: {:?}", ret);
             assert_eq!(ret.unwrap(), 960);
-            assert!(
-                pcmf.iter().any(|s| s.abs() > 1e-6),
-                "{name} decode_float all zeros"
-            );
+            assert!(pcmf.iter().any(|s| s.abs() > 1e-6), "decode_float all zeros");
             // Float samples should be in [-1.0, 1.0] range
-            assert!(
-                pcmf.iter().all(|&s| s >= -1.0 && s <= 1.0),
-                "{name} decode_float out of range"
-            );
+            assert!(pcmf.iter().all(|&s| s >= -1.0 && s <= 1.0), "decode_float out of range");
         }
     }
 
@@ -3010,12 +2982,7 @@ mod tests {
         // The gained output should have higher energy
         let energy1: i64 = pcm1.iter().map(|&s| (s as i64) * (s as i64)).sum();
         let energy2: i64 = pcm2.iter().map(|&s| (s as i64) * (s as i64)).sum();
-        assert!(
-            energy2 > energy1,
-            "Gained output should be louder: energy1={}, energy2={}",
-            energy1,
-            energy2
-        );
+        assert!(energy2 > energy1, "gained output should be louder");
     }
 
     #[test]
@@ -3233,11 +3200,7 @@ mod tests {
 
         // FEC with frame_size=480 < packet's 960 → should fall back to PLC
         let ret = dec.decode(Some(&packets[1]), &mut pcm, 480, true);
-        assert!(
-            ret.is_ok(),
-            "FEC frame_size mismatch fallback failed: {:?}",
-            ret
-        );
+        assert!(ret.is_ok(), "FEC frame_size mismatch fallback failed");
         assert_eq!(ret.unwrap(), 480);
     }
 
@@ -3309,13 +3272,9 @@ mod tests {
         let mut _transitions = 0;
 
         for (i, pkt) in packets.iter().enumerate() {
-            let pkt_mode = opus_packet_get_mode(pkt);
+            let _pkt_mode = opus_packet_get_mode(pkt);
             let ret = dec.decode(Some(pkt), &mut pcm, 5760, false);
-            assert!(
-                ret.is_ok(),
-                "Frame {i} decode failed (mode {pkt_mode}): {:?}",
-                ret
-            );
+            assert!(ret.is_ok(), "frame {i} decode failed");
             let decoded = ret.unwrap();
             assert!(decoded > 0);
 
@@ -3378,15 +3337,8 @@ mod tests {
                     0,
                 );
                 assert!(c_ret > 0, "C decode failed at frame {i}: {c_ret}");
-                assert_eq!(
-                    rust_ret, c_ret,
-                    "Frame {i}: sample count mismatch (rust={rust_ret}, c={c_ret})"
-                );
-                assert_eq!(
-                    &rust_pcm[..rust_ret as usize],
-                    &c_pcm[..c_ret as usize],
-                    "Frame {i}: PCM mismatch vs C reference"
-                );
+                assert_eq!(rust_ret, c_ret, "frame {i}: sample count mismatch");
+                assert_eq!(&rust_pcm[..rust_ret as usize], &c_pcm[..c_ret as usize], "frame {i}: PCM mismatch");
             }
 
             opus_decoder_destroy(c_dec);
@@ -3408,9 +3360,9 @@ mod tests {
 
     #[test]
     fn test_decoder_bandwidth_detection_all_modes() {
-        use crate::opus::encoder::{OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_VOIP, OpusEncoder};
+        use crate::opus::encoder::{OPUS_APPLICATION_VOIP, OpusEncoder};
         // Encode at different sample rates and check decoder bandwidth
-        for &(rate, mode_name) in &[(8000, "NB"), (12000, "MB"), (16000, "WB")] {
+        for &(rate, _mode_name) in &[(8000, "NB"), (12000, "MB"), (16000, "WB")] {
             let frame_size = rate / 50;
             let mut enc = OpusEncoder::new(rate, 1, OPUS_APPLICATION_VOIP).unwrap();
             enc.set_bitrate(24000);
@@ -3424,12 +3376,7 @@ mod tests {
             dec.decode(Some(&pkt[..len as usize]), &mut out, frame_size, false)
                 .unwrap();
             let bw = dec.get_bandwidth();
-            assert!(
-                bw >= OPUS_BANDWIDTH_NARROWBAND && bw <= OPUS_BANDWIDTH_FULLBAND,
-                "{}: bandwidth {} out of range",
-                mode_name,
-                bw
-            );
+            assert!(bw >= OPUS_BANDWIDTH_NARROWBAND && bw <= OPUS_BANDWIDTH_FULLBAND, "bandwidth out of range");
         }
     }
 
@@ -4033,11 +3980,7 @@ mod tests {
         // FEC decode with frame_size=1920 > packet_frame_size=960
         // This triggers PLC for first 960 samples, then FEC for last 960
         let ret = dec.decode(Some(&packets[4]), &mut pcm, 1920, true);
-        assert!(
-            ret.is_ok(),
-            "FEC partial decode with PLC prefix failed: {:?}",
-            ret
-        );
+        assert!(ret.is_ok(), "FEC partial decode with PLC prefix failed");
         assert_eq!(ret.unwrap(), 1920);
     }
 
@@ -4117,11 +4060,7 @@ mod tests {
 
         // First SILK decode — triggers hybrid→SILK CELT fade-out (line 968-980)
         let ret = dec.decode(Some(&silk_pkt[0]), &mut pcm, 960, false);
-        assert!(
-            ret.is_ok(),
-            "Hybrid->SILK first transition failed: {:?}",
-            ret
-        );
+        assert!(ret.is_ok(), "Hybrid->SILK first transition failed");
         assert_eq!(ret.unwrap(), 960);
         assert_eq!(dec.prev_mode, MODE_SILK_ONLY);
 
