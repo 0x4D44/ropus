@@ -624,7 +624,7 @@ fn prefilter_and_fold(
             let w_rise = window[i] as i32;
             let w_fall = window[overlap - 1 - i] as i32;
             buf[off + decode_buffer_size - n as usize + i] =
-                mult16_32_q15(w_fall, etmp[overlap - 1 - i]) + mult16_32_q15(w_rise, etmp[i]);
+                mult16_32_q15(w_fall, etmp[overlap - 1 - i]).wrapping_add(mult16_32_q15(w_rise, etmp[i]));
         }
     }
 }

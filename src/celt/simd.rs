@@ -191,8 +191,10 @@ pub fn mdct_window_simd(output: &mut [i32], window: &[i16], overlap: usize) {
             let w_asc = window[wp_asc] as i32;
             let w_desc = window[wp_desc] as i32;
 
-            output[yp] = s_mul_inline(x_rev, w_desc) - s_mul_inline(x_fwd, w_asc);
-            output[xp] = s_mul_inline(x_rev, w_asc) + s_mul_inline(x_fwd, w_desc);
+            // C relies on signed i32 wrap-around here (the sum of two Q15 products
+            // can exceed i32 range with extreme signal values from garbage input).
+            output[yp] = s_mul_inline(x_rev, w_desc).wrapping_sub(s_mul_inline(x_fwd, w_asc));
+            output[xp] = s_mul_inline(x_rev, w_asc).wrapping_add(s_mul_inline(x_fwd, w_desc));
         }
     }
 
@@ -206,8 +208,8 @@ pub fn mdct_window_simd(output: &mut [i32], window: &[i16], overlap: usize) {
         let x_fwd = output[xp];
         let x_rev = output[yp];
 
-        output[yp] = s_mul_inline(x_rev, w_desc) - s_mul_inline(x_fwd, w_asc);
-        output[xp] = s_mul_inline(x_rev, w_asc) + s_mul_inline(x_fwd, w_desc);
+        output[yp] = s_mul_inline(x_rev, w_desc).wrapping_sub(s_mul_inline(x_fwd, w_asc));
+        output[xp] = s_mul_inline(x_rev, w_asc).wrapping_add(s_mul_inline(x_fwd, w_desc));
     }
 }
 
@@ -590,9 +592,9 @@ mod tests {
                     let x1 = expected[xp1];
                     let x2 = expected[yp1];
                     expected[yp1] =
-                        s_mul_inline(x2, window[wp2] as i32) - s_mul_inline(x1, window[wp1] as i32);
+                        s_mul_inline(x2, window[wp2] as i32).wrapping_sub(s_mul_inline(x1, window[wp1] as i32));
                     expected[xp1] =
-                        s_mul_inline(x2, window[wp1] as i32) + s_mul_inline(x1, window[wp2] as i32);
+                        s_mul_inline(x2, window[wp1] as i32).wrapping_add(s_mul_inline(x1, window[wp2] as i32));
                     yp1 += 1;
                     xp1 -= 1;
                     wp1 += 1;

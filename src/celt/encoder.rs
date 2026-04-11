@@ -429,8 +429,8 @@ pub(crate) fn clt_mdct_forward(
 
         let re = f[2 * i];
         let im = f[2 * i + 1];
-        let yr = mult16_32_q15(t0, re) - mult16_32_q15(t1, im);
-        let yi = mult16_32_q15(t0, im) + mult16_32_q15(t1, re);
+        let yr = mult16_32_q15(t0, re).wrapping_sub(mult16_32_q15(t1, im));
+        let yi = mult16_32_q15(t0, im).wrapping_add(mult16_32_q15(t1, re));
 
         // S_MUL2 = MULT16_32_Q16 (non-QEXT)
         let yc_r = mult16_32_q16(scale, yr);
@@ -458,11 +458,11 @@ pub(crate) fn clt_mdct_forward(
         let t1 = trig[n4 + i] as i32;
 
         let yr = pshr32(
-            mult16_32_q15(t1, f2[i].i) - mult16_32_q15(t0, f2[i].r),
+            mult16_32_q15(t1, f2[i].i).wrapping_sub(mult16_32_q15(t0, f2[i].r)),
             headroom,
         );
         let yi = pshr32(
-            mult16_32_q15(t1, f2[i].r) + mult16_32_q15(t0, f2[i].i),
+            mult16_32_q15(t1, f2[i].r).wrapping_add(mult16_32_q15(t0, f2[i].i)),
             headroom,
         );
 
