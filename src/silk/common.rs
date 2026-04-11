@@ -577,8 +577,10 @@ pub fn silk_lpc_inverse_pred_gain(a_q12: &[i16], order: usize) -> i32 {
 pub fn silk_lpc_fit(a_q_to: &mut [i16], a_q_from: &mut [i32], q_to: i32, q_from: i32, d: usize) {
     let rshift = q_from - q_to;
 
-    // Limit maximum absolute value so coefficients fit in int16
-    for _iter in 0..10 {
+    // C: silk_LPC_fit.c — limit max absolute value so coefficients fit in int16.
+    // Track whether we exhausted all 10 iterations (C uses `if (i == 10)` after loop).
+    let mut reached_max_iter = true;
+    for _i in 0..10 {
         let mut maxabs = 0i32;
         let mut idx = 0usize;
         for k in 0..d {
@@ -598,27 +600,24 @@ pub fn silk_lpc_fit(a_q_to: &mut [i16], a_q_from: &mut [i32], q_to: i32, q_from:
                     / ((maxabs * (idx as i32 + 1)) >> 2));
             silk_bwexpander_32(&mut a_q_from[..d], d, chirp_q16);
         } else {
+            reached_max_iter = false;
             break;
         }
     }
 
-    // Convert with rounding and write-back saturated values to a_q_from
-    // (C: silk_LPC_fit.c — write-back ensures a_q_from stays consistent)
-    if rshift > 0 {
+    // C: silk_LPC_fit.c lines 71-81 — two distinct paths:
+    //   i == 10 (max iterations): SAT16 + write-back to a_QIN
+    //   i < 10  (early converge): plain RSHIFT_ROUND cast to i16, NO write-back
+    if reached_max_iter {
+        // Reached the last iteration: clip and write-back
         for k in 0..d {
             a_q_to[k] = sat16(silk_rshift_round(a_q_from[k], rshift));
             a_q_from[k] = shl32(a_q_to[k] as i32, rshift);
         }
-    } else if rshift < 0 {
-        let lshift = -rshift;
-        for k in 0..d {
-            a_q_to[k] = sat16(a_q_from[k] << lshift);
-            a_q_from[k] = shr32(a_q_to[k] as i32, lshift);
-        }
     } else {
+        // Converged early: just round, no saturation, no write-back
         for k in 0..d {
-            a_q_to[k] = sat16(a_q_from[k]);
-            a_q_from[k] = a_q_to[k] as i32;
+            a_q_to[k] = silk_rshift_round(a_q_from[k], rshift) as i16;
         }
     }
 }
