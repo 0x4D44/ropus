@@ -1062,6 +1062,7 @@ fn silk_decode_core(
             // Apply gain and output
             let out_val = silk_rshift_round(silk_smulww(s_lpc_q14[MAX_LPC_ORDER + i], gain_q10), 8);
             xq[xq_offset + i] = sat16(out_val);
+
         }
 
         // Shift LPC state for next subframe
@@ -1259,7 +1260,9 @@ fn silk_plc_conceal(dec: &mut SilkDecoderState, frame: &mut [i16]) {
                         + (LTP_ORDER / 2) as i64
                         - j as i64;
                     if s_idx >= 0 && (s_idx as usize) < s_ltp_q14.len() {
-                        pred += ((s_ltp_q14[s_idx as usize] as i64 * b_q14[j] as i64) >> 16) as i32;
+                        pred = (pred as i64
+                            + ((s_ltp_q14[s_idx as usize] as i64 * b_q14[j] as i64) >> 16))
+                            as i32;
                     }
                 }
                 pred
@@ -1279,7 +1282,9 @@ fn silk_plc_conceal(dec: &mut SilkDecoderState, frame: &mut [i16]) {
             for j in 0..lpc_order {
                 let idx = MAX_LPC_ORDER + i - j - 1;
                 if idx < s_lpc_q14.len() {
-                    lpc_pred_q10 += ((s_lpc_q14[idx] as i64 * a_q12[j] as i64) >> 16) as i32;
+                    lpc_pred_q10 = (lpc_pred_q10 as i64
+                        + ((s_lpc_q14[idx] as i64 * a_q12[j] as i64) >> 16))
+                        as i32;
                 }
             }
 
@@ -1446,7 +1451,9 @@ fn silk_cng(
             let mut lpc_pred_q10: i32 = (lpc_order >> 1) as i32;
             for j in 0..lpc_order {
                 let idx = MAX_LPC_ORDER + i - j - 1;
-                lpc_pred_q10 += ((cng_sig_q14[idx] as i64 * cng_a_q12[j] as i64) >> 16) as i32;
+                lpc_pred_q10 = (lpc_pred_q10 as i64
+                    + ((cng_sig_q14[idx] as i64 * cng_a_q12[j] as i64) >> 16))
+                    as i32;
             }
             cng_sig_q14[MAX_LPC_ORDER + i] = silk_add_sat32(
                 cng_sig_q14[MAX_LPC_ORDER + i],
@@ -2393,7 +2400,7 @@ pub fn silk_decode(
                     if nfpp == 1 {
                         decoder.channel_state[n].lbrr_flags[0] = true;
                     } else {
-                        let symbol = rc.decode_icdf(SILK_LBRR_FLAGS_ICDF_PTR[nfpp - 2], 8);
+                        let symbol = rc.decode_icdf(SILK_LBRR_FLAGS_ICDF_PTR[nfpp - 2], 8) + 1;
                         for i in 0..nfpp {
                             decoder.channel_state[n].lbrr_flags[i] = ((symbol >> i) & 1) != 0;
                         }
