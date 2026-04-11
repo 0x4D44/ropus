@@ -408,8 +408,8 @@ unsafe extern "C" {
     // INSTRUMENT: SILK NLSF indices, pulses, and additional encoder state
     pub fn debug_get_silk_nlsf_and_pulses(
         enc: *mut OpusEncoder,
-        nlsf_indices: *mut opus_int32,      // 17 elements
-        ltp_indices: *mut opus_int32,       // 4 elements
+        nlsf_indices: *mut opus_int32, // 17 elements
+        ltp_indices: *mut opus_int32,  // 4 elements
         per_index: *mut opus_int32,
         prev_signal_type: *mut opus_int32,
         prev_lag: *mut opus_int32,

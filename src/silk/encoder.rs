@@ -7827,8 +7827,7 @@ pub fn silk_encode(
         }
     } else {
         // Only accept input lengths that are a multiple of 10 ms (C: enc_API.c:246-251)
-        if n_blocks_of_10ms * enc_control.api_sample_rate != 100 * n_samples_in
-            || n_samples_in < 0
+        if n_blocks_of_10ms * enc_control.api_sample_rate != 100 * n_samples_in || n_samples_in < 0
         {
             return SILK_ENC_INPUT_INVALID_NO_OF_SAMPLES;
         }
@@ -8915,14 +8914,7 @@ mod tests {
         silk_warped_autocorrelation(&mut corr, &mut scale, &[0i16; 8], 0, 8, 4);
         assert_eq!(corr, [0; 5]);
 
-        silk_warped_autocorrelation(
-            &mut corr,
-            &mut scale,
-            &[i16::MAX; 8],
-            8_192,
-            8,
-            4,
-        );
+        silk_warped_autocorrelation(&mut corr, &mut scale, &[i16::MAX; 8], 8_192, 8, 4);
         assert!(corr.iter().any(|&c| c != 0));
         assert!(corr[0] > 0);
     }
@@ -8957,8 +8949,8 @@ mod tests {
     #[test]
     fn test_ltp_analysis_filter_with_zero_taps_is_identity() {
         let x = [
-            -20i16, -17, -14, -11, -8, -5, -2, 1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37,
-            40, 43, 46, 49,
+            -20i16, -17, -14, -11, -8, -5, -2, 1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40,
+            43, 46, 49,
         ];
         let mut ltp_res = [0i16; 12];
         let ltp_coef_q14 = [0i16; LTP_ORDER * 2];
@@ -8977,12 +8969,7 @@ mod tests {
             2,
         );
 
-        assert_eq!(
-            ltp_res,
-            [
-                4, 7, 10, 13, 16, 19, 16, 19, 22, 25, 28, 31,
-            ]
-        );
+        assert_eq!(ltp_res, [4, 7, 10, 13, 16, 19, 16, 19, 22, 25, 28, 31,]);
     }
 
     #[test]
@@ -9076,9 +9063,7 @@ mod tests {
 
         let x16 = [250i16, 500, -750, 1_000];
         let mut x_sc_q10 = [0i32; 4];
-        let s_ltp = [
-            0i16, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110,
-        ];
+        let s_ltp = [0i16, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110];
         let mut s_ltp_q15 = [1_000i32; 12];
         let gains_q16 = [32_768, 32_768, 32_768, 32_768];
         let pitch_l = [2, 2, 2, 2];
@@ -9145,7 +9130,11 @@ mod tests {
 
         assert!(voiced_pulses.iter().any(|&pulse| pulse != 0));
         assert!(voiced.xq[..4].iter().any(|&sample| sample != 0));
-        assert!(voiced.s_ltp_shp_q14[8..12].iter().any(|&sample| sample != 0));
+        assert!(
+            voiced.s_ltp_shp_q14[8..12]
+                .iter()
+                .any(|&sample| sample != 0)
+        );
         assert!(voiced_ltp[8..12].iter().any(|&sample| sample != 2_000));
 
         let mut unvoiced = NsqState::default();
@@ -9240,7 +9229,11 @@ mod tests {
         assert_eq!(nsq.lag_prev, 4);
         assert_eq!(nsq.s_ltp_buf_idx, ps_enc.ltp_mem_length);
         assert_eq!(nsq.s_ltp_shp_buf_idx, ps_enc.ltp_mem_length);
-        assert!(nsq.xq[..ps_enc.ltp_mem_length as usize].iter().any(|&sample| sample != 0));
+        assert!(
+            nsq.xq[..ps_enc.ltp_mem_length as usize]
+                .iter()
+                .any(|&sample| sample != 0)
+        );
     }
 
     #[test]
@@ -9565,7 +9558,9 @@ mod tests {
         assert_eq!(enc.s_cmn.fs_khz, 8);
         assert_eq!(enc.s_cmn.prev_api_fs_hz, 24000);
 
-        let nlsf_in = [2048i16, 4096, 6144, 8192, 10240, 12288, 14336, 16384, 18432, 20480];
+        let nlsf_in = [
+            2048i16, 4096, 6144, 8192, 10240, 12288, 14336, 16384, 18432, 20480,
+        ];
         let mut a_q12 = [0i16; MAX_LPC_ORDER];
         silk_nlsf2a(&mut a_q12, &nlsf_in, 10);
 
@@ -9723,7 +9718,9 @@ mod tests {
         let mut pcm = vec![0i16; total_samples];
         let mut rng: u64 = 0xDEAD_BEEF_CAFE_BABE;
         for s in pcm.iter_mut() {
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             *s = (rng >> 33) as i16;
         }
 
@@ -9731,7 +9728,10 @@ mod tests {
         let c_enc = unsafe {
             let mut error: c_int = 0;
             let enc = opus_encoder_create(sample_rate, channels, application, &mut error);
-            assert!(!enc.is_null() && error == 0, "C encoder create failed: {error}");
+            assert!(
+                !enc.is_null() && error == 0,
+                "C encoder create failed: {error}"
+            );
             opus_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, bitrate);
             opus_encoder_ctl(enc, OPUS_SET_VBR_REQUEST, 0 as c_int);
             opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY_REQUEST, complexity);
@@ -9752,7 +9752,9 @@ mod tests {
         for frame_idx in 0..num_frames {
             // Generate per-frame PCM from the running RNG
             for s in pcm.iter_mut() {
-                rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                rng = rng
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 *s = (rng >> 33) as i16;
             }
 
@@ -9842,7 +9844,10 @@ mod tests {
             assert_eq!(state.n_states_delayed_decision, expected_delayed);
             assert_eq!(state.nlsf_msvq_survivors, expected_survivors);
             assert_eq!(state.use_interpolated_nlsfs, 1);
-            assert!(state.warping_q16 > 0, "warping should be >0 at complexity {complexity}");
+            assert!(
+                state.warping_q16 > 0,
+                "warping should be >0 at complexity {complexity}"
+            );
             assert!(
                 state.shaping_lpc_order >= 16,
                 "shaping_lpc_order should be >=16 at complexity {complexity}"
@@ -9855,7 +9860,7 @@ mod tests {
         // Cover LBRR with FEC enabled and different packet loss percentages
         for loss_perc in [0, 10, 25, 50, 100] {
             let mut state = SilkEncoderState::default();
-            state.lbrr_enabled = 1;  // was enabled in previous packet
+            state.lbrr_enabled = 1; // was enabled in previous packet
             state.packet_loss_perc = loss_perc;
 
             let ctrl = SilkEncControlStruct {
@@ -9979,7 +9984,9 @@ mod tests {
     #[test]
     fn test_stereo_find_predictor_with_correlated_signals() {
         let frame_len = 160;
-        let mid: Vec<i16> = (0..frame_len).map(|i| ((i as f32 * 0.1).sin() * 10000.0) as i16).collect();
+        let mid: Vec<i16> = (0..frame_len)
+            .map(|i| ((i as f32 * 0.1).sin() * 10000.0) as i16)
+            .collect();
         let side: Vec<i16> = mid.iter().map(|&s| s / 3).collect();
 
         let mut ratio_q14 = 0i32;
@@ -10069,7 +10076,10 @@ mod tests {
         );
 
         // When to_mono=true, width should be 0
-        assert_eq!(state.width_prev_q14, 0, "width should be 0 for mono transition");
+        assert_eq!(
+            state.width_prev_q14, 0,
+            "width should be 0 for mono transition"
+        );
     }
 
     #[test]
@@ -10080,7 +10090,9 @@ mod tests {
         state.smth_width_q14 = 100; // small width
         state.width_prev_q14 = 0; // was mono
 
-        let mut x1: Vec<i16> = (0..frame_len).map(|i| ((i as f32 * 0.3).sin() * 8000.0) as i16).collect();
+        let mut x1: Vec<i16> = (0..frame_len)
+            .map(|i| ((i as f32 * 0.3).sin() * 8000.0) as i16)
+            .collect();
         let mut x2 = x1.clone(); // identical = no side info
 
         let mut pred_ix = [[0i8; 3]; 2];
@@ -10146,8 +10158,7 @@ mod tests {
     #[test]
     fn test_nlsf_encode_basic() {
         let mut nlsf_q15: [i16; MAX_LPC_ORDER] = [
-            3277, 6554, 9830, 13107, 16384, 19660, 22937, 26214, 29491, 32000,
-            0, 0, 0, 0, 0, 0,
+            3277, 6554, 9830, 13107, 16384, 19660, 22937, 26214, 29491, 32000, 0, 0, 0, 0, 0, 0,
         ];
         let mut nlsf_indices = [0i8; MAX_LPC_ORDER + 1];
         let mut w_q2 = [0i16; MAX_LPC_ORDER];
@@ -10171,8 +10182,8 @@ mod tests {
     #[test]
     fn test_nlsf_encode_wideband() {
         let mut nlsf_q15: [i16; MAX_LPC_ORDER] = [
-            2048, 4096, 6144, 8192, 10240, 12288, 14336, 16384,
-            18432, 20480, 22528, 24576, 26624, 28672, 30720, 32000,
+            2048, 4096, 6144, 8192, 10240, 12288, 14336, 16384, 18432, 20480, 22528, 24576, 26624,
+            28672, 30720, 32000,
         ];
         let mut nlsf_indices = [0i8; MAX_LPC_ORDER + 1];
         let mut w_q2 = [0i16; MAX_LPC_ORDER];
@@ -10250,13 +10261,7 @@ mod tests {
         let mut payload = [0u8; 256];
         let mut range_enc = RangeEncoder::new(&mut payload);
 
-        silk_encode_indices(
-            &enc.s_cmn,
-            &mut range_enc,
-            0,
-            false,
-            CODE_INDEPENDENTLY,
-        );
+        silk_encode_indices(&enc.s_cmn, &mut range_enc, 0, false, CODE_INDEPENDENTLY);
 
         let bytes_written = range_enc.tell();
         assert!(bytes_written > 0, "should have encoded some bits");
@@ -10275,13 +10280,7 @@ mod tests {
         let mut payload = [0u8; 256];
         let mut range_enc = RangeEncoder::new(&mut payload);
 
-        silk_encode_indices(
-            &enc.s_cmn,
-            &mut range_enc,
-            0,
-            false,
-            CODE_CONDITIONALLY,
-        );
+        silk_encode_indices(&enc.s_cmn, &mut range_enc, 0, false, CODE_CONDITIONALLY);
 
         let bytes_written = range_enc.tell();
         assert!(bytes_written > 0);
@@ -10330,13 +10329,7 @@ mod tests {
         let mut payload = [0u8; 512];
         let mut range_enc = RangeEncoder::new(&mut payload);
 
-        silk_encode_pulses(
-            &mut range_enc,
-            TYPE_UNVOICED,
-            1,
-            &pulses,
-            frame_length,
-        );
+        silk_encode_pulses(&mut range_enc, TYPE_UNVOICED, 1, &pulses, frame_length);
 
         assert!(range_enc.tell() > 0, "should encode pulse data");
     }
@@ -10347,19 +10340,19 @@ mod tests {
         let frame_length = 160;
         let mut pulses = [0i8; 160];
         for i in 0..frame_length {
-            pulses[i] = if i % 3 == 0 { 9 } else if i % 5 == 0 { -7 } else { 4 };
+            pulses[i] = if i % 3 == 0 {
+                9
+            } else if i % 5 == 0 {
+                -7
+            } else {
+                4
+            };
         }
 
         let mut payload = [0u8; 1024];
         let mut range_enc = RangeEncoder::new(&mut payload);
 
-        silk_encode_pulses(
-            &mut range_enc,
-            TYPE_VOICED,
-            0,
-            &pulses,
-            frame_length,
-        );
+        silk_encode_pulses(&mut range_enc, TYPE_VOICED, 0, &pulses, frame_length);
 
         assert!(range_enc.tell() > 0);
     }
@@ -10376,13 +10369,7 @@ mod tests {
         let mut payload = [0u8; 512];
         let mut range_enc = RangeEncoder::new(&mut payload);
 
-        silk_encode_pulses(
-            &mut range_enc,
-            TYPE_UNVOICED,
-            0,
-            &pulses,
-            frame_length,
-        );
+        silk_encode_pulses(&mut range_enc, TYPE_UNVOICED, 0, &pulses, frame_length);
 
         assert!(range_enc.tell() > 0);
     }
@@ -10414,8 +10401,10 @@ mod tests {
         indices.nlsf_interp_coef_q2 = 4; // no interpolation
         indices.seed = 3;
 
-        let x16 = [120i16, -180, 240, -300, 360, -420, 480, -540,
-                    100, -150, 200, -250, 300, -350, 400, -450];
+        let x16 = [
+            120i16, -180, 240, -300, 360, -420, 480, -540, 100, -150, 200, -250, 300, -350, 400,
+            -450,
+        ];
         let mut pulses = [0i8; 16];
         let mut pred_coef_q12 = [[0i16; MAX_LPC_ORDER]; 2];
         pred_coef_q12[0][..4].copy_from_slice(&[512, -256, 128, -64]);
@@ -10446,7 +10435,10 @@ mod tests {
             16_384,
         );
 
-        assert!(pulses.iter().any(|&p| p != 0), "del_dec should produce pulses");
+        assert!(
+            pulses.iter().any(|&p| p != 0),
+            "del_dec should produce pulses"
+        );
     }
 
     #[test]
@@ -10474,7 +10466,9 @@ mod tests {
         indices.nlsf_interp_coef_q2 = 4;
         indices.seed = 1;
 
-        let x16: Vec<i16> = (0..32).map(|i| ((i as f32 * 0.5).sin() * 1000.0) as i16).collect();
+        let x16: Vec<i16> = (0..32)
+            .map(|i| ((i as f32 * 0.5).sin() * 1000.0) as i16)
+            .collect();
         let mut pulses = [0i8; 32];
         let mut pred_coef_q12 = [[0i16; MAX_LPC_ORDER]; 2];
         pred_coef_q12[0][..4].copy_from_slice(&[2048, -1024, 512, -256]);
@@ -10509,7 +10503,10 @@ mod tests {
             16_384,
         );
 
-        assert!(pulses.iter().any(|&p| p != 0), "voiced del_dec should produce pulses");
+        assert!(
+            pulses.iter().any(|&p| p != 0),
+            "voiced del_dec should produce pulses"
+        );
         assert_eq!(nsq.lag_prev, 8);
     }
 
@@ -10610,7 +10607,9 @@ mod tests {
         // Voiced: gain reduction should have been applied
         assert!(ctrl.gains_q16.iter().all(|&g| g > 0));
         // quant_offset_type should reflect tilt decision
-        assert!(enc.s_cmn.indices.quant_offset_type == 0 || enc.s_cmn.indices.quant_offset_type == 1);
+        assert!(
+            enc.s_cmn.indices.quant_offset_type == 0 || enc.s_cmn.indices.quant_offset_type == 1
+        );
     }
 
     #[test]
@@ -10622,7 +10621,9 @@ mod tests {
 
         // Create a signal buffer large enough
         let total_len = ltp_mem + nb_subfr * subfr_length + LTP_ORDER;
-        let mut r_ptr: Vec<i16> = (0..total_len).map(|i| ((i as f32 * 0.2).sin() * 5000.0) as i16).collect();
+        let mut r_ptr: Vec<i16> = (0..total_len)
+            .map(|i| ((i as f32 * 0.2).sin() * 5000.0) as i16)
+            .collect();
 
         let mut xxltp_q17 = vec![0i32; nb_subfr * LTP_ORDER * LTP_ORDER];
         let mut xxltp_q17_vec = vec![0i32; nb_subfr * LTP_ORDER];
@@ -10669,7 +10670,8 @@ mod tests {
         // Fill input_buf with some signal data
         for i in 0..enc.s_cmn.frame_length as usize {
             if i + 1 < enc.s_cmn.input_buf.len() {
-                enc.s_cmn.input_buf[i + 1] = enc.x_buf[enc.s_cmn.ltp_mem_length as usize + (enc.s_cmn.la_shape as usize) + i];
+                enc.s_cmn.input_buf[i + 1] = enc.x_buf
+                    [enc.s_cmn.ltp_mem_length as usize + (enc.s_cmn.la_shape as usize) + i];
             }
         }
 
@@ -10687,7 +10689,10 @@ mod tests {
         );
 
         assert_eq!(ret, 0, "silk_encode_frame_fix should succeed");
-        assert!(n_bytes_out > 0, "should produce output bytes: {n_bytes_out}");
+        assert!(
+            n_bytes_out > 0,
+            "should produce output bytes: {n_bytes_out}"
+        );
     }
 
     #[test]
@@ -10702,7 +10707,8 @@ mod tests {
 
         for i in 0..enc.s_cmn.frame_length as usize {
             if i + 1 < enc.s_cmn.input_buf.len() {
-                enc.s_cmn.input_buf[i + 1] = enc.x_buf[enc.s_cmn.ltp_mem_length as usize + (enc.s_cmn.la_shape as usize) + i];
+                enc.s_cmn.input_buf[i + 1] = enc.x_buf
+                    [enc.s_cmn.ltp_mem_length as usize + (enc.s_cmn.la_shape as usize) + i];
             }
         }
 
@@ -10721,8 +10727,10 @@ mod tests {
 
         assert_eq!(ret, 0);
         assert!(n_bytes_out > 0, "complexity-8 encode should produce bytes");
-        assert!(enc.s_cmn.n_states_delayed_decision >= 2,
-            "complexity 8 should use delayed decision");
+        assert!(
+            enc.s_cmn.n_states_delayed_decision >= 2,
+            "complexity 8 should use delayed decision"
+        );
     }
 
     #[test]

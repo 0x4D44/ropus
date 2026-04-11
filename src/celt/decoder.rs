@@ -624,7 +624,8 @@ fn prefilter_and_fold(
             let w_rise = window[i] as i32;
             let w_fall = window[overlap - 1 - i] as i32;
             buf[off + decode_buffer_size - n as usize + i] =
-                mult16_32_q15(w_fall, etmp[overlap - 1 - i]).wrapping_add(mult16_32_q15(w_rise, etmp[i]));
+                mult16_32_q15(w_fall, etmp[overlap - 1 - i])
+                    .wrapping_add(mult16_32_q15(w_rise, etmp[i]));
         }
     }
 }
@@ -915,8 +916,6 @@ impl CeltDecoder {
     fn decode_lost(&mut self, n: i32, lm: i32, lpcnet: DnnPlcArg<'_>) {
         #[cfg(feature = "dnn")]
         let mut lpcnet = lpcnet;
-        #[cfg(not(feature = "dnn"))]
-        let lpcnet = lpcnet;
 
         let mode = self.mode;
         let cc = self.channels;
@@ -955,7 +954,8 @@ impl CeltDecoder {
             }
         }
         #[cfg(not(feature = "dnn"))]
-        let _ = &lpcnet;
+        #[allow(clippy::let_unit_value)]
+        let _ = lpcnet;
 
         if curr_frame_type == FRAME_PLC_NOISE {
             // --- Noise-based PLC ---
@@ -1541,6 +1541,7 @@ impl CeltDecoder {
         }
 
         // Normal decode path: lpcnet is not used (only for PLC).
+        #[allow(clippy::let_unit_value)]
         let _ = lpcnet;
 
         let data = data.unwrap();
@@ -2575,8 +2576,11 @@ mod tests {
             let prev_duration = dec.loss_duration;
             let _ = dec.decode_with_ec(None, &mut pcm, 960, None, false, plc_arg());
             if i > 0 {
-                assert!(dec.loss_duration >= prev_duration,
-                    "loss_duration should grow: was {prev_duration}, now {}", dec.loss_duration);
+                assert!(
+                    dec.loss_duration >= prev_duration,
+                    "loss_duration should grow: was {prev_duration}, now {}",
+                    dec.loss_duration
+                );
             }
         }
     }
@@ -2618,8 +2622,11 @@ mod tests {
         let cases = [(48000, 1), (24000, 2), (16000, 3), (12000, 4), (8000, 6)];
         for (rate, expected_ds) in cases {
             let dec = CeltDecoder::new(rate, 1).unwrap();
-            assert_eq!(dec.downsample, expected_ds,
-                "rate={rate}: expected ds={expected_ds}, got {}", dec.downsample);
+            assert_eq!(
+                dec.downsample, expected_ds,
+                "rate={rate}: expected ds={expected_ds}, got {}",
+                dec.downsample
+            );
         }
     }
 

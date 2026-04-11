@@ -1528,7 +1528,10 @@ fn cmd_mathcompare() {
             if rsqrt32_mismatches <= 5 {
                 println!(
                     "  MISMATCH: celt_rsqrt_norm32({}) C={} R={} diff={}",
-                    x, c_val, r_val, c_val - r_val
+                    x,
+                    c_val,
+                    r_val,
+                    c_val - r_val
                 );
             }
         }
@@ -1543,7 +1546,10 @@ fn cmd_mathcompare() {
             if rsqrt32_mismatches <= 5 {
                 println!(
                     "  MISMATCH: celt_rsqrt_norm32({}) C={} R={} diff={}",
-                    x, c_val, r_val, c_val - r_val
+                    x,
+                    c_val,
+                    r_val,
+                    c_val - r_val
                 );
             }
         }
@@ -1652,7 +1658,10 @@ fn cmd_mathcompare() {
             if rsqrt_norm_mismatches <= 5 {
                 println!(
                     "  MISMATCH: celt_rsqrt_norm({}) C={} R={} diff={}",
-                    x, c_val, r_val, c_val - r_val
+                    x,
+                    c_val,
+                    r_val,
+                    c_val - r_val
                 );
             }
         }
@@ -1680,7 +1689,10 @@ fn cmd_mathcompare() {
             if rcp16_mismatches <= 5 {
                 println!(
                     "  MISMATCH: celt_rcp_norm16({}) C={} R={} diff={}",
-                    x, c_val, r_val, c_val - r_val
+                    x,
+                    c_val,
+                    r_val,
+                    c_val - r_val
                 );
             }
         }
@@ -1712,7 +1724,10 @@ fn cmd_mathcompare() {
             if rcp32_mismatches <= 5 {
                 println!(
                     "  MISMATCH: celt_rcp_norm32({}) C={} R={} diff={}",
-                    x, c_val, r_val, c_val - r_val
+                    x,
+                    c_val,
+                    r_val,
+                    c_val - r_val
                 );
             }
         }
@@ -1727,7 +1742,10 @@ fn cmd_mathcompare() {
             if rcp32_mismatches <= 5 {
                 println!(
                     "  MISMATCH: celt_rcp_norm32({}) C={} R={} diff={}",
-                    x, c_val, r_val, c_val - r_val
+                    x,
+                    c_val,
+                    r_val,
+                    c_val - r_val
                 );
             }
         }
@@ -1758,7 +1776,10 @@ fn cmd_mathcompare() {
             if rcp_mismatches <= 5 {
                 println!(
                     "  MISMATCH: celt_rcp({}) C={} R={} diff={}",
-                    x, c_val, r_val, c_val - r_val
+                    x,
+                    c_val,
+                    r_val,
+                    c_val - r_val
                 );
             }
         }
@@ -1775,7 +1796,10 @@ fn cmd_mathcompare() {
             if rcp_mismatches <= 5 {
                 println!(
                     "  MISMATCH: celt_rcp({}) C={} R={} diff={}",
-                    x, c_val, r_val, c_val - r_val
+                    x,
+                    c_val,
+                    r_val,
+                    c_val - r_val
                 );
             }
         }
@@ -1792,7 +1816,10 @@ fn cmd_mathcompare() {
             if rcp_mismatches <= 5 {
                 println!(
                     "  MISMATCH: celt_rcp({}) C={} R={} diff={}",
-                    x, c_val, r_val, c_val - r_val
+                    x,
+                    c_val,
+                    r_val,
+                    c_val - r_val
                 );
             }
         }
@@ -1809,7 +1836,11 @@ fn cmd_mathcompare() {
             if rcp_mismatches <= 5 {
                 println!(
                     "  MISMATCH: celt_rcp(2^{} = {}) C={} R={} diff={}",
-                    k, x, c_val, r_val, c_val - r_val
+                    k,
+                    x,
+                    c_val,
+                    r_val,
+                    c_val - r_val
                 );
             }
         }
@@ -1831,7 +1862,12 @@ fn cmd_mathcompare() {
                 if rcp_mismatches <= 5 {
                     println!(
                         "  MISMATCH: celt_rcp(2^{}+{} = {}) C={} R={} diff={}",
-                        k, delta, x, c_val, r_val, c_val - r_val
+                        k,
+                        delta,
+                        x,
+                        c_val,
+                        r_val,
+                        c_val - r_val
                     );
                 }
             }
@@ -5547,7 +5583,7 @@ fn get_rss_bytes() -> Option<usize> {
                 return Some(pmc.working_set_size);
             }
         }
-        return None;
+        None
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -5561,7 +5597,7 @@ fn get_rss_bytes() -> Option<usize> {
                 }
             }
         }
-        return None;
+        None
     }
 }
 
@@ -5583,30 +5619,50 @@ fn torture_rng_choice<T: Copy>(state: &mut u64, choices: &[T]) -> T {
 fn random_torture_config(rng: &mut u64, sample_rate: i32, channels: i32) -> EncodeConfig {
     let mut cfg = EncodeConfig::new(sample_rate, channels);
 
-    cfg.bitrate = torture_rng_choice(rng, &[
-        6000, 8000, 10000, 16000, 24000, 32000, 48000,
-        64000, 96000, 128000, 256000, 320000, 510000,
-    ]);
+    cfg.bitrate = torture_rng_choice(
+        rng,
+        &[
+            6000, 8000, 10000, 16000, 24000, 32000, 48000, 64000, 96000, 128000, 256000, 320000,
+            510000,
+        ],
+    );
     cfg.complexity = (torture_rng(rng) % 11) as i32;
     cfg.vbr = (torture_rng(rng) % 2) as i32;
-    cfg.vbr_constraint = if cfg.vbr != 0 { (torture_rng(rng) % 2) as i32 } else { 0 };
-    cfg.signal = torture_rng_choice(rng, &[
-        bindings::OPUS_AUTO, bindings::OPUS_SIGNAL_VOICE, bindings::OPUS_SIGNAL_MUSIC,
-    ]);
-    cfg.max_bandwidth = torture_rng_choice(rng, &[
-        bindings::OPUS_BANDWIDTH_NARROWBAND,
-        bindings::OPUS_BANDWIDTH_MEDIUMBAND,
-        bindings::OPUS_BANDWIDTH_WIDEBAND,
-        bindings::OPUS_BANDWIDTH_SUPERWIDEBAND,
-        bindings::OPUS_BANDWIDTH_FULLBAND,
-    ]);
+    cfg.vbr_constraint = if cfg.vbr != 0 {
+        (torture_rng(rng) % 2) as i32
+    } else {
+        0
+    };
+    cfg.signal = torture_rng_choice(
+        rng,
+        &[
+            bindings::OPUS_AUTO,
+            bindings::OPUS_SIGNAL_VOICE,
+            bindings::OPUS_SIGNAL_MUSIC,
+        ],
+    );
+    cfg.max_bandwidth = torture_rng_choice(
+        rng,
+        &[
+            bindings::OPUS_BANDWIDTH_NARROWBAND,
+            bindings::OPUS_BANDWIDTH_MEDIUMBAND,
+            bindings::OPUS_BANDWIDTH_WIDEBAND,
+            bindings::OPUS_BANDWIDTH_SUPERWIDEBAND,
+            bindings::OPUS_BANDWIDTH_FULLBAND,
+        ],
+    );
     cfg.bandwidth = bindings::OPUS_AUTO;
     // Weight toward AUTO to let the encoder decide, but occasionally force a mode
-    cfg.force_mode = torture_rng_choice(rng, &[
-        bindings::OPUS_AUTO, bindings::OPUS_AUTO, bindings::OPUS_AUTO,
-        1000, // SILK_ONLY
-        1002, // CELT_ONLY
-    ]);
+    cfg.force_mode = torture_rng_choice(
+        rng,
+        &[
+            bindings::OPUS_AUTO,
+            bindings::OPUS_AUTO,
+            bindings::OPUS_AUTO,
+            1000, // SILK_ONLY
+            1002, // CELT_ONLY
+        ],
+    );
     cfg.fec = (torture_rng(rng) % 2) as i32;
     cfg.packet_loss_pct = if cfg.fec != 0 {
         torture_rng_choice(rng, &[0, 1, 5, 10, 20, 30])
@@ -5634,17 +5690,41 @@ unsafe fn apply_config_to_c_encoder(enc: *mut bindings::OpusEncoder, cfg: &Encod
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, cfg.bitrate);
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, cfg.complexity);
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_VBR_REQUEST, cfg.vbr);
-        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_VBR_CONSTRAINT_REQUEST, cfg.vbr_constraint);
+        bindings::opus_encoder_ctl(
+            enc,
+            bindings::OPUS_SET_VBR_CONSTRAINT_REQUEST,
+            cfg.vbr_constraint,
+        );
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_INBAND_FEC_REQUEST, cfg.fec);
-        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_PACKET_LOSS_PERC_REQUEST, cfg.packet_loss_pct);
+        bindings::opus_encoder_ctl(
+            enc,
+            bindings::OPUS_SET_PACKET_LOSS_PERC_REQUEST,
+            cfg.packet_loss_pct,
+        );
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_DTX_REQUEST, cfg.dtx);
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_SIGNAL_REQUEST, cfg.signal);
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BANDWIDTH_REQUEST, cfg.bandwidth);
-        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_FORCE_CHANNELS_REQUEST, cfg.force_channels);
-        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_MAX_BANDWIDTH_REQUEST, cfg.max_bandwidth);
+        bindings::opus_encoder_ctl(
+            enc,
+            bindings::OPUS_SET_FORCE_CHANNELS_REQUEST,
+            cfg.force_channels,
+        );
+        bindings::opus_encoder_ctl(
+            enc,
+            bindings::OPUS_SET_MAX_BANDWIDTH_REQUEST,
+            cfg.max_bandwidth,
+        );
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_LSB_DEPTH_REQUEST, cfg.lsb_depth);
-        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_PREDICTION_DISABLED_REQUEST, cfg.prediction_disabled);
-        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST, cfg.phase_inversion_disabled);
+        bindings::opus_encoder_ctl(
+            enc,
+            bindings::OPUS_SET_PREDICTION_DISABLED_REQUEST,
+            cfg.prediction_disabled,
+        );
+        bindings::opus_encoder_ctl(
+            enc,
+            bindings::OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST,
+            cfg.phase_inversion_disabled,
+        );
         bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_FORCE_MODE_REQUEST, cfg.force_mode);
     }
 }
@@ -5678,18 +5758,31 @@ fn format_torture_config(cfg: &EncodeConfig) -> String {
         _ => "??",
     };
     let bw_str = match cfg.max_bandwidth {
-        1101 => "NB", 1102 => "MB", 1103 => "WB", 1104 => "SWB", 1105 => "FB",
+        1101 => "NB",
+        1102 => "MB",
+        1103 => "WB",
+        1104 => "SWB",
+        1105 => "FB",
         _ => "AUTO",
     };
     let sig_str = match cfg.signal {
-        -1000 => "AUTO", 3001 => "VOICE", 3002 => "MUSIC",
+        -1000 => "AUTO",
+        3001 => "VOICE",
+        3002 => "MUSIC",
         _ => "??",
     };
     format!(
         "br={} mode={} bw={} cx={} vbr={} fec={}/{} dtx={} sig={} frame={}ms",
-        cfg.bitrate, mode_str, bw_str, cfg.complexity,
-        cfg.vbr, cfg.fec, cfg.packet_loss_pct,
-        cfg.dtx, sig_str, cfg.frame_ms
+        cfg.bitrate,
+        mode_str,
+        bw_str,
+        cfg.complexity,
+        cfg.vbr,
+        cfg.fec,
+        cfg.packet_loss_pct,
+        cfg.dtx,
+        sig_str,
+        cfg.frame_ms
     )
 }
 
@@ -5757,28 +5850,87 @@ fn state_checkpoint_diffs(
                 }
             }};
         }
-        cmp_enc_i32!(bindings::OPUS_GET_BITRATE_REQUEST,      r_enc.get_bitrate(),      "bitrate");
-        cmp_enc_i32!(bindings::OPUS_GET_MAX_BANDWIDTH_REQUEST, r_enc.get_max_bandwidth(), "max_bandwidth");
-        cmp_enc_i32!(bindings::OPUS_GET_VBR_REQUEST,          r_enc.get_vbr(),          "vbr");
-        cmp_enc_i32!(bindings::OPUS_GET_BANDWIDTH_REQUEST,    r_enc.get_bandwidth(),    "bandwidth");
-        cmp_enc_i32!(bindings::OPUS_GET_COMPLEXITY_REQUEST,   r_enc.get_complexity(),   "complexity");
-        cmp_enc_i32!(bindings::OPUS_GET_INBAND_FEC_REQUEST,   r_enc.get_inband_fec(),   "inband_fec");
-        cmp_enc_i32!(bindings::OPUS_GET_PACKET_LOSS_PERC_REQUEST, r_enc.get_packet_loss_perc(), "packet_loss_perc");
-        cmp_enc_i32!(bindings::OPUS_GET_DTX_REQUEST,          r_enc.get_dtx(),          "dtx");
-        cmp_enc_i32!(bindings::OPUS_GET_VBR_CONSTRAINT_REQUEST, r_enc.get_vbr_constraint(), "vbr_constraint");
-        cmp_enc_i32!(bindings::OPUS_GET_FORCE_CHANNELS_REQUEST, r_enc.get_force_channels(), "force_channels");
-        cmp_enc_i32!(bindings::OPUS_GET_SIGNAL_REQUEST,       r_enc.get_signal(),       "signal");
-        cmp_enc_i32!(bindings::OPUS_GET_LOOKAHEAD_REQUEST,    r_enc.get_lookahead(),    "lookahead");
-        cmp_enc_i32!(bindings::OPUS_GET_SAMPLE_RATE_REQUEST,  r_enc.get_sample_rate(),  "sample_rate");
-        cmp_enc_i32!(bindings::OPUS_GET_LSB_DEPTH_REQUEST,    r_enc.get_lsb_depth(),    "lsb_depth");
-        cmp_enc_i32!(bindings::OPUS_GET_PREDICTION_DISABLED_REQUEST, r_enc.get_prediction_disabled(), "prediction_disabled");
-        cmp_enc_i32!(bindings::OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST, r_enc.get_phase_inversion_disabled(), "phase_inversion_disabled");
+        cmp_enc_i32!(
+            bindings::OPUS_GET_BITRATE_REQUEST,
+            r_enc.get_bitrate(),
+            "bitrate"
+        );
+        cmp_enc_i32!(
+            bindings::OPUS_GET_MAX_BANDWIDTH_REQUEST,
+            r_enc.get_max_bandwidth(),
+            "max_bandwidth"
+        );
+        cmp_enc_i32!(bindings::OPUS_GET_VBR_REQUEST, r_enc.get_vbr(), "vbr");
+        cmp_enc_i32!(
+            bindings::OPUS_GET_BANDWIDTH_REQUEST,
+            r_enc.get_bandwidth(),
+            "bandwidth"
+        );
+        cmp_enc_i32!(
+            bindings::OPUS_GET_COMPLEXITY_REQUEST,
+            r_enc.get_complexity(),
+            "complexity"
+        );
+        cmp_enc_i32!(
+            bindings::OPUS_GET_INBAND_FEC_REQUEST,
+            r_enc.get_inband_fec(),
+            "inband_fec"
+        );
+        cmp_enc_i32!(
+            bindings::OPUS_GET_PACKET_LOSS_PERC_REQUEST,
+            r_enc.get_packet_loss_perc(),
+            "packet_loss_perc"
+        );
+        cmp_enc_i32!(bindings::OPUS_GET_DTX_REQUEST, r_enc.get_dtx(), "dtx");
+        cmp_enc_i32!(
+            bindings::OPUS_GET_VBR_CONSTRAINT_REQUEST,
+            r_enc.get_vbr_constraint(),
+            "vbr_constraint"
+        );
+        cmp_enc_i32!(
+            bindings::OPUS_GET_FORCE_CHANNELS_REQUEST,
+            r_enc.get_force_channels(),
+            "force_channels"
+        );
+        cmp_enc_i32!(
+            bindings::OPUS_GET_SIGNAL_REQUEST,
+            r_enc.get_signal(),
+            "signal"
+        );
+        cmp_enc_i32!(
+            bindings::OPUS_GET_LOOKAHEAD_REQUEST,
+            r_enc.get_lookahead(),
+            "lookahead"
+        );
+        cmp_enc_i32!(
+            bindings::OPUS_GET_SAMPLE_RATE_REQUEST,
+            r_enc.get_sample_rate(),
+            "sample_rate"
+        );
+        cmp_enc_i32!(
+            bindings::OPUS_GET_LSB_DEPTH_REQUEST,
+            r_enc.get_lsb_depth(),
+            "lsb_depth"
+        );
+        cmp_enc_i32!(
+            bindings::OPUS_GET_PREDICTION_DISABLED_REQUEST,
+            r_enc.get_prediction_disabled(),
+            "prediction_disabled"
+        );
+        cmp_enc_i32!(
+            bindings::OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST,
+            r_enc.get_phase_inversion_disabled(),
+            "phase_inversion_disabled"
+        );
 
         // Final range is u32.
         let c_rng = c_enc_get_u32(c_enc, bindings::OPUS_GET_FINAL_RANGE_REQUEST);
         let r_rng = r_enc.get_final_range();
         if c_rng != r_rng {
-            diffs.push(format!("enc.final_range: C=0x{:08x} R=0x{:08x}", c_rng, r_rng));
+            diffs.push(format!(
+                "enc.final_range: C=0x{:08x} R=0x{:08x}",
+                c_rng, r_rng
+            ));
         }
 
         // Internal HP/mode state via debug helper
@@ -5801,7 +5953,10 @@ fn state_checkpoint_diffs(
             diffs.push(format!("enc.hp_mem: C={:?} R={:?}", c_hp, r_hp));
         }
         if c_hp_smth2 != r_hp_smth2 {
-            diffs.push(format!("enc.variable_hp_smth2: C={} R={}", c_hp_smth2, r_hp_smth2));
+            diffs.push(format!(
+                "enc.variable_hp_smth2: C={} R={}",
+                c_hp_smth2, r_hp_smth2
+            ));
         }
 
         // SILK encoder internal state
@@ -5834,12 +5989,7 @@ fn state_checkpoint_diffs(
             &mut c_silk_signal_type,
             &mut c_silk_input_quality_bands_q15,
         );
-        if let Some((r_fs_khz, r_frame_length, r_nb_subfr, r_input_buf_ix,
-                      r_n_frames_per_packet, r_packet_size_ms,
-                      r_first_frame_after_reset, r_controlled,
-                      r_prefill_flag, r_n_frames_encoded,
-                      r_speech_activity_q8, r_signal_type,
-                      r_input_quality_bands_q15)) = r_enc.get_silk_state() {
+        if let Some(rs) = r_enc.get_silk_state() {
             macro_rules! cmp_silk {
                 ($c:expr, $r:expr, $name:literal) => {
                     if $c != $r {
@@ -5847,19 +5997,43 @@ fn state_checkpoint_diffs(
                     }
                 };
             }
-            cmp_silk!(c_silk_fs_khz, r_fs_khz, "fs_khz");
-            cmp_silk!(c_silk_frame_length, r_frame_length, "frame_length");
-            cmp_silk!(c_silk_nb_subfr, r_nb_subfr, "nb_subfr");
-            cmp_silk!(c_silk_input_buf_ix, r_input_buf_ix, "input_buf_ix");
-            cmp_silk!(c_silk_n_frames_per_packet, r_n_frames_per_packet, "n_frames_per_packet");
-            cmp_silk!(c_silk_packet_size_ms, r_packet_size_ms, "packet_size_ms");
-            cmp_silk!(c_silk_first_frame_after_reset, r_first_frame_after_reset, "first_frame_after_reset");
-            cmp_silk!(c_silk_controlled_since_last_payload, r_controlled, "controlled_since_last_payload");
-            cmp_silk!(c_silk_prefill_flag, r_prefill_flag, "prefill_flag");
-            cmp_silk!(c_silk_n_frames_encoded, r_n_frames_encoded, "n_frames_encoded");
-            cmp_silk!(c_silk_speech_activity_q8, r_speech_activity_q8, "speech_activity_q8");
-            cmp_silk!(c_silk_signal_type, r_signal_type, "signal_type");
-            cmp_silk!(c_silk_input_quality_bands_q15, r_input_quality_bands_q15, "input_quality_bands_q15");
+            cmp_silk!(c_silk_fs_khz, rs.fs_khz, "fs_khz");
+            cmp_silk!(c_silk_frame_length, rs.frame_length, "frame_length");
+            cmp_silk!(c_silk_nb_subfr, rs.nb_subfr, "nb_subfr");
+            cmp_silk!(c_silk_input_buf_ix, rs.input_buf_ix, "input_buf_ix");
+            cmp_silk!(
+                c_silk_n_frames_per_packet,
+                rs.n_frames_per_packet,
+                "n_frames_per_packet"
+            );
+            cmp_silk!(c_silk_packet_size_ms, rs.packet_size_ms, "packet_size_ms");
+            cmp_silk!(
+                c_silk_first_frame_after_reset,
+                rs.first_frame_after_reset,
+                "first_frame_after_reset"
+            );
+            cmp_silk!(
+                c_silk_controlled_since_last_payload,
+                rs.controlled_since_last_payload,
+                "controlled_since_last_payload"
+            );
+            cmp_silk!(c_silk_prefill_flag, rs.prefill_flag, "prefill_flag");
+            cmp_silk!(
+                c_silk_n_frames_encoded,
+                rs.n_frames_encoded,
+                "n_frames_encoded"
+            );
+            cmp_silk!(
+                c_silk_speech_activity_q8,
+                rs.speech_activity_q8,
+                "speech_activity_q8"
+            );
+            cmp_silk!(c_silk_signal_type, rs.signal_type, "signal_type");
+            cmp_silk!(
+                c_silk_input_quality_bands_q15,
+                rs.input_quality_bands_q15,
+                "input_quality_bands_q15"
+            );
         }
     }
 
@@ -5874,23 +6048,41 @@ fn state_checkpoint_diffs(
                 }
             }};
         }
-        cmp_dec_i32!(bindings::OPUS_GET_BANDWIDTH_REQUEST,    r_dec.get_bandwidth(),    "bandwidth");
-        cmp_dec_i32!(bindings::OPUS_GET_SAMPLE_RATE_REQUEST,  r_dec.get_sample_rate(),  "sample_rate");
-        cmp_dec_i32!(bindings::OPUS_GET_PITCH_REQUEST,        r_dec.get_pitch(),        "pitch");
-        cmp_dec_i32!(bindings::OPUS_GET_GAIN_REQUEST,         r_dec.get_gain(),         "gain");
-        cmp_dec_i32!(bindings::OPUS_GET_LAST_PACKET_DURATION_REQUEST, r_dec.get_last_packet_duration(), "last_packet_duration");
+        cmp_dec_i32!(
+            bindings::OPUS_GET_BANDWIDTH_REQUEST,
+            r_dec.get_bandwidth(),
+            "bandwidth"
+        );
+        cmp_dec_i32!(
+            bindings::OPUS_GET_SAMPLE_RATE_REQUEST,
+            r_dec.get_sample_rate(),
+            "sample_rate"
+        );
+        cmp_dec_i32!(bindings::OPUS_GET_PITCH_REQUEST, r_dec.get_pitch(), "pitch");
+        cmp_dec_i32!(bindings::OPUS_GET_GAIN_REQUEST, r_dec.get_gain(), "gain");
+        cmp_dec_i32!(
+            bindings::OPUS_GET_LAST_PACKET_DURATION_REQUEST,
+            r_dec.get_last_packet_duration(),
+            "last_packet_duration"
+        );
 
         // phase_inversion_disabled is bool on Rust decoder side.
         let c_piv = c_dec_get_i32(c_dec, bindings::OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST);
         let r_piv = r_dec.get_phase_inversion_disabled() as i32;
         if c_piv != r_piv {
-            diffs.push(format!("dec.phase_inversion_disabled: C={} R={}", c_piv, r_piv));
+            diffs.push(format!(
+                "dec.phase_inversion_disabled: C={} R={}",
+                c_piv, r_piv
+            ));
         }
 
         let c_rng = c_dec_get_u32(c_dec, bindings::OPUS_GET_FINAL_RANGE_REQUEST);
         let r_rng = r_dec.get_final_range();
         if c_rng != r_rng {
-            diffs.push(format!("dec.final_range: C=0x{:08x} R=0x{:08x}", c_rng, r_rng));
+            diffs.push(format!(
+                "dec.final_range: C=0x{:08x} R=0x{:08x}",
+                c_rng, r_rng
+            ));
         }
     }
 
@@ -5966,63 +6158,231 @@ static BURSTS: &[Burst] = &[
         name: "silk_celt_silk",
         min_channels: 1,
         steps: [
-            BurstStep { label: "SILK 20ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_SILK; c.frame_ms = 20.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND; c.bitrate = 32000; } },
-            BurstStep { label: "CELT 20ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_CELT; c.frame_ms = 20.0; c.bitrate = 128000; } },
-            BurstStep { label: "SILK 20ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_SILK; c.frame_ms = 20.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND; c.bitrate = 32000; } },
+            BurstStep {
+                label: "SILK 20ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_SILK;
+                    c.frame_ms = 20.0;
+                    c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND;
+                    c.bitrate = 32000;
+                },
+            },
+            BurstStep {
+                label: "CELT 20ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_CELT;
+                    c.frame_ms = 20.0;
+                    c.bitrate = 128000;
+                },
+            },
+            BurstStep {
+                label: "SILK 20ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_SILK;
+                    c.frame_ms = 20.0;
+                    c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND;
+                    c.bitrate = 32000;
+                },
+            },
         ],
     },
     Burst {
         name: "celt_silk_celt",
         min_channels: 1,
         steps: [
-            BurstStep { label: "CELT 20ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_CELT; c.frame_ms = 20.0; c.bitrate = 128000; } },
-            BurstStep { label: "SILK 20ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_SILK; c.frame_ms = 20.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND; c.bitrate = 32000; } },
-            BurstStep { label: "CELT 20ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_CELT; c.frame_ms = 20.0; c.bitrate = 128000; } },
+            BurstStep {
+                label: "CELT 20ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_CELT;
+                    c.frame_ms = 20.0;
+                    c.bitrate = 128000;
+                },
+            },
+            BurstStep {
+                label: "SILK 20ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_SILK;
+                    c.frame_ms = 20.0;
+                    c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND;
+                    c.bitrate = 32000;
+                },
+            },
+            BurstStep {
+                label: "CELT 20ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_CELT;
+                    c.frame_ms = 20.0;
+                    c.bitrate = 128000;
+                },
+            },
         ],
     },
     Burst {
         name: "silk_celt_silk_short",
         min_channels: 1,
         steps: [
-            BurstStep { label: "SILK 10ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_SILK; c.frame_ms = 10.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND; c.bitrate = 32000; } },
-            BurstStep { label: "CELT 10ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_CELT; c.frame_ms = 10.0; c.bitrate = 128000; } },
-            BurstStep { label: "SILK 10ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_SILK; c.frame_ms = 10.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND; c.bitrate = 32000; } },
+            BurstStep {
+                label: "SILK 10ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_SILK;
+                    c.frame_ms = 10.0;
+                    c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND;
+                    c.bitrate = 32000;
+                },
+            },
+            BurstStep {
+                label: "CELT 10ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_CELT;
+                    c.frame_ms = 10.0;
+                    c.bitrate = 128000;
+                },
+            },
+            BurstStep {
+                label: "SILK 10ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_SILK;
+                    c.frame_ms = 10.0;
+                    c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND;
+                    c.bitrate = 32000;
+                },
+            },
         ],
     },
     Burst {
         name: "hybrid_celt_hybrid",
         min_channels: 1,
         steps: [
-            BurstStep { label: "HYBRID 20ms", hold: 1, mutate: |c| { c.force_mode = BURST_MODE_HYBRID; c.frame_ms = 20.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_SUPERWIDEBAND; c.bitrate = 48000; } },
-            BurstStep { label: "CELT 20ms",   hold: 1, mutate: |c| { c.force_mode = BURST_MODE_CELT;   c.frame_ms = 20.0; c.bitrate = 128000; } },
-            BurstStep { label: "HYBRID 20ms", hold: 1, mutate: |c| { c.force_mode = BURST_MODE_HYBRID; c.frame_ms = 20.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_SUPERWIDEBAND; c.bitrate = 48000; } },
+            BurstStep {
+                label: "HYBRID 20ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_HYBRID;
+                    c.frame_ms = 20.0;
+                    c.max_bandwidth = bindings::OPUS_BANDWIDTH_SUPERWIDEBAND;
+                    c.bitrate = 48000;
+                },
+            },
+            BurstStep {
+                label: "CELT 20ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_CELT;
+                    c.frame_ms = 20.0;
+                    c.bitrate = 128000;
+                },
+            },
+            BurstStep {
+                label: "HYBRID 20ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_HYBRID;
+                    c.frame_ms = 20.0;
+                    c.max_bandwidth = bindings::OPUS_BANDWIDTH_SUPERWIDEBAND;
+                    c.bitrate = 48000;
+                },
+            },
         ],
     },
     Burst {
         name: "stereo_mono_stereo",
         min_channels: 2,
         steps: [
-            BurstStep { label: "ch=2", hold: 1, mutate: |c| { c.force_channels = 2; c.bitrate = 96000; } },
-            BurstStep { label: "ch=1", hold: 1, mutate: |c| { c.force_channels = 1; c.bitrate = 96000; } },
-            BurstStep { label: "ch=2", hold: 1, mutate: |c| { c.force_channels = 2; c.bitrate = 96000; } },
+            BurstStep {
+                label: "ch=2",
+                hold: 1,
+                mutate: |c| {
+                    c.force_channels = 2;
+                    c.bitrate = 96000;
+                },
+            },
+            BurstStep {
+                label: "ch=1",
+                hold: 1,
+                mutate: |c| {
+                    c.force_channels = 1;
+                    c.bitrate = 96000;
+                },
+            },
+            BurstStep {
+                label: "ch=2",
+                hold: 1,
+                mutate: |c| {
+                    c.force_channels = 2;
+                    c.bitrate = 96000;
+                },
+            },
         ],
     },
     Burst {
         name: "stereo_mono_auto",
         min_channels: 2,
         steps: [
-            BurstStep { label: "ch=2",    hold: 1, mutate: |c| { c.force_channels = 2; c.bitrate = 96000; } },
-            BurstStep { label: "ch=1",    hold: 1, mutate: |c| { c.force_channels = 1; c.bitrate = 96000; } },
-            BurstStep { label: "ch=AUTO", hold: 1, mutate: |c| { c.force_channels = bindings::OPUS_AUTO; c.bitrate = 96000; } },
+            BurstStep {
+                label: "ch=2",
+                hold: 1,
+                mutate: |c| {
+                    c.force_channels = 2;
+                    c.bitrate = 96000;
+                },
+            },
+            BurstStep {
+                label: "ch=1",
+                hold: 1,
+                mutate: |c| {
+                    c.force_channels = 1;
+                    c.bitrate = 96000;
+                },
+            },
+            BurstStep {
+                label: "ch=AUTO",
+                hold: 1,
+                mutate: |c| {
+                    c.force_channels = bindings::OPUS_AUTO;
+                    c.bitrate = 96000;
+                },
+            },
         ],
     },
     Burst {
         name: "vbr_cbr_at_low_br",
         min_channels: 1,
         steps: [
-            BurstStep { label: "vbr=1 br=8k", hold: 1, mutate: |c| { c.vbr = 1; c.vbr_constraint = 0; c.bitrate = 8000; } },
-            BurstStep { label: "vbr=0 br=8k", hold: 1, mutate: |c| { c.vbr = 0; c.bitrate = 8000; } },
-            BurstStep { label: "vbr=1 br=8k", hold: 1, mutate: |c| { c.vbr = 1; c.vbr_constraint = 0; c.bitrate = 8000; } },
+            BurstStep {
+                label: "vbr=1 br=8k",
+                hold: 1,
+                mutate: |c| {
+                    c.vbr = 1;
+                    c.vbr_constraint = 0;
+                    c.bitrate = 8000;
+                },
+            },
+            BurstStep {
+                label: "vbr=0 br=8k",
+                hold: 1,
+                mutate: |c| {
+                    c.vbr = 0;
+                    c.bitrate = 8000;
+                },
+            },
+            BurstStep {
+                label: "vbr=1 br=8k",
+                hold: 1,
+                mutate: |c| {
+                    c.vbr = 1;
+                    c.vbr_constraint = 0;
+                    c.bitrate = 8000;
+                },
+            },
         ],
     },
     Burst {
@@ -6036,9 +6396,33 @@ static BURSTS: &[Burst] = &[
         // the devil's-advocate review (2026.04.09) called out as the
         // real coverage gap.
         steps: [
-            BurstStep { label: "CELT 2.5ms", hold: 1, mutate: |c| { c.force_mode = BURST_MODE_CELT; c.frame_ms = 2.5;  c.bitrate = 128000; } },
-            BurstStep { label: "CELT 10ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_CELT; c.frame_ms = 10.0; c.bitrate = 128000; } },
-            BurstStep { label: "CELT 20ms",  hold: 1, mutate: |c| { c.force_mode = BURST_MODE_CELT; c.frame_ms = 20.0; c.bitrate = 128000; } },
+            BurstStep {
+                label: "CELT 2.5ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_CELT;
+                    c.frame_ms = 2.5;
+                    c.bitrate = 128000;
+                },
+            },
+            BurstStep {
+                label: "CELT 10ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_CELT;
+                    c.frame_ms = 10.0;
+                    c.bitrate = 128000;
+                },
+            },
+            BurstStep {
+                label: "CELT 20ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_CELT;
+                    c.frame_ms = 20.0;
+                    c.bitrate = 128000;
+                },
+            },
         ],
     },
     Burst {
@@ -6048,45 +6432,147 @@ static BURSTS: &[Burst] = &[
         // transitions within SILK mode. force_mode=SILK keeps us on
         // the SILK path; 60, 40, 20 ms are all valid SILK sizes.
         steps: [
-            BurstStep { label: "SILK 60ms", hold: 1, mutate: |c| { c.force_mode = BURST_MODE_SILK; c.frame_ms = 60.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND; c.bitrate = 24000; } },
-            BurstStep { label: "SILK 40ms", hold: 1, mutate: |c| { c.force_mode = BURST_MODE_SILK; c.frame_ms = 40.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND; c.bitrate = 24000; } },
-            BurstStep { label: "SILK 20ms", hold: 1, mutate: |c| { c.force_mode = BURST_MODE_SILK; c.frame_ms = 20.0; c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND; c.bitrate = 24000; } },
+            BurstStep {
+                label: "SILK 60ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_SILK;
+                    c.frame_ms = 60.0;
+                    c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND;
+                    c.bitrate = 24000;
+                },
+            },
+            BurstStep {
+                label: "SILK 40ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_SILK;
+                    c.frame_ms = 40.0;
+                    c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND;
+                    c.bitrate = 24000;
+                },
+            },
+            BurstStep {
+                label: "SILK 20ms",
+                hold: 1,
+                mutate: |c| {
+                    c.force_mode = BURST_MODE_SILK;
+                    c.frame_ms = 20.0;
+                    c.max_bandwidth = bindings::OPUS_BANDWIDTH_WIDEBAND;
+                    c.bitrate = 24000;
+                },
+            },
         ],
     },
     Burst {
         name: "framesize_20_40_20",
         min_channels: 1,
         steps: [
-            BurstStep { label: "20ms", hold: 1, mutate: |c| { c.frame_ms = 20.0; } },
-            BurstStep { label: "40ms", hold: 1, mutate: |c| { c.frame_ms = 40.0; } },
-            BurstStep { label: "20ms", hold: 1, mutate: |c| { c.frame_ms = 20.0; } },
+            BurstStep {
+                label: "20ms",
+                hold: 1,
+                mutate: |c| {
+                    c.frame_ms = 20.0;
+                },
+            },
+            BurstStep {
+                label: "40ms",
+                hold: 1,
+                mutate: |c| {
+                    c.frame_ms = 40.0;
+                },
+            },
+            BurstStep {
+                label: "20ms",
+                hold: 1,
+                mutate: |c| {
+                    c.frame_ms = 20.0;
+                },
+            },
         ],
     },
     Burst {
         name: "bitrate_crash_6k_510k_6k",
         min_channels: 1,
         steps: [
-            BurstStep { label: "br=6k",   hold: 1, mutate: |c| { c.bitrate = 6000; } },
-            BurstStep { label: "br=510k", hold: 1, mutate: |c| { c.bitrate = 510000; } },
-            BurstStep { label: "br=6k",   hold: 1, mutate: |c| { c.bitrate = 6000; } },
+            BurstStep {
+                label: "br=6k",
+                hold: 1,
+                mutate: |c| {
+                    c.bitrate = 6000;
+                },
+            },
+            BurstStep {
+                label: "br=510k",
+                hold: 1,
+                mutate: |c| {
+                    c.bitrate = 510000;
+                },
+            },
+            BurstStep {
+                label: "br=6k",
+                hold: 1,
+                mutate: |c| {
+                    c.bitrate = 6000;
+                },
+            },
         ],
     },
     Burst {
         name: "bandwidth_NB_FB_NB",
         min_channels: 1,
         steps: [
-            BurstStep { label: "NB", hold: 1, mutate: |c| { c.max_bandwidth = bindings::OPUS_BANDWIDTH_NARROWBAND; } },
-            BurstStep { label: "FB", hold: 1, mutate: |c| { c.max_bandwidth = bindings::OPUS_BANDWIDTH_FULLBAND; } },
-            BurstStep { label: "NB", hold: 1, mutate: |c| { c.max_bandwidth = bindings::OPUS_BANDWIDTH_NARROWBAND; } },
+            BurstStep {
+                label: "NB",
+                hold: 1,
+                mutate: |c| {
+                    c.max_bandwidth = bindings::OPUS_BANDWIDTH_NARROWBAND;
+                },
+            },
+            BurstStep {
+                label: "FB",
+                hold: 1,
+                mutate: |c| {
+                    c.max_bandwidth = bindings::OPUS_BANDWIDTH_FULLBAND;
+                },
+            },
+            BurstStep {
+                label: "NB",
+                hold: 1,
+                mutate: |c| {
+                    c.max_bandwidth = bindings::OPUS_BANDWIDTH_NARROWBAND;
+                },
+            },
         ],
     },
     Burst {
         name: "fec_off_on_off",
         min_channels: 1,
         steps: [
-            BurstStep { label: "fec=0",        hold: 1, mutate: |c| { c.fec = 0; c.packet_loss_pct = 0; } },
-            BurstStep { label: "fec=1 loss20", hold: 1, mutate: |c| { c.fec = 1; c.packet_loss_pct = 20; } },
-            BurstStep { label: "fec=0",        hold: 1, mutate: |c| { c.fec = 0; c.packet_loss_pct = 0; } },
+            BurstStep {
+                label: "fec=0",
+                hold: 1,
+                mutate: |c| {
+                    c.fec = 0;
+                    c.packet_loss_pct = 0;
+                },
+            },
+            BurstStep {
+                label: "fec=1 loss20",
+                hold: 1,
+                mutate: |c| {
+                    c.fec = 1;
+                    c.packet_loss_pct = 20;
+                },
+            },
+            BurstStep {
+                label: "fec=0",
+                hold: 1,
+                mutate: |c| {
+                    c.fec = 0;
+                    c.packet_loss_pct = 0;
+                },
+            },
         ],
     },
 ];
@@ -6104,8 +6590,15 @@ fn select_burst(frame_idx: usize, burst_interval: usize, channels: i32) -> &'sta
     // Filter to usable bursts first so the rotation is stable relative to
     // the channel count (i.e. a mono run and a stereo run both cycle
     // through the same subset deterministically).
-    let usable: Vec<&'static Burst> = BURSTS.iter().filter(|b| b.min_channels <= channels).collect();
-    assert!(!usable.is_empty(), "no bursts usable at channels={}", channels);
+    let usable: Vec<&'static Burst> = BURSTS
+        .iter()
+        .filter(|b| b.min_channels <= channels)
+        .collect();
+    assert!(
+        !usable.is_empty(),
+        "no bursts usable at channels={}",
+        channels
+    );
     let boundary = frame_idx / burst_interval.max(1);
     usable[boundary % usable.len()]
 }
@@ -6130,7 +6623,11 @@ impl CurrentCfgSource {
     fn format(&self) -> String {
         match self {
             CurrentCfgSource::Random => "random".to_string(),
-            CurrentCfgSource::Burst { name, step_idx, step_label } => {
+            CurrentCfgSource::Burst {
+                name,
+                step_idx,
+                step_label,
+            } => {
                 format!("burst={} step={}:{}", name, step_idx, step_label)
             }
         }
@@ -6245,7 +6742,10 @@ fn cmd_torture(
             &mut err,
         );
         if enc.is_null() || err != bindings::OPUS_OK {
-            eprintln!("ERROR: C encoder create failed: {}", bindings::error_string(err));
+            eprintln!(
+                "ERROR: C encoder create failed: {}",
+                bindings::error_string(err)
+            );
             process::exit(1);
         }
         enc
@@ -6255,7 +6755,10 @@ fn cmd_torture(
         let mut err: i32 = 0;
         let dec = bindings::opus_decoder_create(sample_rate, channels, &mut err);
         if dec.is_null() || err != bindings::OPUS_OK {
-            eprintln!("ERROR: C decoder (C stream) create failed: {}", bindings::error_string(err));
+            eprintln!(
+                "ERROR: C decoder (C stream) create failed: {}",
+                bindings::error_string(err)
+            );
             process::exit(1);
         }
         dec
@@ -6271,8 +6774,8 @@ fn cmd_torture(
         eprintln!("ERROR: Rust encoder create failed: {}", e);
         process::exit(1);
     });
-    let mut rust_dec_cs =
-        mdopus::opus::decoder::OpusDecoder::new(sample_rate, channels).unwrap_or_else(|e| {
+    let mut rust_dec_cs = mdopus::opus::decoder::OpusDecoder::new(sample_rate, channels)
+        .unwrap_or_else(|e| {
             eprintln!("ERROR: Rust decoder (C stream) create failed: {}", e);
             process::exit(1);
         });
@@ -6287,7 +6790,10 @@ fn cmd_torture(
             let mut err: i32 = 0;
             let dec = bindings::opus_decoder_create(sample_rate, channels, &mut err);
             if dec.is_null() || err != bindings::OPUS_OK {
-                eprintln!("ERROR: C decoder (Rust stream) create failed: {}", bindings::error_string(err));
+                eprintln!(
+                    "ERROR: C decoder (Rust stream) create failed: {}",
+                    bindings::error_string(err)
+                );
                 process::exit(1);
             }
             dec
@@ -6417,9 +6923,8 @@ fn cmd_torture(
             }
         } else {
             // Not currently in a burst.
-            let start_burst = burst_interval > 0
-                && frame_idx > 0
-                && frame_idx % burst_interval == 0;
+            let start_burst =
+                burst_interval > 0 && frame_idx > 0 && frame_idx % burst_interval == 0;
             if start_burst {
                 let burst = select_burst(frame_idx, burst_interval, channels);
                 burst_saved_cfg = Some(current_cfg.clone());
@@ -6491,7 +6996,9 @@ fn cmd_torture(
                     encode_mismatches += 1;
                     let print_ok = encode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
                     if print_ok {
-                        if in_burst { burst_mismatches_printed += 1; }
+                        if in_burst {
+                            burst_mismatches_printed += 1;
+                        }
                         println!(
                             "ENCODE ERROR frame {}: Rust failed ({}), C ok ({} bytes)",
                             frame_idx, e, c_len
@@ -6529,7 +7036,9 @@ fn cmd_torture(
             prior_divergence_seen = true;
             let print_ok = encode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
             if print_ok {
-                if in_burst { burst_mismatches_printed += 1; }
+                if in_burst {
+                    burst_mismatches_printed += 1;
+                }
                 println!(
                     "ENCODE MISMATCH frame {} (config #{}): C={} bytes, Rust={} bytes",
                     frame_idx, configs_tested, c_len, rust_len
@@ -6562,7 +7071,12 @@ fn cmd_torture(
         // C: c_dec_rs  fed Rust packet (cross_decode only)
         // D: rust_dec_rs fed Rust packet (cross_decode only)
         let a = unsafe {
-            c_decode_packet(c_dec_cs, &c_pkt[..c_len], &mut pcm_a, max_frame_samples_per_ch as i32)
+            c_decode_packet(
+                c_dec_cs,
+                &c_pkt[..c_len],
+                &mut pcm_a,
+                max_frame_samples_per_ch as i32,
+            )
         };
         let b = rust_decode_packet(
             &mut rust_dec_cs,
@@ -6612,7 +7126,9 @@ fn cmd_torture(
                     max_pcm_diff = max_pcm_diff.max(local_max_diff);
                     let print_ok = decode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
                     if print_ok {
-                        if in_burst { burst_mismatches_printed += 1; }
+                        if in_burst {
+                            burst_mismatches_printed += 1;
+                        }
                         println!(
                             "DECODE MISMATCH frame {}: max PCM diff {} (A vs B, c_len={})",
                             frame_idx, local_max_diff, c_len
@@ -6631,7 +7147,9 @@ fn cmd_torture(
                     range_mismatches += 1;
                     let print_ok = range_mismatches <= 5 || (in_burst && burst_print_budget_ok);
                     if print_ok {
-                        if in_burst { burst_mismatches_printed += 1; }
+                        if in_burst {
+                            burst_mismatches_printed += 1;
+                        }
                         println!(
                             "RANGE MISMATCH frame {}: A.rng=0x{:08x} B.rng=0x{:08x}",
                             frame_idx, ar, br
@@ -6651,7 +7169,9 @@ fn cmd_torture(
                 decode_mismatches += 1;
                 let print_ok = decode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
                 if print_ok {
-                    if in_burst { burst_mismatches_printed += 1; }
+                    if in_burst {
+                        burst_mismatches_printed += 1;
+                    }
                     println!(
                         "DECODE ERROR frame {}: Rust decoder rejected C packet",
                         frame_idx
@@ -6670,7 +7190,9 @@ fn cmd_torture(
                 decode_mismatches += 1;
                 let print_ok = decode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
                 if print_ok {
-                    if in_burst { burst_mismatches_printed += 1; }
+                    if in_burst {
+                        burst_mismatches_printed += 1;
+                    }
                     println!(
                         "DECODE ERROR frame {}: C decoder rejected C packet (Rust accepted)",
                         frame_idx
@@ -6723,9 +7245,12 @@ fn cmd_torture(
                 };
                 if cross_pcm_fail {
                     cross_decode_mismatches += 1;
-                    let print_ok = cross_decode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
+                    let print_ok =
+                        cross_decode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
                     if print_ok {
-                        if in_burst { burst_mismatches_printed += 1; }
+                        if in_burst {
+                            burst_mismatches_printed += 1;
+                        }
                         println!(
                             "CROSS-DECODE MISMATCH (A vs C, packets equal) @ frame {}",
                             frame_idx
@@ -6760,9 +7285,12 @@ fn cmd_torture(
                 };
                 if cross_rust_fail {
                     cross_decode_mismatches += 1;
-                    let print_ok = cross_decode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
+                    let print_ok =
+                        cross_decode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
                     if print_ok {
-                        if in_burst { burst_mismatches_printed += 1; }
+                        if in_burst {
+                            burst_mismatches_printed += 1;
+                        }
                         println!(
                             "CROSS-DECODE MISMATCH (B vs D, packets equal) @ frame {}",
                             frame_idx
@@ -6800,9 +7328,12 @@ fn cmd_torture(
                 };
                 if weak_fail_cd {
                     cross_decode_mismatches += 1;
-                    let print_ok = cross_decode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
+                    let print_ok =
+                        cross_decode_mismatches <= 5 || (in_burst && burst_print_budget_ok);
                     if print_ok {
-                        if in_burst { burst_mismatches_printed += 1; }
+                        if in_burst {
+                            burst_mismatches_printed += 1;
+                        }
                         println!(
                             "CROSS-DECODE MISMATCH (C vs D, packets diverged) @ frame {}",
                             frame_idx
@@ -6869,9 +7400,16 @@ fn cmd_torture(
             let pct = pcm_pos as f64 / pcm.len() as f64 * 100.0;
             eprint!(
                 "\r  [{:.0}s] frame {} ({:.1}%), cfgs: {}, bursts: {}, enc_err: {}, dec_err: {}, rng_err: {}, xdec_err: {}, state_err: {}   ",
-                elapsed, frame_idx, pct, configs_tested, bursts_fired,
-                encode_mismatches, decode_mismatches, range_mismatches,
-                cross_decode_mismatches, state_check_mismatches,
+                elapsed,
+                frame_idx,
+                pct,
+                configs_tested,
+                bursts_fired,
+                encode_mismatches,
+                decode_mismatches,
+                range_mismatches,
+                cross_decode_mismatches,
+                state_check_mismatches,
             );
         }
     }
@@ -7019,18 +7557,17 @@ fn run_transition_sequence(
         }
         dec
     };
-    let mut rust_dec_cs =
-        match mdopus::opus::decoder::OpusDecoder::new(sample_rate, channels) {
-            Ok(d) => d,
-            Err(_) => {
-                println!("SKIP (Rust decoder failed)");
-                unsafe {
-                    bindings::opus_encoder_destroy(c_enc);
-                    bindings::opus_decoder_destroy(c_dec_cs);
-                };
-                return true;
-            }
-        };
+    let mut rust_dec_cs = match mdopus::opus::decoder::OpusDecoder::new(sample_rate, channels) {
+        Ok(d) => d,
+        Err(_) => {
+            println!("SKIP (Rust decoder failed)");
+            unsafe {
+                bindings::opus_encoder_destroy(c_enc);
+                bindings::opus_decoder_destroy(c_dec_cs);
+            };
+            return true;
+        }
+    };
 
     // Cross-decode extras: separate decoders fed the Rust-encoded stream.
     let c_dec_rs: *mut bindings::OpusDecoder = if cross_decode {
@@ -7073,8 +7610,16 @@ fn run_transition_sequence(
     let mut rust_pkt = vec![0u8; 4000];
     let mut pcm_a = vec![0i16; max_frame_samples];
     let mut pcm_b = vec![0i16; max_frame_samples];
-    let mut pcm_c = if cross_decode { vec![0i16; max_frame_samples] } else { Vec::new() };
-    let mut pcm_d = if cross_decode { vec![0i16; max_frame_samples] } else { Vec::new() };
+    let mut pcm_c = if cross_decode {
+        vec![0i16; max_frame_samples]
+    } else {
+        Vec::new()
+    };
+    let mut pcm_d = if cross_decode {
+        vec![0i16; max_frame_samples]
+    } else {
+        Vec::new()
+    };
 
     let frame_samples = frame_size * channels as usize;
     let mut pcm_pos: usize = 0;
@@ -7127,22 +7672,32 @@ fn run_transition_sequence(
                     if first_fail.is_none() {
                         first_fail = Some((step_idx, f));
                         // Dump first mismatch details
-                        eprintln!("    DIAG step={} frame={}: C={} bytes Rust={} bytes", step_idx, f, cl, rl);
+                        eprintln!(
+                            "    DIAG step={} frame={}: C={} bytes Rust={} bytes",
+                            step_idx, f, cl, rl
+                        );
                         if cl > 0 && rl > 0 {
                             eprintln!("    C_toc=0x{:02x} R_toc=0x{:02x}", c_pkt[0], rust_pkt[0]);
                         }
                         let min_len = cl.min(rl).min(16);
                         eprint!("    C_pkt:");
-                        for b in &c_pkt[..min_len] { eprint!(" {:02x}", b); }
+                        for b in &c_pkt[..min_len] {
+                            eprint!(" {:02x}", b);
+                        }
                         eprintln!();
                         eprint!("    R_pkt:");
-                        for b in &rust_pkt[..min_len] { eprint!(" {:02x}", b); }
+                        for b in &rust_pkt[..min_len] {
+                            eprint!(" {:02x}", b);
+                        }
                         eprintln!();
                         // Find first diff
                         let cmp_len = cl.min(rl);
                         for k in 0..cmp_len {
                             if c_pkt[k] != rust_pkt[k] {
-                                eprintln!("    First diff at byte {}: C=0x{:02x} R=0x{:02x}", k, c_pkt[k], rust_pkt[k]);
+                                eprintln!(
+                                    "    First diff at byte {}: C=0x{:02x} R=0x{:02x}",
+                                    k, c_pkt[k], rust_pkt[k]
+                                );
                                 break;
                             }
                         }
@@ -7161,7 +7716,12 @@ fn run_transition_sequence(
                 );
                 let c_res = if cross_decode {
                     unsafe {
-                        c_decode_packet(c_dec_rs, &rust_pkt[..rl], &mut pcm_c, max_dec_per_ch as i32)
+                        c_decode_packet(
+                            c_dec_rs,
+                            &rust_pkt[..rl],
+                            &mut pcm_c,
+                            max_dec_per_ch as i32,
+                        )
                     }
                 } else {
                     None
@@ -7180,8 +7740,8 @@ fn run_transition_sequence(
                 // A vs B: existing check.
                 match (a, b) {
                     (Some((an, ar)), Some((bn, br))) => {
-                        let n = (an as usize * channels as usize)
-                            .min(bn as usize * channels as usize);
+                        let n =
+                            (an as usize * channels as usize).min(bn as usize * channels as usize);
                         let mut pcm_diff = false;
                         for j in 0..n {
                             if pcm_a[j] != pcm_b[j] {
@@ -7216,7 +7776,10 @@ fn run_transition_sequence(
                                     .min(cn as usize * channels as usize);
                                 let mut diff = false;
                                 for j in 0..n {
-                                    if pcm_a[j] != pcm_c[j] { diff = true; break; }
+                                    if pcm_a[j] != pcm_c[j] {
+                                        diff = true;
+                                        break;
+                                    }
                                 }
                                 diff || ar != cr
                             }
@@ -7229,7 +7792,10 @@ fn run_transition_sequence(
                                     .min(dn as usize * channels as usize);
                                 let mut diff = false;
                                 for j in 0..n {
-                                    if pcm_b[j] != pcm_d[j] { diff = true; break; }
+                                    if pcm_b[j] != pcm_d[j] {
+                                        diff = true;
+                                        break;
+                                    }
                                 }
                                 diff || br != dr
                             }
@@ -7250,7 +7816,10 @@ fn run_transition_sequence(
                                     .min(dn as usize * channels as usize);
                                 let mut diff = false;
                                 for j in 0..n {
-                                    if pcm_c[j] != pcm_d[j] { diff = true; break; }
+                                    if pcm_c[j] != pcm_d[j] {
+                                        diff = true;
+                                        break;
+                                    }
                                 }
                                 diff || cr != dr
                             }
@@ -7339,8 +7908,14 @@ fn cmd_transitions(cross_decode: bool) {
 
         all_pass &= run_transition_sequence(
             "SILK->CELT->SILK->CELT (mono)",
-            sr, ch,
-            &[(silk.clone(), n), (celt.clone(), n), (silk.clone(), n), (celt.clone(), n)],
+            sr,
+            ch,
+            &[
+                (silk.clone(), n),
+                (celt.clone(), n),
+                (silk.clone(), n),
+                (celt.clone(), n),
+            ],
             cross_decode,
         );
     }
@@ -7369,7 +7944,8 @@ fn cmd_transitions(cross_decode: bool) {
                 (cfg, n / 2)
             })
             .collect();
-        all_pass &= run_transition_sequence("BW sweep NB->FB->NB (mono)", sr, ch, &steps, cross_decode);
+        all_pass &=
+            run_transition_sequence("BW sweep NB->FB->NB (mono)", sr, ch, &steps, cross_decode);
     }
 
     // --- Test 3: VBR on/off cycling ---
@@ -7387,8 +7963,14 @@ fn cmd_transitions(cross_decode: bool) {
 
         all_pass &= run_transition_sequence(
             "VBR on->off->on->off (mono)",
-            sr, ch,
-            &[(vbr_on.clone(), n), (vbr_off.clone(), n), (vbr_on.clone(), n), (vbr_off.clone(), n)],
+            sr,
+            ch,
+            &[
+                (vbr_on.clone(), n),
+                (vbr_off.clone(), n),
+                (vbr_on.clone(), n),
+                (vbr_off.clone(), n),
+            ],
             cross_decode,
         );
     }
@@ -7415,7 +7997,8 @@ fn cmd_transitions(cross_decode: bool) {
 
         all_pass &= run_transition_sequence(
             "VOIP-like->AUDIO-like->VOIP-like (mono)",
-            sr, ch,
+            sr,
+            ch,
             &[
                 (voip_like.clone(), n),
                 (audio_like.clone(), n),
@@ -7441,8 +8024,13 @@ fn cmd_transitions(cross_decode: bool) {
 
         all_pass &= run_transition_sequence(
             "DTX on->off->on (mono)",
-            sr, ch,
-            &[(dtx_on.clone(), n), (dtx_off.clone(), n), (dtx_on.clone(), n)],
+            sr,
+            ch,
+            &[
+                (dtx_on.clone(), n),
+                (dtx_off.clone(), n),
+                (dtx_on.clone(), n),
+            ],
             cross_decode,
         );
     }
@@ -7465,7 +8053,8 @@ fn cmd_transitions(cross_decode: bool) {
 
         all_pass &= run_transition_sequence(
             "Stereo->ForceMono->Auto->Stereo",
-            sr, ch,
+            sr,
+            ch,
             &[
                 (stereo.clone(), n),
                 (mono_forced.clone(), n),
@@ -7489,7 +8078,13 @@ fn cmd_transitions(cross_decode: bool) {
                 (cfg, n)
             })
             .collect();
-        all_pass &= run_transition_sequence("Bitrate extremes 6k->510k->6k (mono)", sr, ch, &steps, cross_decode);
+        all_pass &= run_transition_sequence(
+            "Bitrate extremes 6k->510k->6k (mono)",
+            sr,
+            ch,
+            &steps,
+            cross_decode,
+        );
     }
 
     // --- Test 8: FEC + packet loss cycling ---
@@ -7512,8 +8107,14 @@ fn cmd_transitions(cross_decode: bool) {
 
         all_pass &= run_transition_sequence(
             "FEC off->low_loss->high_loss->off (mono)",
-            sr, ch,
-            &[(fec_off.clone(), n), (fec_low.clone(), n), (fec_high.clone(), n), (fec_off.clone(), n)],
+            sr,
+            ch,
+            &[
+                (fec_off.clone(), n),
+                (fec_low.clone(), n),
+                (fec_high.clone(), n),
+                (fec_off.clone(), n),
+            ],
             cross_decode,
         );
     }
@@ -8446,6 +9047,19 @@ mod coverage_smoke_tests {
             "CELT 48k/1ch CBR 64kbps 20ms cx10 VOIP DTX",
             "CELT 48k/2ch CBR 128kbps 20ms cx10 AUDIO forcestereo",
             "CELT 48k/1ch CBR 64kbps 2.5ms cx10 LOWDELAY",
+            // Additional for coverage:
+            "SILK 12k/1ch CBR 16kbps 20ms cx10 VOIP", // mediumband
+            "SILK 16k/2ch CBR 32kbps 20ms cx10 VOIP", // stereo WB SILK
+            "SILK 16k/1ch CVBR 24kbps 40ms cx10 VOIP", // 40ms frames
+            "SILK 16k/1ch CBR 24kbps 60ms cx10 VOIP", // 60ms frames
+            "SILK 8k/2ch CBR 24kbps 20ms cx10 VOIP",  // stereo NB
+            "SILK 16k/1ch CBR 32kbps 20ms cx10 VOIP FEC+25%loss", // high loss FEC
+            "Hybrid 48k/2ch CBR 64kbps 20ms cx10 AUDIO", // hybrid stereo
+            "Hybrid 48k/1ch CVBR 48kbps 20ms cx10 AUDIO", // hybrid CVBR
+            "CELT 48k/1ch CVBR 32kbps 20ms cx10 AUDIO", // CELT CVBR low
+            "CELT 48k/2ch CVBR 96kbps 20ms cx10 AUDIO", // CELT stereo CVBR
+            "CELT 48k/1ch CBR 64kbps 10ms cx10 LOWDELAY", // 10ms lowdelay
+            "CELT 48k/2ch CBR 128kbps 5ms cx10 LOWDELAY", // stereo lowdelay
         ] {
             cmd_sweep(Some(filter), true);
         }
@@ -8469,7 +9083,9 @@ fn usage() {
     eprintln!("  mdopus-compare sweep [filter] [--stop-on-fail]");
     eprintln!("  mdopus-compare bench <input.wav> [--bitrate N] [--complexity N] [--iters N]");
     eprintln!("  mdopus-compare longsoak [--duration N] [--sample-rate N]");
-    eprintln!("  mdopus-compare torture [--duration N] [--seed N] [--change-interval N] [--sample-rate N] [--channels N]");
+    eprintln!(
+        "  mdopus-compare torture [--duration N] [--seed N] [--change-interval N] [--sample-rate N] [--channels N]"
+    );
     eprintln!("  mdopus-compare transitions");
     eprintln!("  mdopus-compare quality <input.wav>");
     eprintln!("  mdopus-compare packets <input.wav>");

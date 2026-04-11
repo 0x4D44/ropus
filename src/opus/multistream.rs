@@ -13,20 +13,20 @@
 use crate::celt::bands::compute_band_energies;
 use crate::celt::encoder::{celt_preemphasis, clt_mdct_forward, get_fft_state};
 use crate::celt::math_ops::{celt_log2, isqrt32};
-use crate::celt::modes::{bitrate_to_bits, bits_to_bitrate, resampling_factor, CELTMode};
+use crate::celt::modes::{CELTMode, bitrate_to_bits, bits_to_bitrate, resampling_factor};
 use crate::celt::quant_bands::amp2log2;
 use crate::types::*;
 
 use super::decoder::{
-    opus_packet_get_nb_samples, OpusDecoder, MODE_CELT_ONLY, OPUS_BAD_ARG, OPUS_BUFFER_TOO_SMALL,
-    OPUS_INTERNAL_ERROR, OPUS_INVALID_PACKET, OPUS_OK, OPUS_UNIMPLEMENTED,
+    MODE_CELT_ONLY, OPUS_BAD_ARG, OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR, OPUS_INVALID_PACKET,
+    OPUS_OK, OPUS_UNIMPLEMENTED, OpusDecoder, opus_packet_get_nb_samples,
 };
 use super::decoder::{
     OPUS_BANDWIDTH_FULLBAND, OPUS_BANDWIDTH_NARROWBAND, OPUS_BANDWIDTH_SUPERWIDEBAND,
     OPUS_BANDWIDTH_WIDEBAND,
 };
 use super::encoder::{
-    frame_size_select, OpusEncoder, OPUS_AUTO, OPUS_BITRATE_MAX, OPUS_FRAMESIZE_ARG,
+    OPUS_AUTO, OPUS_BITRATE_MAX, OPUS_FRAMESIZE_ARG, OpusEncoder, frame_size_select,
 };
 use super::repacketizer::OpusRepacketizer;
 
@@ -2389,11 +2389,13 @@ mod tests {
             .unwrap();
         assert_eq!(muted_decoded, 960);
         assert!(muted_out.iter().step_by(2).any(|&sample| sample != 123));
-        assert!(muted_out
-            .iter()
-            .skip(1)
-            .step_by(2)
-            .all(|&sample| sample == 0));
+        assert!(
+            muted_out
+                .iter()
+                .skip(1)
+                .step_by(2)
+                .all(|&sample| sample == 0)
+        );
     }
 
     #[test]
@@ -2708,7 +2710,10 @@ mod tests {
         for (order_plus_one, expected_dim) in [(4, 18), (5, 27), (6, 38)] {
             let mixing = get_mixing_matrix_for_order(order_plus_one).unwrap();
             let demixing = get_demixing_matrix_for_order(order_plus_one).unwrap();
-            assert_eq!((mixing.rows, mixing.cols, mixing.gain), (expected_dim, expected_dim, 0));
+            assert_eq!(
+                (mixing.rows, mixing.cols, mixing.gain),
+                (expected_dim, expected_dim, 0)
+            );
             assert_eq!(
                 (demixing.rows, demixing.cols, demixing.gain),
                 (expected_dim, expected_dim, 0)
@@ -2925,7 +2930,10 @@ mod tests {
         let len = enc.encode(&pcm, 960, &mut packet, 5000).unwrap();
         assert!(len > 0);
         assert_eq!(enc.get_final_range(), enc.ms_encoder.get_final_range());
-        assert_eq!(enc.ms_encoder.get_encoder(0).unwrap().ms_get_complexity(), 4);
+        assert_eq!(
+            enc.ms_encoder.get_encoder(0).unwrap().ms_get_complexity(),
+            4
+        );
         assert_eq!(enc.ms_encoder.get_encoder(0).unwrap().ms_get_vbr(), 0);
 
         enc.reset();
@@ -3152,8 +3160,8 @@ mod tests {
             OpusProjectionEncoder::new(48000, 9, 3, OPUS_APPLICATION_AUDIO).unwrap();
         let demixing = enc.get_demixing_matrix();
         let matrix_size = enc.get_demixing_matrix_size();
-        let mut dec = OpusProjectionDecoder::new(48000, 9, streams, coupled, &demixing, matrix_size)
-            .unwrap();
+        let mut dec =
+            OpusProjectionDecoder::new(48000, 9, streams, coupled, &demixing, matrix_size).unwrap();
 
         let pcm = patterned_pcm_i16(960, 9, 79);
         let mut packet = vec![0u8; 5000];
@@ -3180,7 +3188,10 @@ mod tests {
         // Family 2 = ambisonics. Invalid channel counts for ambisonics.
         for ch in [0, 2, 5, 7, 8, 10] {
             let result = OpusMSEncoder::new_surround(48000, ch, 2, OPUS_APPLICATION_AUDIO);
-            assert!(result.is_err(), "channels={ch} should be invalid for ambisonics family 2");
+            assert!(
+                result.is_err(),
+                "channels={ch} should be invalid for ambisonics family 2"
+            );
         }
     }
 
@@ -3190,20 +3201,27 @@ mod tests {
         // N=1: 1, 3; N=2: 4, 6; N=3: 9, 11; N=4: 16
         for ch in [1, 3, 4, 6, 9, 11, 16] {
             let result = OpusMSEncoder::new_surround(48000, ch, 2, OPUS_APPLICATION_AUDIO);
-            assert!(result.is_ok(), "channels={ch} should be valid for ambisonics, got {:?}", result.err());
+            assert!(
+                result.is_ok(),
+                "channels={ch} should be valid for ambisonics, got {:?}",
+                result.err()
+            );
         }
     }
 
     #[test]
     fn test_ms_encoder_coupled_stereo_roundtrip() {
-        let mut enc = OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO).expect("stereo ms encoder");
+        let mut enc = OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO)
+            .expect("stereo ms encoder");
         let mut dec = OpusMSDecoder::new(48000, 2, 1, 1, &[0, 1]).expect("stereo ms decoder");
         let pcm = patterned_pcm_i16(960, 2, 42);
         let mut packet = vec![0u8; 4000];
         let len = enc.encode(&pcm, 960, &mut packet, 4000).expect("encode");
         assert!(len > 0);
         let mut out = vec![0i16; 960 * 2];
-        let decoded = dec.decode(Some(&packet[..len as usize]), len, &mut out, 960, false).expect("decode");
+        let decoded = dec
+            .decode(Some(&packet[..len as usize]), len, &mut out, 960, false)
+            .expect("decode");
         assert_eq!(decoded, 960);
         assert!(out.iter().any(|&s| s != 0));
     }
@@ -3228,13 +3246,15 @@ mod tests {
 
     #[test]
     fn test_ms_decoder_plc_stereo() {
-        let mut enc = OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO).expect("stereo ms encoder");
+        let mut enc = OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO)
+            .expect("stereo ms encoder");
         let mut dec = OpusMSDecoder::new(48000, 2, 1, 1, &[0, 1]).expect("stereo ms decoder");
         let pcm = patterned_pcm_i16(960, 2, 99);
         let mut packet = vec![0u8; 4000];
         let len = enc.encode(&pcm, 960, &mut packet, 4000).expect("encode");
         let mut out = vec![0i16; 960 * 2];
-        dec.decode(Some(&packet[..len as usize]), len, &mut out, 960, false).expect("decode");
+        dec.decode(Some(&packet[..len as usize]), len, &mut out, 960, false)
+            .expect("decode");
         let mut plc_out = vec![0i16; 960 * 2];
         let result = dec.decode(None, 0, &mut plc_out, 960, false);
         assert!(result.is_ok(), "PLC decode should succeed");
@@ -3243,7 +3263,10 @@ mod tests {
     #[test]
     fn test_validate_layout_max_channels_boundary() {
         let result = OpusMSDecoder::new(48000, 2, 255, 1, &[0, 1]);
-        assert!(result.is_err(), "streams=255 + coupled=1 = 256 > 255 should fail");
+        assert!(
+            result.is_err(),
+            "streams=255 + coupled=1 = 256 > 255 should fail"
+        );
     }
 
     #[test]
@@ -3386,8 +3409,7 @@ mod tests {
     #[test]
     fn test_ms_decode_fec_stereo_coupled() {
         // Exercise FEC decode path with a coupled stereo stream
-        let mut enc =
-            OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO).unwrap();
+        let mut enc = OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO).unwrap();
         enc.set_inband_fec(1);
         enc.set_packet_loss_perc(20);
 
@@ -3443,7 +3465,10 @@ mod tests {
         // Exercise all order branches for demixing matrix lookup
         for order in 2..=6 {
             let result = get_demixing_matrix_for_order(order);
-            assert!(result.is_ok(), "order_plus_one={order} should have a demixing matrix");
+            assert!(
+                result.is_ok(),
+                "order_plus_one={order} should have a demixing matrix"
+            );
             let mat = result.unwrap();
             assert!(mat.rows > 0);
             assert!(mat.cols > 0);

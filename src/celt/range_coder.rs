@@ -1513,7 +1513,10 @@ mod tests {
         assert_eq!(offs, 0);
         assert_eq!(rem, -1);
         enc.patch_initial_bits(1, 1);
-        assert!(enc.error(), "should set error when rng > EC_CODE_TOP >> nbits");
+        assert!(
+            enc.error(),
+            "should set error when rng > EC_CODE_TOP >> nbits"
+        );
     }
 
     #[test]
@@ -1527,7 +1530,10 @@ mod tests {
         enc.encode_bits(0xFF, 8);
         enc.done();
         // With only 2 bytes, this should overflow
-        assert!(enc.error(), "tiny buffer with many bits should cause error in done()");
+        assert!(
+            enc.error(),
+            "tiny buffer with many bits should cause error in done()"
+        );
     }
 
     #[test]

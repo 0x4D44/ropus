@@ -186,6 +186,24 @@ pub struct StereoWidthState {
     pub max_follower: i32,   // Q15
 }
 
+/// Snapshot of key SILK encoder internal state, used for comparison testing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SilkEncoderSnapshot {
+    pub fs_khz: i32,
+    pub frame_length: i32,
+    pub nb_subfr: i32,
+    pub input_buf_ix: i32,
+    pub n_frames_per_packet: i32,
+    pub packet_size_ms: i32,
+    pub first_frame_after_reset: i32,
+    pub controlled_since_last_payload: i32,
+    pub prefill_flag: i32,
+    pub n_frames_encoded: i32,
+    pub speech_activity_q8: i32,
+    pub signal_type: i32,
+    pub input_quality_bands_q15: i32,
+}
+
 /// Opus encoder state.
 pub struct OpusEncoder {
     // --- Immutable after init ---
@@ -1728,16 +1746,18 @@ impl OpusEncoder {
 
         // C: repacketize_len = use_vbr ? out_data_bytes : IMIN(cbr_bytes, out_data_bytes)
         // For CBR, max_data_bytes is already clamped to cbr_bytes by the caller.
-        let repacketize_len =
-            if self.use_vbr != 0 || self.user_bitrate_bps == OPUS_BITRATE_MAX {
-                orig_max_data_bytes
-            } else {
-                imin(max_data_bytes, orig_max_data_bytes)
-            };
+        let repacketize_len = if self.use_vbr != 0 || self.user_bitrate_bps == OPUS_BITRATE_MAX {
+            orig_max_data_bytes
+        } else {
+            imin(max_data_bytes, orig_max_data_bytes)
+        };
 
         // C: max_header_bytes = nb_frames == 2 ? 3 : (2+(nb_frames-1)*2)
-        let max_header_bytes =
-            if nb_frames == 2 { 3 } else { 2 + (nb_frames - 1) * 2 };
+        let max_header_bytes = if nb_frames == 2 {
+            3
+        } else {
+            2 + (nb_frames - 1) * 2
+        };
         let max_len_sum = nb_frames + repacketize_len - max_header_bytes;
         let mut tot_size: i32 = 0;
         let mut dtx_count: i32 = 0;
@@ -1752,8 +1772,7 @@ impl OpusEncoder {
             // C: frame_to_celt = to_celt && i==nb_frames-1;
             let frame_to_celt = to_celt && i == nb_frames - 1;
             // C: frame_redundancy = redundancy && (frame_to_celt || (!to_celt && i==0));
-            let frame_redundancy =
-                redundancy && (frame_to_celt || (!to_celt && i == 0));
+            let frame_redundancy = redundancy && (frame_to_celt || (!to_celt && i == 0));
 
             // C: curr_max = IMIN(bitrate_to_bits(...)/8, max_len_sum/nb_frames);
             //    curr_max = IMIN(max_len_sum-tot_size, curr_max);
@@ -2034,17 +2053,13 @@ impl OpusEncoder {
                     };
                     if effective_max_rate < 8000 {
                         self.silk_mode.max_internal_sample_rate = 12000;
-                        self.silk_mode.desired_internal_sample_rate = imin(
-                            12000,
-                            self.silk_mode.desired_internal_sample_rate,
-                        );
+                        self.silk_mode.desired_internal_sample_rate =
+                            imin(12000, self.silk_mode.desired_internal_sample_rate);
                     }
                     if effective_max_rate < 7000 {
                         self.silk_mode.max_internal_sample_rate = 8000;
-                        self.silk_mode.desired_internal_sample_rate = imin(
-                            8000,
-                            self.silk_mode.desired_internal_sample_rate,
-                        );
+                        self.silk_mode.desired_internal_sample_rate =
+                            imin(8000, self.silk_mode.desired_internal_sample_rate);
                     }
                 }
 
@@ -2242,7 +2257,9 @@ impl OpusEncoder {
             // C: OPUS_COPY(tmp_prefill, &delay_buffer[(encoder_buffer-total_buffer-Fs/400)*ch], ch*Fs/400)
             // This captures 2.5ms from the delay buffer at an offset that will be
             // overwritten by the update below.
-            if self.mode != MODE_SILK_ONLY && self.mode != self.prev_mode && self.prev_mode > 0
+            if self.mode != MODE_SILK_ONLY
+                && self.mode != self.prev_mode
+                && self.prev_mode > 0
                 && self.application != OPUS_APPLICATION_RESTRICTED_SILK
             {
                 let n4 = (self.fs / 400) as usize;
@@ -2946,26 +2963,24 @@ impl OpusEncoder {
 
     /// Return key SILK encoder internal state for comparison testing.
     /// Returns None if no SILK encoder is allocated.
-    pub fn get_silk_state(
-        &self,
-    ) -> Option<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)> {
+    pub fn get_silk_state(&self) -> Option<SilkEncoderSnapshot> {
         let silk = self.silk_enc.as_ref()?;
         let s = &silk.state_fxx[0].s_cmn;
-        Some((
-            s.fs_khz,
-            s.frame_length,
-            s.nb_subfr,
-            s.input_buf_ix,
-            s.n_frames_per_packet,
-            s.packet_size_ms,
-            s.first_frame_after_reset,
-            s.controlled_since_last_payload,
-            s.prefill_flag,
-            s.n_frames_encoded,
-            s.speech_activity_q8,
-            s.indices.signal_type as i32,
-            s.input_quality_bands_q15[0],
-        ))
+        Some(SilkEncoderSnapshot {
+            fs_khz: s.fs_khz,
+            frame_length: s.frame_length,
+            nb_subfr: s.nb_subfr,
+            input_buf_ix: s.input_buf_ix,
+            n_frames_per_packet: s.n_frames_per_packet,
+            packet_size_ms: s.packet_size_ms,
+            first_frame_after_reset: s.first_frame_after_reset,
+            controlled_since_last_payload: s.controlled_since_last_payload,
+            prefill_flag: s.prefill_flag,
+            n_frames_encoded: s.n_frames_encoded,
+            speech_activity_q8: s.speech_activity_q8,
+            signal_type: s.indices.signal_type as i32,
+            input_quality_bands_q15: s.input_quality_bands_q15[0],
+        })
     }
 }
 
@@ -3782,7 +3797,10 @@ mod tests {
         let pcm_f32 = patterned_pcm_f32(960, 2, 77);
         let mut packet = [0u8; 16];
 
-        assert_eq!(enc.encode(&pcm_i16, 960, &mut packet, 16), Err(OPUS_BAD_ARG));
+        assert_eq!(
+            enc.encode(&pcm_i16, 960, &mut packet, 16),
+            Err(OPUS_BAD_ARG)
+        );
         assert_eq!(
             enc.encode_float(&pcm_f32, 960, &mut packet, 16),
             Err(OPUS_BAD_ARG)
@@ -3911,7 +3929,10 @@ mod tests {
 
         assert!(len > 1);
         assert_ne!(enc.get_mode(), MODE_CELT_ONLY);
-        assert_eq!(packet_mode_from_toc(&packet[..len as usize]), enc.get_mode());
+        assert_eq!(
+            packet_mode_from_toc(&packet[..len as usize]),
+            enc.get_mode()
+        );
         assert_eq!(enc.silk_mode.to_mono, 1);
         assert_eq!(enc.get_stream_channels(), 2);
     }
@@ -3947,7 +3968,10 @@ mod tests {
 
         assert!(len > 1);
         assert_eq!(enc.silk_bw_switch, 0);
-        assert_eq!(packet_mode_from_toc(&packet[..len as usize]), MODE_CELT_ONLY);
+        assert_eq!(
+            packet_mode_from_toc(&packet[..len as usize]),
+            MODE_CELT_ONLY
+        );
     }
 
     #[test]
@@ -3992,7 +4016,17 @@ mod tests {
             // Result ignored: we only inspect silk_mode state after the
             // narrowing logic runs (encode may fail with tiny buffers).
             let _ = enc.encode_frame_native(
-                &pcm, 960, &mut packet, 25, 25, false, false, false, 0, 6000, false,
+                &pcm,
+                960,
+                &mut packet,
+                25,
+                25,
+                false,
+                false,
+                false,
+                0,
+                6000,
+                false,
             );
             assert_eq!(
                 enc.silk_mode.max_internal_sample_rate, 16000,
@@ -4011,7 +4045,17 @@ mod tests {
             let mut packet = vec![0u8; 1500];
             // max_data_bytes = 18 -> effective_max_rate = 18*400 = 7200
             let _ = enc.encode_frame_native(
-                &pcm, 960, &mut packet, 18, 18, false, false, false, 0, 6000, false,
+                &pcm,
+                960,
+                &mut packet,
+                18,
+                18,
+                false,
+                false,
+                false,
+                0,
+                6000,
+                false,
             );
             assert_eq!(
                 enc.silk_mode.max_internal_sample_rate, 12000,
@@ -4030,7 +4074,17 @@ mod tests {
             let mut packet = vec![0u8; 1500];
             // max_data_bytes = 15 -> effective_max_rate = 15*400 = 6000
             let _ = enc.encode_frame_native(
-                &pcm, 960, &mut packet, 15, 15, false, false, false, 0, 6000, false,
+                &pcm,
+                960,
+                &mut packet,
+                15,
+                15,
+                false,
+                false,
+                false,
+                0,
+                6000,
+                false,
             );
             assert_eq!(
                 enc.silk_mode.max_internal_sample_rate, 8000,
@@ -4066,7 +4120,17 @@ mod tests {
             let pcm = patterned_pcm_i16(480, 1, 601);
             let mut packet = vec![0u8; 1500];
             let _ = enc.encode_frame_native(
-                &pcm, 480, &mut packet, 15, 15, false, false, false, 0, 6000, false,
+                &pcm,
+                480,
+                &mut packet,
+                15,
+                15,
+                false,
+                false,
+                false,
+                0,
+                6000,
+                false,
             );
             assert_eq!(
                 enc.silk_mode.max_internal_sample_rate, 16000,
@@ -4084,7 +4148,17 @@ mod tests {
             let pcm = patterned_pcm_i16(480, 1, 602);
             let mut packet = vec![0u8; 1500];
             let _ = enc.encode_frame_native(
-                &pcm, 480, &mut packet, 14, 14, false, false, false, 0, 6000, false,
+                &pcm,
+                480,
+                &mut packet,
+                14,
+                14,
+                false,
+                false,
+                false,
+                0,
+                6000,
+                false,
             );
             assert_eq!(
                 enc.silk_mode.max_internal_sample_rate, 12000,
@@ -4102,7 +4176,17 @@ mod tests {
             let pcm = patterned_pcm_i16(480, 1, 603);
             let mut packet = vec![0u8; 1500];
             let _ = enc.encode_frame_native(
-                &pcm, 480, &mut packet, 13, 13, false, false, false, 0, 6000, false,
+                &pcm,
+                480,
+                &mut packet,
+                13,
+                13,
+                false,
+                false,
+                false,
+                0,
+                6000,
+                false,
             );
             assert_eq!(
                 enc.silk_mode.max_internal_sample_rate, 8000,
@@ -4141,8 +4225,17 @@ mod tests {
         let pcm2 = patterned_pcm_i16(960, 1, 2002);
         let len = enc
             .encode_frame_native(
-                &pcm2, 960, &mut packet, cap, cap, false, false, false, 0,
-                enc.bitrate_bps, false,
+                &pcm2,
+                960,
+                &mut packet,
+                cap,
+                cap,
+                false,
+                false,
+                false,
+                0,
+                enc.bitrate_bps,
+                false,
             )
             .unwrap();
         assert!(len > 1);
@@ -4180,7 +4273,10 @@ mod tests {
                 break;
             }
         }
-        assert!(got_dtx, "expected DTX 1-byte packet after sustained silence");
+        assert!(
+            got_dtx,
+            "expected DTX 1-byte packet after sustained silence"
+        );
     }
 
     /// Gap 3: Hybrid mode SILK rate interpolation with DRED/LBRR flags.
@@ -4256,8 +4352,14 @@ mod tests {
         // rate=18000 > 17239 → returns 1, bandwidth stays WB.
         let mut bw = OPUS_BANDWIDTH_WIDEBAND;
         let result = decide_fec(1, 10, 1, MODE_SILK_ONLY, &mut bw, 18000);
-        assert_eq!(result, 1, "last_fec=1 hysteresis should keep FEC at WB with rate 18000");
-        assert_eq!(bw, OPUS_BANDWIDTH_WIDEBAND, "bandwidth should stay WB with hysteresis");
+        assert_eq!(
+            result, 1,
+            "last_fec=1 hysteresis should keep FEC at WB with rate 18000"
+        );
+        assert_eq!(
+            bw, OPUS_BANDWIDTH_WIDEBAND,
+            "bandwidth should stay WB with hysteresis"
+        );
 
         // Without hysteresis (last_fec=0), WB threshold = 16000+1000=17000 → scaled=19538.
         // 18000 < 19538 → falls through; WB gets reduced to MB.
@@ -4265,8 +4367,14 @@ mod tests {
         // But bandwidth was changed to MB!
         let mut bw2 = OPUS_BANDWIDTH_WIDEBAND;
         let result2 = decide_fec(1, 10, 0, MODE_SILK_ONLY, &mut bw2, 18000);
-        assert_eq!(result2, 1, "without hysteresis, FEC still enabled but bw reduced");
-        assert_eq!(bw2, OPUS_BANDWIDTH_MEDIUMBAND, "bandwidth should be reduced to MB without hysteresis");
+        assert_eq!(
+            result2, 1,
+            "without hysteresis, FEC still enabled but bw reduced"
+        );
+        assert_eq!(
+            bw2, OPUS_BANDWIDTH_MEDIUMBAND,
+            "bandwidth should be reduced to MB without hysteresis"
+        );
     }
 
     /// Gap 4b: FEC hysteresis through the encode path — set up encoder with
@@ -4351,7 +4459,10 @@ mod tests {
         let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
         assert_eq!(enc.set_bitrate(64000), OPUS_OK);
         assert_eq!(enc.set_vbr(1), OPUS_OK);
-        assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_2_5_MS), OPUS_OK);
+        assert_eq!(
+            enc.set_expert_frame_duration(OPUS_FRAMESIZE_2_5_MS),
+            OPUS_OK
+        );
 
         let pcm = patterned_pcm_i16(120, 1, 2701);
         let mut packet = vec![0u8; 1500];
@@ -4392,7 +4503,15 @@ mod tests {
         let input_mono = vec![1000i16; 480];
         let mut output_mono = vec![0i16; 480];
         let mut hp_mem_mono = [0i32; 4];
-        hp_cutoff_debug(&input_mono, 100, &mut output_mono, &mut hp_mem_mono, 480, 1, 48000);
+        hp_cutoff_debug(
+            &input_mono,
+            100,
+            &mut output_mono,
+            &mut hp_mem_mono,
+            480,
+            1,
+            48000,
+        );
         // Filter should produce output; DC content should be attenuated
         assert!(output_mono.iter().any(|&s| s != 0));
         // HP mem should be updated
@@ -4402,7 +4521,15 @@ mod tests {
         let input_stereo = vec![500i16; 960];
         let mut output_stereo = vec![0i16; 960];
         let mut hp_mem_stereo = [0i32; 4];
-        hp_cutoff_debug(&input_stereo, 80, &mut output_stereo, &mut hp_mem_stereo, 480, 2, 48000);
+        hp_cutoff_debug(
+            &input_stereo,
+            80,
+            &mut output_stereo,
+            &mut hp_mem_stereo,
+            480,
+            2,
+            48000,
+        );
         assert!(output_stereo.iter().any(|&s| s != 0));
         assert!(hp_mem_stereo.iter().any(|&m| m != 0));
     }
@@ -4433,7 +4560,10 @@ mod tests {
         assert!(len > 1);
         // After transition the mode should not be CELT_ONLY
         // (it stays as prev_mode=SILK during transition encode)
-        assert_ne!(packet_mode_from_toc(&packet[..len as usize]), MODE_CELT_ONLY);
+        assert_ne!(
+            packet_mode_from_toc(&packet[..len as usize]),
+            MODE_CELT_ONLY
+        );
     }
 
     /// Gap 11: CBR padding — multiframe CBR path where pad_cbr is triggered
@@ -4531,8 +4661,17 @@ mod tests {
         let pcm2 = patterned_pcm_i16(960, 1, 3499);
         let len = enc
             .encode_frame_native(
-                &pcm2, 960, &mut packet, cap, cap, false, false, false, 0,
-                enc.bitrate_bps, false,
+                &pcm2,
+                960,
+                &mut packet,
+                cap,
+                cap,
+                false,
+                false,
+                false,
+                0,
+                enc.bitrate_bps,
+                false,
             )
             .unwrap();
         assert!(len > 1);
@@ -4669,7 +4808,10 @@ mod tests {
         // Valid fullband
         assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_FULLBAND), OPUS_OK);
         // Invalid: below narrowband
-        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_NARROWBAND - 1), OPUS_BAD_ARG);
+        assert_eq!(
+            enc.set_bandwidth(OPUS_BANDWIDTH_NARROWBAND - 1),
+            OPUS_BAD_ARG
+        );
         // Invalid: above fullband
         assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_FULLBAND + 1), OPUS_BAD_ARG);
     }
@@ -4679,8 +4821,14 @@ mod tests {
         let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
         assert_eq!(enc.set_max_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
         assert_eq!(enc.get_max_bandwidth(), OPUS_BANDWIDTH_WIDEBAND);
-        assert_eq!(enc.set_max_bandwidth(OPUS_BANDWIDTH_NARROWBAND - 1), OPUS_BAD_ARG);
-        assert_eq!(enc.set_max_bandwidth(OPUS_BANDWIDTH_FULLBAND + 1), OPUS_BAD_ARG);
+        assert_eq!(
+            enc.set_max_bandwidth(OPUS_BANDWIDTH_NARROWBAND - 1),
+            OPUS_BAD_ARG
+        );
+        assert_eq!(
+            enc.set_max_bandwidth(OPUS_BANDWIDTH_FULLBAND + 1),
+            OPUS_BAD_ARG
+        );
     }
 
     #[test]
@@ -4866,8 +5014,14 @@ mod tests {
         assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_ARG), OPUS_OK);
         assert_eq!(enc.get_expert_frame_duration(), OPUS_FRAMESIZE_ARG);
         // Verify all valid frame durations
-        assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_2_5_MS), OPUS_OK);
-        assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_120_MS), OPUS_OK);
+        assert_eq!(
+            enc.set_expert_frame_duration(OPUS_FRAMESIZE_2_5_MS),
+            OPUS_OK
+        );
+        assert_eq!(
+            enc.set_expert_frame_duration(OPUS_FRAMESIZE_120_MS),
+            OPUS_OK
+        );
         assert_eq!(enc.get_expert_frame_duration(), OPUS_FRAMESIZE_120_MS);
     }
 }

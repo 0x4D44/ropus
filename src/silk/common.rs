@@ -596,8 +596,7 @@ pub fn silk_lpc_fit(a_q_to: &mut [i16], a_q_from: &mut [i32], q_to: i32, q_from:
             maxabs = imin(maxabs, 163838); // (i32::MAX >> 14) + i16::MAX
             // C uses silk_DIV32 (exact integer division), not silk_DIV32_varQ
             let chirp_q16 = ((0.999 * 65536.0 + 0.5) as i32)
-                - (shl32(maxabs - i16::MAX as i32, 14)
-                    / ((maxabs * (idx as i32 + 1)) >> 2));
+                - (shl32(maxabs - i16::MAX as i32, 14) / ((maxabs * (idx as i32 + 1)) >> 2));
             silk_bwexpander_32(&mut a_q_from[..d], d, chirp_q16);
         } else {
             reached_max_iter = false;
@@ -1561,7 +1560,7 @@ mod tests {
         let result = silk_lpc_inverse_pred_gain(&a_q12, 10);
         assert!(
             result > 0,
-            "stable filter should have positive inverse gain, got {result}"
+            "stable filter should have positive inverse gain"
         );
     }
 
@@ -1590,7 +1589,7 @@ mod tests {
         let expected_approx = (0.75 * (1i64 << 30) as f64) as i32;
         assert!(
             (result - expected_approx).abs() < expected_approx / 10,
-            "first-order IPG: expected ~{expected_approx}, got {result}"
+            "first-order IPG mismatch"
         );
     }
 
@@ -1629,9 +1628,7 @@ mod tests {
             let diff = nlsf[i] as i32 - nlsf[i - 1] as i32;
             assert!(
                 diff >= SILK_NLSF_DELTA_MIN_NB_MB_Q15[i] as i32,
-                "nlsf[{i}] - nlsf[{}] = {diff}, minimum = {}",
-                i - 1,
-                SILK_NLSF_DELTA_MIN_NB_MB_Q15[i]
+                "nlsf delta too small at {i}"
             );
         }
     }
@@ -1645,9 +1642,7 @@ mod tests {
         silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
         assert!(
             nlsf[0] as i32 >= SILK_NLSF_DELTA_MIN_NB_MB_Q15[0] as i32,
-            "nlsf[0]={} should be >= delta_min[0]={}",
-            nlsf[0],
-            SILK_NLSF_DELTA_MIN_NB_MB_Q15[0]
+            "nlsf[0] below delta_min"
         );
     }
 
@@ -1659,12 +1654,7 @@ mod tests {
         ];
         silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
         let upper = (1i32 << 15) - SILK_NLSF_DELTA_MIN_NB_MB_Q15[10] as i32;
-        assert!(
-            (nlsf[9] as i32) <= upper,
-            "nlsf[9]={} should be <= upper={}",
-            nlsf[9],
-            upper
-        );
+        assert!((nlsf[9] as i32) <= upper, "nlsf[9] exceeds upper limit");
     }
 
     #[test]
@@ -1675,13 +1665,7 @@ mod tests {
         ];
         silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
         for i in 1..10 {
-            assert!(
-                nlsf[i] > nlsf[i - 1],
-                "nlsf[{i}]={} should be > nlsf[{}]={}",
-                nlsf[i],
-                i - 1,
-                nlsf[i - 1]
-            );
+            assert!(nlsf[i] > nlsf[i - 1], "nlsf ordering violated at {i}");
         }
     }
 
@@ -1702,10 +1686,7 @@ mod tests {
             "order-10 should produce non-zero LPC"
         );
         let ipg = silk_lpc_inverse_pred_gain(&a_q12, 10);
-        assert!(
-            ipg > 0,
-            "order-10 NLSF2A should produce stable filter (IPG={ipg})"
-        );
+        assert!(ipg > 0, "order-10 NLSF2A should produce stable filter");
     }
 
     #[test]
@@ -1722,10 +1703,7 @@ mod tests {
             "order-16 should produce non-zero LPC"
         );
         let ipg = silk_lpc_inverse_pred_gain(&a_q12, 16);
-        assert!(
-            ipg > 0,
-            "order-16 NLSF2A should produce stable filter (IPG={ipg})"
-        );
+        assert!(ipg > 0, "order-16 NLSF2A should produce stable filter");
     }
 
     #[test]
@@ -1760,7 +1738,7 @@ mod tests {
         // Allow tolerance since the function adds a rounding bias
         assert!(
             (reconstructed - true_energy).abs() <= true_energy,
-            "ones: reconstructed={reconstructed}, true={true_energy}"
+            "ones: energy mismatch"
         );
     }
 
@@ -1780,7 +1758,7 @@ mod tests {
         let reconstructed = (energy as i64) << shift;
         assert!(
             (reconstructed - 1_000_000).abs() <= 10_000,
-            "single: energy={energy}, shift={shift}, reconstructed={reconstructed}"
+            "single sample energy mismatch"
         );
     }
 
@@ -1791,10 +1769,7 @@ mod tests {
             let (energy, shift) = silk_sum_sqr_shift(&input);
             assert!(energy > 0, "len={len}: energy should be positive");
             let reconstructed = (energy as i64) << shift;
-            assert!(
-                reconstructed > 0,
-                "len={len}: reconstructed energy should be positive"
-            );
+            assert!(reconstructed > 0, "reconstructed energy should be positive");
         }
     }
 
@@ -1810,10 +1785,7 @@ mod tests {
             let input = 1i32 << k;
             let result = silk_lin2log(input);
             let expected = k * 128;
-            assert!(
-                (result - expected).abs() <= 2,
-                "lin2log(2^{k}={input}): expected {expected}, got {result}"
-            );
+            assert!((result - expected).abs() <= 2, "lin2log power-of-2 mismatch at k={k}");
         }
     }
 
@@ -1832,10 +1804,7 @@ mod tests {
             let log_val = silk_lin2log(x);
             let reconstructed = silk_log2lin(log_val);
             let error = (reconstructed - x).abs() as f64 / x as f64;
-            assert!(
-                error < 0.05,
-                "roundtrip x={x}: log={log_val}, recon={reconstructed}, error={error:.4}"
-            );
+            assert!(error < 0.05, "lin2log/log2lin roundtrip error too large");
         }
     }
 
@@ -1890,10 +1859,7 @@ mod tests {
         for x in 1..180 {
             let sum = silk_sigm_q15(x) + silk_sigm_q15(-x);
             // s(x) + s(-x) should be approximately 32767 (Q15 for 1.0)
-            assert!(
-                (sum - 32767).abs() <= 2,
-                "sigm({x}) + sigm(-{x}) = {sum}, expected ~32767"
-            );
+            assert!((sum - 32767).abs() <= 2, "sigm symmetry violated");
         }
     }
 
@@ -1917,11 +1883,7 @@ mod tests {
                     break;
                 }
                 let val = silk_sigm_q15(x);
-                assert!(
-                    val >= prev,
-                    "positive segment: sigm({x})={val} < sigm({})={prev}",
-                    x - 1
-                );
+                assert!(val >= prev, "positive segment monotonicity violated");
                 prev = val;
             }
         }
@@ -1930,11 +1892,7 @@ mod tests {
             let mut prev = silk_sigm_q15(seg_start);
             for x in (seg_start + 1)..seg_start + 31 {
                 let val = silk_sigm_q15(x);
-                assert!(
-                    val >= prev,
-                    "negative segment: sigm({x})={val} < sigm({})={prev}",
-                    x - 1
-                );
+                assert!(val >= prev, "negative segment monotonicity violated");
                 prev = val;
             }
         }
@@ -1948,10 +1906,7 @@ mod tests {
     fn test_inv_power_of_2() {
         // 1/2 in Q16 = 32768
         let result = silk_inverse32_var_q(2, 16);
-        assert!(
-            (result - 32768).abs() <= 2,
-            "1/2 in Q16: expected 32768, got {result}"
-        );
+        assert!((result - 32768).abs() <= 2, "1/2 in Q16 mismatch");
     }
 
     #[test]
@@ -1959,29 +1914,20 @@ mod tests {
         // 1/100 in Q30 = 10737418 (approximately)
         let result = silk_inverse32_var_q(100, 30);
         let expected = ((1i64 << 30) / 100) as i32;
-        assert!(
-            (result - expected).abs() <= expected / 20 + 2,
-            "1/100 in Q30: expected ~{expected}, got {result}"
-        );
+        assert!((result - expected).abs() <= expected / 20 + 2, "1/100 in Q30 mismatch");
     }
 
     #[test]
     fn test_inv_negative() {
         let result = silk_inverse32_var_q(-4, 16);
         // -1/4 in Q16 = -16384
-        assert!(
-            (result - (-16384)).abs() <= 2,
-            "1/(-4) in Q16: expected -16384, got {result}"
-        );
+        assert!((result - (-16384)).abs() <= 2, "1/(-4) in Q16 mismatch");
     }
 
     #[test]
     fn test_div_simple() {
         let result = silk_div32_var_q(100, 10, 0);
-        assert!(
-            (result - 10).abs() <= 1,
-            "100/10 in Q0: expected 10, got {result}"
-        );
+        assert!((result - 10).abs() <= 1, "100/10 in Q0 mismatch");
     }
 
     #[test]
@@ -1989,10 +1935,7 @@ mod tests {
         // 1/3 in Q16 = 21845
         let result = silk_div32_var_q(1, 3, 16);
         let expected = ((1i64 << 16) / 3) as i32;
-        assert!(
-            (result - expected).abs() <= expected / 10 + 2,
-            "1/3 in Q16: expected ~{expected}, got {result}"
-        );
+        assert!((result - expected).abs() <= expected / 10 + 2, "1/3 in Q16 mismatch");
     }
 
     // ===================================================================
@@ -2014,10 +1957,7 @@ mod tests {
         // Approximate: within a few percent
         for &(input, expected) in &[(1, 1), (4, 2), (16, 4), (256, 16)] {
             let result = silk_sqrt_approx(input);
-            assert!(
-                (result - expected).abs() <= expected / 4 + 1,
-                "sqrt({input}): expected ~{expected}, got {result}"
-            );
+            assert!((result - expected).abs() <= expected / 4 + 1, "sqrt_approx mismatch");
         }
     }
 
@@ -2025,10 +1965,7 @@ mod tests {
     fn test_sqrt_large() {
         let result = silk_sqrt_approx(1 << 30);
         // sqrt(2^30) = 2^15 = 32768
-        assert!(
-            (result - 32768).abs() < 4000,
-            "sqrt(2^30): expected ~32768, got {result}"
-        );
+        assert!((result - 32768).abs() < 4000, "sqrt(2^30) mismatch");
     }
 
     // ===================================================================
@@ -2130,11 +2067,7 @@ mod tests {
         silk_lpc_analysis_filter(&mut out, &s, &a_q12, 20, 4);
         // After the first d samples, the prediction should perfectly cancel DC
         for i in 5..20 {
-            assert!(
-                out[i].abs() <= 1,
-                "out[{i}]={} should be near 0 for DC with a[0]=4096",
-                out[i]
-            );
+            assert!(out[i].abs() <= 1, "DC removal residual too large at {i}");
         }
     }
 
@@ -2156,14 +2089,10 @@ mod tests {
         let mut ar = [10000i16, 10000, 10000, 10000];
         silk_bwexpander(&mut ar, 4, 32768);
         // ar[0] ~ 5000, ar[1] ~ 2500, ar[2] ~ 1250, ar[3] ~ 625
-        assert!(
-            (ar[0] - 5000).abs() <= 10,
-            "ar[0]={}, expected ~5000",
-            ar[0]
-        );
-        assert!(ar[1] < ar[0], "ar[1]={} should be < ar[0]={}", ar[1], ar[0]);
-        assert!(ar[2] < ar[1], "ar[2]={} should be < ar[1]={}", ar[2], ar[1]);
-        assert!(ar[3] < ar[2], "ar[3]={} should be < ar[2]={}", ar[3], ar[2]);
+        assert!((ar[0] - 5000).abs() <= 10, "ar[0] should be ~5000");
+        assert!(ar[1] < ar[0], "chirp should decay");
+        assert!(ar[2] < ar[1], "chirp should decay");
+        assert!(ar[3] < ar[2], "chirp should decay");
     }
 
     #[test]
@@ -2469,11 +2398,16 @@ mod tests {
     #[test]
     fn test_down2_alternating_signal() {
         let mut state = [0i32; 2];
-        let input: Vec<i16> = (0..16).map(|i| if i % 2 == 0 { 10000 } else { -10000 }).collect();
+        let input: Vec<i16> = (0..16)
+            .map(|i| if i % 2 == 0 { 10000 } else { -10000 })
+            .collect();
         let mut output = [0i16; 8];
         silk_resampler_down2(&mut state, &mut output, &input);
         let max_out = output.iter().map(|x| x.abs()).max().unwrap();
-        assert!(max_out < 10000, "alternating signal should be attenuated, got max={max_out}");
+        assert!(
+            max_out < 10000,
+            "alternating signal should be attenuated, got max={max_out}"
+        );
     }
 
     #[test]
@@ -2484,7 +2418,10 @@ mod tests {
         let mut output = [0i16; 60];
         silk_resampler_down2_3(&mut state, &mut output, &input, 90);
         let last = output[59];
-        assert!((last as i32 - 5000).abs() < 2000, "DC 5000 should converge near 5000, got {last}");
+        assert!(
+            (last as i32 - 5000).abs() < 2000,
+            "DC 5000 should converge near 5000, got {last}"
+        );
     }
 
     #[test]
@@ -2493,7 +2430,13 @@ mod tests {
         let ndelta_min = [250i16, 200, 200, 200, 200, 250];
         silk_nlsf_stabilize(&mut nlsf, &ndelta_min, 5);
         for i in 1..5 {
-            assert!(nlsf[i] > nlsf[i - 1], "NLSF[{i}]={} should be > NLSF[{}]={}", nlsf[i], i - 1, nlsf[i - 1]);
+            assert!(
+                nlsf[i] > nlsf[i - 1],
+                "NLSF[{i}]={} should be > NLSF[{}]={}",
+                nlsf[i],
+                i - 1,
+                nlsf[i - 1]
+            );
         }
     }
 
@@ -2502,7 +2445,10 @@ mod tests {
         let mut nlsf = [0i16; 5];
         let ndelta_min = [250i16, 200, 200, 200, 200, 250];
         silk_nlsf_stabilize(&mut nlsf, &ndelta_min, 5);
-        assert!(nlsf[0] > 0, "NLSF[0] should be positive after stabilization");
+        assert!(
+            nlsf[0] > 0,
+            "NLSF[0] should be positive after stabilization"
+        );
         for i in 1..5 {
             assert!(nlsf[i] > nlsf[i - 1]);
         }
@@ -2514,7 +2460,12 @@ mod tests {
         let ndelta_min = [250i16, 200, 200, 200, 200, 250];
         silk_nlsf_stabilize(&mut nlsf, &ndelta_min, 5);
         let upper_bound = 32768i32 - ndelta_min[5] as i32;
-        assert!((nlsf[4] as i32) <= upper_bound, "last NLSF {} should respect upper bound {}", nlsf[4], upper_bound);
+        assert!(
+            (nlsf[4] as i32) <= upper_bound,
+            "last NLSF {} should respect upper bound {}",
+            nlsf[4],
+            upper_bound
+        );
     }
 
     #[test]
@@ -2525,7 +2476,10 @@ mod tests {
             seed = silk_rand(seed);
             values.push(seed);
         }
-        assert!(values.windows(2).any(|w| w[0] != w[1]), "PRNG should produce varying values");
+        assert!(
+            values.windows(2).any(|w| w[0] != w[1]),
+            "PRNG should produce varying values"
+        );
     }
 
     #[test]
@@ -2553,7 +2507,11 @@ mod tests {
         let conditional = false;
         silk_gains_dequant(&mut gain_q16, &ind, &mut prev_ind, conditional, 4);
         for i in 0..4 {
-            assert!(gain_q16[i] > 0, "gain_q16[{i}]={} should be positive", gain_q16[i]);
+            assert!(
+                gain_q16[i] > 0,
+                "gain_q16[{i}]={} should be positive",
+                gain_q16[i]
+            );
         }
     }
 
@@ -2637,7 +2595,7 @@ mod tests {
         // Poles at r=1.0 → gain blows up → function should detect instability.
         let mut a_q12 = [0i16; MAX_LPC_ORDER];
         a_q12[0] = -5793; // -1.414 in Q12
-        a_q12[1] = 4096;  //  1.0   in Q12
+        a_q12[1] = 4096; //  1.0   in Q12
         let result = silk_lpc_inverse_pred_gain(&a_q12, 2);
         assert_eq!(result, 0, "unit-circle poles should return 0 (unstable)");
     }
@@ -2730,7 +2688,9 @@ mod tests {
     fn test_nlsf_stabilize_fallback_clamp() {
         // Reversed NLSFs should force the main loop to exhaust MAX_LOOPS=20
         // iterations, hitting the fallback sort-and-clamp path (lines 1354-1370).
-        let mut nlsf = [32000i16, 29000, 26000, 23000, 20000, 17000, 14000, 11000, 8000, 5000];
+        let mut nlsf = [
+            32000i16, 29000, 26000, 23000, 20000, 17000, 14000, 11000, 8000, 5000,
+        ];
         silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
 
         // After stabilization, must satisfy all delta_min constraints
@@ -2744,14 +2704,16 @@ mod tests {
             let diff = nlsf[i] as i32 - nlsf[i - 1] as i32;
             assert!(
                 diff >= SILK_NLSF_DELTA_MIN_NB_MB_Q15[i] as i32,
-                "gap nlsf[{i}]-nlsf[{}]={diff} < delta_min={}", i - 1,
+                "gap nlsf[{i}]-nlsf[{}]={diff} < delta_min={}",
+                i - 1,
                 SILK_NLSF_DELTA_MIN_NB_MB_Q15[i]
             );
         }
         let upper = (1i32 << 15) - SILK_NLSF_DELTA_MIN_NB_MB_Q15[10] as i32;
         assert!(
             (nlsf[9] as i32) <= upper,
-            "nlsf[9]={} > upper={upper}", nlsf[9]
+            "nlsf[9]={} > upper={upper}",
+            nlsf[9]
         );
     }
 }

@@ -3414,7 +3414,10 @@ mod tests {
         assert_eq!(enc.start, enc.mode.nb_ebands - 1);
 
         assert_eq!(enc.ctl(CeltEncoderCtl::SetEndBand(0)), OPUS_BAD_ARG);
-        assert_eq!(enc.ctl(CeltEncoderCtl::SetEndBand(enc.mode.nb_ebands)), OPUS_OK);
+        assert_eq!(
+            enc.ctl(CeltEncoderCtl::SetEndBand(enc.mode.nb_ebands)),
+            OPUS_OK
+        );
         assert_eq!(enc.end, enc.mode.nb_ebands);
 
         assert_eq!(enc.ctl(CeltEncoderCtl::SetPrediction(3)), OPUS_BAD_ARG);
@@ -3430,7 +3433,10 @@ mod tests {
         assert_eq!(enc.loss_rate, 15);
 
         assert_eq!(enc.ctl(CeltEncoderCtl::SetBitrate(500)), OPUS_BAD_ARG);
-        assert_eq!(enc.ctl(CeltEncoderCtl::SetBitrate(OPUS_BITRATE_MAX)), OPUS_OK);
+        assert_eq!(
+            enc.ctl(CeltEncoderCtl::SetBitrate(OPUS_BITRATE_MAX)),
+            OPUS_OK
+        );
         assert_eq!(enc.bitrate, OPUS_BITRATE_MAX);
 
         assert_eq!(enc.ctl(CeltEncoderCtl::SetChannels(0)), OPUS_BAD_ARG);
@@ -3467,10 +3473,16 @@ mod tests {
 
         assert_eq!(enc.ctl(CeltEncoderCtl::GetLsbDepth), OPUS_OK);
         assert_eq!(enc.ctl(CeltEncoderCtl::GetPhaseInversionDisabled), OPUS_OK);
-        assert_eq!(enc.ctl(CeltEncoderCtl::SetAnalysis(analysis.clone())), OPUS_OK);
+        assert_eq!(
+            enc.ctl(CeltEncoderCtl::SetAnalysis(analysis.clone())),
+            OPUS_OK
+        );
         assert_eq!(enc.analysis.valid, analysis.valid);
         assert_eq!(enc.analysis.tonality, analysis.tonality);
-        assert_eq!(enc.ctl(CeltEncoderCtl::SetSilkInfo(silk_info.clone())), OPUS_OK);
+        assert_eq!(
+            enc.ctl(CeltEncoderCtl::SetSilkInfo(silk_info.clone())),
+            OPUS_OK
+        );
         assert_eq!(enc.silk_info.signal_type, silk_info.signal_type);
         assert_eq!(enc.ctl(CeltEncoderCtl::SetSignalling(0)), OPUS_OK);
         assert_eq!(enc.signalling, 0);
@@ -3562,14 +3574,7 @@ mod tests {
         // old_band_e: all bands at 0 (creating a large difference)
         let old_band_e = vec![0i32; nb_ebands as usize];
 
-        let result = patch_transient_decision(
-            &band_log_e,
-            &old_band_e,
-            nb_ebands,
-            start,
-            end,
-            c,
-        );
+        let result = patch_transient_decision(&band_log_e, &old_band_e, nb_ebands, start, end, c);
 
         // C reference returns false because i16 truncation clamps x1 to 0
         assert!(
@@ -3598,14 +3603,7 @@ mod tests {
         let band_log_e = vec![50_000_000i32; nb_ebands as usize]; // 0x02FAF080
         let old_band_e = vec![10_000_000i32; nb_ebands as usize]; // 0x00989680
 
-        let result = patch_transient_decision(
-            &band_log_e,
-            &old_band_e,
-            nb_ebands,
-            start,
-            end,
-            c,
-        );
+        let result = patch_transient_decision(&band_log_e, &old_band_e, nb_ebands, start, end, c);
 
         // With i16 truncation: mean_diff = 23040 < 16777216 → false
         // Without truncation: mean_diff = 40000000 > 16777216 → true
@@ -3633,29 +3631,20 @@ mod tests {
 
         // 32767: largest value that survives i16 truncation intact
         let band_log_e_max = vec![i16::MAX as i32; nb_ebands as usize];
-        let result_max = patch_transient_decision(
-            &band_log_e_max,
-            &old_band_e,
-            nb_ebands,
-            start,
-            end,
-            c,
-        );
+        let result_max =
+            patch_transient_decision(&band_log_e_max, &old_band_e, nb_ebands, start, end, c);
         // mean_diff = 32767, threshold = 16777216 → false
         assert!(!result_max, "32767 should not exceed threshold");
 
         // 32768: truncates to -32768, clamped to 0 by max(0, x1-x2)
         let band_log_e_overflow = vec![i16::MAX as i32 + 1; nb_ebands as usize];
-        let result_overflow = patch_transient_decision(
-            &band_log_e_overflow,
-            &old_band_e,
-            nb_ebands,
-            start,
-            end,
-            c,
-        );
+        let result_overflow =
+            patch_transient_decision(&band_log_e_overflow, &old_band_e, nb_ebands, start, end, c);
         // mean_diff = 0 → false (truncation cliff)
-        assert!(!result_overflow, "32768 truncates to -32768; mean_diff should be 0");
+        assert!(
+            !result_overflow,
+            "32768 truncates to -32768; mean_diff should be 0"
+        );
     }
 
     /// Test stereo (C=2) with large energy values — truncation applies per-channel.
@@ -3676,14 +3665,7 @@ mod tests {
         let band_log_e = vec![large_energy; 2 * nb_ebands as usize];
         let old_band_e = vec![0i32; 2 * nb_ebands as usize];
 
-        let result = patch_transient_decision(
-            &band_log_e,
-            &old_band_e,
-            nb_ebands,
-            start,
-            end,
-            c,
-        );
+        let result = patch_transient_decision(&band_log_e, &old_band_e, nb_ebands, start, end, c);
 
         // Both channels: x1 truncates to 0, x2 = 0, mean_diff = 0 → false
         assert!(
@@ -3698,12 +3680,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     /// Helper: encode a frame and return compressed size.
-    fn encode_frame(
-        enc: &mut CeltEncoder,
-        pcm: &[i16],
-        frame_size: i32,
-        max_bytes: i32,
-    ) -> i32 {
+    fn encode_frame(enc: &mut CeltEncoder, pcm: &[i16], frame_size: i32, max_bytes: i32) -> i32 {
         let mut compressed = vec![0u8; max_bytes as usize];
         celt_encode_with_ec(enc, pcm, frame_size, &mut compressed, max_bytes, None)
     }
@@ -3749,7 +3726,11 @@ mod tests {
         enc.bitrate = 64000;
         let pcm = vec![0i16; 960]; // Pure silence
         let ret = encode_frame(&mut enc, &pcm, 960, 128);
-        assert!(ret > 0 && ret <= 4, "silence VBR should produce tiny packet, got {}", ret);
+        assert!(
+            ret > 0 && ret <= 4,
+            "silence VBR should produce tiny packet, got {}",
+            ret
+        );
     }
 
     #[test]

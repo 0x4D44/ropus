@@ -591,10 +591,10 @@ mod tests {
                 for _ in 0..ov / 2 {
                     let x1 = expected[xp1];
                     let x2 = expected[yp1];
-                    expected[yp1] =
-                        s_mul_inline(x2, window[wp2] as i32).wrapping_sub(s_mul_inline(x1, window[wp1] as i32));
-                    expected[xp1] =
-                        s_mul_inline(x2, window[wp1] as i32).wrapping_add(s_mul_inline(x1, window[wp2] as i32));
+                    expected[yp1] = s_mul_inline(x2, window[wp2] as i32)
+                        .wrapping_sub(s_mul_inline(x1, window[wp1] as i32));
+                    expected[xp1] = s_mul_inline(x2, window[wp1] as i32)
+                        .wrapping_add(s_mul_inline(x1, window[wp2] as i32));
                     yp1 += 1;
                     xp1 -= 1;
                     wp1 += 1;

@@ -798,7 +798,10 @@ mod tests {
         let mut y = vec![0i32; n];
         celt_fir(&x, &num, &mut y, n, ord);
         // First output should include the impulse
-        assert!(y[0] != 0, "FIR output should be non-zero with unit coefficients");
+        assert!(
+            y[0] != 0,
+            "FIR output should be non-zero with unit coefficients"
+        );
     }
 
     #[test]
@@ -812,7 +815,10 @@ mod tests {
         let mut mem = [0i32; 4];
         celt_iir(&x, &den, &mut y, n, 4, &mut mem);
         // Output should be non-zero due to feedback
-        assert!(y.iter().any(|&v| v != 0), "IIR with feedback should produce non-zero output");
+        assert!(
+            y.iter().any(|&v| v != 0),
+            "IIR with feedback should produce non-zero output"
+        );
     }
 
     #[test]
@@ -834,7 +840,11 @@ mod tests {
         let ac = [1 << 22, -(1 << 20)]; // negative correlation
         celt_lpc(&mut lpc_out, &ac, 1);
         // Should predict positive correlation
-        assert!(lpc_out[0] > 0, "negative ac[1] should give positive lpc[0], got {}", lpc_out[0]);
+        assert!(
+            lpc_out[0] > 0,
+            "negative ac[1] should give positive lpc[0], got {}",
+            lpc_out[0]
+        );
     }
 
     #[test]

@@ -2181,7 +2181,10 @@ mod tests {
             len: 0,
         };
         let mut buf = [0u8; 260];
-        assert_eq!(write_extension_payload(&mut buf, false, 260, 0, &short, false), 0);
+        assert_eq!(
+            write_extension_payload(&mut buf, false, 260, 0, &short, false),
+            0
+        );
 
         let payload: Vec<u8> = (0..256u16).map(|v| v as u8).collect();
         let long = OpusExtensionData {
@@ -2190,7 +2193,10 @@ mod tests {
             data: &payload,
             len: payload.len() as i32,
         };
-        assert_eq!(write_extension_payload(&mut buf, false, 260, 0, &long, false), 258);
+        assert_eq!(
+            write_extension_payload(&mut buf, false, 260, 0, &long, false),
+            258
+        );
         assert_eq!(&buf[..2], &[255, 1]);
         assert_eq!(&buf[2..258], payload.as_slice());
     }
@@ -2545,7 +2551,10 @@ mod tests {
 
         let mut packet = [0x08u8, 0xAA, 0xBB];
         assert_eq!(opus_multistream_packet_pad(&mut packet, 3, 3, 1), OPUS_OK);
-        assert_eq!(opus_multistream_packet_pad(&mut packet, 3, 2, 1), OPUS_BAD_ARG);
+        assert_eq!(
+            opus_multistream_packet_pad(&mut packet, 3, 2, 1),
+            OPUS_BAD_ARG
+        );
     }
 
     #[test]
@@ -2594,13 +2603,7 @@ mod tests {
         assert_eq!(nb_ext, 0);
 
         assert_eq!(
-            opus_packet_extensions_generate(
-                None,
-                64,
-                &[ext],
-                (MAX_FRAMES as i32) + 1,
-                false
-            ),
+            opus_packet_extensions_generate(None, 64, &[ext], (MAX_FRAMES as i32) + 1, false),
             OPUS_BAD_ARG
         );
 
@@ -2615,7 +2618,10 @@ mod tests {
         assert_eq!(rp.cat(&pkt, 2), OPUS_OK);
 
         let mut out = [0u8; 4];
-        assert_eq!(rp.out_range_impl(0, 0, &mut out, 4, false, false, &[]), OPUS_BAD_ARG);
+        assert_eq!(
+            rp.out_range_impl(0, 0, &mut out, 4, false, false, &[]),
+            OPUS_BAD_ARG
+        );
         assert_eq!(
             rp.out_range_impl(0, 1, &mut out, 1, false, false, &[]),
             OPUS_BUFFER_TOO_SMALL
@@ -2649,7 +2655,11 @@ mod tests {
         assert_eq!(ret, 16);
         assert_eq!(padded[0] & 0x3, 0x3);
         assert_ne!(padded[1] & 0x40, 0);
-        assert!(padded[ret as usize - 4..ret as usize].iter().all(|&b| b == 0));
+        assert!(
+            padded[ret as usize - 4..ret as usize]
+                .iter()
+                .all(|&b| b == 0)
+        );
     }
 
     #[test]
@@ -2794,7 +2804,12 @@ mod tests {
     #[test]
     fn test_extension_long_lacing_n255_payload() {
         let payload: Vec<u8> = (0..260).map(|i| (i & 0xFF) as u8).collect();
-        let ext = OpusExtensionData { id: 40, frame: 0, data: &payload, len: 260 };
+        let ext = OpusExtensionData {
+            id: 40,
+            frame: 0,
+            data: &payload,
+            len: 260,
+        };
         let size = opus_packet_extensions_generate(None, 512, &[ext], 1, false);
         assert!(size > 0);
         let mut buf = vec![0u8; size as usize];
@@ -2810,10 +2825,25 @@ mod tests {
 
     #[test]
     fn test_extension_variable_length_data_multiple_ids() {
-        let ext_short0 = OpusExtensionData { id: 3, frame: 0, data: &[], len: 0 };
-        let ext_short1 = OpusExtensionData { id: 5, frame: 0, data: &[0xAB], len: 1 };
+        let ext_short0 = OpusExtensionData {
+            id: 3,
+            frame: 0,
+            data: &[],
+            len: 0,
+        };
+        let ext_short1 = OpusExtensionData {
+            id: 5,
+            frame: 0,
+            data: &[0xAB],
+            len: 1,
+        };
         let long_payload = [0x11u8; 20];
-        let ext_long = OpusExtensionData { id: 64, frame: 0, data: &long_payload, len: 20 };
+        let ext_long = OpusExtensionData {
+            id: 64,
+            frame: 0,
+            data: &long_payload,
+            len: 20,
+        };
         let exts = [ext_short0, ext_short1, ext_long];
         let size = opus_packet_extensions_generate(None, 256, &exts, 1, false);
         let mut buf = vec![0u8; size as usize];
@@ -2832,7 +2862,12 @@ mod tests {
     fn test_extension_cascade_repeat_across_three_frames() {
         let payload = [0x99u8; 5];
         let exts: Vec<OpusExtensionData> = (0..3)
-            .map(|f| OpusExtensionData { id: 40, frame: f, data: &payload, len: 5 })
+            .map(|f| OpusExtensionData {
+                id: 40,
+                frame: f,
+                data: &payload,
+                len: 5,
+            })
             .collect();
         let size = opus_packet_extensions_generate(None, 256, &exts, 3, false);
         let mut buf = vec![0u8; size as usize];
@@ -2841,7 +2876,9 @@ mod tests {
         let mut results = Vec::new();
         loop {
             let (ret, ext) = iter.next_ext();
-            if ret <= 0 { break; }
+            if ret <= 0 {
+                break;
+            }
             results.push((ext.id, ext.frame, ext.len));
         }
         assert_eq!(results.len(), 3);
@@ -2868,13 +2905,19 @@ mod tests {
     #[test]
     fn test_self_delimited_cbr_size_mismatch_rejected() {
         let pkt = [0x09u8, 10, 0xAA, 0xBB];
-        assert!(matches!(parse_packet(&pkt, pkt.len() as i32, true), Err(OPUS_INVALID_PACKET)));
+        assert!(matches!(
+            parse_packet(&pkt, pkt.len() as i32, true),
+            Err(OPUS_INVALID_PACKET)
+        ));
     }
 
     #[test]
     fn test_self_delimited_vbr_code2_size_overflow() {
         let pkt = [0x0Au8, 2, 0xAA, 0xBB, 100];
-        assert!(matches!(parse_packet(&pkt, pkt.len() as i32, true), Err(OPUS_INVALID_PACKET)));
+        assert!(matches!(
+            parse_packet(&pkt, pkt.len() as i32, true),
+            Err(OPUS_INVALID_PACKET)
+        ));
     }
 
     #[test]
@@ -2902,7 +2945,9 @@ mod tests {
     fn test_multi_frame_repacketization_four_frames() {
         let pkt = [0x08u8, 0xAA, 0xBB];
         let mut rp = OpusRepacketizer::new();
-        for _ in 0..4 { assert_eq!(rp.cat(&pkt, pkt.len() as i32), OPUS_OK); }
+        for _ in 0..4 {
+            assert_eq!(rp.cat(&pkt, pkt.len() as i32), OPUS_OK);
+        }
         assert_eq!(rp.get_nb_frames(), 4);
         let mut out = [0u8; 256];
         let ret = rp.out(&mut out, 256);
@@ -2911,7 +2956,9 @@ mod tests {
         assert_eq!(out[1] & 0x3F, 4);
         let parsed = parse_packet(&out[..ret as usize], ret, false).unwrap();
         assert_eq!(parsed.count, 4);
-        for i in 0..4 { assert_eq!(parsed.frames[i], &[0xAA, 0xBB]); }
+        for i in 0..4 {
+            assert_eq!(parsed.frames[i], &[0xAA, 0xBB]);
+        }
     }
 
     #[test]
@@ -2951,9 +2998,18 @@ mod tests {
     #[test]
     fn test_code3_cbr_with_padding_stripping() {
         let pkt = vec![
-            0x08u8 | 0x03, 2 | 0x40, 5,
-            0xAA, 0xBB, 0xCC, 0xDD,
-            0x01, 0x01, 0x01, 0x01, 0x01,
+            0x08u8 | 0x03,
+            2 | 0x40,
+            5,
+            0xAA,
+            0xBB,
+            0xCC,
+            0xDD,
+            0x01,
+            0x01,
+            0x01,
+            0x01,
+            0x01,
         ];
         let mut rp = OpusRepacketizer::new();
         assert_eq!(rp.cat(&pkt, pkt.len() as i32), OPUS_OK);
@@ -2966,17 +3022,33 @@ mod tests {
     #[test]
     fn test_toc_configurations_silk_celt_hybrid() {
         assert_eq!(parse_packet(&[0x00u8, 0xAA], 2, false).unwrap().toc, 0x00);
-        assert_eq!(parse_packet(&[0x48u8, 0xBB, 0xCC], 3, false).unwrap().toc, 0x48);
+        assert_eq!(
+            parse_packet(&[0x48u8, 0xBB, 0xCC], 3, false).unwrap().toc,
+            0x48
+        );
         assert_eq!(parse_packet(&[0x80u8, 0xDD], 2, false).unwrap().toc, 0x80);
-        assert_eq!(parse_packet(&[0x60u8, 0xEE, 0xFF], 3, false).unwrap().toc, 0x60);
-        assert_eq!(parse_packet(&[0x18u8, 0xAA, 0xBB], 3, false).unwrap().toc, 0x18);
+        assert_eq!(
+            parse_packet(&[0x60u8, 0xEE, 0xFF], 3, false).unwrap().toc,
+            0x60
+        );
+        assert_eq!(
+            parse_packet(&[0x18u8, 0xAA, 0xBB], 3, false).unwrap().toc,
+            0x18
+        );
     }
 
     #[test]
     fn test_out_range_impl_various_ranges() {
-        let pkts = [[0x08u8, 0x11], [0x08u8, 0x22], [0x08u8, 0x33], [0x08u8, 0x44]];
+        let pkts = [
+            [0x08u8, 0x11],
+            [0x08u8, 0x22],
+            [0x08u8, 0x33],
+            [0x08u8, 0x44],
+        ];
         let mut rp = OpusRepacketizer::new();
-        for pkt in &pkts { assert_eq!(rp.cat(pkt, pkt.len() as i32), OPUS_OK); }
+        for pkt in &pkts {
+            assert_eq!(rp.cat(pkt, pkt.len() as i32), OPUS_OK);
+        }
         let mut out = [0u8; 256];
         let _ret = rp.out_range(0, 1, &mut out, 256);
         assert_eq!(out[0] & 0x3, 0x0);
@@ -3020,32 +3092,47 @@ mod tests {
 
     #[test]
     fn test_parse_negative_len_returns_bad_arg() {
-        assert!(matches!(parse_packet(&[0x08u8, 0xAA], -1, false), Err(OPUS_BAD_ARG)));
+        assert!(matches!(
+            parse_packet(&[0x08u8, 0xAA], -1, false),
+            Err(OPUS_BAD_ARG)
+        ));
     }
 
     #[test]
     fn test_parse_code3_vbr_last_size_negative() {
         let pkt = [0x08u8 | 0x03, 2 | 0x80, 250, 0xAA, 0xBB];
-        assert!(matches!(parse_packet(&pkt, pkt.len() as i32, false), Err(OPUS_INVALID_PACKET)));
+        assert!(matches!(
+            parse_packet(&pkt, pkt.len() as i32, false),
+            Err(OPUS_INVALID_PACKET)
+        ));
     }
 
     #[test]
     fn test_parse_code3_cbr_non_divisible_rejected() {
         let pkt = [0x08u8 | 0x03, 3, 0xAA, 0xBB, 0xCC, 0xDD];
-        assert!(matches!(parse_packet(&pkt, pkt.len() as i32, false), Err(OPUS_INVALID_PACKET)));
+        assert!(matches!(
+            parse_packet(&pkt, pkt.len() as i32, false),
+            Err(OPUS_INVALID_PACKET)
+        ));
     }
 
     #[test]
     fn test_parse_code3_exceeds_duration_limit() {
         let pkt = [0x08u8 | 0x03, 13];
-        assert!(matches!(parse_packet(&pkt, pkt.len() as i32, false), Err(OPUS_INVALID_PACKET)));
+        assert!(matches!(
+            parse_packet(&pkt, pkt.len() as i32, false),
+            Err(OPUS_INVALID_PACKET)
+        ));
     }
 
     #[test]
     fn test_parse_frame_size_above_1275_rejected() {
         let mut pkt = vec![0x08u8];
         pkt.extend(vec![0xAA; 1276]);
-        assert!(matches!(parse_packet(&pkt, pkt.len() as i32, false), Err(OPUS_INVALID_PACKET)));
+        assert!(matches!(
+            parse_packet(&pkt, pkt.len() as i32, false),
+            Err(OPUS_INVALID_PACKET)
+        ));
     }
 
     #[test]
@@ -3055,14 +3142,30 @@ mod tests {
         let padded_len = original_len + 30;
         let mut buf = vec![0u8; padded_len as usize];
         buf[..pkt.len()].copy_from_slice(&pkt);
-        assert_eq!(opus_multistream_packet_pad(&mut buf, original_len, padded_len, 2), OPUS_OK);
-        assert_eq!(opus_multistream_packet_unpad(&mut buf, padded_len, 2), original_len);
+        assert_eq!(
+            opus_multistream_packet_pad(&mut buf, original_len, padded_len, 2),
+            OPUS_OK
+        );
+        assert_eq!(
+            opus_multistream_packet_unpad(&mut buf, padded_len, 2),
+            original_len
+        );
     }
 
     #[test]
     fn test_extension_frame_separator_multi_increment() {
-        let ext0 = OpusExtensionData { id: 5, frame: 0, data: &[0x11], len: 1 };
-        let ext3 = OpusExtensionData { id: 5, frame: 3, data: &[0x44], len: 1 };
+        let ext0 = OpusExtensionData {
+            id: 5,
+            frame: 0,
+            data: &[0x11],
+            len: 1,
+        };
+        let ext3 = OpusExtensionData {
+            id: 5,
+            frame: 3,
+            data: &[0x44],
+            len: 1,
+        };
         let size = opus_packet_extensions_generate(None, 256, &[ext0, ext3], 4, false);
         let mut buf = vec![0u8; size as usize];
         opus_packet_extensions_generate(Some(&mut buf), size, &[ext0, ext3], 4, false);
@@ -3078,7 +3181,10 @@ mod tests {
     fn test_skip_extension_payload_short_insufficient() {
         let mut pos = 0usize;
         let mut header_size = 0;
-        assert_eq!(skip_extension_payload(&[], &mut pos, 0, &mut header_size, 0x0B, 0), -1);
+        assert_eq!(
+            skip_extension_payload(&[], &mut pos, 0, &mut header_size, 0x0B, 0),
+            -1
+        );
     }
 
     #[test]
@@ -3095,7 +3201,10 @@ mod tests {
     fn test_skip_extension_payload_long_l0_insufficient_trailing() {
         let mut pos = 0usize;
         let mut header_size = 0;
-        assert_eq!(skip_extension_payload(&[], &mut pos, 1, &mut header_size, 0x40, 5), -1);
+        assert_eq!(
+            skip_extension_payload(&[], &mut pos, 1, &mut header_size, 0x40, 5),
+            -1
+        );
     }
 
     #[test]
@@ -3108,15 +3217,28 @@ mod tests {
 
     #[test]
     fn test_write_extension_buffer_too_small_for_id() {
-        let ext = OpusExtensionData { id: 5, frame: 0, data: &[0x11], len: 1 };
+        let ext = OpusExtensionData {
+            id: 5,
+            frame: 0,
+            data: &[0x11],
+            len: 1,
+        };
         let mut buf = [0u8; 0];
-        assert_eq!(write_extension(&mut buf, false, 0, 0, &ext, false), OPUS_BUFFER_TOO_SMALL);
+        assert_eq!(
+            write_extension(&mut buf, false, 0, 0, &ext, false),
+            OPUS_BUFFER_TOO_SMALL
+        );
     }
 
     #[test]
     fn test_write_extension_long_last_vs_not_last() {
         let payload = [0x11u8, 0x22, 0x33];
-        let ext = OpusExtensionData { id: 40, frame: 0, data: &payload, len: 3 };
+        let ext = OpusExtensionData {
+            id: 40,
+            frame: 0,
+            data: &payload,
+            len: 3,
+        };
         let mut buf = [0u8; 8];
         let ret = write_extension(&mut buf, false, 8, 0, &ext, true);
         assert_eq!(ret, 4);
@@ -3196,8 +3318,18 @@ mod tests {
         // Test frame_max applied mid-iteration via frame separator (lines 577-579):
         // ext on frame 0, separator to frame 1, ext on frame 1
         // With frame_max=1, the separator should stop iteration
-        let ext0 = OpusExtensionData { id: 5, frame: 0, data: &[0x11], len: 1 };
-        let ext1 = OpusExtensionData { id: 6, frame: 1, data: &[0x22], len: 1 };
+        let ext0 = OpusExtensionData {
+            id: 5,
+            frame: 0,
+            data: &[0x11],
+            len: 1,
+        };
+        let ext1 = OpusExtensionData {
+            id: 6,
+            frame: 1,
+            data: &[0x22],
+            len: 1,
+        };
         let size = opus_packet_extensions_generate(None, 256, &[ext0, ext1], 2, false);
         let mut buf = vec![0u8; size as usize];
         opus_packet_extensions_generate(Some(&mut buf), size, &[ext0, ext1], 2, false);
@@ -3219,8 +3351,18 @@ mod tests {
     fn test_extension_repeat_l0_long_extensions() {
         // Two frames, each with a long extension (id=40). Using repeat with L=0.
         let payload = [0x77u8; 10];
-        let ext0 = OpusExtensionData { id: 40, frame: 0, data: &payload, len: 10 };
-        let ext1 = OpusExtensionData { id: 40, frame: 1, data: &payload, len: 10 };
+        let ext0 = OpusExtensionData {
+            id: 40,
+            frame: 0,
+            data: &payload,
+            len: 10,
+        };
+        let ext1 = OpusExtensionData {
+            id: 40,
+            frame: 1,
+            data: &payload,
+            len: 10,
+        };
         let size = opus_packet_extensions_generate(None, 256, &[ext0, ext1], 2, false);
         assert!(size > 0);
         let mut buf = vec![0u8; size as usize];
@@ -3230,7 +3372,9 @@ mod tests {
         let mut results = Vec::new();
         loop {
             let (ret, ext) = iter.next_ext();
-            if ret <= 0 { break; }
+            if ret <= 0 {
+                break;
+            }
             results.push((ext.id, ext.frame, ext.len));
         }
         assert_eq!(results.len(), 2);
@@ -3296,8 +3440,18 @@ mod tests {
     #[test]
     fn test_extension_generate_multi_frame_separator_dryrun() {
         // Extensions on frame 0 and frame 3 (skip 2 frames)
-        let ext0 = OpusExtensionData { id: 5, frame: 0, data: &[0xAA], len: 1 };
-        let ext3 = OpusExtensionData { id: 6, frame: 3, data: &[0xBB], len: 1 };
+        let ext0 = OpusExtensionData {
+            id: 5,
+            frame: 0,
+            data: &[0xAA],
+            len: 1,
+        };
+        let ext3 = OpusExtensionData {
+            id: 6,
+            frame: 3,
+            data: &[0xBB],
+            len: 1,
+        };
         let size = opus_packet_extensions_generate(None, 64, &[ext0, ext3], 4, false);
         assert!(size > 0);
         let mut buf = vec![0u8; size as usize];
@@ -3316,7 +3470,12 @@ mod tests {
     /// Test write_extension_payload dry-run mode (line 726).
     #[test]
     fn test_write_extension_payload_dryrun() {
-        let ext = OpusExtensionData { id: 40, frame: 0, data: &[1, 2, 3], len: 3 };
+        let ext = OpusExtensionData {
+            id: 40,
+            frame: 0,
+            data: &[1, 2, 3],
+            len: 3,
+        };
         let mut buf = [0xFFu8; 8];
         // dry_run=true: should advance position but not write
         let ret = write_extension_payload(&mut buf, true, 8, 0, &ext, false);
@@ -3324,7 +3483,12 @@ mod tests {
         assert_eq!(buf[0], 0xFF); // unchanged because dry_run
 
         // Short extension dry-run
-        let short = OpusExtensionData { id: 5, frame: 0, data: &[0x42], len: 1 };
+        let short = OpusExtensionData {
+            id: 5,
+            frame: 0,
+            data: &[0x42],
+            len: 1,
+        };
         let ret = write_extension_payload(&mut buf, true, 8, 0, &short, false);
         assert_eq!(ret, 1);
         assert_eq!(buf[0], 0xFF); // unchanged
@@ -3333,7 +3497,12 @@ mod tests {
     /// Test long extension payload buffer too small (line 719).
     #[test]
     fn test_write_extension_payload_long_buffer_too_small() {
-        let ext = OpusExtensionData { id: 40, frame: 0, data: &[1, 2, 3, 4, 5], len: 5 };
+        let ext = OpusExtensionData {
+            id: 40,
+            frame: 0,
+            data: &[1, 2, 3, 4, 5],
+            len: 5,
+        };
         let mut buf = [0u8; 4];
         // Not last: needs 1 lacing + 5 data = 6, only 4 available
         assert_eq!(
@@ -3367,7 +3536,12 @@ mod tests {
     #[test]
     fn test_pad_impl_ext_len_overflow() {
         let big_payload = [0x11u8; 50];
-        let ext = OpusExtensionData { id: 40, frame: 0, data: &big_payload, len: 50 };
+        let ext = OpusExtensionData {
+            id: 40,
+            frame: 0,
+            data: &big_payload,
+            len: 50,
+        };
         let mut buf = [0u8; 60];
         buf[0] = 0x08;
         buf[1] = 0xAA;

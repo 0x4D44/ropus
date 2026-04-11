@@ -2356,7 +2356,11 @@ mod tests {
         append_float_record(blob, "sig_net_gain_dense_out_bias", 4);
         append_float_record(blob, "sig_net_gain_dense_out_weights_float", 192 * 4);
 
-        append_int8_record(blob, "sig_net_gru1_input_weights_int8", (192 + 80) * (3 * 160));
+        append_int8_record(
+            blob,
+            "sig_net_gru1_input_weights_int8",
+            (192 + 80) * (3 * 160),
+        );
         append_float_record(blob, "sig_net_gru1_input_subias", 3 * 160);
         append_float_record(blob, "sig_net_gru1_input_scale", 3 * 160);
         append_int8_record(blob, "sig_net_gru1_recurrent_weights_int8", 160 * (3 * 160));
@@ -2367,7 +2371,11 @@ mod tests {
         append_float_record(blob, "sig_net_gru1_glu_gate_subias", 160);
         append_float_record(blob, "sig_net_gru1_glu_gate_scale", 160);
 
-        append_int8_record(blob, "sig_net_gru2_input_weights_int8", (160 + 80) * (3 * 128));
+        append_int8_record(
+            blob,
+            "sig_net_gru2_input_weights_int8",
+            (160 + 80) * (3 * 128),
+        );
         append_float_record(blob, "sig_net_gru2_input_subias", 3 * 128);
         append_float_record(blob, "sig_net_gru2_input_scale", 3 * 128);
         append_int8_record(blob, "sig_net_gru2_recurrent_weights_int8", 128 * (3 * 128));
@@ -2378,7 +2386,11 @@ mod tests {
         append_float_record(blob, "sig_net_gru2_glu_gate_subias", 128);
         append_float_record(blob, "sig_net_gru2_glu_gate_scale", 128);
 
-        append_int8_record(blob, "sig_net_gru3_input_weights_int8", (128 + 80) * (3 * 128));
+        append_int8_record(
+            blob,
+            "sig_net_gru3_input_weights_int8",
+            (128 + 80) * (3 * 128),
+        );
         append_float_record(blob, "sig_net_gru3_input_subias", 3 * 128);
         append_float_record(blob, "sig_net_gru3_input_scale", 3 * 128);
         append_int8_record(blob, "sig_net_gru3_recurrent_weights_int8", 128 * (3 * 128));
@@ -2927,7 +2939,10 @@ mod tests {
 
         let pcm_i16 = patterned_pcm(23);
         let mut ceps_i16 = [0.0f32; NB_TOTAL_FEATURES];
-        assert_eq!(enc.compute_single_frame_features(&pcm_i16, &mut ceps_i16), 0);
+        assert_eq!(
+            enc.compute_single_frame_features(&pcm_i16, &mut ceps_i16),
+            0
+        );
         assert!(ceps_i16.iter().all(|value| value.is_finite()));
 
         let pcm_f32 = patterned_frame(29);
@@ -3289,9 +3304,11 @@ mod tests {
         assert_eq!(plc.loss_count, 1);
         assert_eq!(plc.analysis_pos, PLC_BUF_SIZE - FRAME_SIZE);
         assert_eq!(plc.predict_pos, PLC_BUF_SIZE);
-        assert!(first
-            .iter()
-            .all(|&s| (-32767..=32767).contains(&(s as i32))));
+        assert!(
+            first
+                .iter()
+                .all(|&s| (-32767..=32767).contains(&(s as i32)))
+        );
         assert!(plc.features.iter().all(|v| v.is_finite()));
         assert!(plc.cont_features.iter().all(|v| v.is_finite()));
 
@@ -3545,7 +3562,10 @@ mod tests {
 
         let zero_sum_logits = [-100.0f32; 256];
         let mut rng2 = Kiss99Ctx::default();
-        assert_eq!(sample_mdense(&mdense, &state, &zero_sum_logits, &mut rng2), 255);
+        assert_eq!(
+            sample_mdense(&mdense, &state, &zero_sum_logits, &mut rng2),
+            255
+        );
     }
 
     // --- Coverage additions: PLC, encoder features, LPC analysis ---
@@ -3557,9 +3577,17 @@ mod tests {
         let mut mem = 0.0f32;
         preemphasis(&mut y, &mut mem, &x, 0.85, 5);
         // First output: y[0] = x[0] + mem = 0.5 + 0.0 = 0.5
-        assert!((y[0] - 0.5).abs() < 1e-5, "first preemph output should be 0.5, got {}", y[0]);
+        assert!(
+            (y[0] - 0.5).abs() < 1e-5,
+            "first preemph output should be 0.5, got {}",
+            y[0]
+        );
         // mem should be -coef * x[last] = -0.85 * (-0.1) = 0.085
-        assert!((mem - 0.085).abs() < 1e-5, "mem should be -coef * x[last], got {}", mem);
+        assert!(
+            (mem - 0.085).abs() < 1e-5,
+            "mem should be -coef * x[last], got {}",
+            mem
+        );
     }
 
     #[test]
@@ -3568,7 +3596,10 @@ mod tests {
         let cepstrum = [0.0f32; NB_BANDS]; // zero cepstrum -> flat spectrum
         let _gain = lpc_from_cepstrum(&mut lpc, &cepstrum);
         // With zero cepstrum, LPC should be near zero (white spectrum)
-        assert!(lpc.iter().all(|&c| c.is_finite()), "LPC coefficients should be finite");
+        assert!(
+            lpc.iter().all(|&c| c.is_finite()),
+            "LPC coefficients should be finite"
+        );
     }
 
     #[test]
@@ -3577,7 +3608,10 @@ mod tests {
         let mut output = [0.0f32; NB_BANDS];
         dct(&mut output, &input);
         // DC component should be non-zero
-        assert!(output[0].abs() > 0.0, "DCT of DC signal should have non-zero DC component");
+        assert!(
+            output[0].abs() > 0.0,
+            "DCT of DC signal should have non-zero DC component"
+        );
         assert!(output[0].is_finite());
     }
 
@@ -3588,7 +3622,11 @@ mod tests {
         // Windowed signal: edges should be attenuated, middle should be near 1.0
         assert!(x[0].abs() < 1.0, "window should attenuate edges");
         let mid = WINDOW_SIZE / 2;
-        assert!(x[mid].abs() > 0.5, "window should preserve middle: got {}", x[mid]);
+        assert!(
+            x[mid].abs() > 0.5,
+            "window should preserve middle: got {}",
+            x[mid]
+        );
     }
 
     #[test]
@@ -3596,8 +3634,15 @@ mod tests {
         let mut lpc = [1.0f32; LPC_ORDER];
         lpc_weighting(&mut lpc, 0.9);
         // Each coefficient should be scaled by gamma^(i+1)
-        assert!((lpc[0] - 0.9).abs() < 1e-5, "lpc[0] should be 0.9, got {}", lpc[0]);
-        assert!(lpc[LPC_ORDER - 1].abs() < lpc[0].abs(), "later coefficients should be smaller");
+        assert!(
+            (lpc[0] - 0.9).abs() < 1e-5,
+            "lpc[0] should be 0.9, got {}",
+            lpc[0]
+        );
+        assert!(
+            lpc[LPC_ORDER - 1].abs() < lpc[0].abs(),
+            "later coefficients should be smaller"
+        );
     }
 
     #[test]
@@ -3607,8 +3652,10 @@ mod tests {
         let input = patterned_frame(42);
         enc.compute_frame_features(&input);
         // Features should be finite
-        assert!(enc.features[0..NB_BANDS].iter().all(|f| f.is_finite()),
-            "encoder features should be finite after compute");
+        assert!(
+            enc.features[0..NB_BANDS].iter().all(|f| f.is_finite()),
+            "encoder features should be finite after compute"
+        );
     }
 
     #[test]

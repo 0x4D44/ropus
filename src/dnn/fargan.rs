@@ -1400,7 +1400,11 @@ mod tests {
         let features = vec![0.0f32; 5 * NB_FEATURES];
         st.cont(&pcm, &features);
         assert!(st.cont_initialized);
-        assert!((st.deemph_mem - dc_val).abs() < 1e-5, "deemph_mem should be {dc_val}, got {}", st.deemph_mem);
+        assert!(
+            (st.deemph_mem - dc_val).abs() < 1e-5,
+            "deemph_mem should be {dc_val}, got {}",
+            st.deemph_mem
+        );
     }
 
     #[test]
@@ -1413,7 +1417,10 @@ mod tests {
             let mut pcm = [0.0f32; FARGAN_FRAME_SIZE];
             let features = [0.0f32; NB_FEATURES];
             st.synthesize(&mut pcm, &features);
-            assert!(pcm.iter().all(|x| x.is_finite()), "synthesized samples should be finite");
+            assert!(
+                pcm.iter().all(|x| x.is_finite()),
+                "synthesized samples should be finite"
+            );
         }
     }
 
@@ -1426,7 +1433,10 @@ mod tests {
         let mut pcm_i16 = [0i16; LPCNET_FRAME_SIZE];
         let features = [0.0f32; NB_FEATURES];
         st.synthesize_int(&mut pcm_i16, &features);
-        assert!(pcm_i16.iter().all(|&s| s >= i16::MIN && s <= i16::MAX), "all samples should be within i16 range");
+        assert!(
+            pcm_i16.iter().all(|&s| s >= i16::MIN && s <= i16::MAX),
+            "all samples should be within i16 range"
+        );
     }
 
     #[test]
@@ -1445,9 +1455,15 @@ mod tests {
         assert!(period >= 0, "period should be >= 0, got {period}");
         features[NB_BANDS] = -100.0;
         let period2 = decode_pitch_period(&features);
-        assert!(period2 >= 0, "period should be >= 0 for negative input, got {period2}");
+        assert!(
+            period2 >= 0,
+            "period should be >= 0 for negative input, got {period2}"
+        );
         features[NB_BANDS] = 2.0;
         let period3 = decode_pitch_period(&features);
-        assert!(period3 >= 0, "moderate value should give period >= 0, got {period3}");
+        assert!(
+            period3 >= 0,
+            "moderate value should give period >= 0, got {period3}"
+        );
     }
 }

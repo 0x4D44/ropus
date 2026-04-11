@@ -1172,8 +1172,14 @@ mod tests {
         let mut output = vec![0i32; n];
         clt_mdct_backward(l, &input, &mut output, mode.window, overlap, shift, 1);
         let max_abs = output.iter().map(|x| x.abs()).max().unwrap_or(0);
-        assert!(max_abs < i32::MAX / 2, "shift=0 output should be bounded, got {max_abs}");
-        assert!(output.iter().any(|&v| v != 0), "shift=0 impulse should produce non-zero output");
+        assert!(
+            max_abs < i32::MAX / 2,
+            "shift=0 output should be bounded, got {max_abs}"
+        );
+        assert!(
+            output.iter().any(|&v| v != 0),
+            "shift=0 impulse should produce non-zero output"
+        );
     }
 
     #[test]
@@ -1190,8 +1196,14 @@ mod tests {
         let mut output = vec![0i32; n];
         clt_mdct_backward(l, &input, &mut output, mode.window, overlap, shift, 1);
         let max_abs = output.iter().map(|x| x.abs()).max().unwrap_or(0);
-        assert!(max_abs < i32::MAX / 2, "shift=1 output should be bounded, got {max_abs}");
-        assert!(output.iter().any(|&v| v != 0), "shift=1 impulse should produce non-zero output");
+        assert!(
+            max_abs < i32::MAX / 2,
+            "shift=1 output should be bounded, got {max_abs}"
+        );
+        assert!(
+            output.iter().any(|&v| v != 0),
+            "shift=1 impulse should produce non-zero output"
+        );
     }
 
     #[test]
@@ -1208,8 +1220,14 @@ mod tests {
         let mut output = vec![0i32; n];
         clt_mdct_backward(l, &input, &mut output, mode.window, overlap, shift, 1);
         let max_abs = output.iter().map(|x| x.abs()).max().unwrap_or(0);
-        assert!(max_abs < i32::MAX / 2, "shift=2 output should be bounded, got {max_abs}");
-        assert!(output.iter().any(|&v| v != 0), "shift=2 impulse should produce non-zero output");
+        assert!(
+            max_abs < i32::MAX / 2,
+            "shift=2 output should be bounded, got {max_abs}"
+        );
+        assert!(
+            output.iter().any(|&v| v != 0),
+            "shift=2 impulse should produce non-zero output"
+        );
     }
 
     #[test]
@@ -1224,15 +1242,37 @@ mod tests {
         // Zero input
         let input_zero = vec![0i32; n2];
         let mut output_zero = vec![0i32; n];
-        clt_mdct_backward(l, &input_zero, &mut output_zero, mode.window, overlap, shift, 1);
-        assert!(output_zero.iter().all(|&v| v == 0), "zero input should give zero output");
+        clt_mdct_backward(
+            l,
+            &input_zero,
+            &mut output_zero,
+            mode.window,
+            overlap,
+            shift,
+            1,
+        );
+        assert!(
+            output_zero.iter().all(|&v| v == 0),
+            "zero input should give zero output"
+        );
 
         // Impulse input
         let mut input_imp = vec![0i32; n2];
         input_imp[n2 / 2] = 1 << 15;
         let mut output_imp = vec![0i32; n];
-        clt_mdct_backward(l, &input_imp, &mut output_imp, mode.window, overlap, shift, 1);
-        assert!(output_imp.iter().any(|&v| v != 0), "impulse input at mid-band should produce output");
+        clt_mdct_backward(
+            l,
+            &input_imp,
+            &mut output_imp,
+            mode.window,
+            overlap,
+            shift,
+            1,
+        );
+        assert!(
+            output_imp.iter().any(|&v| v != 0),
+            "impulse input at mid-band should produce output"
+        );
     }
 
     #[test]

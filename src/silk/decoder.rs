@@ -688,8 +688,10 @@ fn silk_decode_pulses(
             // C: after 10 LSB shifts, offset the ICDF table by 1 byte to
             // prevent decoding another SILK_MAX_PULSES+1 (avoids infinite loop).
             let table_offset = if n_lshifts[i] == 10 { 1 } else { 0 };
-            sum_pulses[i] =
-                rc.decode_icdf(&SILK_PULSES_PER_BLOCK_ICDF[N_RATE_LEVELS - 1][table_offset..], 8);
+            sum_pulses[i] = rc.decode_icdf(
+                &SILK_PULSES_PER_BLOCK_ICDF[N_RATE_LEVELS - 1][table_offset..],
+                8,
+            );
         }
     }
 
@@ -1062,7 +1064,6 @@ fn silk_decode_core(
             // Apply gain and output
             let out_val = silk_rshift_round(silk_smulww(s_lpc_q14[MAX_LPC_ORDER + i], gain_q10), 8);
             xq[xq_offset + i] = sat16(out_val);
-
         }
 
         // Shift LPC state for next subframe
@@ -1136,7 +1137,10 @@ fn silk_plc_rand_offset(
 ) -> usize {
     // Need at least 2 subframes for energy comparison
     if nb_subfr < 2 || subfr_length == 0 {
-        return imax(0, plc_nb_subfr as i32 * plc_subfr_length as i32 - RAND_BUF_SIZE as i32) as usize;
+        return imax(
+            0,
+            plc_nb_subfr as i32 * plc_subfr_length as i32 - RAND_BUF_SIZE as i32,
+        ) as usize;
     }
 
     // Scale the last two subframes of exc_q14 by prevGain_Q10 and convert to i16
@@ -1146,9 +1150,8 @@ fn silk_plc_rand_offset(
         for i in 0..subfr_length {
             let src_idx = src_offset + i;
             if src_idx < exc_q14.len() {
-                exc_buf[k * subfr_length + i] = sat16(
-                    silk_smulww(exc_q14[src_idx], prev_gain_q10[k]) >> 8,
-                );
+                exc_buf[k * subfr_length + i] =
+                    sat16(silk_smulww(exc_q14[src_idx], prev_gain_q10[k]) >> 8);
             }
         }
     }
@@ -1159,10 +1162,16 @@ fn silk_plc_rand_offset(
 
     if (energy1 >> shift2) < (energy2 >> shift1) {
         // First subframe has lower energy
-        imax(0, (plc_nb_subfr as i32 - 1) * plc_subfr_length as i32 - RAND_BUF_SIZE as i32) as usize
+        imax(
+            0,
+            (plc_nb_subfr as i32 - 1) * plc_subfr_length as i32 - RAND_BUF_SIZE as i32,
+        ) as usize
     } else {
         // Second subframe has lower energy
-        imax(0, plc_nb_subfr as i32 * plc_subfr_length as i32 - RAND_BUF_SIZE as i32) as usize
+        imax(
+            0,
+            plc_nb_subfr as i32 * plc_subfr_length as i32 - RAND_BUF_SIZE as i32,
+        ) as usize
     }
 }
 
@@ -1250,7 +1259,11 @@ fn silk_plc_conceal(dec: &mut SilkDecoderState, frame: &mut [i16]) {
             rand_seed = silk_rand(rand_seed);
             let idx = ((rand_seed >> 25) as usize) & RAND_BUF_MASK;
             let buf_idx = rand_ptr_offset + idx;
-            let rand_val = if buf_idx < dec.exc_q14.len() { dec.exc_q14[buf_idx] } else { 0 };
+            let rand_val = if buf_idx < dec.exc_q14.len() {
+                dec.exc_q14[buf_idx]
+            } else {
+                0
+            };
 
             // LTP prediction for voiced
             let ltp_pred = if dec.prev_signal_type == TYPE_VOICED {
@@ -2229,6 +2242,7 @@ pub fn silk_decode_frame(
             }
         }
         #[cfg(not(feature = "dnn"))]
+        #[allow(clippy::let_unit_value)]
         let _ = lpcnet;
 
         dec.loss_cnt = 0;
@@ -2493,6 +2507,7 @@ pub fn silk_decode(
     #[cfg(feature = "dnn")]
     let mut lpcnet = lpcnet;
     #[cfg(not(feature = "dnn"))]
+    #[allow(clippy::let_unit_value)]
     let _ = lpcnet;
 
     for n in 0..n_channels_internal {
@@ -3550,8 +3565,14 @@ mod tests {
         let lpcnet_arg: DnnPlcArg<'_> = ();
 
         let ret = silk_decode(
-            &mut decoder, &mut ctrl, FLAG_PACKET_LOST, true,
-            &mut rc, &mut out, &mut n, lpcnet_arg,
+            &mut decoder,
+            &mut ctrl,
+            FLAG_PACKET_LOST,
+            true,
+            &mut rc,
+            &mut out,
+            &mut n,
+            lpcnet_arg,
         );
         assert_eq!(ret, 0);
         assert_eq!(decoder.channel_state[0].nb_subfr, 2);
@@ -3586,8 +3607,14 @@ mod tests {
         let lpcnet_arg: DnnPlcArg<'_> = ();
 
         let ret = silk_decode(
-            &mut decoder, &mut ctrl, FLAG_PACKET_LOST, true,
-            &mut rc, &mut out, &mut n, lpcnet_arg,
+            &mut decoder,
+            &mut ctrl,
+            FLAG_PACKET_LOST,
+            true,
+            &mut rc,
+            &mut out,
+            &mut n,
+            lpcnet_arg,
         );
         assert_eq!(ret, 0);
         assert_eq!(decoder.channel_state[0].n_frames_per_packet, 2);
@@ -3620,8 +3647,14 @@ mod tests {
         let lpcnet_arg: DnnPlcArg<'_> = ();
 
         let ret = silk_decode(
-            &mut decoder, &mut ctrl, FLAG_PACKET_LOST, true,
-            &mut rc, &mut out, &mut n, lpcnet_arg,
+            &mut decoder,
+            &mut ctrl,
+            FLAG_PACKET_LOST,
+            true,
+            &mut rc,
+            &mut out,
+            &mut n,
+            lpcnet_arg,
         );
         assert_eq!(ret, 0);
         assert_eq!(decoder.channel_state[0].n_frames_per_packet, 3);
@@ -3674,14 +3707,23 @@ mod tests {
 
         // Packet lost triggers PLC for both channels
         let ret = silk_decode(
-            &mut decoder, &mut ctrl, FLAG_PACKET_LOST, false,
-            &mut rc, &mut out, &mut n, lpcnet_arg,
+            &mut decoder,
+            &mut ctrl,
+            FLAG_PACKET_LOST,
+            false,
+            &mut rc,
+            &mut out,
+            &mut n,
+            lpcnet_arg,
         );
         assert_eq!(ret, 0);
         // Side channel should have been reset since prev_decode_only_middle was true
         assert_eq!(decoder.channel_state[1].lag_prev, 100);
         assert_eq!(decoder.channel_state[1].last_gain_index, 10);
-        assert_eq!(decoder.channel_state[1].prev_signal_type, TYPE_NO_VOICE_ACTIVITY);
+        assert_eq!(
+            decoder.channel_state[1].prev_signal_type,
+            TYPE_NO_VOICE_ACTIVITY
+        );
         assert!(decoder.channel_state[1].first_frame_after_reset);
     }
 
@@ -3723,8 +3765,14 @@ mod tests {
         let lpcnet_arg: DnnPlcArg<'_> = ();
 
         let ret = silk_decode(
-            &mut decoder, &mut ctrl, FLAG_PACKET_LOST, true,
-            &mut rc, &mut out, &mut n, lpcnet_arg,
+            &mut decoder,
+            &mut ctrl,
+            FLAG_PACKET_LOST,
+            true,
+            &mut rc,
+            &mut out,
+            &mut n,
+            lpcnet_arg,
         );
         assert_eq!(ret, 0);
         assert_eq!(decoder.n_channels_internal, 2);
@@ -3736,8 +3784,7 @@ mod tests {
     fn test_nlsf_stabilize_boundary_violations_wb() {
         // WB (order 16) NLSFs packed tightly at the bottom, forcing stabilization
         let mut nlsf: [i16; 16] = [
-            100, 101, 102, 103, 200, 201, 202, 203,
-            500, 501, 502, 503, 1000, 1001, 1002, 1003,
+            100, 101, 102, 103, 200, 201, 202, 203, 500, 501, 502, 503, 1000, 1001, 1002, 1003,
         ];
         let delta_min = SILK_NLSF_DELTA_MIN_WB_Q15;
         silk_nlsf_stabilize(&mut nlsf, &delta_min, 16);
@@ -3749,7 +3796,9 @@ mod tests {
             assert!(
                 diff >= delta_min[i] as i32,
                 "WB NLSF spacing violation at {}: diff={}, min={}",
-                i, diff, delta_min[i]
+                i,
+                diff,
+                delta_min[i]
             );
         }
     }
@@ -3758,8 +3807,8 @@ mod tests {
     fn test_nlsf2a_order_16() {
         // WB uses order 16
         let nlsf: [i16; 16] = [
-            2048, 4096, 6144, 8192, 10240, 12288, 14336, 16384,
-            18432, 20480, 22528, 24576, 26624, 28672, 30720, 32000,
+            2048, 4096, 6144, 8192, 10240, 12288, 14336, 16384, 18432, 20480, 22528, 24576, 26624,
+            28672, 30720, 32000,
         ];
         let mut a_q12 = [0i16; 16];
         silk_nlsf2a(&mut a_q12, &nlsf, 16);
@@ -3807,7 +3856,10 @@ mod tests {
                 assert!(
                     lag >= min_lag && lag <= max_lag,
                     "contour {}: lag {} out of range [{}, {}]",
-                    contour_idx, lag, min_lag, max_lag
+                    contour_idx,
+                    lag,
+                    min_lag,
+                    max_lag
                 );
             }
         }
@@ -3878,8 +3930,14 @@ mod tests {
         let lpcnet_arg: DnnPlcArg<'_> = ();
 
         silk_decode(
-            &mut decoder, &mut ctrl, FLAG_PACKET_LOST, false,
-            &mut rc, &mut out, &mut n, lpcnet_arg,
+            &mut decoder,
+            &mut ctrl,
+            FLAG_PACKET_LOST,
+            false,
+            &mut rc,
+            &mut out,
+            &mut n,
+            lpcnet_arg,
         );
 
         // After packet loss, prev_pitch_lag is set to 0 (no valid voiced info)
@@ -3954,8 +4012,14 @@ mod tests {
         let lpcnet_arg: DnnPlcArg<'_> = ();
 
         let ret = silk_decode(
-            &mut decoder, &mut ctrl, FLAG_PACKET_LOST, false,
-            &mut rc, &mut out, &mut n, lpcnet_arg,
+            &mut decoder,
+            &mut ctrl,
+            FLAG_PACKET_LOST,
+            false,
+            &mut rc,
+            &mut out,
+            &mut n,
+            lpcnet_arg,
         );
         assert_eq!(ret, 0);
         assert_eq!(n, 960);
@@ -3963,8 +4027,12 @@ mod tests {
         // Check that L and R channels are identical (mono duplication)
         for i in 0..n {
             assert_eq!(
-                out[2 * i], out[2 * i + 1],
-                "Stereo sample {} mismatch: L={}, R={}", i, out[2 * i], out[2 * i + 1]
+                out[2 * i],
+                out[2 * i + 1],
+                "Stereo sample {} mismatch: L={}, R={}",
+                i,
+                out[2 * i],
+                out[2 * i + 1]
             );
         }
     }
@@ -3995,7 +4063,12 @@ mod tests {
         // lin2log should be monotonically increasing
         let log_100 = silk_lin2log(100);
         let log_10000 = silk_lin2log(10000);
-        assert!(log_10000 > log_100, "monotonicity: log(10000)={} should > log(100)={}", log_10000, log_100);
+        assert!(
+            log_10000 > log_100,
+            "monotonicity: log(10000)={} should > log(100)={}",
+            log_10000,
+            log_100
+        );
 
         // Round-trip for a medium value
         let log_val = silk_lin2log(50000);

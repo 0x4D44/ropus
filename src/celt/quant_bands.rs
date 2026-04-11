@@ -1238,7 +1238,8 @@ mod tests {
 
         let mut e_bands = vec![0i32; total];
         for i in 0..end as usize {
-            e_bands[i] = qconst32(5.0, DB_SHIFT as u32) + (i as i32) * qconst32(1.0, DB_SHIFT as u32);
+            e_bands[i] =
+                qconst32(5.0, DB_SHIFT as u32) + (i as i32) * qconst32(1.0, DB_SHIFT as u32);
         }
 
         let mut old_e_bands_enc = vec![0i32; total];
@@ -1250,9 +1251,23 @@ mod tests {
         {
             let mut enc = RangeEncoder::new(&mut buf);
             quant_coarse_energy(
-                &m, start, end, end, &e_bands, &mut old_e_bands_enc,
-                (budget_bytes as u32) * 8, &mut error, &mut enc, cc, lm,
-                budget_bytes as i32, 1, &mut delayed_intra, 0, 0, 0,
+                &m,
+                start,
+                end,
+                end,
+                &e_bands,
+                &mut old_e_bands_enc,
+                (budget_bytes as u32) * 8,
+                &mut error,
+                &mut enc,
+                cc,
+                lm,
+                budget_bytes as i32,
+                1,
+                &mut delayed_intra,
+                0,
+                0,
+                0,
             );
             enc.done();
         }
@@ -1262,7 +1277,16 @@ mod tests {
             let mut dec = RangeDecoder::new(&buf);
             let intra = if dec.decode_bit_logp(3) { 1 } else { 0 };
             assert_eq!(intra, 1, "force_intra should set intra flag");
-            unquant_coarse_energy(&m, start, end, &mut old_e_bands_dec, intra, &mut dec, cc, lm);
+            unquant_coarse_energy(
+                &m,
+                start,
+                end,
+                &mut old_e_bands_dec,
+                intra,
+                &mut dec,
+                cc,
+                lm,
+            );
         }
 
         assert_eq!(old_e_bands_enc, old_e_bands_dec);
@@ -1293,9 +1317,23 @@ mod tests {
         {
             let mut enc = RangeEncoder::new(&mut buf);
             quant_coarse_energy(
-                &m, start, end, end, &e_bands, &mut old_e_bands_enc,
-                (budget_bytes as u32) * 8, &mut error, &mut enc, cc, lm,
-                budget_bytes as i32, 0, &mut delayed_intra, 1, 0, 0,
+                &m,
+                start,
+                end,
+                end,
+                &e_bands,
+                &mut old_e_bands_enc,
+                (budget_bytes as u32) * 8,
+                &mut error,
+                &mut enc,
+                cc,
+                lm,
+                budget_bytes as i32,
+                0,
+                &mut delayed_intra,
+                1,
+                0,
+                0,
             );
             enc.done();
         }
@@ -1304,7 +1342,16 @@ mod tests {
         {
             let mut dec = RangeDecoder::new(&buf);
             let intra = if dec.decode_bit_logp(3) { 1 } else { 0 };
-            unquant_coarse_energy(&m, start, end, &mut old_e_bands_dec, intra, &mut dec, cc, lm);
+            unquant_coarse_energy(
+                &m,
+                start,
+                end,
+                &mut old_e_bands_dec,
+                intra,
+                &mut dec,
+                cc,
+                lm,
+            );
         }
 
         assert_eq!(old_e_bands_enc, old_e_bands_dec);
@@ -1352,7 +1399,8 @@ mod tests {
         for lm in 1..=3 {
             let mut e_bands = vec![0i32; total];
             for i in 0..end as usize {
-                e_bands[i] = qconst32(4.0, DB_SHIFT as u32) + (i as i32) * qconst32(0.3, DB_SHIFT as u32);
+                e_bands[i] =
+                    qconst32(4.0, DB_SHIFT as u32) + (i as i32) * qconst32(0.3, DB_SHIFT as u32);
             }
 
             let mut old_e_bands_enc = vec![0i32; total];
@@ -1363,9 +1411,23 @@ mod tests {
             {
                 let mut enc = RangeEncoder::new(&mut buf);
                 quant_coarse_energy(
-                    &m, start, end, end, &e_bands, &mut old_e_bands_enc,
-                    (budget_bytes as u32) * 8, &mut error, &mut enc, cc, lm,
-                    budget_bytes as i32, 0, &mut delayed_intra, 1, 0, 0,
+                    &m,
+                    start,
+                    end,
+                    end,
+                    &e_bands,
+                    &mut old_e_bands_enc,
+                    (budget_bytes as u32) * 8,
+                    &mut error,
+                    &mut enc,
+                    cc,
+                    lm,
+                    budget_bytes as i32,
+                    0,
+                    &mut delayed_intra,
+                    1,
+                    0,
+                    0,
                 );
                 enc.done();
             }
@@ -1374,7 +1436,16 @@ mod tests {
             {
                 let mut dec = RangeDecoder::new(&buf);
                 let intra = if dec.decode_bit_logp(3) { 1 } else { 0 };
-                unquant_coarse_energy(&m, start, end, &mut old_e_bands_dec, intra, &mut dec, cc, lm);
+                unquant_coarse_energy(
+                    &m,
+                    start,
+                    end,
+                    &mut old_e_bands_dec,
+                    intra,
+                    &mut dec,
+                    cc,
+                    lm,
+                );
             }
 
             assert_eq!(
@@ -1409,9 +1480,23 @@ mod tests {
         {
             let mut enc = RangeEncoder::new(&mut buf);
             quant_coarse_energy(
-                &m, start, end, end, &e_bands, &mut old_e_bands_enc,
-                (budget_bytes as u32) * 8, &mut error, &mut enc, cc, lm,
-                budget_bytes as i32, 0, &mut delayed_intra, 1, 0, 1,
+                &m,
+                start,
+                end,
+                end,
+                &e_bands,
+                &mut old_e_bands_enc,
+                (budget_bytes as u32) * 8,
+                &mut error,
+                &mut enc,
+                cc,
+                lm,
+                budget_bytes as i32,
+                0,
+                &mut delayed_intra,
+                1,
+                0,
+                1,
             );
             enc.done();
         }
@@ -1420,7 +1505,16 @@ mod tests {
         {
             let mut dec = RangeDecoder::new(&buf);
             let intra = if dec.decode_bit_logp(3) { 1 } else { 0 };
-            unquant_coarse_energy(&m, start, end, &mut old_e_bands_dec, intra, &mut dec, cc, lm);
+            unquant_coarse_energy(
+                &m,
+                start,
+                end,
+                &mut old_e_bands_dec,
+                intra,
+                &mut dec,
+                cc,
+                lm,
+            );
         }
 
         assert_eq!(old_e_bands_enc, old_e_bands_dec);
@@ -1450,16 +1544,29 @@ mod tests {
         {
             let mut enc = RangeEncoder::new(&mut buf);
             quant_fine_energy(
-                &m, start, end, &mut old_e_bands_enc, &mut error,
-                Some(&prev_quant), &extra_quant, &mut enc, cc,
+                &m,
+                start,
+                end,
+                &mut old_e_bands_enc,
+                &mut error,
+                Some(&prev_quant),
+                &extra_quant,
+                &mut enc,
+                cc,
             );
             enc.done();
         }
         {
             let mut dec = RangeDecoder::new(&buf);
             unquant_fine_energy(
-                &m, start, end, &mut old_e_bands_dec,
-                Some(&prev_quant), &extra_quant, &mut dec, cc,
+                &m,
+                start,
+                end,
+                &mut old_e_bands_dec,
+                Some(&prev_quant),
+                &extra_quant,
+                &mut dec,
+                cc,
             );
         }
 
@@ -1479,7 +1586,10 @@ mod tests {
         let mut old_e_bands2 = vec![qconst32(5.0, DB_SHIFT as u32); nb_ebands as usize];
         old_e_bands2[0] = qconst32(10.0, DB_SHIFT as u32);
         let dist2 = loss_distortion(&e_bands, &old_e_bands2, 0, 21, nb_ebands, 1);
-        assert!(dist2 > 0, "nonzero difference should give nonzero distortion");
+        assert!(
+            dist2 > 0,
+            "nonzero difference should give nonzero distortion"
+        );
     }
 
     #[test]
@@ -1500,8 +1610,14 @@ mod tests {
         // Active bands should have finite log values (not silence floor)
         let silence = -qconst32(14.0, DB_SHIFT as u32);
         for i in 0..3 {
-            assert_ne!(band_log_e[i], silence, "active band {i} should not be at silence floor");
-            assert_ne!(band_log_e[i], 0, "active band {i} should have nonzero log energy");
+            assert_ne!(
+                band_log_e[i], silence,
+                "active band {i} should not be at silence floor"
+            );
+            assert_ne!(
+                band_log_e[i], 0,
+                "active band {i} should have nonzero log energy"
+            );
         }
 
         // log2(2*E) should be roughly log2(E) + 1.0 * 2^DB_SHIFT

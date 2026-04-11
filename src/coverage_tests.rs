@@ -161,9 +161,7 @@ fn encode_frames(
     for i in 0..n_frames {
         let pcm = patterned_pcm_i16(frame_size, channels, 100 + i as i32 * 13);
         let mut pkt = vec![0u8; 1500];
-        let len = enc
-            .encode(&pcm, frame_size as i32, &mut pkt, 1500)
-            .unwrap();
+        let len = enc.encode(&pcm, frame_size as i32, &mut pkt, 1500).unwrap();
         packets.push(pkt[..len as usize].to_vec());
     }
     packets
@@ -411,7 +409,8 @@ fn coverage_sample_rate_sweep_silk() {
         let mut pkt = vec![0u8; 1500];
         let len = enc.encode(&pcm, frame_size, &mut pkt, 1500).unwrap();
         let mut out = vec![0i16; frame_size as usize];
-        dec.decode(Some(&pkt[..len as usize]), &mut out, frame_size, false).unwrap();
+        dec.decode(Some(&pkt[..len as usize]), &mut out, frame_size, false)
+            .unwrap();
     }
 }
 
@@ -482,7 +481,8 @@ fn coverage_decode_float_and_decode24() {
     // decode_float
     let mut dec = OpusDecoder::new(48000, 1).unwrap();
     let mut out_f32 = vec![0f32; 960];
-    dec.decode_float(Some(pkt), &mut out_f32, 960, false).unwrap();
+    dec.decode_float(Some(pkt), &mut out_f32, 960, false)
+        .unwrap();
     assert!(out_f32.iter().any(|s| s.abs() > 1e-4));
 
     // decode24
@@ -576,7 +576,8 @@ fn coverage_multistream_stereo_encode_decode() {
     let len = enc.encode(&pcm, 960, &mut pkt, 4000).unwrap();
 
     let mut out = vec![0i16; 960 * 2];
-    dec.decode(Some(&pkt[..len as usize]), len, &mut out, 960, false).unwrap();
+    dec.decode(Some(&pkt[..len as usize]), len, &mut out, 960, false)
+        .unwrap();
     assert!(out.iter().any(|&s| s != 0));
 }
 
@@ -591,7 +592,8 @@ fn coverage_decoder_gain_and_pitch() {
     let mut dec = OpusDecoder::new(48000, 1).unwrap();
     dec.set_gain(256); // +1 dB
     let mut out = vec![0i16; 960];
-    dec.decode(Some(&pkt[..len as usize]), &mut out, 960, false).unwrap();
+    dec.decode(Some(&pkt[..len as usize]), &mut out, 960, false)
+        .unwrap();
     let pitch = dec.get_pitch();
     // Pitch may or may not be > 0 depending on mode, just ensure no panic
     let _ = pitch;
@@ -675,7 +677,10 @@ fn coverage_dtx_silk_voip_silence_packets() {
             break;
         }
     }
-    assert!(dtx_found, "DTX should produce 1-byte TOC-only packet after sustained silence");
+    assert!(
+        dtx_found,
+        "DTX should produce 1-byte TOC-only packet after sustained silence"
+    );
 }
 
 /// Low bitrate stereo width: stereo encoder at 12000bps.
@@ -695,7 +700,8 @@ fn coverage_stereo_width_low_bitrate() {
         let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
         assert!(len > 0);
         let mut out = vec![0i16; 960 * 2];
-        dec.decode(Some(&pkt[..len as usize]), &mut out, 960, false).unwrap();
+        dec.decode(Some(&pkt[..len as usize]), &mut out, 960, false)
+            .unwrap();
     }
 }
 
@@ -716,7 +722,8 @@ fn coverage_stereo_width_high_bitrate_celt() {
         let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
         assert!(len > 0);
         let mut out = vec![0i16; 960 * 2];
-        dec.decode(Some(&pkt[..len as usize]), &mut out, 960, false).unwrap();
+        dec.decode(Some(&pkt[..len as usize]), &mut out, 960, false)
+            .unwrap();
     }
 }
 
@@ -809,7 +816,8 @@ fn coverage_celt_to_silk_short_frames_no_redundancy() {
         let mut pkt = vec![0u8; 1500];
         let len = enc.encode(&pcm, 240, &mut pkt, 1500).unwrap();
         let mut out = vec![0i16; 240];
-        dec.decode(Some(&pkt[..len as usize]), &mut out, 240, false).unwrap();
+        dec.decode(Some(&pkt[..len as usize]), &mut out, 240, false)
+            .unwrap();
     }
 
     // Switch to SILK — but 5ms < fs/100, so SILK is overridden to CELT
@@ -820,7 +828,8 @@ fn coverage_celt_to_silk_short_frames_no_redundancy() {
         let mut pkt = vec![0u8; 1500];
         let len = enc.encode(&pcm, 240, &mut pkt, 1500).unwrap();
         let mut out = vec![0i16; 240];
-        dec.decode(Some(&pkt[..len as usize]), &mut out, 240, false).unwrap();
+        dec.decode(Some(&pkt[..len as usize]), &mut out, 240, false)
+            .unwrap();
     }
     // With 5ms frames, mode should be CELT regardless of SILK request
     assert_eq!(enc.get_mode(), MODE_CELT_ONLY);
@@ -876,4 +885,272 @@ fn coverage_cbr_constraint_padding() {
     let mut pkt2 = vec![0u8; 1500];
     let len2 = enc.encode(&pcm2, 960, &mut pkt2, 1500).unwrap();
     assert!(len2 > 0);
+}
+
+/// Comprehensive encoder configuration sweep: exercise many internal branches
+/// in a single test with minimal test LOC. Each configuration encodes several
+/// frames and decodes them, exercising different mode/bandwidth/rate combinations.
+#[test]
+fn coverage_comprehensive_encoder_sweep() {
+    // (rate, ch, app, mode, bw, bitrate, vbr, frame_ms, complexity, signal)
+    let configs: &[(
+        i32,
+        i32,
+        i32,
+        Option<i32>,
+        Option<i32>,
+        i32,
+        i32,
+        i32,
+        i32,
+        Option<i32>,
+    )] = &[
+        // 16kHz SILK mono at different complexities
+        (
+            16000,
+            1,
+            OPUS_APPLICATION_VOIP,
+            Some(MODE_SILK_ONLY),
+            None,
+            8000,
+            1,
+            20,
+            0,
+            Some(OPUS_SIGNAL_VOICE),
+        ),
+        (
+            16000,
+            1,
+            OPUS_APPLICATION_VOIP,
+            Some(MODE_SILK_ONLY),
+            None,
+            44000,
+            1,
+            20,
+            10,
+            Some(OPUS_SIGNAL_VOICE),
+        ),
+        // 8kHz SILK narrowband stereo (exercises resampler + stereo paths)
+        (
+            8000,
+            2,
+            OPUS_APPLICATION_VOIP,
+            Some(MODE_SILK_ONLY),
+            None,
+            24000,
+            1,
+            20,
+            5,
+            Some(OPUS_SIGNAL_VOICE),
+        ),
+        // 24kHz SILK SWB (exercises SWB coding paths)
+        (
+            24000,
+            1,
+            OPUS_APPLICATION_VOIP,
+            Some(MODE_SILK_ONLY),
+            None,
+            32000,
+            1,
+            20,
+            5,
+            None,
+        ),
+        // 48kHz CELT CBR mono at very low bitrate (exercises minimum-rate paths)
+        (
+            48000,
+            1,
+            OPUS_APPLICATION_AUDIO,
+            Some(MODE_CELT_ONLY),
+            None,
+            6000,
+            0,
+            20,
+            5,
+            Some(OPUS_SIGNAL_MUSIC),
+        ),
+        // 48kHz CELT VBR stereo at high bitrate (exercises stereo decisions)
+        (
+            48000,
+            2,
+            OPUS_APPLICATION_AUDIO,
+            Some(MODE_CELT_ONLY),
+            None,
+            128000,
+            1,
+            20,
+            10,
+            Some(OPUS_SIGNAL_MUSIC),
+        ),
+        // 48kHz Hybrid mono (exercises hybrid start band, SILK+CELT split)
+        (
+            48000,
+            1,
+            OPUS_APPLICATION_AUDIO,
+            Some(MODE_HYBRID),
+            None,
+            40000,
+            1,
+            20,
+            5,
+            None,
+        ),
+        // 48kHz Hybrid stereo (exercises hybrid stereo width)
+        (
+            48000,
+            2,
+            OPUS_APPLICATION_AUDIO,
+            Some(MODE_HYBRID),
+            None,
+            48000,
+            1,
+            20,
+            5,
+            None,
+        ),
+        // 48kHz auto mode at medium bitrate (lets encoder pick mode)
+        (
+            48000,
+            1,
+            OPUS_APPLICATION_AUDIO,
+            None,
+            None,
+            24000,
+            1,
+            20,
+            5,
+            None,
+        ),
+        (
+            48000,
+            2,
+            OPUS_APPLICATION_VOIP,
+            None,
+            None,
+            32000,
+            1,
+            20,
+            5,
+            Some(OPUS_SIGNAL_VOICE),
+        ),
+        // 48kHz CELT 10ms (exercises short frame paths)
+        (
+            48000,
+            1,
+            OPUS_APPLICATION_RESTRICTED_LOWDELAY,
+            Some(MODE_CELT_ONLY),
+            None,
+            48000,
+            1,
+            10,
+            5,
+            None,
+        ),
+        // Restricted low delay 5ms (smallest CELT frame)
+        (
+            48000,
+            1,
+            OPUS_APPLICATION_RESTRICTED_LOWDELAY,
+            Some(MODE_CELT_ONLY),
+            None,
+            64000,
+            1,
+            5,
+            5,
+            None,
+        ),
+    ];
+    for (idx, &(rate, ch, app, mode, bw, bitrate, vbr, frame_ms, complexity, signal)) in
+        configs.iter().enumerate()
+    {
+        let mut enc = OpusEncoder::new(rate, ch, app).unwrap();
+        enc.set_bitrate(bitrate);
+        enc.set_vbr(vbr);
+        enc.set_complexity(complexity);
+        if let Some(m) = mode {
+            enc.set_force_mode(m);
+        }
+        if let Some(b) = bw {
+            enc.set_max_bandwidth(b);
+        }
+        if let Some(s) = signal {
+            enc.set_signal(s);
+        }
+        let frame_size = rate * frame_ms / 1000;
+        let mut dec = OpusDecoder::new(rate, ch).unwrap();
+        for f in 0..8 {
+            let pcm = patterned_pcm_i16(frame_size as usize, ch as usize, (idx * 100 + f) as i32);
+            let mut pkt = vec![0u8; 1500];
+            let len = enc.encode(&pcm, frame_size, &mut pkt, 1500).unwrap();
+            assert!(len > 0, "config {idx} frame {f}: encode returned 0 bytes");
+            let mut out = vec![0i16; frame_size as usize * ch as usize];
+            dec.decode(Some(&pkt[..len as usize]), &mut out, frame_size, false)
+                .unwrap();
+        }
+    }
+}
+
+/// Exercise the encoder's mode transition with redundancy by alternating
+/// between SILK and CELT modes many times.
+#[test]
+fn coverage_rapid_mode_alternation() {
+    let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+    enc.set_bitrate(32000);
+    enc.set_vbr(1);
+    let mut dec = OpusDecoder::new(48000, 1).unwrap();
+    let modes = [
+        MODE_SILK_ONLY,
+        MODE_CELT_ONLY,
+        MODE_SILK_ONLY,
+        MODE_CELT_ONLY,
+        MODE_HYBRID,
+        MODE_CELT_ONLY,
+        MODE_SILK_ONLY,
+        MODE_HYBRID,
+        MODE_CELT_ONLY,
+        MODE_SILK_ONLY,
+    ];
+    for (i, &mode) in modes.iter().enumerate() {
+        enc.set_force_mode(mode);
+        let pcm = patterned_pcm_i16(960, 1, 7000 + i as i32 * 17);
+        let mut pkt = vec![0u8; 1500];
+        let len = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+        let mut out = vec![0i16; 960];
+        dec.decode(Some(&pkt[..len as usize]), &mut out, 960, false)
+            .unwrap();
+    }
+}
+
+/// Exercise the decoder's FEC path by dropping packets and using FEC recovery.
+#[test]
+fn coverage_fec_recovery_silk_multiple_drops() {
+    let mut enc = OpusEncoder::new(16000, 1, OPUS_APPLICATION_VOIP).unwrap();
+    enc.set_force_mode(MODE_SILK_ONLY);
+    enc.set_bitrate(24000);
+    enc.set_inband_fec(1);
+    enc.set_packet_loss_perc(30);
+    let mut dec = OpusDecoder::new(16000, 1).unwrap();
+    let mut packets: Vec<Vec<u8>> = Vec::new();
+    // Encode 10 frames
+    for i in 0..10 {
+        let pcm = patterned_pcm_i16(320, 1, 8000 + i * 13);
+        let mut pkt = vec![0u8; 1500];
+        let len = enc.encode(&pcm, 320, &mut pkt, 1500).unwrap();
+        packets.push(pkt[..len as usize].to_vec());
+    }
+    // Decode with some drops: frames 3, 5, 7 are "lost"
+    for i in 0..10 {
+        let mut out = vec![0i16; 320];
+        if i == 3 || i == 5 || i == 7 {
+            // Lost frame — use FEC from next packet if available
+            if i + 1 < packets.len() {
+                dec.decode(Some(&packets[i + 1]), &mut out, 320, true)
+                    .unwrap();
+            } else {
+                dec.decode(None, &mut out, 320, false).unwrap();
+            }
+        } else {
+            dec.decode(Some(&packets[i]), &mut out, 320, false).unwrap();
+        }
+    }
 }

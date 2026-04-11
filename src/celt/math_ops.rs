@@ -995,7 +995,10 @@ mod tests {
     fn test_celt_div_nonzero() {
         // Verify result is not 0, 1, or -1 for typical inputs
         let result = celt_div(100_000_000, 10000);
-        assert!(result.abs() > 100, "celt_div should not return ~0 for large a");
+        assert!(
+            result.abs() > 100,
+            "celt_div should not return ~0 for large a"
+        );
     }
 
     // --- celt_sqrt32 (3 survivors: no direct test) ---
@@ -1033,11 +1036,17 @@ mod tests {
         // Exercise the k<12 branch: k = celt_ilog2(x) >> 1
         // For k<12, need ilog2(x) < 24, so x < 2^24 = 16777216
         let result = celt_sqrt32(100);
-        assert!(result > 0, "celt_sqrt32(100) should be positive, got {result}");
+        assert!(
+            result > 0,
+            "celt_sqrt32(100) should be positive, got {result}"
+        );
         // sqrt(100) * 2^(Q_out) where Q_out = (ilog2(100)/2 + 16)
         // ilog2(100) = 6, k=3, Q_out = 3+16=19 => ~524288 * sqrt(100/8) ≈ ...
         // Just verify it's reasonable and not 0/1/-1
-        assert!(result > 1000, "celt_sqrt32(100) = {result}, should be > 1000");
+        assert!(
+            result > 1000,
+            "celt_sqrt32(100) = {result}, should be > 1000"
+        );
     }
 
     // --- celt_rcp_norm32 (3 survivors: no test) ---
@@ -1107,10 +1116,7 @@ mod tests {
         // For x=0, exp2(0) should be close to 1.0 in Q16 = 65536
         let result = celt_exp2_db(0);
         let diff = (result - 65536).abs();
-        assert!(
-            diff < 64,
-            "celt_exp2_db(0) = {result}, expected ~65536"
-        );
+        assert!(diff < 64, "celt_exp2_db(0) = {result}, expected ~65536");
     }
 
     #[test]
@@ -1169,7 +1175,8 @@ mod tests {
         let cos_pi_minus_x = celt_cos_norm(65536 - x);
         assert_eq!(
             cos_x, -cos_pi_minus_x,
-            "cos(x)={cos_x} should equal -cos(π-x)={}", -cos_pi_minus_x
+            "cos(x)={cos_x} should equal -cos(π-x)={}",
+            -cos_pi_minus_x
         );
     }
 
@@ -1289,10 +1296,7 @@ mod tests {
         // exp2(0) = 1.0 in Q16 = 65536. Input 0 in Q10.
         let result = celt_exp2(0);
         let diff = (result - 65536).abs();
-        assert!(
-            diff < 32,
-            "celt_exp2(0) = {result}, expected ~65536"
-        );
+        assert!(diff < 32, "celt_exp2(0) = {result}, expected ~65536");
     }
 
     #[test]
@@ -1300,10 +1304,7 @@ mod tests {
         // exp2(1024) = exp2(1.0 in Q10) = 2.0 in Q16 = 131072
         let result = celt_exp2(1024);
         let diff = (result - 131_072).abs();
-        assert!(
-            diff < 64,
-            "celt_exp2(1024) = {result}, expected ~131072"
-        );
+        assert!(diff < 64, "celt_exp2(1024) = {result}, expected ~131072");
     }
 
     #[test]
@@ -1311,10 +1312,7 @@ mod tests {
         // exp2(-1024) = exp2(-1.0) = 0.5 in Q16 = 32768
         let result = celt_exp2(-1024);
         let diff = (result - 32768).abs();
-        assert!(
-            diff < 32,
-            "celt_exp2(-1024) = {result}, expected ~32768"
-        );
+        assert!(diff < 32, "celt_exp2(-1024) = {result}, expected ~32768");
     }
 
     // --- celt_sqrt strengthened ---

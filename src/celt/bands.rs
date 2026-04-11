@@ -2340,7 +2340,11 @@ mod tests {
 
         let mut norm = freq.clone();
         normalise_bands(mode, &freq, &mut norm, &band_e, 1, 1, 1);
-        assert!(norm[..mode.ebands[1] as usize].iter().any(|&sample| sample != 0));
+        assert!(
+            norm[..mode.ebands[1] as usize]
+                .iter()
+                .any(|&sample| sample != 0)
+        );
     }
 
     #[test]
@@ -2375,12 +2379,20 @@ mod tests {
 
         band_log_e[0] = -20 << DB_SHIFT;
         denormalise_bands(mode, &x, &mut freq, &band_log_e, 0, 1, 1, 1, false);
-        assert!(freq[..mode.ebands[1] as usize].iter().all(|&sample| sample == 0));
+        assert!(
+            freq[..mode.ebands[1] as usize]
+                .iter()
+                .all(|&sample| sample == 0)
+        );
 
         band_log_e[0] = 40 << DB_SHIFT;
         freq.fill(0);
         denormalise_bands(mode, &x, &mut freq, &band_log_e, 0, 1, 1, 1, false);
-        assert!(freq[..mode.ebands[1] as usize].iter().any(|&sample| sample != 0));
+        assert!(
+            freq[..mode.ebands[1] as usize]
+                .iter()
+                .any(|&sample| sample != 0)
+        );
     }
 
     #[test]
@@ -2491,11 +2503,23 @@ mod tests {
         let mut freq = vec![999i32; n];
         let band_log_e = vec![(-25i32) << DB_SHIFT; mode.nb_ebands as usize];
         // Very negative gain: below -20<<DB_SHIFT → zeroed
-        denormalise_bands(mode, &x, &mut freq, &band_log_e, 0, mode.nb_ebands - 1, 1, 1, false);
+        denormalise_bands(
+            mode,
+            &x,
+            &mut freq,
+            &band_log_e,
+            0,
+            mode.nb_ebands - 1,
+            1,
+            1,
+            false,
+        );
         let start = mode.ebands[0] as usize;
         let end_idx = mode.ebands[(mode.nb_ebands - 1) as usize] as usize;
-        assert!(freq[start..end_idx].iter().all(|&s| s == 0),
-            "very negative gain should zero output");
+        assert!(
+            freq[start..end_idx].iter().all(|&s| s == 0),
+            "very negative gain should zero output"
+        );
     }
 
     #[test]
@@ -2507,8 +2531,10 @@ mod tests {
         let band_log_e = vec![45i32 << DB_SHIFT; mode.nb_ebands as usize];
         denormalise_bands(mode, &x, &mut freq, &band_log_e, 0, 3, 1, 1, false);
         let end_idx = mode.ebands[3] as usize;
-        assert!(freq[..end_idx].iter().any(|&s| s != 0),
-            "high gain should produce nonzero output");
+        assert!(
+            freq[..end_idx].iter().any(|&s| s != 0),
+            "high gain should produce nonzero output"
+        );
     }
 
     #[test]
@@ -2553,10 +2579,22 @@ mod tests {
         let spread_weight = vec![1i32; mode.nb_ebands as usize];
 
         let decision = spreading_decision(
-            mode, &x, &mut average, SPREAD_NORMAL, &mut hf_average, &mut tapset,
-            true, mode.nb_ebands, 1, 1, &spread_weight,
+            mode,
+            &x,
+            &mut average,
+            SPREAD_NORMAL,
+            &mut hf_average,
+            &mut tapset,
+            true,
+            mode.nb_ebands,
+            1,
+            1,
+            &spread_weight,
         );
-        assert!(matches!(decision, SPREAD_NONE | SPREAD_LIGHT | SPREAD_NORMAL | SPREAD_AGGRESSIVE));
+        assert!(matches!(
+            decision,
+            SPREAD_NONE | SPREAD_LIGHT | SPREAD_NORMAL | SPREAD_AGGRESSIVE
+        ));
     }
 
     #[test]
@@ -2573,10 +2611,22 @@ mod tests {
         let spread_weight = vec![1i32; mode.nb_ebands as usize];
 
         let decision = spreading_decision(
-            mode, &x, &mut average, SPREAD_NORMAL, &mut hf_average, &mut tapset,
-            true, mode.nb_ebands, 1, 1, &spread_weight,
+            mode,
+            &x,
+            &mut average,
+            SPREAD_NORMAL,
+            &mut hf_average,
+            &mut tapset,
+            true,
+            mode.nb_ebands,
+            1,
+            1,
+            &spread_weight,
         );
-        assert!(matches!(decision, SPREAD_NONE | SPREAD_LIGHT | SPREAD_NORMAL | SPREAD_AGGRESSIVE));
+        assert!(matches!(
+            decision,
+            SPREAD_NONE | SPREAD_LIGHT | SPREAD_NORMAL | SPREAD_AGGRESSIVE
+        ));
     }
 
     #[test]
@@ -2618,13 +2668,28 @@ mod tests {
         let r1 = bitexact_log2tan(20000, 10000);
         let r2 = bitexact_log2tan(10000, 20000);
         // Should be approximately negatives of each other
-        assert!((r1 + r2).abs() < 10, "antisymmetry violated: {} + {} = {}", r1, r2, r1 + r2);
+        assert!(
+            (r1 + r2).abs() < 10,
+            "antisymmetry violated: {} + {} = {}",
+            r1,
+            r2,
+            r1 + r2
+        );
     }
 
     #[test]
     fn test_haar1_stride_2() {
         // haar1(n0=4, stride=2): n0>>1=2, needs stride*2*2=8 elems
-        let mut x = vec![1 << 20, 2 << 20, 3 << 20, 4 << 20, 5 << 20, 6 << 20, 7 << 20, 8 << 20];
+        let mut x = vec![
+            1 << 20,
+            2 << 20,
+            3 << 20,
+            4 << 20,
+            5 << 20,
+            6 << 20,
+            7 << 20,
+            8 << 20,
+        ];
         haar1(&mut x, 4, 2);
         assert!(x.iter().any(|&v| v != 0));
     }
@@ -2647,10 +2712,10 @@ mod tests {
             mode,
             &mut x_dec,
             &mut collapsed_masks,
-            1,    // lm
-            1,    // C
+            1, // lm
+            1, // C
             n as i32,
-            0,    // start
+            0, // start
             nb_ebands as i32 - 1,
             &old_log_e,
             &old_log_e2,
@@ -2669,7 +2734,17 @@ mod tests {
         let mut freq = vec![999i32; n];
         let band_log_e = vec![0i32; mode.nb_ebands as usize];
         // silence=true → zero everything
-        denormalise_bands(mode, &x, &mut freq, &band_log_e, 0, mode.nb_ebands, 1, 1, true);
+        denormalise_bands(
+            mode,
+            &x,
+            &mut freq,
+            &band_log_e,
+            0,
+            mode.nb_ebands,
+            1,
+            1,
+            true,
+        );
         assert!(freq.iter().all(|&s| s == 0));
     }
 
@@ -2747,7 +2822,10 @@ mod tests {
         band_e[nb] = 1 << 19;
         intensity_stereo(mode, &mut x, &y, &band_e, 0, band_w as i32);
         // x should be a weighted combination of x and y
-        assert!(x.iter().any(|&v| v != 1 << 20), "intensity_stereo should modify x");
+        assert!(
+            x.iter().any(|&v| v != 1 << 20),
+            "intensity_stereo should modify x"
+        );
     }
 
     /// compute_channel_weights basic check
@@ -2782,7 +2860,7 @@ mod tests {
             &mut x_dec,
             &mut collapsed_masks,
             1,
-            2,       // stereo
+            2, // stereo
             (n * 2) as i32,
             0,
             nb_ebands as i32 - 1,
@@ -2814,7 +2892,7 @@ mod tests {
             &mut x_dec,
             &mut collapsed_masks,
             1,
-            1,       // mono
+            1, // mono
             n as i32,
             0,
             nb_ebands as i32 - 1,
@@ -2823,7 +2901,7 @@ mod tests {
             &old_log_e,
             &pulses,
             42,
-            false,   // decode path: exercises the C==1 && !encode branch
+            false, // decode path: exercises the C==1 && !encode branch
         );
     }
 }

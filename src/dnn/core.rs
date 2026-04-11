@@ -2871,7 +2871,10 @@ mod tests {
         assert!(layer.weights_idx.is_some());
         assert!(layer.float_weights.is_some());
         assert!(layer.weights.is_none());
-        assert_eq!(layer.float_weights.as_ref().unwrap().len(), SPARSE_BLOCK_SIZE);
+        assert_eq!(
+            layer.float_weights.as_ref().unwrap().len(),
+            SPARSE_BLOCK_SIZE
+        );
         assert_eq!(layer.bias.as_ref().unwrap().len(), 8);
 
         // Verify it works through compute_linear (exercises sparse_sgemv8x4)
@@ -2931,6 +2934,9 @@ mod tests {
         assert!(layer.weights.is_some());
         assert!(layer.float_weights.is_some());
         assert_eq!(layer.weights.as_ref().unwrap().len(), SPARSE_BLOCK_SIZE);
-        assert_eq!(layer.float_weights.as_ref().unwrap().len(), SPARSE_BLOCK_SIZE);
+        assert_eq!(
+            layer.float_weights.as_ref().unwrap().len(),
+            SPARSE_BLOCK_SIZE
+        );
     }
 }
