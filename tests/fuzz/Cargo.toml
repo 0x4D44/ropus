@@ -41,3 +41,18 @@ doc = false
 name = "fuzz_packet_parse"
 path = "fuzz_targets/fuzz_packet_parse.rs"
 doc = false
+
+[[bin]]
+name = "fuzz_decode_safety"
+path = "fuzz_targets/fuzz_decode_safety.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_encode_safety"
+path = "fuzz_targets/fuzz_encode_safety.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_roundtrip_safety"
+path = "fuzz_targets/fuzz_roundtrip_safety.rs"
+doc = false
