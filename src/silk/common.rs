@@ -74,9 +74,9 @@ pub const LOG2_INV_LPC_GAIN_LOW_THRES: i32 = 8; // 2^8 = 24 dB LPC gain
 
 /// CNG constants
 pub const CNG_BUF_MASK_MAX: usize = 255;
-pub const CNG_NLSF_SMTH_Q16: i32 = 6554; // ~0.1 in Q16
-pub const CNG_GAIN_SMTH_Q16: i32 = 1638; // ~0.025 in Q16
-pub const CNG_GAIN_SMTH_THRESHOLD_Q16: i32 = 92682; // ~sqrt(2) in Q16
+pub const CNG_NLSF_SMTH_Q16: i32 = 16348; // 0.25 in Q16 (C: silk_define.h)
+pub const CNG_GAIN_SMTH_Q16: i32 = 4634; // 0.25^(1/4) in Q16 (C: silk_define.h)
+pub const CNG_GAIN_SMTH_THRESHOLD_Q16: i32 = 46396; // -3dB in Q16 (C: silk_define.h)
 
 /// Stereo constants
 pub const STEREO_INTERP_LEN_MS: usize = 8;
@@ -592,31 +592,33 @@ pub fn silk_lpc_fit(a_q_to: &mut [i16], a_q_from: &mut [i32], q_to: i32, q_from:
         if maxabs > i16::MAX as i32 {
             // Reduce magnitude via bandwidth expansion
             maxabs = imin(maxabs, 163838); // (i32::MAX >> 14) + i16::MAX
+            // C uses silk_DIV32 (exact integer division), not silk_DIV32_varQ
             let chirp_q16 = ((0.999 * 65536.0 + 0.5) as i32)
-                - silk_div32_varq(
-                    shl32(maxabs - i16::MAX as i32, 14),
-                    (maxabs * (idx as i32 + 1)) >> 2,
-                    0,
-                );
+                - (shl32(maxabs - i16::MAX as i32, 14)
+                    / ((maxabs * (idx as i32 + 1)) >> 2));
             silk_bwexpander_32(&mut a_q_from[..d], d, chirp_q16);
         } else {
             break;
         }
     }
 
-    // Convert with rounding
+    // Convert with rounding and write-back saturated values to a_q_from
+    // (C: silk_LPC_fit.c — write-back ensures a_q_from stays consistent)
     if rshift > 0 {
         for k in 0..d {
             a_q_to[k] = sat16(silk_rshift_round(a_q_from[k], rshift));
+            a_q_from[k] = shl32(a_q_to[k] as i32, rshift);
         }
     } else if rshift < 0 {
         let lshift = -rshift;
         for k in 0..d {
             a_q_to[k] = sat16(a_q_from[k] << lshift);
+            a_q_from[k] = shr32(a_q_to[k] as i32, lshift);
         }
     } else {
         for k in 0..d {
             a_q_to[k] = sat16(a_q_from[k]);
+            a_q_from[k] = a_q_to[k] as i32;
         }
     }
 }
@@ -1448,9 +1450,12 @@ pub fn silk_nlsf2a(a_q12: &mut [i16], nlsf: &[i16], d: usize) {
         if silk_lpc_inverse_pred_gain(a_q12, d) > 0 {
             return; // Stable
         }
-        // Apply bandwidth expansion and retry
+        // Apply bandwidth expansion and convert with simple rounding (C: NLSF2A.c:132-139).
+        // Must NOT use silk_lpc_fit here — it applies additional BWE which over-attenuates.
         silk_bwexpander_32(&mut a32_qa1[..d], d, 65536 - (2 << i) as i32);
-        silk_lpc_fit(a_q12, &mut a32_qa1, 12, QA + 1, d);
+        for k in 0..d {
+            a_q12[k] = silk_rshift_round(a32_qa1[k], QA + 1 - 12) as i16;
+        }
     }
 }
 
