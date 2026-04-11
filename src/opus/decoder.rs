@@ -3341,4 +3341,499 @@ mod tests {
         let mut out = vec![0i16; 320];
         dec.decode(Some(&pkts[4]), &mut out, 320, false).unwrap();
     }
+
+    // -----------------------------------------------------------------------
+    // Coverage: packet parsing error paths
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_packet_parse_negative_len() {
+        // Line 188: len < 0 should return OPUS_BAD_ARG
+        let data = [0x80u8, 0x00];
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let ret = opus_packet_parse_impl(
+            &data, -1, false, &mut toc, &mut sizes, &mut offset, None,
+        );
+        assert_eq!(ret, OPUS_BAD_ARG);
+    }
+
+    #[test]
+    fn test_packet_parse_zero_len() {
+        // Line 191: len == 0 should return OPUS_INVALID_PACKET
+        let data = [0x80u8];
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let ret = opus_packet_parse_impl(
+            &data, 0, false, &mut toc, &mut sizes, &mut offset, None,
+        );
+        assert_eq!(ret, OPUS_INVALID_PACKET);
+    }
+
+    #[test]
+    fn test_packet_parse_code2_parse_size_error() {
+        // Line 231: Code 2 (VBR) where parse_size returns error (only TOC, no size byte)
+        let pkt = [0x82u8]; // TOC code=2, but no size byte follows
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let ret = opus_packet_parse_impl(
+            &pkt, pkt.len() as i32, false, &mut toc, &mut sizes, &mut offset, None,
+        );
+        assert_eq!(ret, OPUS_INVALID_PACKET);
+    }
+
+    #[test]
+    fn test_packet_parse_code2_size_exceeds_remaining() {
+        // Line 236: Code 2 (VBR) where first frame size > remaining data
+        // TOC code=2, size byte = 200, but only 2 bytes total after TOC
+        let pkt = [0x82u8, 200, 0, 0];
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let ret = opus_packet_parse_impl(
+            &pkt, pkt.len() as i32, false, &mut toc, &mut sizes, &mut offset, None,
+        );
+        assert_eq!(ret, OPUS_INVALID_PACKET);
+    }
+
+    #[test]
+    fn test_packet_parse_code3_vbr_frame_size_exceeds_remaining() {
+        // Lines 281/286: Code 3 VBR where a frame size exceeds remaining data
+        // TOC code=3, ch byte = 0x82 (VBR, 2 frames), size[0] = 250
+        // Total payload too small for size[0]
+        let pkt = [0x83u8, 0x82, 250, 0, 0];
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let ret = opus_packet_parse_impl(
+            &pkt, pkt.len() as i32, false, &mut toc, &mut sizes, &mut offset, None,
+        );
+        assert_eq!(ret, OPUS_INVALID_PACKET);
+    }
+
+    #[test]
+    fn test_packet_parse_code3_vbr_negative_last_size() {
+        // Line 292: Code 3 VBR where accumulated frame sizes make last_size < 0
+        // 3 VBR frames, sizes claim more than available
+        // TOC code=3, ch = 0x83 (VBR, 3 frames), sizes[0]=100, sizes[1]=100
+        // But total remaining after TOC+ch is only 210, so last_size = 210 - 2 - 100 - 2 - 100 < 0
+        let mut pkt = vec![0x83u8, 0x83]; // TOC + ch (VBR, 3 frames)
+        pkt.push(100); // size[0] = 100
+        pkt.push(100); // size[1] = 100
+        // Payload: need 200 bytes for frames 0+1, plus room for frame 2
+        // Total after TOC+ch = pkt.len()-2 = payload
+        // We need remaining - (1+100) - (1+100) < 0 for last_size
+        // remaining = len - 2 (TOC+ch). If len = 204, remaining = 202
+        // After size[0]: remaining -= 1 (byte), last_size -= 1+100 = 101. rem=201, last=101
+        // After size[1]: remaining -= 1, last_size -= 1+100 = 0. But that's exactly 0, not negative.
+        // Let's make it so sizes are huge relative to total payload.
+        // Actually let's use 2-byte size encoding to claim larger sizes.
+        // size byte 252+x means 4*second_byte + first_byte. Use [255, 50] = 4*50+255=455
+        let mut pkt2 = vec![0x83u8, 0x82]; // VBR, 2 frames
+        pkt2.extend_from_slice(&[255, 50]); // size[0] = 455 (2 bytes consumed)
+        pkt2.extend_from_slice(&[0u8; 10]); // small payload
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let ret = opus_packet_parse_impl(
+            &pkt2, pkt2.len() as i32, false, &mut toc, &mut sizes, &mut offset, None,
+        );
+        // size[0]=455 > remaining (after TOC+ch+2 size bytes = 10), so hits line 286
+        assert_eq!(ret, OPUS_INVALID_PACKET);
+    }
+
+    #[test]
+    fn test_packet_parse_code3_cbr_not_divisible() {
+        // Line 298: Code 3 CBR where remaining is not divisible by count
+        // TOC code=3, ch = 0x03 (CBR, 3 frames), remaining = 10 (not divisible by 3)
+        let mut pkt = vec![0x83u8, 0x03]; // TOC + ch (CBR, 3 frames)
+        pkt.extend_from_slice(&[0u8; 10]); // 10 bytes not divisible by 3
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let ret = opus_packet_parse_impl(
+            &pkt, pkt.len() as i32, false, &mut toc, &mut sizes, &mut offset, None,
+        );
+        assert_eq!(ret, OPUS_INVALID_PACKET);
+    }
+
+    #[test]
+    fn test_packet_parse_code3_padding_exhausts_remaining() {
+        // Line 271: Code 3 with padding that makes remaining < 0
+        // TOC code=3, ch = 0x43 (padding + CBR, 3 frames), padding byte = 200
+        // Total data too small to survive the padding
+        let pkt = [0x83u8, 0x43, 200]; // padding of 200 > remaining after ch (1 byte)
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let ret = opus_packet_parse_impl(
+            &pkt, pkt.len() as i32, false, &mut toc, &mut sizes, &mut offset, None,
+        );
+        assert_eq!(ret, OPUS_INVALID_PACKET);
+    }
+
+    #[test]
+    fn test_packet_parse_code3_vbr_parse_size_error_in_loop() {
+        // Line 281: Code 3 VBR where parse_size fails inside the frame-size loop
+        // TOC code=3, ch = 0x83 (VBR, 3 frames), then a 252+ byte with no second byte
+        let pkt = [0x83u8, 0x83, 255]; // VBR, 3 frames. parse_size sees 255 but no 2nd byte
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let ret = opus_packet_parse_impl(
+            &pkt, pkt.len() as i32, false, &mut toc, &mut sizes, &mut offset, None,
+        );
+        assert_eq!(ret, OPUS_INVALID_PACKET);
+    }
+
+    #[test]
+    fn test_packet_parse_last_size_exceeds_1275() {
+        // Line 335: Non-self-delimited packet where last_size > 1275
+        // Code 0 (single frame) with payload > 1275 bytes
+        let mut pkt = vec![0x80u8]; // TOC: CELT, code 0
+        pkt.extend_from_slice(&[0u8; 1276]); // 1276 bytes payload > 1275 limit
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let ret = opus_packet_parse_impl(
+            &pkt, pkt.len() as i32, false, &mut toc, &mut sizes, &mut offset, None,
+        );
+        assert_eq!(ret, OPUS_INVALID_PACKET);
+    }
+
+    #[test]
+    fn test_packet_parse_self_delimited_size_error() {
+        // Line 311: Self-delimited framing where parse_size for last frame fails
+        // Code 0 (single frame), self_delimited=true, but no size byte for last frame
+        let pkt = [0x80u8]; // Only TOC, no size byte for self-delimited last frame
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let ret = opus_packet_parse_impl(
+            &pkt, pkt.len() as i32, true, &mut toc, &mut sizes, &mut offset, None,
+        );
+        assert_eq!(ret, OPUS_INVALID_PACKET);
+    }
+
+    #[test]
+    fn test_packet_parse_self_delimited_size_exceeds_remaining() {
+        // Line 322: Self-delimited where the declared size > remaining bytes
+        // Code 0, self_delimited, size byte claims 200 but only a few bytes follow
+        let pkt = [0x80u8, 200, 0, 0]; // TOC + size=200, but only 2 payload bytes
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let ret = opus_packet_parse_impl(
+            &pkt, pkt.len() as i32, true, &mut toc, &mut sizes, &mut offset, None,
+        );
+        assert_eq!(ret, OPUS_INVALID_PACKET);
+    }
+
+    #[test]
+    fn test_packet_parse_self_delimited_cbr_size_times_count_exceeds_remaining() {
+        // Line 322: Self-delimited CBR where sz*count > remaining
+        // Code 3, CBR, 3 frames, self-delimited, size byte = 100 => 100*3=300 > remaining
+        let mut pkt = vec![0x83u8, 0x03]; // TOC + ch (CBR, 3 frames)
+        pkt.push(100); // self-delimited last-frame size = 100
+        pkt.extend_from_slice(&[0u8; 10]); // only 10 bytes payload
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let ret = opus_packet_parse_impl(
+            &pkt, pkt.len() as i32, true, &mut toc, &mut sizes, &mut offset, None,
+        );
+        assert_eq!(ret, OPUS_INVALID_PACKET);
+    }
+
+    #[test]
+    fn test_packet_parse_self_delimited_vbr_bytes_plus_sz_exceeds_last() {
+        // Line 328: Self-delimited VBR where bytes + sz > last_size
+        // Code 3, VBR, 2 frames. size[0]=5, self-delimited size = 100
+        // but total is too small for that
+        let mut pkt = vec![0x83u8, 0x82]; // TOC + ch (VBR, 2 frames)
+        pkt.push(5); // size[0] = 5
+        pkt.push(100); // self-delimited last size = 100
+        pkt.extend_from_slice(&[0u8; 10]); // small payload
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+        let ret = opus_packet_parse_impl(
+            &pkt, pkt.len() as i32, true, &mut toc, &mut sizes, &mut offset, None,
+        );
+        assert_eq!(ret, OPUS_INVALID_PACKET);
+    }
+
+    // -----------------------------------------------------------------------
+    // Coverage: opus_packet_has_lbrr with empty first frame
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_packet_has_lbrr_empty_first_frame() {
+        // Line 387: sizes[0] == 0 should return Ok(false)
+        // SILK 20ms mono, code 2 (VBR), first frame size = 0
+        // TOC: SILK NB 20ms mono code=2 = (config=1)<<3 | 0<<2 | 2 = 0x0A
+        let pkt = [0x0Au8, 0x00, 0x00, 0x00]; // size[0]=0, rest is frame 2
+        let ret = opus_packet_has_lbrr(&pkt, pkt.len() as i32);
+        assert_eq!(ret, Ok(false));
+    }
+
+    // -----------------------------------------------------------------------
+    // Coverage: opus_packet_get_nb_samples exercising success path
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_get_nb_samples_various_rates() {
+        // Line 165: opus_packet_get_nb_samples success path at different sample rates
+        // SILK 20ms mono code 0: config=1 => 20ms, 1 frame
+        let pkt = [0x08u8, 0x00]; // SILK 20ms, code 0
+        // At 48kHz: 1 * 960 = 960
+        assert_eq!(opus_packet_get_nb_samples(&pkt, 48000), Ok(960));
+        // At 16kHz: 1 * 320 = 320
+        assert_eq!(opus_packet_get_nb_samples(&pkt, 16000), Ok(320));
+        // At 8kHz: 1 * 160 = 160
+        assert_eq!(opus_packet_get_nb_samples(&pkt, 8000), Ok(160));
+
+        // Code 1 (2 CBR frames), CELT 20ms: 2 * 960 = 1920 at 48kHz
+        let pkt2 = [0x99u8, 0x00, 0x00]; // CELT 20ms code=1, with 2 bytes payload
+        assert_eq!(opus_packet_get_nb_samples(&pkt2, 48000), Ok(1920));
+    }
+
+    // -----------------------------------------------------------------------
+    // Coverage: PLC audio size adjustment branches
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_plc_audiosize_adjustment_between_f5_and_f10() {
+        // Lines 701-705: PLC with frame_size between f5 and f10 for non-SILK mode
+        // At 48kHz: f20=960, f10=480, f5=240, f2.5=120
+        // CELT PLC with frame_size=360 (between f5=240 and f10=480) should clamp to f5=240
+        let celt_pkt = &encode_packets(
+            48000, 1, OPUS_APPLICATION_AUDIO,
+            Some(MODE_CELT_ONLY), None, None, 960, 1,
+        )[0];
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut pcm = vec![0i16; 5760];
+        // Prime with a CELT packet
+        dec.decode(Some(celt_pkt), &mut pcm, 960, false).unwrap();
+        assert_eq!(dec.prev_mode, MODE_CELT_ONLY);
+
+        // Now PLC with frame_size=360 (between f5=240 and f10=480)
+        let ret = dec.decode_frame(None, &mut pcm, 360, false);
+        assert!(ret.is_ok(), "PLC audiosize adjustment failed: {:?}", ret);
+        // Should have been clamped to f5=240
+        assert_eq!(ret.unwrap(), 240);
+    }
+
+    #[test]
+    fn test_plc_audiosize_adjustment_between_f10_and_f20() {
+        // Lines 701-702: PLC with frame_size between f10 and f20 should clamp to f10
+        // At 48kHz: f20=960, f10=480
+        let silk_pkt = &encode_packets(
+            48000, 1, OPUS_APPLICATION_AUDIO,
+            Some(MODE_SILK_ONLY), Some(OPUS_BANDWIDTH_WIDEBAND), None, 960, 1,
+        )[0];
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut pcm = vec![0i16; 5760];
+        dec.decode(Some(silk_pkt), &mut pcm, 960, false).unwrap();
+
+        // PLC with frame_size=600 (between f10=480 and f20=960)
+        let ret = dec.decode_frame(None, &mut pcm, 600, false);
+        assert!(ret.is_ok(), "PLC audiosize clamp to f10 failed: {:?}", ret);
+        assert_eq!(ret.unwrap(), 480);
+    }
+
+    // -----------------------------------------------------------------------
+    // Coverage: CELT→SILK transition (non-redundant) with PLC pre-decode
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_transition_celt_to_silk_non_redundant() {
+        // Lines 886-891: Transition from CELT to SILK (non-redundant) triggers PLC pre-decode
+        // into a transition buffer, then smooth-fades with the new SILK output.
+        let celt_pkt = &encode_packets(
+            48000, 1, OPUS_APPLICATION_AUDIO,
+            Some(MODE_CELT_ONLY), None, None, 960, 2,
+        );
+        let silk_pkt = &encode_packets(
+            48000, 1, OPUS_APPLICATION_AUDIO,
+            Some(MODE_SILK_ONLY), Some(OPUS_BANDWIDTH_WIDEBAND), None, 960, 1,
+        )[0];
+
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut pcm = vec![0i16; 5760];
+
+        // Prime with CELT packets
+        for pkt in celt_pkt {
+            dec.decode(Some(pkt), &mut pcm, 960, false).unwrap();
+        }
+        assert_eq!(dec.prev_mode, MODE_CELT_ONLY);
+
+        // Decode SILK — this is CELT→SILK transition (non-redundant path)
+        // which exercises lines 886-891 (transition PLC for SILK→CELT smooth fade)
+        let ret = dec.decode(Some(silk_pkt), &mut pcm, 960, false);
+        assert!(ret.is_ok(), "CELT->SILK transition failed: {:?}", ret);
+        assert_eq!(ret.unwrap(), 960);
+        assert_eq!(dec.prev_mode, MODE_SILK_ONLY);
+    }
+
+    // -----------------------------------------------------------------------
+    // Coverage: Transition smooth-fade with short frame (audiosize < f5)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_transition_smooth_fade_short_frame() {
+        // Lines 1061-1074: Transition crossfade when audiosize < f5
+        // At 48kHz: f5=240, f2.5=120. We need a frame with audiosize < 240.
+        // Use CELT 2.5ms frames (120 samples) to create a short transition.
+        // Prime decoder with SILK, then decode a CELT 2.5ms packet.
+        let silk_pkt = &encode_packets(
+            48000, 1, OPUS_APPLICATION_AUDIO,
+            Some(MODE_SILK_ONLY), Some(OPUS_BANDWIDTH_WIDEBAND), None, 960, 2,
+        );
+
+        // CELT 2.5ms: config bits 4-3 = 0 in CELT range -> 2.5ms
+        // Use RESTRICTED_LOWDELAY which forces CELT and allows short frames
+        let mut celt_enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+        celt_enc.set_bitrate(64000);
+        let short_pcm = patterned_pcm_i16(120, 1, 777);
+        let mut celt_buf = vec![0u8; 1500];
+        let celt_len = celt_enc.encode(&short_pcm, 120, &mut celt_buf, 1500).unwrap();
+        let celt_short_pkt = &celt_buf[..celt_len as usize];
+
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut pcm = vec![0i16; 5760];
+
+        // Prime with SILK
+        for pkt in silk_pkt {
+            dec.decode(Some(pkt), &mut pcm, 960, false).unwrap();
+        }
+        assert_eq!(dec.prev_mode, MODE_SILK_ONLY);
+
+        // Decode short CELT — triggers SILK→CELT transition with short frame
+        let ret = dec.decode(Some(celt_short_pkt), &mut pcm, 120, false);
+        assert!(ret.is_ok(), "Short CELT transition failed: {:?}", ret);
+        assert_eq!(ret.unwrap(), 120);
+        assert_eq!(dec.prev_mode, MODE_CELT_ONLY);
+    }
+
+    // -----------------------------------------------------------------------
+    // Coverage: FEC decode path with frame_size > packet_frame_size
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_fec_partial_decode_plc_prefix() {
+        // Lines 1188-1207: FEC decode where frame_size > packet_frame_size
+        // triggers PLC for the prefix, then FEC for the remainder.
+        let packets = encode_silk_with_fec(48000, 1, 960, 5);
+
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut pcm = vec![0i16; 5760];
+
+        // Prime decoder with first 3 packets
+        for pkt in &packets[..3] {
+            dec.decode(Some(pkt), &mut pcm, 960, false).unwrap();
+        }
+
+        // FEC decode with frame_size=1920 > packet_frame_size=960
+        // This triggers PLC for first 960 samples, then FEC for last 960
+        let ret = dec.decode(Some(&packets[4]), &mut pcm, 1920, true);
+        assert!(ret.is_ok(), "FEC partial decode with PLC prefix failed: {:?}", ret);
+        assert_eq!(ret.unwrap(), 1920);
+    }
+
+    // -----------------------------------------------------------------------
+    // Coverage: FEC falls back to PLC when prev mode is CELT
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_fec_fallback_plc_when_prev_mode_celt() {
+        // Line 1181: decode_fec=true with self.mode == MODE_CELT_ONLY
+        // falls back to PLC (CELT has no LBRR)
+        let celt_pkt = &encode_packets(
+            48000, 1, OPUS_APPLICATION_AUDIO,
+            Some(MODE_CELT_ONLY), None, None, 960, 2,
+        );
+        let silk_fec_pkt = &encode_silk_with_fec(48000, 1, 960, 3);
+
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut pcm = vec![0i16; 5760];
+
+        // Prime with CELT packets to set self.mode to CELT
+        for pkt in celt_pkt {
+            dec.decode(Some(pkt), &mut pcm, 960, false).unwrap();
+        }
+        assert_eq!(dec.prev_mode, MODE_CELT_ONLY);
+
+        // FEC with a SILK packet, but self.mode is CELT => falls back to PLC
+        let ret = dec.decode(Some(&silk_fec_pkt[2]), &mut pcm, 960, true);
+        assert!(ret.is_ok(), "FEC fallback to PLC failed: {:?}", ret);
+        assert_eq!(ret.unwrap(), 960);
+    }
+
+    // -----------------------------------------------------------------------
+    // Coverage: Hybrid→SILK transition CELT fade-out
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_hybrid_to_silk_celt_fadeout_with_prev_redundancy() {
+        // Lines 962-980: When transitioning from hybrid to SILK-only,
+        // the CELT decoder decodes a silence frame for fade-out.
+        // Also test that prev_redundancy=true suppresses the fade-out.
+        let hybrid_pkt = &encode_packets(
+            48000, 1, OPUS_APPLICATION_AUDIO,
+            Some(MODE_HYBRID), Some(OPUS_BANDWIDTH_SUPERWIDEBAND), Some(32000), 960, 2,
+        );
+        let silk_pkt = &encode_packets(
+            48000, 1, OPUS_APPLICATION_AUDIO,
+            Some(MODE_SILK_ONLY), Some(OPUS_BANDWIDTH_WIDEBAND), None, 960, 2,
+        );
+
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut pcm = vec![0i16; 5760];
+
+        // Prime with hybrid
+        for pkt in hybrid_pkt {
+            dec.decode(Some(pkt), &mut pcm, 960, false).unwrap();
+        }
+        assert_eq!(dec.prev_mode, MODE_HYBRID);
+
+        // First SILK decode — triggers hybrid→SILK CELT fade-out (line 968-980)
+        let ret = dec.decode(Some(&silk_pkt[0]), &mut pcm, 960, false);
+        assert!(ret.is_ok(), "Hybrid->SILK first transition failed: {:?}", ret);
+        assert_eq!(ret.unwrap(), 960);
+        assert_eq!(dec.prev_mode, MODE_SILK_ONLY);
+
+        // Second SILK decode — no longer hybrid->SILK, so no fade-out
+        let ret = dec.decode(Some(&silk_pkt[1]), &mut pcm, 960, false);
+        assert!(ret.is_ok());
+        assert_eq!(ret.unwrap(), 960);
+    }
+
+    // -----------------------------------------------------------------------
+    // Coverage: SILK bandwidth setting paths (NB, MB, WB)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_silk_bandwidth_narrowband_and_mediumband() {
+        // Lines 731, 736: SILK bandwidth settings for NB and MB
+        // (WB is the default/fallthrough, already covered)
+        for &(bw, rate, bw_name) in &[
+            (OPUS_BANDWIDTH_NARROWBAND, 8000, "NB"),
+            (OPUS_BANDWIDTH_MEDIUMBAND, 12000, "MB"),
+        ] {
+            let packets = encode_packets(
+                rate, 1, OPUS_APPLICATION_AUDIO,
+                Some(MODE_SILK_ONLY), Some(bw), None, rate / 50, 1,
+            );
+            let mut dec = OpusDecoder::new(rate, 1).unwrap();
+            let mut pcm = vec![0i16; rate as usize / 50];
+            let ret = dec.decode(Some(&packets[0]), &mut pcm, rate / 50, false);
+            assert!(ret.is_ok(), "{bw_name} decode failed: {:?}", ret);
+            assert_eq!(ret.unwrap(), rate / 50,
+                "{bw_name}: expected {} samples", rate / 50);
+        }
+    }
 }
