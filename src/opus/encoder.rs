@@ -1726,7 +1726,19 @@ impl OpusEncoder {
             self.prev_channels = self.stream_channels;
         }
 
-        let max_len_sum = max_data_bytes;
+        // C: repacketize_len = use_vbr ? out_data_bytes : IMIN(cbr_bytes, out_data_bytes)
+        // For CBR, max_data_bytes is already clamped to cbr_bytes by the caller.
+        let repacketize_len =
+            if self.use_vbr != 0 || self.user_bitrate_bps == OPUS_BITRATE_MAX {
+                orig_max_data_bytes
+            } else {
+                imin(max_data_bytes, orig_max_data_bytes)
+            };
+
+        // C: max_header_bytes = nb_frames == 2 ? 3 : (2+(nb_frames-1)*2)
+        let max_header_bytes =
+            if nb_frames == 2 { 3 } else { 2 + (nb_frames - 1) * 2 };
+        let max_len_sum = nb_frames + repacketize_len - max_header_bytes;
         let mut tot_size: i32 = 0;
         let mut dtx_count: i32 = 0;
 
@@ -1792,7 +1804,6 @@ impl OpusEncoder {
         }
 
         let pad_cbr = self.use_vbr == 0 && dtx_count != nb_frames;
-        let repacketize_len = orig_max_data_bytes;
         let ret = rp.out_range_impl(
             0,
             nb_frames as usize,
