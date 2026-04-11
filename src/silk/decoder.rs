@@ -685,11 +685,8 @@ fn silk_decode_pulses(
         // Handle overflow: while sum_pulses == SILK_MAX_PULSES + 1
         while sum_pulses[i] == SILK_MAX_PULSES + 1 {
             n_lshifts[i] += 1;
-            let use_last = if n_lshifts[i] == 10 { 1 } else { 0 };
-            sum_pulses[i] = rc.decode_icdf(
-                &SILK_PULSES_PER_BLOCK_ICDF[N_RATE_LEVELS - 1 + use_last as usize],
-                8,
-            );
+            sum_pulses[i] =
+                rc.decode_icdf(&SILK_PULSES_PER_BLOCK_ICDF[N_RATE_LEVELS - 1], 8);
         }
     }
 
@@ -1122,15 +1119,63 @@ fn silk_plc_update(dec: &mut SilkDecoderState, dec_ctrl: &SilkDecoderControl) {
     dec.s_plc.prev_ltp_scale_q14 = dec_ctrl.ltp_scale_q14 as i16;
 }
 
+/// Compute the offset into `exc_q14` for the noise source buffer.
+/// Compares energy of the last two subframes (scaled by gain) and picks the
+/// subframe with lower energy, matching C `silk_PLC_energy` + pointer selection.
+fn silk_plc_rand_offset(
+    exc_q14: &[i32],
+    prev_gain_q10: &[i32; 2],
+    subfr_length: usize,
+    nb_subfr: usize,
+    plc_nb_subfr: usize,
+    plc_subfr_length: usize,
+) -> usize {
+    // Need at least 2 subframes for energy comparison
+    if nb_subfr < 2 || subfr_length == 0 {
+        return imax(0, plc_nb_subfr as i32 * plc_subfr_length as i32 - RAND_BUF_SIZE as i32) as usize;
+    }
+
+    // Scale the last two subframes of exc_q14 by prevGain_Q10 and convert to i16
+    let mut exc_buf = vec![0i16; 2 * subfr_length];
+    for k in 0..2usize {
+        let src_offset = (k + nb_subfr - 2) * subfr_length;
+        for i in 0..subfr_length {
+            let src_idx = src_offset + i;
+            if src_idx < exc_q14.len() {
+                exc_buf[k * subfr_length + i] = sat16(
+                    silk_smulww(exc_q14[src_idx], prev_gain_q10[k]) >> 8,
+                );
+            }
+        }
+    }
+
+    // Compare energy of the two subframes
+    let (energy1, shift1) = silk_sum_sqr_shift(&exc_buf[..subfr_length]);
+    let (energy2, shift2) = silk_sum_sqr_shift(&exc_buf[subfr_length..2 * subfr_length]);
+
+    if (energy1 >> shift2) < (energy2 >> shift1) {
+        // First subframe has lower energy
+        imax(0, (plc_nb_subfr as i32 - 1) * plc_subfr_length as i32 - RAND_BUF_SIZE as i32) as usize
+    } else {
+        // Second subframe has lower energy
+        imax(0, plc_nb_subfr as i32 * plc_subfr_length as i32 - RAND_BUF_SIZE as i32) as usize
+    }
+}
+
 fn silk_plc_conceal(dec: &mut SilkDecoderState, frame: &mut [i16]) {
     let frame_length = dec.frame_length;
     let subfr_length = dec.subfr_length;
     let nb_subfr = dec.nb_subfr;
     let lpc_order = dec.lpc_order;
 
-    // Apply bandwidth expansion to saved LPC coefficients
-    let mut a_q12 = dec.s_plc.prev_lpc_q12;
-    silk_bwexpander(&mut a_q12, lpc_order, BWE_COEF_Q16);
+    // Zero LPC coefficients after reset (no valid LPC state to conceal with)
+    if dec.first_frame_after_reset {
+        dec.s_plc.prev_lpc_q12 = [0i16; MAX_LPC_ORDER];
+    }
+
+    // Apply bandwidth expansion to saved LPC coefficients (in-place, so next PLC call sees expanded coefficients)
+    silk_bwexpander(&mut dec.s_plc.prev_lpc_q12, lpc_order, BWE_COEF_Q16);
+    let a_q12 = dec.s_plc.prev_lpc_q12;
 
     let mut b_q14 = dec.s_plc.ltp_coef_q14;
     let mut rand_seed = dec.s_plc.rand_seed;
@@ -1139,7 +1184,7 @@ fn silk_plc_conceal(dec: &mut SilkDecoderState, frame: &mut [i16]) {
     // Get attenuation indices (clamp at NB_ATT-1)
     let att_idx = imin(dec.loss_cnt as i32, NB_ATT as i32 - 1) as usize;
     let harm_gain_q15 = HARM_ATT_Q15[att_idx];
-    let rand_gain_q15 = if dec.prev_signal_type == TYPE_VOICED {
+    let mut rand_gain_q15 = if dec.prev_signal_type == TYPE_VOICED {
         PLC_RAND_ATTENUATE_V_Q15[att_idx]
     } else {
         PLC_RAND_ATTENUATE_UV_Q15[att_idx]
@@ -1159,21 +1204,38 @@ fn silk_plc_conceal(dec: &mut SilkDecoderState, frame: &mut [i16]) {
             rand_scale_q14 = imax(rand_scale_q14, 3277); // Min 0.2 in Q14
             rand_scale_q14 =
                 ((rand_scale_q14 as i64 * dec.s_plc.prev_ltp_scale_q14 as i64) >> 14) as i32;
+        } else {
+            // Reduce random noise for unvoiced frames with high LPC gain
+            let inv_gain_q30 = silk_lpc_inverse_pred_gain(&a_q12, lpc_order);
+            let mut down_scale_q30 =
+                imin(1i32 << (30 - LOG2_INV_LPC_GAIN_HIGH_THRES), inv_gain_q30);
+            down_scale_q30 = imax(1i32 << (30 - LOG2_INV_LPC_GAIN_LOW_THRES), down_scale_q30);
+            down_scale_q30 <<= LOG2_INV_LPC_GAIN_HIGH_THRES;
+            rand_gain_q15 = silk_smulwb_i32(down_scale_q30, rand_gain_q15) >> 14;
         }
     }
 
-    let _prev_gain_q10_0 = dec.s_plc.prev_gain_q16[0] >> 6;
-    let prev_gain_q10_1 = dec.s_plc.prev_gain_q16[1] >> 6;
+    let prev_gain_q10 = [
+        dec.s_plc.prev_gain_q16[0] >> 6,
+        dec.s_plc.prev_gain_q16[1] >> 6,
+    ];
 
-    // Use excitation buffer as noise source
-    let exc_buf: Vec<i32> = dec.exc_q14[..frame_length].to_vec();
+    // Select noise source subframe based on energy comparison
+    let rand_ptr_offset = silk_plc_rand_offset(
+        &dec.exc_q14,
+        &prev_gain_q10,
+        subfr_length,
+        nb_subfr,
+        dec.s_plc.nb_subfr as usize,
+        dec.s_plc.subfr_length as usize,
+    );
 
     // LPC state
     let mut s_lpc_q14 = vec![0i32; subfr_length + MAX_LPC_ORDER];
     s_lpc_q14[..MAX_LPC_ORDER].copy_from_slice(&dec.s_lpc_q14_buf);
 
     // LTP state for voiced concealment
-    let mut pitch_lag = (dec.s_plc.pitch_l_q8 >> 8).max(1);
+    let mut pitch_lag = silk_rshift_round(dec.s_plc.pitch_l_q8, 8).max(1);
     let mut s_ltp_q14 = vec![0i32; frame_length + pitch_lag as usize + LTP_ORDER];
 
     let mut frame_offset = 0;
@@ -1183,7 +1245,8 @@ fn silk_plc_conceal(dec: &mut SilkDecoderState, frame: &mut [i16]) {
         for i in 0..subfr_length {
             rand_seed = silk_rand(rand_seed);
             let idx = ((rand_seed >> 25) as usize) & RAND_BUF_MASK;
-            let rand_val = if idx < exc_buf.len() { exc_buf[idx] } else { 0 };
+            let buf_idx = rand_ptr_offset + idx;
+            let rand_val = if buf_idx < dec.exc_q14.len() { dec.exc_q14[buf_idx] } else { 0 };
 
             // LTP prediction for voiced
             let ltp_pred = if dec.prev_signal_type == TYPE_VOICED {
@@ -1221,7 +1284,7 @@ fn silk_plc_conceal(dec: &mut SilkDecoderState, frame: &mut [i16]) {
 
             // Scale and output
             let out_val = silk_rshift_round(
-                silk_smulww(s_lpc_q14[MAX_LPC_ORDER + i], prev_gain_q10_1),
+                silk_smulww(s_lpc_q14[MAX_LPC_ORDER + i], prev_gain_q10[1]),
                 8,
             );
             frame[frame_offset + i] = sat16(out_val);
@@ -1237,7 +1300,7 @@ fn silk_plc_conceal(dec: &mut SilkDecoderState, frame: &mut [i16]) {
         let pitch_incr = ((dec.s_plc.pitch_l_q8 as i64 * PITCH_DRIFT_FAC_Q16 as i64) >> 16) as i32;
         dec.s_plc.pitch_l_q8 += pitch_incr;
         dec.s_plc.pitch_l_q8 = imin(dec.s_plc.pitch_l_q8, (MAX_PITCH_LAG_MS * dec.fs_khz) << 8);
-        pitch_lag = (dec.s_plc.pitch_l_q8 >> 8).max(1);
+        pitch_lag = silk_rshift_round(dec.s_plc.pitch_l_q8, 8).max(1);
 
         // Shift LPC state
         for i in 0..MAX_LPC_ORDER {

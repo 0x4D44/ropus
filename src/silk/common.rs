@@ -69,6 +69,8 @@ pub const HARM_ATT_Q15: [i32; NB_ATT] = [32440, 31130];
 pub const PLC_RAND_ATTENUATE_V_Q15: [i32; NB_ATT] = [31130, 26214];
 pub const PLC_RAND_ATTENUATE_UV_Q15: [i32; NB_ATT] = [32440, 29491];
 pub const BWE_COEF_Q16: i32 = 64881; // ~0.99 in Q16
+pub const LOG2_INV_LPC_GAIN_HIGH_THRES: i32 = 3; // 2^3 = 8 dB LPC gain
+pub const LOG2_INV_LPC_GAIN_LOW_THRES: i32 = 8; // 2^8 = 24 dB LPC gain
 
 /// CNG constants
 pub const CNG_BUF_MASK_MAX: usize = 255;
@@ -1319,7 +1321,7 @@ pub fn silk_nlsf_stabilize(nlsf_q15: &mut [i16], delta_min_q15: &[i16], order: u
         if min_idx == 0 {
             nlsf_q15[0] = delta_min_q15[0];
         } else if min_idx == order {
-            nlsf_q15[order - 1] = (1i32 << 15) as i16 - delta_min_q15[order];
+            nlsf_q15[order - 1] = ((1i32 << 15) - delta_min_q15[order] as i32) as i16;
         } else {
             // Center frequency of the pair
             let mut min_center: i32 = 0;
