@@ -2684,6 +2684,108 @@ mod tests {
     // silk_nlsf_stabilize: fallback sort-and-clamp path
     // ===================================================================
 
+    // ===================================================================
+    // Mutation-killing pinning tests: exact-value assertions for low-level
+    // functions where property-based tests had too much tolerance.
+    // ===================================================================
+
+    #[test]
+    fn test_pin_rand_buf_mask() {
+        assert_eq!(RAND_BUF_MASK, 127);
+        assert_eq!(RAND_BUF_MASK, RAND_BUF_SIZE - 1);
+        // Mask must be one less than a power of 2
+        assert_eq!(RAND_BUF_MASK & RAND_BUF_SIZE, 0);
+    }
+
+    #[test]
+    fn test_pin_sigm_q15_exact() {
+        // Exact outputs at specific inputs — catches < vs <= boundary mutations
+        assert_eq!(silk_sigm_q15(-1), 16147);
+        assert_eq!(silk_sigm_q15(0), 16384);
+        assert_eq!(silk_sigm_q15(1), 16621);
+        assert_eq!(silk_sigm_q15(-32), 8812);
+        assert_eq!(silk_sigm_q15(32), 23955);
+        // Near saturation boundaries — catches < vs <= at ±192
+        assert_eq!(silk_sigm_q15(-191), 2);
+        assert_eq!(silk_sigm_q15(-192), 0);
+        assert_eq!(silk_sigm_q15(191), 32765);
+        assert_eq!(silk_sigm_q15(192), 32767);
+    }
+
+    #[test]
+    fn test_pin_log2lin_exact() {
+        // Exact outputs — catches < vs <= at boundary 2048
+        assert_eq!(silk_log2lin(0), 1);
+        assert_eq!(silk_log2lin(127), 1);
+        assert_eq!(silk_log2lin(128), 2);
+        assert_eq!(silk_log2lin(2047), 65024);
+        assert_eq!(silk_log2lin(2048), 65536);
+        assert_eq!(silk_log2lin(2049), 65536);
+        assert_eq!(silk_log2lin(3966), 2122317824);
+    }
+
+    #[test]
+    fn test_pin_bwexpander_exact() {
+        let mut ar = [16384i16, 8192, 4096, 2048];
+        silk_bwexpander(&mut ar, 4, 64000);
+        // Catches + vs - in chirp update (line 218)
+        assert_eq!(ar, [16000, 7813, 3815, 1863]);
+    }
+
+    #[test]
+    fn test_pin_inverse32_exact() {
+        // Catches << vs >> (line 258) and < vs <= (line 272)
+        assert_eq!(silk_inverse32_var_q(1000, 16), 65);
+        assert_eq!(silk_inverse32_var_q(12345, 20), 84);
+        assert_eq!(silk_inverse32_var_q(1, 30), 1073741823);
+        // High-precision: larger q_res makes refinement term visible
+        assert_eq!(silk_inverse32_var_q(7, 30), 153391689);
+        assert_eq!(silk_inverse32_var_q(100, 30), 10737418);
+        // Small b32, large q_res exercises lshift <= 0 branch
+        assert_eq!(silk_inverse32_var_q(3, 30), 357913941);
+        // Additional exact values at various q_res to catch refinement mutations
+        assert_eq!(silk_inverse32_var_q(12345, 10), 0);
+        assert_eq!(silk_inverse32_var_q(12345, 24), 1359);
+        assert_eq!(silk_inverse32_var_q(12345, 28), 21744);
+    }
+
+    #[test]
+    fn test_pin_div32_exact() {
+        // Catches < vs ==, < vs <=, and delete - mutations (lines 302-304)
+        assert_eq!(silk_div32_var_q(1000000, 1000, 10), 1024000);
+        assert_eq!(silk_div32_var_q(12345, 678, 16), 1193277);
+        // lshift < 0 case: large q_res with small headroom difference
+        assert_eq!(silk_div32_var_q(1, 3, 30), 357913941);
+        // lshift == 0 boundary: 29 + a_headrm - b_headrm - q_res = 0
+        assert_eq!(silk_div32_var_q(100, 200, 29), 268435455);
+    }
+
+    #[test]
+    fn test_pin_sum_sqr_shift_exact() {
+        // Catches * vs +, >> vs <<, + vs *, < vs > mutations (lines 360-380)
+        assert_eq!(silk_sum_sqr_shift(&[1i16; 100]), (100, 0));
+        assert_eq!(silk_sum_sqr_shift(&[1000i16]), (1000000, 0));
+        assert_eq!(silk_sum_sqr_shift(&[32767i16; 4]), (536838144, 3));
+        let mix: Vec<i16> = (1..=10).map(|i| (i * 1000) as i16).collect();
+        assert_eq!(silk_sum_sqr_shift(&mix), (385000000, 0));
+    }
+
+    #[test]
+    fn test_pin_sum_sqr_shift_i32_exact() {
+        // Catches return (1,1), * vs +, && vs ||, > vs >=, >>= vs <<= (lines 388-396)
+        assert_eq!(silk_sum_sqr_shift_i32(&[100, 200, 300, 400, 500], 0), (550000, 0));
+    }
+
+    #[test]
+    fn test_pin_lpc_filter_history_exact() {
+        // Catches + vs - and + vs * in inner loop (line 460)
+        let s: Vec<i16> = (0..20).map(|i| (i * 100 + 50) as i16).collect();
+        let a_q12 = [2048i16, -1024, 512];
+        let mut out = vec![0i32; 10];
+        silk_lpc_analysis_filter_with_history(&mut out, &s, 5, &a_q12, 10, 3);
+        assert_eq!(out, [382, 444, 507, 569, 632, 694, 757, 819, 882, 944]);
+    }
+
     #[test]
     fn test_nlsf_stabilize_fallback_clamp() {
         // Reversed NLSFs should force the main loop to exhaust MAX_LOOPS=20
