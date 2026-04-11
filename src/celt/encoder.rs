@@ -3692,4 +3692,329 @@ mod tests {
              i16 truncation zeroes both channels"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Coverage improvement: encode-path tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: encode a frame and return compressed size.
+    fn encode_frame(
+        enc: &mut CeltEncoder,
+        pcm: &[i16],
+        frame_size: i32,
+        max_bytes: i32,
+    ) -> i32 {
+        let mut compressed = vec![0u8; max_bytes as usize];
+        celt_encode_with_ec(enc, pcm, frame_size, &mut compressed, max_bytes, None)
+    }
+
+    /// Helper: generate patterned PCM for a given frame size and channels.
+    fn gen_pcm(frame_size: usize, channels: usize, seed: i32) -> Vec<i16> {
+        (0..frame_size * channels)
+            .map(|i| (((i as i32 * 7919 + seed * 911) % 28000) - 14000) as i16)
+            .collect()
+    }
+
+    #[test]
+    fn test_encode_cvbr_clamping_low_bitrate() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 1;
+        enc.constrained_vbr = 1;
+        enc.bitrate = 12000; // Very low → CVBR clamping kicks in
+        enc.complexity = 5;
+        // Drain reservoir by encoding several frames
+        for i in 0..8 {
+            let pcm = gen_pcm(960, 1, i);
+            let ret = encode_frame(&mut enc, &pcm, 960, 128);
+            assert!(ret > 0, "frame {} encode failed: {}", i, ret);
+        }
+    }
+
+    #[test]
+    fn test_encode_cvbr_reservoir_depleted() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 1;
+        enc.constrained_vbr = 1;
+        enc.bitrate = 8000; // Very tight
+        enc.vbr_reservoir = -5000; // Force negative reservoir
+        let pcm = gen_pcm(960, 1, 42);
+        let ret = encode_frame(&mut enc, &pcm, 960, 128);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_silence_vbr_shrinks_packet() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 1;
+        enc.bitrate = 64000;
+        let pcm = vec![0i16; 960]; // Pure silence
+        let ret = encode_frame(&mut enc, &pcm, 960, 128);
+        assert!(ret > 0 && ret <= 4, "silence VBR should produce tiny packet, got {}", ret);
+    }
+
+    #[test]
+    fn test_encode_cbr_with_signalling() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 0;
+        enc.signalling = 1;
+        enc.bitrate = 64000;
+        let pcm = gen_pcm(960, 1, 7);
+        let ret = encode_frame(&mut enc, &pcm, 960, 128);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_cbr_without_signalling() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 0;
+        enc.signalling = 0;
+        enc.bitrate = 64000;
+        let pcm = gen_pcm(960, 1, 13);
+        let ret = encode_frame(&mut enc, &pcm, 960, 128);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_cbr_max_bitrate() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 0;
+        enc.bitrate = OPUS_BITRATE_MAX;
+        let pcm = gen_pcm(960, 1, 99);
+        let ret = encode_frame(&mut enc, &pcm, 960, 1275);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_transient_impulse() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 1;
+        enc.bitrate = 128000;
+        enc.complexity = 5;
+        // Create impulse: loud burst then silence
+        let mut pcm = vec![0i16; 960];
+        for i in 0..48 {
+            pcm[i] = 30000;
+        }
+        let ret = encode_frame(&mut enc, &pcm, 960, 256);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_short_blocks_consecutive_transients() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 1;
+        enc.bitrate = 128000;
+        enc.complexity = 10;
+        // Encode multiple frames with sharp transients
+        for frame_idx in 0..5 {
+            let mut pcm = vec![0i16; 960];
+            let start = (frame_idx * 37) % 900;
+            for i in start..start.min(959) + 30 {
+                pcm[i] = if i % 2 == 0 { 32000 } else { -32000 };
+            }
+            let ret = encode_frame(&mut enc, &pcm, 960, 256);
+            assert!(ret > 0, "frame {} failed: {}", frame_idx, ret);
+        }
+    }
+
+    #[test]
+    fn test_encode_stereo_low_bitrate_intensity() {
+        let mut enc = CeltEncoder::new(48000, 2).unwrap();
+        enc.vbr = 1;
+        enc.bitrate = 24000; // Low enough to trigger intensity stereo
+        enc.complexity = 5;
+        let pcm = gen_pcm(960, 2, 21);
+        let ret = encode_frame(&mut enc, &pcm, 960, 64);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_stereo_high_bitrate_dual() {
+        let mut enc = CeltEncoder::new(48000, 2).unwrap();
+        enc.vbr = 1;
+        enc.bitrate = 256000; // High enough for dual stereo
+        enc.complexity = 10;
+        let pcm = gen_pcm(960, 2, 33);
+        let ret = encode_frame(&mut enc, &pcm, 960, 512);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_very_low_bitrate() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 0;
+        enc.bitrate = 6000;
+        let pcm = gen_pcm(960, 1, 55);
+        let ret = encode_frame(&mut enc, &pcm, 960, 16);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_minimum_packet_two_bytes() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 0;
+        enc.bitrate = 6000;
+        let pcm = gen_pcm(960, 1, 66);
+        let ret = encode_frame(&mut enc, &pcm, 960, 2);
+        assert!(ret >= 2);
+    }
+
+    #[test]
+    fn test_encode_lfe_mode_via_opus() {
+        // LFE mode is set by the multistream encoder, not directly on CeltEncoder.
+        // Test that setting lfe=1 + end=1 (narrowband) works:
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 0;
+        enc.bitrate = 32000;
+        enc.lfe = 1;
+        enc.end = 1; // Restrict to LFE band
+        enc.complexity = 0;
+        let pcm: Vec<i16> = (0..960)
+            .map(|i| ((i as f64 * 0.02).sin() * 5000.0) as i16)
+            .collect();
+        let ret = encode_frame(&mut enc, &pcm, 960, 64);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_complexity_zero() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 1;
+        enc.bitrate = 64000;
+        enc.complexity = 0;
+        let pcm = gen_pcm(960, 1, 88);
+        let ret = encode_frame(&mut enc, &pcm, 960, 128);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_complexity_ten() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 1;
+        enc.bitrate = 64000;
+        enc.complexity = 10;
+        let pcm = gen_pcm(960, 1, 99);
+        let ret = encode_frame(&mut enc, &pcm, 960, 128);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_bad_frame_size() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.bitrate = 64000;
+        let pcm = gen_pcm(960, 1, 1);
+        // frame_size=100 doesn't match any valid LM
+        let ret = encode_frame(&mut enc, &pcm, 100, 128);
+        assert_eq!(ret, OPUS_BAD_ARG);
+    }
+
+    #[test]
+    fn test_encode_too_small_buffer() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.bitrate = 64000;
+        let pcm = gen_pcm(960, 1, 1);
+        let ret = encode_frame(&mut enc, &pcm, 960, 1);
+        assert_eq!(ret, OPUS_BAD_ARG);
+    }
+
+    #[test]
+    fn test_encode_phase_inversion_disabled() {
+        let mut enc = CeltEncoder::new(48000, 2).unwrap();
+        enc.vbr = 1;
+        enc.bitrate = 128000;
+        enc.disable_inv = 1;
+        let pcm = gen_pcm(960, 2, 44);
+        let ret = encode_frame(&mut enc, &pcm, 960, 256);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_240_frame_size() {
+        // 5ms frame (LM=0 at 48kHz)
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 1;
+        enc.bitrate = 64000;
+        let pcm = gen_pcm(240, 1, 11);
+        let ret = encode_frame(&mut enc, &pcm, 240, 128);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_480_frame_size() {
+        // 10ms frame
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 1;
+        enc.bitrate = 64000;
+        let pcm = gen_pcm(480, 1, 22);
+        let ret = encode_frame(&mut enc, &pcm, 480, 128);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_multiple_frames_vbr_reservoir() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 1;
+        enc.constrained_vbr = 1;
+        enc.bitrate = 48000;
+        // Encode enough frames to exercise the reservoir dynamics
+        for i in 0..20 {
+            let pcm = gen_pcm(960, 1, i * 7);
+            let ret = encode_frame(&mut enc, &pcm, 960, 128);
+            assert!(ret > 0, "frame {} failed: {}", i, ret);
+        }
+    }
+
+    #[test]
+    fn test_encode_prediction_disabled() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 1;
+        enc.bitrate = 64000;
+        enc.disable_pf = 1;
+        enc.force_intra = 1;
+        let pcm = gen_pcm(960, 1, 33);
+        let ret = encode_frame(&mut enc, &pcm, 960, 128);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_with_loss_rate() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 1;
+        enc.bitrate = 64000;
+        enc.loss_rate = 25;
+        let pcm = gen_pcm(960, 1, 44);
+        let ret = encode_frame(&mut enc, &pcm, 960, 128);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_16khz_upsampled() {
+        let mut enc = CeltEncoder::new(16000, 1).unwrap();
+        enc.vbr = 1;
+        enc.bitrate = 32000;
+        let pcm = gen_pcm(320, 1, 55);
+        let ret = encode_frame(&mut enc, &pcm, 320, 64);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_stereo_silence_vbr() {
+        let mut enc = CeltEncoder::new(48000, 2).unwrap();
+        enc.vbr = 1;
+        enc.bitrate = 64000;
+        let pcm = vec![0i16; 960 * 2];
+        let ret = encode_frame(&mut enc, &pcm, 960, 128);
+        assert!(ret > 0);
+    }
+
+    #[test]
+    fn test_encode_hybrid_mode_start_band() {
+        let mut enc = CeltEncoder::new(48000, 1).unwrap();
+        enc.vbr = 1;
+        enc.bitrate = 64000;
+        enc.start = 17; // Non-zero start → hybrid mode
+        let pcm = gen_pcm(960, 1, 77);
+        let ret = encode_frame(&mut enc, &pcm, 960, 128);
+        assert!(ret > 0);
+    }
 }

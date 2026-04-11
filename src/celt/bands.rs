@@ -2478,4 +2478,211 @@ mod tests {
             SPREAD_NONE | SPREAD_LIGHT | SPREAD_NORMAL | SPREAD_AGGRESSIVE
         ));
     }
+
+    // -----------------------------------------------------------------------
+    // Coverage improvement tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_denormalise_bands_very_negative_gain_zeroes_output() {
+        let mode = mode_create(48000, 960).unwrap();
+        let n = mode.short_mdct_size as usize;
+        let x = vec![1 << NORM_SHIFT; n];
+        let mut freq = vec![999i32; n];
+        let band_log_e = vec![(-25i32) << DB_SHIFT; mode.nb_ebands as usize];
+        // Very negative gain: below -20<<DB_SHIFT → zeroed
+        denormalise_bands(mode, &x, &mut freq, &band_log_e, 0, mode.nb_ebands - 1, 1, 1, false);
+        let start = mode.ebands[0] as usize;
+        let end_idx = mode.ebands[(mode.nb_ebands - 1) as usize] as usize;
+        assert!(freq[start..end_idx].iter().all(|&s| s == 0),
+            "very negative gain should zero output");
+    }
+
+    #[test]
+    fn test_denormalise_bands_high_gain_produces_nonzero() {
+        let mode = mode_create(48000, 960).unwrap();
+        let n = mode.short_mdct_size as usize;
+        let x = vec![1 << NORM_SHIFT; n];
+        let mut freq = vec![0i32; n];
+        let band_log_e = vec![45i32 << DB_SHIFT; mode.nb_ebands as usize];
+        denormalise_bands(mode, &x, &mut freq, &band_log_e, 0, 3, 1, 1, false);
+        let end_idx = mode.ebands[3] as usize;
+        assert!(freq[..end_idx].iter().any(|&s| s != 0),
+            "high gain should produce nonzero output");
+    }
+
+    #[test]
+    fn test_hysteresis_decision_exact_boundary_crossings() {
+        let thresholds = [100, 200, 300];
+        let hysteresis = [10, 10, 10];
+        // val=100 >= thresh[0]=100, val < thresh[1]=200 → i=1
+        // prev=0, i(1) > prev(0), val(100) < thresh[0]+hyst[0]=110 → i=prev=0
+        assert_eq!(hysteresis_decision(100, &thresholds, &hysteresis, 3, 0), 0);
+        // val=110 → i=1 (110 >= 100, 110 < 200), prev=0, i>prev, val(110) < 110? No (not <) → stays 1
+        assert_eq!(hysteresis_decision(110, &thresholds, &hysteresis, 3, 0), 1);
+        // val=200 → i=2 (200 >= 200, 200 < 300), prev=2, i==prev → no hysteresis → 2
+        assert_eq!(hysteresis_decision(200, &thresholds, &hysteresis, 3, 2), 2);
+        // val=195 → i=1 (195 >= 100, 195 < 200), prev=2
+        // i(1) < prev(2), val(195) > thresh[1]-hyst[1] = 200-10 = 190? Yes → i=prev=2
+        assert_eq!(hysteresis_decision(195, &thresholds, &hysteresis, 3, 2), 2);
+    }
+
+    #[test]
+    fn test_hysteresis_decision_retain_lower() {
+        let thresholds = [100, 200, 300];
+        let hysteresis = [10, 10, 10];
+        // prev=1, val=195 → i=1 (195 >= 100, 195 < 200), i == prev → 1
+        assert_eq!(hysteresis_decision(195, &thresholds, &hysteresis, 3, 1), 1);
+        // prev=1, val=95 → i=0 (95 < 100), i < prev
+        // val(95) > thresh[0]-hyst[0] = 100-10 = 90? Yes → i=prev=1
+        assert_eq!(hysteresis_decision(95, &thresholds, &hysteresis, 3, 1), 1);
+        // prev=1, val=85 → i=0 (85 < 100), i < prev
+        // val(85) > thresh[0]-hyst[0] = 90? No → stays i=0
+        assert_eq!(hysteresis_decision(85, &thresholds, &hysteresis, 3, 1), 0);
+    }
+
+    #[test]
+    fn test_spreading_decision_flat_spectrum() {
+        let mode = mode_create(48000, 960).unwrap();
+        let n = mode.short_mdct_size as usize;
+        // Flat spectrum → high hf_average → tends to aggressive spread
+        let x = vec![1000i32; n];
+        let mut average = 0;
+        let mut hf_average = 0;
+        let mut tapset = 0;
+        let spread_weight = vec![1i32; mode.nb_ebands as usize];
+
+        let decision = spreading_decision(
+            mode, &x, &mut average, SPREAD_NORMAL, &mut hf_average, &mut tapset,
+            true, mode.nb_ebands, 1, 1, &spread_weight,
+        );
+        assert!(matches!(decision, SPREAD_NONE | SPREAD_LIGHT | SPREAD_NORMAL | SPREAD_AGGRESSIVE));
+    }
+
+    #[test]
+    fn test_spreading_decision_sparse_spectrum() {
+        let mode = mode_create(48000, 960).unwrap();
+        let n = mode.short_mdct_size as usize;
+        // Sparse: energy in only first few bins
+        let mut x = vec![0i32; n];
+        x[0] = 1 << 28;
+        x[1] = 1 << 28;
+        let mut average = 0;
+        let mut hf_average = 0;
+        let mut tapset = 0;
+        let spread_weight = vec![1i32; mode.nb_ebands as usize];
+
+        let decision = spreading_decision(
+            mode, &x, &mut average, SPREAD_NORMAL, &mut hf_average, &mut tapset,
+            true, mode.nb_ebands, 1, 1, &spread_weight,
+        );
+        assert!(matches!(decision, SPREAD_NONE | SPREAD_LIGHT | SPREAD_NORMAL | SPREAD_AGGRESSIVE));
+    }
+
+    #[test]
+    fn test_compute_qn_n2_stereo() {
+        // N=2 stereo special case
+        let qn = compute_qn(2, 200, 30, 50, true);
+        assert!(qn >= 1 && qn <= 256);
+    }
+
+    #[test]
+    fn test_compute_qn_very_low_qb() {
+        let qn = compute_qn(8, 2, 1, 100, false);
+        assert_eq!(qn, 1); // Very low bits → 1
+    }
+
+    #[test]
+    fn test_compute_qn_high_bits() {
+        let qn = compute_qn(16, 400, 60, 30, false);
+        assert!(qn >= 2);
+        if qn > 1 {
+            assert_eq!(qn & 1, 0); // Must be even when > 1
+        }
+    }
+
+    #[test]
+    fn test_bitexact_cos_additional_angles() {
+        // Quarter angles (i16 range 0..16383)
+        let c = bitexact_cos(4096); // ~π/8
+        assert!(c > 0);
+        let c = bitexact_cos(12288); // ~3π/8
+        assert!(c > 0);
+        // Near π/2 — max valid i16 input
+        let c = bitexact_cos(16383);
+        assert!(c.abs() < 100); // Near zero
+    }
+
+    #[test]
+    fn test_bitexact_log2tan_antisymmetry() {
+        let r1 = bitexact_log2tan(20000, 10000);
+        let r2 = bitexact_log2tan(10000, 20000);
+        // Should be approximately negatives of each other
+        assert!((r1 + r2).abs() < 10, "antisymmetry violated: {} + {} = {}", r1, r2, r1 + r2);
+    }
+
+    #[test]
+    fn test_haar1_stride_2() {
+        // haar1(n0=4, stride=2): n0>>1=2, needs stride*2*2=8 elems
+        let mut x = vec![1 << 20, 2 << 20, 3 << 20, 4 << 20, 5 << 20, 6 << 20, 7 << 20, 8 << 20];
+        haar1(&mut x, 4, 2);
+        assert!(x.iter().any(|&v| v != 0));
+    }
+
+    #[test]
+    fn test_anti_collapse_mono() {
+        let mode = mode_create(48000, 960).unwrap();
+        let n = mode.short_mdct_size as usize;
+        let nb_ebands = mode.nb_ebands as usize;
+
+        let mut x_dec = vec![0i32; n];
+        let old_log_e = vec![0i32; nb_ebands * 2];
+        let old_log_e2 = vec![0i32; nb_ebands * 2];
+        let pulses = vec![0i32; nb_ebands];
+        let mut collapsed_masks = vec![0xFFu8; nb_ebands];
+
+        let seed = 12345u32;
+
+        anti_collapse(
+            mode,
+            &mut x_dec,
+            &mut collapsed_masks,
+            1,    // lm
+            1,    // C
+            n as i32,
+            0,    // start
+            nb_ebands as i32 - 1,
+            &old_log_e,
+            &old_log_e2,
+            &old_log_e, // energy_error (reuse)
+            &pulses,
+            seed,
+            true, // encode
+        );
+    }
+
+    #[test]
+    fn test_denormalise_bands_silence_mode() {
+        let mode = mode_create(48000, 960).unwrap();
+        let n = mode.short_mdct_size as usize;
+        let x = vec![1 << NORM_SHIFT; n];
+        let mut freq = vec![999i32; n];
+        let band_log_e = vec![0i32; mode.nb_ebands as usize];
+        // silence=true → zero everything
+        denormalise_bands(mode, &x, &mut freq, &band_log_e, 0, mode.nb_ebands, 1, 1, true);
+        assert!(freq.iter().all(|&s| s == 0));
+    }
+
+    #[test]
+    fn test_compute_band_energies_stereo() {
+        let mode = mode_create(48000, 960).unwrap();
+        let n = mode.short_mdct_size as usize;
+        let mut freq = vec![0i32; n * 2]; // stereo
+        freq[0] = 1 << 20;
+        freq[n] = 1 << 20; // ch2
+        let mut band_e = vec![0i32; mode.nb_ebands as usize * 2];
+        compute_band_energies(mode, &freq, &mut band_e, 1, 2, 0);
+        assert!(band_e[0] > 0); // ch1 band 0
+        assert!(band_e[mode.nb_ebands as usize] > 0); // ch2 band 0
+    }
 }
