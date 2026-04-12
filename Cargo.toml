@@ -1,6 +1,6 @@
 [package]
 name = "mdopus"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 build = "tests/harness/build.rs"
 autobins = false
@@ -31,3 +31,11 @@ codegen-units = 1
 [[bin]]
 name = "mdopus-compare"
 path = "tests/harness/main.rs"
+
+[[bin]]
+name = "replay_fuzz_decode"
+path = "tools/replay_fuzz_decode.rs"
+
+[[bin]]
+name = "diff_fuzz_decode"
+path = "tools/diff_fuzz_decode.rs"
