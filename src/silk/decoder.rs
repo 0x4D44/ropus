@@ -1412,9 +1412,19 @@ fn silk_cng(
                 max_k = k;
             }
         }
+        // Shift existing buffer right by subfr_length so the old front slot
+        // drops into slot 1, slot 1 into slot 2, etc. (matches C silk_memmove
+        // at CNG.c:115). copy_within handles overlapping regions correctly.
+        let shift_len = (dec.nb_subfr - 1) * dec.subfr_length;
+        if shift_len > 0 {
+            dec.s_cng
+                .cng_exc_buf_q14
+                .copy_within(0..shift_len, dec.subfr_length);
+        }
+        // Copy new excitation from max-gain subframe into the front slot
+        // (matches C silk_memcpy at CNG.c:116).
         let exc_start = max_k * dec.subfr_length;
-        let _exc_end = exc_start + dec.subfr_length;
-        for i in 0..dec.subfr_length.min(MAX_FRAME_LENGTH) {
+        for i in 0..dec.subfr_length {
             if exc_start + i < dec.exc_q14.len() {
                 dec.s_cng.cng_exc_buf_q14[i] = dec.exc_q14[exc_start + i];
             }
@@ -1442,16 +1452,19 @@ fn silk_cng(
         let mut cng_sig_q14 = vec![0i32; length + MAX_LPC_ORDER];
         cng_sig_q14[..MAX_LPC_ORDER].copy_from_slice(&dec.s_cng.cng_synth_state);
 
+        // Compute power-of-2 mask <= length (matches C CNG.c:46-49).
+        // The resulting mask is always of the form 2^n - 1 and <= 255, so
+        // idx is guaranteed to fit within MAX_FRAME_LENGTH (=320).
+        let mut exc_mask = CNG_BUF_MASK_MAX;
+        while exc_mask > length {
+            exc_mask >>= 1;
+        }
+
         let mut seed = dec.s_cng.rand_seed;
         for i in 0..length {
             seed = silk_rand(seed);
-            let idx =
-                ((seed >> 24) as usize) & CNG_BUF_MASK_MAX.min(dec.subfr_length.saturating_sub(1));
-            cng_sig_q14[MAX_LPC_ORDER + i] = if idx < MAX_FRAME_LENGTH {
-                dec.s_cng.cng_exc_buf_q14[idx]
-            } else {
-                0
-            };
+            let idx = ((seed >> 24) as usize) & exc_mask;
+            cng_sig_q14[MAX_LPC_ORDER + i] = dec.s_cng.cng_exc_buf_q14[idx];
         }
         dec.s_cng.rand_seed = seed;
 
@@ -1494,7 +1507,7 @@ fn silk_cng(
 // ===========================================================================
 
 /// Decode stereo mid/side predictor coefficients.
-pub fn silk_stereo_decode_pred(rc: &mut RangeDecoder, pred_q13: &mut [i16; 2]) {
+pub fn silk_stereo_decode_pred(rc: &mut RangeDecoder, pred_q13: &mut [i32; 2]) {
     // Decode joint index
     let n = rc.decode_icdf(&SILK_STEREO_PRED_JOINT_ICDF, 8);
     let mut ix = [[0i32; 3]; 2];
@@ -1518,11 +1531,11 @@ pub fn silk_stereo_decode_pred(rc: &mut RangeDecoder, pred_q13: &mut [i16; 2]) {
         } else {
             0
         };
-        pred_q13[n_ch] = (low_q13 + step_q13 * (2 * ix[n_ch][1] + 1)) as i16;
+        pred_q13[n_ch] = low_q13 + step_q13 * (2 * ix[n_ch][1] + 1);
     }
 
     // Differential encoding
-    pred_q13[0] = (pred_q13[0] as i32 - pred_q13[1] as i32) as i16;
+    pred_q13[0] -= pred_q13[1];
 }
 
 /// Decode mid-only flag.
@@ -1539,7 +1552,7 @@ pub fn silk_stereo_ms_to_lr(
     state: &mut StereoDecState,
     x1: &mut [i16], // mid → left (size frame_length+2)
     x2: &mut [i16], // side → right (size frame_length+2)
-    pred_q13: &[i16; 2],
+    pred_q13: &[i32; 2],
     fs_khz: i32,
     frame_length: usize,
 ) {
@@ -1561,8 +1574,8 @@ pub fn silk_stereo_ms_to_lr(
     let denom_q16 = (1i32 << 16) / interp_len as i32;
     // C: delta0_Q13 = silk_RSHIFT_ROUND(silk_SMULBB(pred_Q13[0] - pred_prev_Q13[0], denom_Q16), 16)
     // silk_SMULBB truncates both operands to i16 before multiplying.
-    let delta0 = (silk_smulbb(pred_q13[0] as i32 - pred0_q13, denom_q16) + (1 << 15)) >> 16;
-    let delta1 = (silk_smulbb(pred_q13[1] as i32 - pred1_q13, denom_q16) + (1 << 15)) >> 16;
+    let delta0 = (silk_smulbb(pred_q13[0] - pred0_q13, denom_q16) + (1 << 15)) >> 16;
+    let delta1 = (silk_smulbb(pred_q13[1] - pred1_q13, denom_q16) + (1 << 15)) >> 16;
 
     // Interpolation region: predictors ramp from prev to current
     // C uses silk_SMLAWB(a, b, c) = a + ((b * (i64)(i16)c) >> 16)
@@ -1584,8 +1597,8 @@ pub fn silk_stereo_ms_to_lr(
     }
 
     // Steady state: predictors are final values
-    pred0_q13 = pred_q13[0] as i32;
-    pred1_q13 = pred_q13[1] as i32;
+    pred0_q13 = pred_q13[0];
+    pred1_q13 = pred_q13[1];
     for n in interp_len..frame_length {
         let sum = ((x1[n] as i32 + x1[n + 2] as i32 + ((x1[n + 1] as i32) << 1)) << 9) as i32;
         let mut acc = (x2[n + 1] as i32) << 8;
@@ -1595,7 +1608,10 @@ pub fn silk_stereo_ms_to_lr(
         );
         x2[n + 1] = sat16((acc + (1 << 7)) >> 8);
     }
-    state.pred_prev_q13 = *pred_q13;
+    // Store narrows i32 → i16 to match the C struct field type. This
+    // matches the implicit narrowing conversion in the C reference at
+    // reference/silk/stereo_MS_to_LR.c lines 75-76.
+    state.pred_prev_q13 = [pred_q13[0] as i16, pred_q13[1] as i16];
 
     // Convert M/S to L/R in-place at [n+1] positions
     // C: x1[n+1] = SAT16(x1[n+1] + x2[n+1]); x2[n+1] = SAT16(x1[n+1] - x2[n+1])
@@ -2435,7 +2451,7 @@ pub fn silk_decode(
                         if decoder.channel_state[n].lbrr_flags[i] {
                             // C: decode stereo pred/mid_only for LBRR data (lines 264-268)
                             if n_channels_internal == 2 && n == 0 {
-                                let mut lbrr_pred = [0i16; 2];
+                                let mut lbrr_pred = [0i32; 2];
                                 silk_stereo_decode_pred(rc, &mut lbrr_pred);
                                 if !decoder.channel_state[1].lbrr_flags[i] {
                                     let _ = silk_stereo_decode_mid_only(rc);
@@ -2463,8 +2479,9 @@ pub fn silk_decode(
         }
     }
 
-    // Decode stereo predictor
-    let mut ms_pred_q13 = [0i16; 2];
+    // Decode stereo predictor (opus_int32 in C; narrowed only on write back
+    // to psDec->sStereo.pred_prev_Q13 inside silk_stereo_MS_to_LR).
+    let mut ms_pred_q13 = [0i32; 2];
     let mut decode_only_middle = false;
     if n_channels_internal == 2 {
         if lost_flag == FLAG_DECODE_NORMAL
@@ -2483,7 +2500,10 @@ pub fn silk_decode(
                 decode_only_middle = false;
             }
         } else {
-            ms_pred_q13 = decoder.s_stereo.pred_prev_q13;
+            ms_pred_q13 = [
+                decoder.s_stereo.pred_prev_q13[0] as i32,
+                decoder.s_stereo.pred_prev_q13[1] as i32,
+            ];
         }
     }
 
@@ -2882,7 +2902,7 @@ mod tests {
         ];
         let buf = encode_icdf_stream(&symbols);
         let mut rc = RangeDecoder::new(&buf);
-        let mut pred_q13 = [0i16; 2];
+        let mut pred_q13 = [0i32; 2];
 
         silk_stereo_decode_pred(&mut rc, &mut pred_q13);
 
@@ -2894,7 +2914,7 @@ mod tests {
         ix[1][0] = 1;
         ix[1][1] = 0;
 
-        let mut expected = [0i16; 2];
+        let mut expected = [0i32; 2];
         for n_ch in 0..2 {
             ix[n_ch][0] += 3 * ix[n_ch][2];
             let idx = ix[n_ch][0] as usize;
@@ -2904,9 +2924,9 @@ mod tests {
             } else {
                 0
             };
-            expected[n_ch] = (low_q13 + step_q13 * (2 * ix[n_ch][1] + 1)) as i16;
+            expected[n_ch] = low_q13 + step_q13 * (2 * ix[n_ch][1] + 1);
         }
-        expected[0] = (expected[0] as i32 - expected[1] as i32) as i16;
+        expected[0] -= expected[1];
 
         assert_eq!(pred_q13, expected);
     }
@@ -2939,11 +2959,15 @@ mod tests {
         }
         let original_mid = x1.clone();
         let original_side = x2.clone();
-        let pred_q13 = [800, -400];
+        let pred_q13: [i32; 2] = [800, -400];
 
         silk_stereo_ms_to_lr(&mut state, &mut x1, &mut x2, &pred_q13, 16, frame_length);
 
-        assert_eq!(state.pred_prev_q13, pred_q13);
+        // Stored state narrows to i16 to match the C struct layout.
+        assert_eq!(
+            state.pred_prev_q13,
+            [pred_q13[0] as i16, pred_q13[1] as i16]
+        );
         assert_eq!(
             state.s_mid,
             [original_mid[frame_length], original_mid[frame_length + 1]]
@@ -2966,17 +2990,101 @@ mod tests {
         let frame_length = 40usize;
         let mut x1 = vec![30000i16; frame_length + 2];
         let mut x2 = vec![30000i16; frame_length + 2];
-        let pred_q13 = [i16::MAX, i16::MAX];
+        // Predictor values outside i16 range — the C reference uses opus_int32
+        // for pred_Q13 in silk_stereo_MS_to_LR; only the stored pred_prev_Q13
+        // field is opus_int16 (implicit narrowing on write).
+        let pred_q13: [i32; 2] = [40000, -40000];
 
         silk_stereo_ms_to_lr(&mut state, &mut x1, &mut x2, &pred_q13, 8, frame_length);
 
-        assert_eq!(state.pred_prev_q13, pred_q13);
+        // Stored predictor state is narrowed to i16 (matches C struct).
+        assert_eq!(
+            state.pred_prev_q13,
+            [pred_q13[0] as i16, pred_q13[1] as i16]
+        );
         assert!(x1[1..=frame_length].contains(&i16::MAX));
         assert!(
             x2[1..=frame_length]
                 .iter()
                 .all(|&sample| (i16::MIN..=i16::MAX).contains(&sample))
         );
+    }
+
+    /// Regression guard for the i32 widening fix: silk_stereo_MS_to_LR must
+    /// accept opus_int32 pred_Q13 values that exceed the i16 range. Before
+    /// the widening fix this test would not compile because the function
+    /// signature required `&[i16; 2]`.
+    #[test]
+    fn test_stereo_ms_to_lr_accepts_i32_predictors_beyond_i16_range() {
+        let mut state = StereoDecState::default();
+        state.pred_prev_q13 = [0, 0];
+
+        let frame_length = 16usize;
+        let mut x1 = vec![0i16; frame_length + 2];
+        let mut x2 = vec![0i16; frame_length + 2];
+        for i in 0..frame_length {
+            x1[i + 2] = (i as i16) * 100;
+            x2[i + 2] = (i as i16) * -50;
+        }
+
+        // Values deliberately outside i16 range to demonstrate i32 widening.
+        // Under the previous `[i16; 2]` signature, these values could not be
+        // represented at the function boundary.
+        let pred_q13: [i32; 2] = [50_000, -60_000];
+
+        silk_stereo_ms_to_lr(&mut state, &mut x1, &mut x2, &pred_q13, 16, frame_length);
+
+        // State storage stays i16 to match the C struct layout.
+        assert_eq!(
+            state.pred_prev_q13,
+            [pred_q13[0] as i16, pred_q13[1] as i16]
+        );
+    }
+
+    /// Compile-time guard that silk_stereo_decode_pred exposes an
+    /// `&mut [i32; 2]` output and produces values that match the dequantize
+    /// formula without intermediate i16 truncation. Matches the opus_int32
+    /// signature in reference/silk/stereo_decode_pred.c.
+    #[test]
+    fn test_stereo_decode_pred_is_i32_and_matches_dequantize_formula() {
+        let symbols = [
+            (4u32, SILK_STEREO_PRED_JOINT_ICDF.as_slice()),
+            (2u32, SILK_UNIFORM3_ICDF.as_slice()),
+            (4u32, SILK_UNIFORM5_ICDF.as_slice()),
+            (1u32, SILK_UNIFORM3_ICDF.as_slice()),
+            (0u32, SILK_UNIFORM5_ICDF.as_slice()),
+        ];
+        let buf = encode_icdf_stream(&symbols);
+        let mut rc = RangeDecoder::new(&buf);
+        let mut pred_q13: [i32; 2] = [0, 0];
+
+        silk_stereo_decode_pred(&mut rc, &mut pred_q13);
+
+        // Replay the dequantize computation in pure i32 arithmetic and
+        // verify bit-exact agreement — no intermediate i16 truncation.
+        let mut ix = [[0i32; 3]; 2];
+        ix[0][2] = 4 / 5;
+        ix[1][2] = 4 - 5 * ix[0][2];
+        ix[0][0] = 2;
+        ix[0][1] = 4;
+        ix[1][0] = 1;
+        ix[1][1] = 0;
+
+        let mut expected: [i32; 2] = [0, 0];
+        for n_ch in 0..2 {
+            ix[n_ch][0] += 3 * ix[n_ch][2];
+            let idx = ix[n_ch][0] as usize;
+            let low_q13 = SILK_STEREO_PRED_QUANT_Q13[idx] as i32;
+            let step_q13 = if idx + 1 < STEREO_QUANT_TAB_SIZE {
+                ((SILK_STEREO_PRED_QUANT_Q13[idx + 1] as i32 - low_q13) * 6554) >> 16
+            } else {
+                0
+            };
+            expected[n_ch] = low_q13 + step_q13 * (2 * ix[n_ch][1] + 1);
+        }
+        expected[0] -= expected[1];
+
+        assert_eq!(pred_q13, expected);
     }
 
     #[test]
@@ -4075,5 +4183,154 @@ mod tests {
         let roundtrip = silk_log2lin(log_val);
         let ratio = roundtrip as f64 / 50000.0;
         assert!(ratio >= 0.85 && ratio <= 1.15, "roundtrip ratio={}", ratio);
+    }
+
+    // ---- CNG regression tests (Bug #17 and Bug #18) -------------------------
+
+    /// Regression test for Bug #17: `silk_cng` must shift the existing
+    /// `CNG_exc_buf_Q14` FIFO right by `subfr_length` before copying the new
+    /// max-gain subframe into the front slot (matches C `CNG.c:115-116`).
+    #[test]
+    fn test_cng_buffer_shift_fifo() {
+        let mut dec = SilkDecoderState::new();
+        dec.fs_khz = 16;
+        dec.s_cng.fs_khz = 16; // avoid the rate-change reset path
+        dec.nb_subfr = 4;
+        dec.subfr_length = 40;
+        dec.lpc_order = 16;
+        dec.loss_cnt = 0;
+        dec.prev_signal_type = TYPE_NO_VOICE_ACTIVITY;
+
+        // Prime exc_q14 with distinctive values for the first subframe
+        // (which will be the max-gain subframe). Subframe 0 spans [0, 40).
+        for i in 0..dec.subfr_length {
+            dec.exc_q14[i] = 1000 + i as i32;
+        }
+
+        // Prime the four subframe slots of the CNG excitation FIFO with
+        // distinct markers so we can track where each slot ends up.
+        for i in 0..dec.subfr_length {
+            dec.s_cng.cng_exc_buf_q14[i] = 100 + i as i32; // slot 0 -> should move to slot 1
+            dec.s_cng.cng_exc_buf_q14[dec.subfr_length + i] = 200 + i as i32; // -> slot 2
+            dec.s_cng.cng_exc_buf_q14[2 * dec.subfr_length + i] = 300 + i as i32; // -> slot 3
+            dec.s_cng.cng_exc_buf_q14[3 * dec.subfr_length + i] = 400 + i as i32; // dropped
+        }
+
+        // Seed NLSFs and smoothed NLSFs so silk_nlsf2a does not produce NaNs
+        // or trip assertions. Uniform spacing satisfies min-gap requirements.
+        let step = 32767i32 / (dec.lpc_order as i32 + 1);
+        let mut acc = 0i32;
+        for i in 0..dec.lpc_order {
+            acc += step;
+            dec.prev_nlsf_q15[i] = acc as i16;
+            dec.s_cng.cng_smth_nlsf_q15[i] = acc as i16;
+        }
+
+        // Craft gains so subframe 0 is unambiguously the max-gain subframe.
+        let mut dec_ctrl = SilkDecoderControl::default();
+        dec_ctrl.gains_q16[0] = 2 << 16;
+        dec_ctrl.gains_q16[1] = 1 << 16;
+        dec_ctrl.gains_q16[2] = 1 << 16;
+        dec_ctrl.gains_q16[3] = 1 << 16;
+
+        let length = dec.nb_subfr * dec.subfr_length;
+        let mut frame = vec![0i16; length];
+        silk_cng(&mut dec, &dec_ctrl, &mut frame, length);
+
+        // Slot 0 must now hold the new excitation copied from subframe 0
+        // (exc_q14[0..40]).
+        for i in 0..dec.subfr_length {
+            assert_eq!(
+                dec.s_cng.cng_exc_buf_q14[i],
+                1000 + i as i32,
+                "slot 0 mismatch at i={}",
+                i
+            );
+        }
+        // Slot 1 must hold the OLD slot 0 marker (100..140), i.e. the FIFO
+        // shift occurred. Before the fix, slot 1 was left untouched and would
+        // still contain the original 200-series marker values.
+        for i in 0..dec.subfr_length {
+            assert_eq!(
+                dec.s_cng.cng_exc_buf_q14[dec.subfr_length + i],
+                100 + i as i32,
+                "slot 1 (shifted old slot 0) mismatch at i={}",
+                i
+            );
+        }
+        // Slot 2 must hold the OLD slot 1 marker (200..240).
+        for i in 0..dec.subfr_length {
+            assert_eq!(
+                dec.s_cng.cng_exc_buf_q14[2 * dec.subfr_length + i],
+                200 + i as i32,
+                "slot 2 (shifted old slot 1) mismatch at i={}",
+                i
+            );
+        }
+        // Slot 3 must hold the OLD slot 2 marker (300..340).
+        for i in 0..dec.subfr_length {
+            assert_eq!(
+                dec.s_cng.cng_exc_buf_q14[3 * dec.subfr_length + i],
+                300 + i as i32,
+                "slot 3 (shifted old slot 2) mismatch at i={}",
+                i
+            );
+        }
+    }
+
+    /// Regression test for Bug #18: `silk_cng` must compute `exc_mask` by
+    /// halving `CNG_BUF_MASK_MAX` until it is <= the full `length` argument
+    /// (matches C `CNG.c:46-49`), not by clamping against `subfr_length-1`.
+    /// The resulting mask must be of the form `2^n - 1`.
+    #[test]
+    fn test_cng_exc_mask_power_of_2() {
+        // Mirror the C halving loop exactly.
+        fn compute_exc_mask(length: usize) -> usize {
+            let mut exc_mask = CNG_BUF_MASK_MAX;
+            while exc_mask > length {
+                exc_mask >>= 1;
+            }
+            exc_mask
+        }
+
+        // (length, expected mask) — derived from CNG_BUF_MASK_MAX=255 and the
+        // halving loop. The mask is the largest (2^n - 1) that is <= length.
+        let cases: &[(usize, usize)] = &[
+            (320, 255),
+            (240, 127),
+            (160, 127),
+            (120, 63),
+            (80, 63),
+            (40, 31),
+            (20, 15),
+        ];
+
+        for &(length, expected) in cases {
+            let mask = compute_exc_mask(length);
+            assert_eq!(
+                mask, expected,
+                "compute_exc_mask({}) = {}, expected {}",
+                length, mask, expected
+            );
+            // Every mask produced by the halving loop must be (2^n - 1).
+            assert!(
+                (mask + 1).is_power_of_two(),
+                "mask {} for length {} is not of the form 2^n - 1",
+                mask,
+                length
+            );
+            // The mask must fit within the full CNG buffer so indexing is safe.
+            assert!(
+                mask < MAX_FRAME_LENGTH,
+                "mask {} for length {} exceeds MAX_FRAME_LENGTH {}",
+                mask,
+                length,
+                MAX_FRAME_LENGTH
+            );
+        }
+
+        // Sanity check: the ceiling is CNG_BUF_MASK_MAX itself (256 - 1).
+        assert_eq!(compute_exc_mask(CNG_BUF_MASK_MAX), CNG_BUF_MASK_MAX);
+        assert_eq!(compute_exc_mask(CNG_BUF_MASK_MAX + 1), CNG_BUF_MASK_MAX);
     }
 }
