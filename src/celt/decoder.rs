@@ -568,11 +568,11 @@ fn prefilter_and_fold(
     cc: i32,
     overlap: i32,
     n: i32,
-    postfilter_period_old: i32,
+    _postfilter_period_old: i32,
     postfilter_period: i32,
-    postfilter_gain_old: i32,
+    _postfilter_gain_old: i32,
     postfilter_gain: i32,
-    postfilter_tapset_old: i32,
+    _postfilter_tapset_old: i32,
     postfilter_tapset: i32,
     window: &[i16],
 ) {
@@ -590,17 +590,17 @@ fn prefilter_and_fold(
             etmp[i] = buf[src_off + i];
         }
 
-        // Apply inverse filter with negative gains
+        // Apply inverse filter with negative gains.
+        // C calls comb_filter(etmp, x, T0, T1, overlap, -g_old, -g_new, ..., NULL, 0).
+        // With window=NULL and overlap=0, comb_filter only applies the NEW filter
+        // (g1 / T1 params) via comb_filter_const. When g1==0, it early-returns with
+        // just a copy (no filter, no bias). So we must only enter the filter when
+        // the NEW gain is non-zero.
         {
-            let _t0 = imax(postfilter_period_old, COMBFILTER_MINPERIOD) as usize;
             let t1 = imax(postfilter_period, COMBFILTER_MINPERIOD) as usize;
-            let neg_g0 = -postfilter_gain_old;
             let neg_g1 = -postfilter_gain;
 
-            if neg_g0 != 0 || neg_g1 != 0 {
-                let _g00 = mult16_16_p15(neg_g0, COMB_GAINS[postfilter_tapset_old as usize][0]);
-                let _g01 = mult16_16_p15(neg_g0, COMB_GAINS[postfilter_tapset_old as usize][1]);
-                let _g02 = mult16_16_p15(neg_g0, COMB_GAINS[postfilter_tapset_old as usize][2]);
+            if neg_g1 != 0 {
                 let g10 = mult16_16_p15(neg_g1, COMB_GAINS[postfilter_tapset as usize][0]);
                 let g11 = mult16_16_p15(neg_g1, COMB_GAINS[postfilter_tapset as usize][1]);
                 let g12 = mult16_16_p15(neg_g1, COMB_GAINS[postfilter_tapset as usize][2]);
@@ -620,12 +620,14 @@ fn prefilter_and_fold(
         }
 
         // Apply TDAC windowing: fold the overlap region
+        // C reference: decode_mem[i] = window[i]*etmp[N-1-i] + window[N-1-i]*etmp[i]
+        // Rising window multiplies reversed samples, falling window multiplies forward.
         for i in 0..overlap / 2 {
             let w_rise = window[i] as i32;
             let w_fall = window[overlap - 1 - i] as i32;
             buf[off + decode_buffer_size - n as usize + i] =
-                mult16_32_q15(w_fall, etmp[overlap - 1 - i])
-                    .wrapping_add(mult16_32_q15(w_rise, etmp[i]));
+                mult16_32_q15(w_rise, etmp[overlap - 1 - i])
+                    .wrapping_add(mult16_32_q15(w_fall, etmp[i]));
         }
     }
 }
@@ -1544,6 +1546,12 @@ impl CeltDecoder {
         #[allow(clippy::let_unit_value)]
         let _ = lpcnet;
 
+        // Check if there are at least two packets received consecutively before
+        // turning on the pitch-based PLC (C: line 1297 in celt_decoder.c)
+        if self.loss_duration == 0 {
+            self.skip_plc = 0;
+        }
+
         let data = data.unwrap();
 
         // Initialize range decoder
@@ -2037,12 +2045,12 @@ impl CeltDecoder {
             accum,
         );
 
-        // Reset PLC state
+        // Reset PLC state (note: skip_plc is NOT reset here — it is
+        // conditionally reset at the beginning of decode, matching C reference)
         self.loss_duration = 0;
         self.plc_duration = 0;
         self.last_frame_type = FRAME_NORMAL;
         self.prefilter_and_fold = false;
-        self.skip_plc = 0;
 
         // Verify bitstream consistency
         if dec.tell() > len * 8 {

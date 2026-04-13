@@ -1228,9 +1228,16 @@ impl OpusDecoder {
         let mut nb_samples = 0i32;
         let mut data_offset = 0usize;
         for i in 0..count as usize {
-            let frame_data = &payload[data_offset..data_offset + sizes[i] as usize];
+            // C passes (data, size[i]) as separate args; when size[i] <= 1,
+            // opus_decode_frame sets data=NULL triggering PLC/DTX.  Match that
+            // by passing None directly so decode_frame takes the PLC path.
+            let frame_arg = if sizes[i] as i32 <= 1 {
+                None
+            } else {
+                Some(&payload[data_offset..data_offset + sizes[i] as usize])
+            };
             let ret = self.decode_frame(
-                Some(frame_data),
+                frame_arg,
                 &mut pcm[nb_samples as usize * self.channels as usize..],
                 frame_size - nb_samples,
                 false,
