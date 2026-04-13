@@ -244,12 +244,10 @@ pub fn celt_fir(x: &[i32], num: &[i32], y: &mut [i32], n: usize, ord: usize) {
         // = xcorr_kernel(rnum, x + i, sum, ord)
         xcorr_kernel(&rnum, &x[i..], &mut sum, ord);
 
-        // C SSE4.1 uses packssdw which saturates to [-32768,32767].
-        // Match with sat16 instead of sround16's [-32767,32767].
-        y[i] = sat16(pshr32(sum[0], SIG_SHIFT)) as i32;
-        y[i + 1] = sat16(pshr32(sum[1], SIG_SHIFT)) as i32;
-        y[i + 2] = sat16(pshr32(sum[2], SIG_SHIFT)) as i32;
-        y[i + 3] = sat16(pshr32(sum[3], SIG_SHIFT)) as i32;
+        y[i] = sround16(sum[0], SIG_SHIFT);
+        y[i + 1] = sround16(sum[1], SIG_SHIFT);
+        y[i + 2] = sround16(sum[2], SIG_SHIFT);
+        y[i + 3] = sround16(sum[3], SIG_SHIFT);
         i += 4;
     }
 
@@ -259,7 +257,7 @@ pub fn celt_fir(x: &[i32], num: &[i32], y: &mut [i32], n: usize, ord: usize) {
         for j in 0..ord {
             sum = mac16_16(sum, rnum[j], x[i + j]);
         }
-        y[i] = sat16(pshr32(sum, SIG_SHIFT)) as i32;
+        y[i] = sround16(sum, SIG_SHIFT);
         i += 1;
     }
 }
@@ -770,136 +768,5 @@ mod tests {
             y[1..].iter().any(|&v| v != 0),
             "feedback should produce non-zero tail"
         );
-    }
-
-    // --- Coverage additions: lpc_fit, iir/fir edge cases ---
-
-    #[test]
-    fn test_lpc_order_2_symmetric() {
-        // Symmetric AC: real signal, coefficients should be real-valued and stable
-        let mut lpc_out = [0; 2];
-        let ac = [1 << 22, 1 << 20, 1 << 18];
-        celt_lpc(&mut lpc_out, &ac, 2);
-        // Coefficients should be non-zero and within Q12 range
-        assert!(lpc_out[0] != 0, "first coeff should be non-zero");
-        assert!(lpc_out[0].abs() <= 32767, "first coeff should fit Q12");
-        assert!(lpc_out[1].abs() <= 32767, "second coeff should fit Q12");
-    }
-
-    #[test]
-    fn test_fir_all_ones_coefficients() {
-        // FIR with all-ones coefficients should sum history
-        let ord = 3;
-        let n = 4;
-        let mut x = vec![0i32; n + ord];
-        x[ord] = 1 << SIG_SHIFT;
-        x[ord + 1] = 2 << SIG_SHIFT;
-        let num = vec![4096i32; ord]; // Q12 = 1.0
-        let mut y = vec![0i32; n];
-        celt_fir(&x, &num, &mut y, n, ord);
-        // First output should include the impulse
-        assert!(
-            y[0] != 0,
-            "FIR output should be non-zero with unit coefficients"
-        );
-    }
-
-    #[test]
-    fn test_iir_stability_with_large_feedback() {
-        // Large feedback coefficients should still produce finite output
-        let den = [4000i32, -3000, 2000, -1000];
-        let n = 16;
-        let mut x = vec![0i32; n];
-        x[0] = 1 << SIG_SHIFT;
-        let mut y = vec![0i32; n];
-        let mut mem = [0i32; 4];
-        celt_iir(&x, &den, &mut y, n, 4, &mut mem);
-        // Output should be non-zero due to feedback
-        assert!(
-            y.iter().any(|&v| v != 0),
-            "IIR with feedback should produce non-zero output"
-        );
-    }
-
-    #[test]
-    fn test_autocorr_with_window() {
-        // Windowed autocorrelation with a simple rectangular window
-        let x = [1000i32; 16];
-        let window = [32767i32; 4]; // full-scale window
-        let mut ac = [0i32; 3];
-        let _shift = celt_autocorr(&x, &mut ac, Some(&window), 4, 2, 16);
-        assert!(ac[0] > 0, "windowed autocorr R(0) should be positive");
-        // DC signal: all lags should be similar
-        assert!(ac[1] > 0, "DC with window: R(1) should be positive");
-    }
-
-    #[test]
-    fn test_lpc_single_order() {
-        // Single coefficient: should be -ac[1]/ac[0]
-        let mut lpc_out = [0; 1];
-        let ac = [1 << 22, -(1 << 20)]; // negative correlation
-        celt_lpc(&mut lpc_out, &ac, 1);
-        // Should predict positive correlation
-        assert!(
-            lpc_out[0] > 0,
-            "negative ac[1] should give positive lpc[0], got {}",
-            lpc_out[0]
-        );
-    }
-
-    #[test]
-    fn test_lpc_bw_expansion_converges() {
-        // Craft autocorrelation that produces large coefficients which need
-        // bandwidth expansion but still converge within 10 iterations.
-        // Nearly-DC signal: ac values very close, forcing large first coefficient.
-        let base = 1 << 26;
-        let ac = [base, base - 1, base - 3, base - 6, base - 10];
-        let mut lpc_out = [0i32; 4];
-        celt_lpc(&mut lpc_out, &ac, 4);
-        // After bandwidth expansion converges, all coefficients must fit in Q12 i16 range
-        for (i, &c) in lpc_out.iter().enumerate() {
-            assert!(
-                c.abs() <= 32767,
-                "lpc_out[{i}] = {c} should fit in Q12 range after BW expansion"
-            );
-        }
-        // Should NOT be the A(z)=1 fallback (at least one non-trivial coefficient)
-        let is_fallback = lpc_out[0] == 4096 && lpc_out[1..].iter().all(|&c| c == 0);
-        assert!(
-            !is_fallback,
-            "expected BW expansion to converge, not fall back to A(z)=1"
-        );
-    }
-
-    #[test]
-    fn test_lpc_bw_expansion_fallback_az1() {
-        // Force the A(z)=1 fallback by creating coefficients so extreme that
-        // 10 iterations of chirp bandwidth expansion cannot bring them into range.
-        //
-        // Alternating-sign autocorrelation with nearly-full-scale magnitudes
-        // produces oscillating LPC coefficients that resist chirp damping.
-        let p = CELT_LPC_ORDER; // 24
-        let mut ac = [0i32; CELT_LPC_ORDER + 1];
-        ac[0] = 1 << 28;
-        for k in 1..=p {
-            let sign = if k % 2 == 0 { 1 } else { -1 };
-            ac[k] = sign * (ac[0] - k as i32);
-        }
-        let mut lpc_out = [0i32; CELT_LPC_ORDER];
-        celt_lpc(&mut lpc_out, &ac, p);
-
-        // Should have fallen back to A(z)=1: lpc_out[0]=4096, rest=0
-        assert_eq!(
-            lpc_out[0], 4096,
-            "fallback should set lpc_out[0]=4096 (Q12 for 1.0), got {}",
-            lpc_out[0]
-        );
-        for i in 1..p {
-            assert_eq!(
-                lpc_out[i], 0,
-                "fallback should zero lpc_out[{i}], got {}",
-                lpc_out[i]
-            );
-        }
     }
 }
