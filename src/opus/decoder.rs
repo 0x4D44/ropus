@@ -4380,4 +4380,146 @@ mod tests {
         let mut pcm = vec![0i16; 960 * 2];
         let _ = dec.decode(Some(&packet), &mut pcm, 960 * 2, false);
     }
+
+    // -----------------------------------------------------------------------
+    // Mutation-killing pinning tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_pin_error_constants() {
+        assert_eq!(OPUS_OK, 0);
+        assert_eq!(OPUS_BAD_ARG, -1);
+        assert_eq!(OPUS_BUFFER_TOO_SMALL, -2);
+        assert_eq!(OPUS_INTERNAL_ERROR, -3);
+        assert_eq!(OPUS_INVALID_PACKET, -4);
+        assert_eq!(OPUS_UNIMPLEMENTED, -5);
+    }
+
+    #[test]
+    fn test_pin_smooth_fade_8khz() {
+        // fs=8000 => inc = 48000/8000 = 6, so window is sampled at stride 6.
+        // Use a real CELT window to exercise the actual stride path.
+        let dec = OpusDecoder::new(48000, 1).unwrap();
+        let window = dec.celt_dec.get_mode().window;
+
+        let overlap = 10;
+        let channels = 1;
+        let in1 = vec![1000i16; overlap * channels];
+        let in2 = vec![0i16; overlap * channels];
+        let mut out = vec![0i16; overlap * channels];
+
+        smooth_fade(&in1, &in2, &mut out, overlap as i32, channels as i32, window, 8000);
+
+        // Pinned: window stride=6 crossfade of in1=1000 fading to in2=0
+        let expected: [i16; 10] = [999, 999, 998, 991, 975, 944, 893, 820, 724, 611];
+        assert_eq!(&out[..], &expected[..]);
+    }
+
+    #[test]
+    fn test_pin_smooth_fade_16khz() {
+        // fs=16000 => inc = 48000/16000 = 3, window sampled at stride 3.
+        let dec = OpusDecoder::new(48000, 1).unwrap();
+        let window = dec.celt_dec.get_mode().window;
+
+        let overlap = 10;
+        let channels = 1;
+        let in1 = vec![1000i16; overlap * channels];
+        let in2 = vec![0i16; overlap * channels];
+        let mut out = vec![0i16; overlap * channels];
+
+        smooth_fade(&in1, &in2, &mut out, overlap as i32, channels as i32, window, 16000);
+
+        // Pinned: window stride=3 crossfade of in1=1000 fading to in2=0
+        let expected: [i16; 10] = [999, 999, 999, 999, 998, 995, 991, 985, 975, 962];
+        assert_eq!(&out[..], &expected[..]);
+    }
+
+    #[test]
+    fn test_pin_samples_per_frame_silk_60ms() {
+        // SILK-only, audiosize==3 (bits 4-3 of TOC = 0b11) => 60ms frame.
+        // TOC byte: 0b00_00_11_00 = 0x18 (NB, audiosize=3, code 0).
+        let toc_silk_60ms = 0x18u8;
+
+        let rates = [8000, 12000, 16000, 24000, 48000];
+        let expected = [480, 720, 960, 1440, 2880]; // fs * 60 / 1000
+        for (i, &rate) in rates.iter().enumerate() {
+            let spf = opus_packet_get_samples_per_frame(&[toc_silk_60ms], rate);
+            assert_eq!(spf, expected[i], "SILK 60ms at {}Hz", rate);
+        }
+    }
+
+    #[test]
+    fn test_pin_bandwidth_toc_sweep() {
+        // SILK-only: bit7=0, bits6-5 != 0b11 => bw = NB + ((toc>>5)&3)
+        assert_eq!(opus_packet_get_bandwidth(&[0x00]), OPUS_BANDWIDTH_NARROWBAND);
+        assert_eq!(opus_packet_get_bandwidth(&[0x20]), OPUS_BANDWIDTH_MEDIUMBAND);
+        assert_eq!(opus_packet_get_bandwidth(&[0x40]), OPUS_BANDWIDTH_WIDEBAND);
+
+        // Hybrid: bits 7-5 = 011 => bit4 selects SWB/FB
+        assert_eq!(opus_packet_get_bandwidth(&[0x60]), OPUS_BANDWIDTH_SUPERWIDEBAND);
+        assert_eq!(opus_packet_get_bandwidth(&[0x70]), OPUS_BANDWIDTH_FULLBAND);
+
+        // CELT-only: bit7=1 => bw = MB + ((toc>>5)&3), but MB remapped to NB
+        assert_eq!(opus_packet_get_bandwidth(&[0x80]), OPUS_BANDWIDTH_NARROWBAND);
+        assert_eq!(opus_packet_get_bandwidth(&[0xA0]), OPUS_BANDWIDTH_WIDEBAND);
+        assert_eq!(opus_packet_get_bandwidth(&[0xC0]), OPUS_BANDWIDTH_SUPERWIDEBAND);
+        assert_eq!(opus_packet_get_bandwidth(&[0xE0]), OPUS_BANDWIDTH_FULLBAND);
+
+        // Pin the actual constant values
+        assert_eq!(OPUS_BANDWIDTH_NARROWBAND, 1101);
+        assert_eq!(OPUS_BANDWIDTH_MEDIUMBAND, 1102);
+        assert_eq!(OPUS_BANDWIDTH_WIDEBAND, 1103);
+        assert_eq!(OPUS_BANDWIDTH_SUPERWIDEBAND, 1104);
+        assert_eq!(OPUS_BANDWIDTH_FULLBAND, 1105);
+    }
+
+    #[test]
+    fn test_pin_decode_native_exact_output() {
+        // Encode a known signal with RESTRICTED_LOWDELAY (CELT-only), decode, pin output.
+        let mut enc =
+            OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+        enc.set_bitrate(64000);
+
+        let pcm_in = vec![10000i16; 960];
+        let mut packet = vec![0u8; 1500];
+        let len = enc.encode(&pcm_in, 960, &mut packet, 1500).unwrap();
+        let packet = &packet[..len as usize];
+
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut pcm_out = vec![0i16; 960];
+        let decoded = dec.decode(Some(packet), &mut pcm_out, 960, false).unwrap();
+        assert_eq!(decoded, 960);
+
+        // Pinned: first 20 samples from decoding DC=10000 with CELT RESTRICTED_LOWDELAY
+        let expected: [i16; 20] = [
+            0, 1, -1, 1, 0, -1, 2, -3, 2, -3, -2, -1, -5, 1, -3, -4, -5, -3, -9, -7,
+        ];
+        assert_eq!(&pcm_out[..20], &expected[..]);
+    }
+
+    #[test]
+    fn test_pin_decode_with_gain() {
+        // Encode, decode with gain applied, pin exact output samples.
+        let mut enc =
+            OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+        enc.set_bitrate(64000);
+
+        let pcm_in = vec![10000i16; 960];
+        let mut packet = vec![0u8; 1500];
+        let len = enc.encode(&pcm_in, 960, &mut packet, 1500).unwrap();
+        let packet = &packet[..len as usize];
+
+        // Decode with +6dB gain (gain = 256 * 6 = 1536 in Q8)
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        dec.set_gain(1536).unwrap();
+        let mut pcm_out = vec![0i16; 960];
+        let decoded = dec.decode(Some(packet), &mut pcm_out, 960, false).unwrap();
+        assert_eq!(decoded, 960);
+
+        // Pinned: first 20 samples with +6dB gain applied
+        let expected: [i16; 20] = [
+            0, 2, -2, 2, 0, -2, 4, -6, 4, -6, -4, -2, -10, 2, -6, -8, -10, -6, -18, -14,
+        ];
+        assert_eq!(&pcm_out[..20], &expected[..]);
+    }
 }

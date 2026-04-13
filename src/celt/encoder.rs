@@ -3998,4 +3998,240 @@ mod tests {
         let ret = encode_frame(&mut enc, &pcm, 960, 128);
         assert!(ret > 0);
     }
+
+    // ===================================================================
+    // Mutation-killing pinning tests for pure helper functions
+    // ===================================================================
+
+    #[test]
+    fn test_pin_acos_approx() {
+        // acos_approx: Q29 input -> Q13 output (radians)
+        // x=0 -> pi/2 in Q13
+        assert_eq!(acos_approx(0), 12862);
+        // x near +1 -> acos near 0
+        assert_eq!(acos_approx((1 << 29) - 1), 0);
+        // x near -1 -> acos near pi in Q13
+        assert_eq!(acos_approx(-((1 << 29) - 1)), 25736);
+        // x=0.5 (Q29) -> acos(0.5) near pi/3
+        assert_eq!(acos_approx(1 << 28), 8578);
+        // x=-0.5 -> acos(-0.5) near 2*pi/3
+        assert_eq!(acos_approx(-(1 << 28)), 17158);
+        // x=0.25 (Q29)
+        assert_eq!(acos_approx(1 << 27), 10802);
+        // x=-0.25
+        assert_eq!(acos_approx(-(1 << 27)), 14934);
+    }
+
+    #[test]
+    fn test_pin_celt_preemphasis_fast_path() {
+        // celt_preemphasis: upsample=1 (fast path), mono, 8 samples
+        // Standard Opus pre-emphasis coef: 0.85 in Q15 = 27853
+        let coef: [i32; 4] = [qconst16(0.85, 15), 0, 0, 0];
+        let pcm: Vec<i16> = vec![1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000];
+        let mut inp = vec![0i32; 8];
+        let mut mem: i32 = 0;
+
+        celt_preemphasis(&pcm, 0, &mut inp, 0, 8, 1, 1, &coef, &mut mem, 0);
+
+        // y[n] = x[n]<<SIG_SHIFT - coef * y[n-1], where SIG_SHIFT=12
+        assert_eq!(inp[0], 4096000);  // 1000 << 12 = 4096000, mem was 0
+        assert_eq!(inp[1], 4710375);
+        assert_eq!(inp[2], 5324750);
+        assert_eq!(inp[3], 5939125);
+        assert_eq!(inp[4], 6553500);
+        assert_eq!(inp[5], 7167875);
+        assert_eq!(inp[6], 7782250);
+        assert_eq!(inp[7], 8396625);
+        assert_eq!(mem, 32768000); // 8000 << 12
+    }
+
+    #[test]
+    fn test_pin_celt_preemphasis_upsample() {
+        // celt_preemphasis: upsample=2 path, mono, 8 output samples (4 PCM samples)
+        // Every other output gets a real sample; the rest are zero-inserted
+        let coef: [i32; 4] = [qconst16(0.85, 15), 0, 0, 0];
+        let pcm: Vec<i16> = vec![1000, 2000, 3000, 4000];
+        let mut inp = vec![0i32; 8];
+        let mut mem: i32 = 0;
+
+        celt_preemphasis(&pcm, 0, &mut inp, 0, 8, 1, 2, &coef, &mut mem, 0);
+
+        // Even indices get real samples, odd indices get zero-inserted
+        assert_eq!(inp[0], 4096000);    // 1000 << 12, mem=0
+        assert_eq!(inp[1], -3481625);   // 0 - coef * 4096000
+        assert_eq!(inp[2], 8192000);    // 2000 << 12, prev was 0
+        assert_eq!(inp[3], -6963250);   // 0 - coef * 8192000
+        assert_eq!(inp[4], 12288000);   // 3000 << 12
+        assert_eq!(inp[5], -10444875);  // 0 - coef * 12288000
+        assert_eq!(inp[6], 16384000);   // 4000 << 12
+        assert_eq!(inp[7], -13926500);  // 0 - coef * 16384000
+        assert_eq!(mem, 0); // last sample was a zero-insert
+    }
+
+    #[test]
+    fn test_pin_normalize_tone_input() {
+        // Test 1: large-amplitude signal -> shifted down by 1 (10000 >> 1 = 5000)
+        let mut large: Vec<i16> = vec![10000, -10000, 10000, -10000, 10000, -10000, 10000, -10000];
+        let len = large.len();
+        normalize_tone_input(&mut large, len);
+        assert_eq!(large, [5000, -5000, 5000, -5000, 5000, -5000, 5000, -5000]);
+
+        // Test 2: small-amplitude signal -> shift=0, unchanged
+        let mut small: Vec<i16> = vec![1, -1, 1, -1, 1, -1, 1, -1];
+        let len = small.len();
+        normalize_tone_input(&mut small, len);
+        assert_eq!(small, [1, -1, 1, -1, 1, -1, 1, -1]);
+    }
+
+    #[test]
+    fn test_pin_l1_metric() {
+        // l1_metric: sums |tmp[i] >> (NORM_SHIFT-14)| then applies bias
+        // NORM_SHIFT = 24, so each element is shifted right by 10
+        let tmp: Vec<i32> = vec![1 << 20, -(1 << 20), 1 << 19, -(1 << 19)];
+
+        // lm=0, bias=0: pure L1 sum, no frequency bonus
+        assert_eq!(l1_metric(&tmp, 4, 0, 0), 3072);
+        // lm=2, bias=qconst16(0.04,14): frequency bias applied (lm*bias * l1 >> 15)
+        assert_eq!(l1_metric(&tmp, 4, 2, qconst16(0.04, 14)), 3194);
+        // lm=0 with nonzero bias: bias term is lm*bias=0, so same as no bias
+        assert_eq!(l1_metric(&tmp, 4, 0, qconst16(0.04, 14)), 3072);
+    }
+
+    #[test]
+    fn test_pin_compute_vbr_mono() {
+        let mode = &MODE_48000_960_120;
+        let analysis = AnalysisInfo::default();
+        let result = compute_vbr(
+            mode,
+            &analysis,
+            6400,               // base_target
+            3,                  // lm
+            64000,              // bitrate
+            0,                  // last_coded_bands
+            1,                  // c (mono)
+            0,                  // intensity
+            0,                  // constrained_vbr
+            0,                  // stereo_saving
+            0,                  // tot_boost
+            0,                  // tf_estimate
+            0,                  // pitch_change
+            qconst16(0.5, 15), // max_depth
+            0,                  // lfe
+            false,              // has_surround_mask
+            0,                  // surround_masking
+            0,                  // temporal_vbr
+        );
+        // Mono VBR target with default parameters
+        assert_eq!(result, 1493);
+    }
+
+    #[test]
+    fn test_pin_compute_vbr_stereo() {
+        let mode = &MODE_48000_960_120;
+        let analysis = AnalysisInfo::default();
+        let result = compute_vbr(
+            mode,
+            &analysis,
+            6400,               // base_target
+            3,                  // lm
+            64000,              // bitrate
+            0,                  // last_coded_bands
+            2,                  // c (stereo)
+            10,                 // intensity
+            1,                  // constrained_vbr
+            128,                // stereo_saving (Q8)
+            0,                  // tot_boost
+            0,                  // tf_estimate
+            0,                  // pitch_change
+            qconst16(0.5, 15), // max_depth
+            0,                  // lfe
+            false,              // has_surround_mask
+            0,                  // surround_masking
+            0,                  // temporal_vbr
+        );
+        // Stereo with intensity=10, constrained VBR, stereo savings
+        assert_eq!(result, 3068);
+    }
+
+    #[test]
+    fn test_pin_transient_analysis_silence() {
+        // Silence input: all zeros, len=960, mono
+        let input = vec![0i32; 960];
+        let mut tf_estimate: i32 = 0;
+        let mut tf_chan: i32 = 0;
+        let mut weak_transient = false;
+
+        let is_transient = transient_analysis(
+            &input, 960, 1,
+            &mut tf_estimate, &mut tf_chan,
+            false, &mut weak_transient,
+            0, 0,
+        );
+        // Silence: no transient, all outputs zero
+        assert_eq!(is_transient, false);
+        assert_eq!(tf_estimate, 0);
+        assert_eq!(tf_chan, 0);
+        assert_eq!(weak_transient, false);
+    }
+
+    #[test]
+    fn test_pin_transient_analysis_impulse() {
+        // Sharp impulse: first 48 samples = 1 << SIG_SHIFT, rest = 0
+        let mut input = vec![0i32; 960];
+        for i in 0..48 {
+            input[i] = 1 << SIG_SHIFT;
+        }
+        let mut tf_estimate: i32 = 0;
+        let mut tf_chan: i32 = 0;
+        let mut weak_transient = false;
+
+        let is_transient = transient_analysis(
+            &input, 960, 1,
+            &mut tf_estimate, &mut tf_chan,
+            false, &mut weak_transient,
+            0, 0,
+        );
+        // Sharp impulse: detected as transient
+        assert_eq!(is_transient, true);
+        assert_eq!(tf_estimate, 16262);
+        assert_eq!(tf_chan, 0);
+        assert_eq!(weak_transient, false);
+    }
+
+    #[test]
+    fn test_pin_tone_lpc_degenerate() {
+        // Test 1: constant signal -> degenerate (returns true = fail)
+        let constant_signal: Vec<i16> = vec![1000; 200];
+        let mut lpc = [0i32; 2];
+        let fail = tone_lpc(&constant_signal, 200, 10, &mut lpc);
+        assert_eq!(fail, true);   // degenerate: den <= shr32(r00*r11, 10)
+        assert_eq!(lpc[0], 0);   // LPC untouched on failure
+        assert_eq!(lpc[1], 0);
+
+        // Test 2: cosine signal (period=30, delay=5) -> non-degenerate
+        let mut cosine_signal: Vec<i16> = vec![0; 200];
+        let period = 30.0f64;
+        for i in 0..200 {
+            cosine_signal[i] =
+                (1000.0 * (2.0 * std::f64::consts::PI * i as f64 / period).cos()) as i16;
+        }
+        let mut lpc2 = [0i32; 2];
+        let fail2 = tone_lpc(&cosine_signal, 200, 5, &mut lpc2);
+        assert_eq!(fail2, false);            // success
+        assert_eq!(lpc2[0], 536870782);      // near Q29(1.0) = 536870912
+        assert_eq!(lpc2[1], -536870783);     // near -Q29(1.0)
+
+        // Test 3: cosine (period=40, delay=7) -> non-degenerate, different LPC
+        let mut cosine3: Vec<i16> = vec![0; 200];
+        let period3 = 40.0f64;
+        for i in 0..200 {
+            cosine3[i] =
+                (1000.0 * (2.0 * std::f64::consts::PI * i as f64 / period3).cos()) as i16;
+        }
+        let mut lpc3 = [0i32; 2];
+        let fail3 = tone_lpc(&cosine3, 200, 7, &mut lpc3);
+        assert_eq!(fail3, false);
+        assert_eq!(lpc3[0], 487471184);
+        assert_eq!(lpc3[1], -536870452);
+    }
 }

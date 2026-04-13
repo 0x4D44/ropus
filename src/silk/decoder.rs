@@ -4333,4 +4333,278 @@ mod tests {
         assert_eq!(compute_exc_mask(CNG_BUF_MASK_MAX), CNG_BUF_MASK_MAX);
         assert_eq!(compute_exc_mask(CNG_BUF_MASK_MAX + 1), CNG_BUF_MASK_MAX);
     }
+
+    // =======================================================================
+    // Mutation-killing pinning tests
+    // =======================================================================
+
+    #[test]
+    fn test_pin_decoder_set_fs_exact() {
+        // 8kHz configuration: pins exact internal state values
+        let mut dec = SilkDecoderState::new();
+        dec.nb_subfr = MAX_NB_SUBFR;
+        silk_decoder_set_fs(&mut dec, 8, 48_000);
+        assert_eq!(dec.frame_length, 160);
+        assert_eq!(dec.subfr_length, 40);
+        assert_eq!(dec.lpc_order, 10);
+        assert_eq!(dec.ltp_mem_length, 160);
+        assert_eq!(dec.lag_prev, 100);
+        assert_eq!(dec.last_gain_index, 10);
+        assert!(dec.first_frame_after_reset);
+        assert_eq!(dec.resampler_state.resampler_function, USE_SILK_RESAMPLER_IIR_FIR);
+        assert_eq!(dec.resampler_state.fs_in_khz, 8);
+        assert_eq!(dec.resampler_state.fs_out_khz, 48);
+        assert_eq!(dec.resampler_state.batch_size, 80);
+        assert_eq!(dec.resampler_state.input_delay, 0);
+        assert_eq!(dec.resampler_state.inv_ratio_q16, 21846);
+
+        // 12kHz configuration
+        let mut dec = SilkDecoderState::new();
+        dec.nb_subfr = MAX_NB_SUBFR;
+        silk_decoder_set_fs(&mut dec, 12, 48_000);
+        assert_eq!(dec.frame_length, 240);
+        assert_eq!(dec.subfr_length, 60);
+        assert_eq!(dec.lpc_order, 10);
+        assert_eq!(dec.ltp_mem_length, 240);
+        assert_eq!(dec.resampler_state.resampler_function, USE_SILK_RESAMPLER_IIR_FIR);
+        assert_eq!(dec.resampler_state.fs_in_khz, 12);
+        assert_eq!(dec.resampler_state.fs_out_khz, 48);
+        assert_eq!(dec.resampler_state.batch_size, 120);
+        assert_eq!(dec.resampler_state.input_delay, 4);
+        assert_eq!(dec.resampler_state.inv_ratio_q16, 32768);
+
+        // 16kHz configuration
+        let mut dec = SilkDecoderState::new();
+        dec.nb_subfr = MAX_NB_SUBFR;
+        silk_decoder_set_fs(&mut dec, 16, 48_000);
+        assert_eq!(dec.frame_length, 320);
+        assert_eq!(dec.subfr_length, 80);
+        assert_eq!(dec.lpc_order, 16);
+        assert_eq!(dec.ltp_mem_length, 320);
+        assert_eq!(dec.resampler_state.resampler_function, USE_SILK_RESAMPLER_IIR_FIR);
+        assert_eq!(dec.resampler_state.fs_in_khz, 16);
+        assert_eq!(dec.resampler_state.fs_out_khz, 48);
+        assert_eq!(dec.resampler_state.batch_size, 160);
+        assert_eq!(dec.resampler_state.input_delay, 7);
+        assert_eq!(dec.resampler_state.inv_ratio_q16, 43691);
+    }
+
+    #[test]
+    fn test_pin_silk_plc_rand_offset() {
+        // nb_subfr < 2 => fallback path: max(0, 4*40 - 128) = 32
+        let exc = [0i32; 640];
+        let prev_gain = [1i32 << 10, 1i32 << 10];
+        assert_eq!(silk_plc_rand_offset(&exc, &prev_gain, 40, 1, 4, 40), 32);
+
+        // All-zero excitation => energies equal => second-subframe path
+        assert_eq!(silk_plc_rand_offset(&exc, &prev_gain, 40, 4, 4, 40), 32);
+
+        // Last subframe (idx 3) has high energy, second-to-last (idx 2) is zero
+        // => energy1 < energy2 => first-lower path => max(0, 3*40-128) = 0
+        let mut exc2 = [0i32; 640];
+        for i in 120..160 {
+            exc2[i] = 1 << 20;
+        }
+        assert_eq!(silk_plc_rand_offset(&exc2, &prev_gain, 40, 4, 4, 40), 0);
+
+        // Second-to-last subframe (idx 2) has high energy, last (idx 3) is zero
+        // => energy1 > energy2 (not <) => second-lower path => max(0, 4*40-128) = 32
+        let mut exc3 = [0i32; 640];
+        for i in 80..120 {
+            exc3[i] = 1 << 20;
+        }
+        assert_eq!(silk_plc_rand_offset(&exc3, &prev_gain, 40, 4, 4, 40), 32);
+    }
+
+    #[test]
+    fn test_pin_resampler_up2_hq_impulse() {
+        let mut state = [0i32; SILK_RESAMPLER_MAX_IIR_ORDER];
+        let input = [16384i16, 0, 0, 0, 0, 0, 0, 0];
+        let mut out = [0i16; 16];
+        silk_resampler_private_up2_hq(&mut state, &mut out, &input, 8);
+        assert_eq!(
+            out,
+            [60, 571, 2544, 6818, 11778, 12605, 5950, -3750, -6942, -1029, 4927, 2681, -3119, -3000, 1901, 2830]
+        );
+        assert_eq!(state, [0, 3315, -2903886, -3, 112836, -17247130]);
+    }
+
+    #[test]
+    fn test_pin_resampler_down_fir_impulse() {
+        let mut rs = SilkResamplerState::default();
+        silk_resampler_init(&mut rs, 48_000, 8_000, false);
+
+        let mut input = vec![0i16; 480];
+        input[0] = 16384;
+        let mut out = vec![0i16; 80];
+
+        silk_resampler_private_down_fir(&mut rs, &mut out, &input, 480);
+        assert_eq!(
+            &out[..16],
+            &[0, -11, 114, 2589, 163, -263, 288, -255, 223, -193, 166, -142, 120, -102, 85, -71]
+        );
+    }
+
+    #[test]
+    fn test_pin_stereo_ms_to_lr_exact() {
+        let mut state = StereoDecState::default();
+        state.s_mid = [100, 200];
+        state.s_side = [50, 75];
+        state.pred_prev_q13 = [1000, -500];
+
+        let frame_length = 16usize;
+        let mut x1 = vec![0i16; frame_length + 2];
+        let mut x2 = vec![0i16; frame_length + 2];
+        for i in 0..frame_length + 2 {
+            x1[i] = (500 + i as i16 * 10) as i16;
+            x2[i] = (100 - i as i16 * 5) as i16;
+        }
+        let pred_q13 = [2000i16, -1000];
+
+        silk_stereo_ms_to_lr(&mut state, &mut x1, &mut x2, &pred_q13, 8, frame_length);
+
+        // Interpolation region (samples 1..=8): predictors ramping from prev to current
+        assert_eq!(&x1[1..=8], &[294, 633, 649, 655, 661, 667, 674, 680]);
+        assert_eq!(&x2[1..=8], &[106, 407, 411, 425, 439, 453, 466, 480]);
+        // Steady state region (samples 9..=16): predictors at final values
+        assert_eq!(&x1[9..=16], &[686, 692, 699, 705, 711, 718, 724, 731]);
+        assert_eq!(&x2[9..=16], &[494, 508, 521, 535, 549, 562, 576, 589]);
+        // State updated
+        assert_eq!(state.pred_prev_q13, [2000, -1000]);
+        assert_eq!(state.s_mid, [660, 670]);
+        assert_eq!(state.s_side, [20, 15]);
+    }
+
+    #[test]
+    fn test_pin_silk_cng_reset_values() {
+        // NB/MB: lpc_order=10 => step = 32767/11 = 2978
+        let mut dec = SilkDecoderState::new();
+        dec.lpc_order = 10;
+        silk_cng_reset(&mut dec);
+        assert_eq!(
+            &dec.s_cng.cng_smth_nlsf_q15[..10],
+            &[2978, 5956, 8934, 11912, 14890, 17868, 20846, 23824, 26802, 29780]
+        );
+        assert_eq!(dec.s_cng.rand_seed, 3176576);
+        assert_eq!(dec.s_cng.cng_smth_gain_q16, 0);
+        // Excitation buffer and synth state should be zeroed
+        assert!(dec.s_cng.cng_exc_buf_q14.iter().all(|&x| x == 0));
+        assert!(dec.s_cng.cng_synth_state.iter().all(|&x| x == 0));
+
+        // WB: lpc_order=16 => step = 32767/17 = 1927
+        let mut dec2 = SilkDecoderState::new();
+        dec2.lpc_order = 16;
+        silk_cng_reset(&mut dec2);
+        assert_eq!(
+            &dec2.s_cng.cng_smth_nlsf_q15[..16],
+            &[1927, 3854, 5781, 7708, 9635, 11562, 13489, 15416, 17343, 19270, 21197, 23124, 25051, 26978, 28905, 30832]
+        );
+    }
+
+    #[test]
+    fn test_pin_decode_signs_exact() {
+        // Encode sign bits for pulses [3, 0, 1, 2, 0, 0, 1, 0, ...] in one shell block
+        // signal_type=TYPE_VOICED(1), quant_offset_type=0
+        // icdf table index = 7*(0 + 2*1) = 14; sum_pulses=7 => icdf_idx=min(7,6)=6
+        let sign_icdf_idx = 7 * (0 + 2 * 1);
+        let icdf_val = SILK_SIGN_ICDF[sign_icdf_idx + 6];
+        let sign_icdf: [u8; 2] = [icdf_val, 0];
+
+        // Encode 4 sign bits: negative, positive, negative, positive
+        let symbols: Vec<(u32, &[u8])> = vec![
+            (0u32, sign_icdf.as_slice()),
+            (1u32, sign_icdf.as_slice()),
+            (0u32, sign_icdf.as_slice()),
+            (1u32, sign_icdf.as_slice()),
+        ];
+        let buf = encode_icdf_stream(&symbols);
+        let mut rc = RangeDecoder::new(&buf);
+
+        let mut pulses = [0i16; 16];
+        pulses[0] = 3;
+        pulses[2] = 1;
+        pulses[3] = 2;
+        pulses[6] = 1;
+
+        let sum_pulses = [7i32];
+        silk_decode_signs(&mut rc, &mut pulses, 16, TYPE_VOICED, 0, &sum_pulses);
+
+        assert_eq!(
+            pulses,
+            [-3, 0, 1, 2, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn test_pin_stereo_decode_pred_exact() {
+        // Encode: joint_index=12, then ch0: uniform3=1, uniform5=2, ch1: uniform3=0, uniform5=3
+        let symbols = [
+            (12u32, SILK_STEREO_PRED_JOINT_ICDF.as_slice()),
+            (1u32, SILK_UNIFORM3_ICDF.as_slice()),
+            (2u32, SILK_UNIFORM5_ICDF.as_slice()),
+            (0u32, SILK_UNIFORM3_ICDF.as_slice()),
+            (3u32, SILK_UNIFORM5_ICDF.as_slice()),
+        ];
+        let buf = encode_icdf_stream(&symbols);
+        let mut rc = RangeDecoder::new(&buf);
+        let mut pred_q13 = [0i16; 2];
+        silk_stereo_decode_pred(&mut rc, &mut pred_q13);
+        assert_eq!(pred_q13, [1459, -1459]);
+    }
+
+    #[test]
+    fn test_pin_decode_pulses_exact() {
+        // Feed a fixed byte sequence to the range decoder and pin the deterministic
+        // output of silk_decode_pulses. This exercises: rate level decoding, shell
+        // block count, shell coder tree splits, and sign assignment.
+        let buf = [0xA5u8, 0x3C, 0x7E, 0x11, 0x55, 0xD0, 0x88, 0x42,
+                   0xFF, 0x01, 0x9B, 0xC3, 0x67, 0xAA, 0xDE, 0x0F,
+                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let mut rc = RangeDecoder::new(&buf);
+        let mut pulses = [0i16; 16];
+        silk_decode_pulses(&mut rc, &mut pulses, 0, 0, 16);
+        assert_eq!(
+            pulses,
+            [-3, 0, -1, 0, 0, 0, 0, 0, 0, 0, -1, -2, 0, 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn test_pin_decode_indices_exact() {
+        // Feed a fixed byte buffer and pin all decoded index fields.
+        // Configured for 8kHz NB, 4 subframes, non-VAD, independent coding.
+        let buf = [0x80u8, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01,
+                   0xAA, 0x55, 0xCC, 0x33, 0xEE, 0x77, 0xBB, 0xDD,
+                   0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+                   0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00,
+                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let mut rc = RangeDecoder::new(&buf);
+        let mut dec = SilkDecoderState::new();
+        dec.nb_subfr = MAX_NB_SUBFR;
+        silk_decoder_set_fs(&mut dec, 8, 48_000);
+        dec.vad_flags = [false; MAX_FRAMES_PER_PACKET];
+
+        silk_decode_indices(&mut dec, &mut rc, 0, false, CODE_INDEPENDENTLY);
+
+        let idx = &dec.indices;
+        // signal_type=0 (inactive), quant_offset_type=1
+        assert_eq!(idx.signal_type, 0);
+        assert_eq!(idx.quant_offset_type, 1);
+        // Gain indices: absolute first (MSB+LSB), then 3 deltas
+        assert_eq!(idx.gains_indices[..MAX_NB_SUBFR], [13, 7, 4, 4]);
+        // NLSF codebook index and residuals
+        assert_eq!(idx.nlsf_indices[0], 6);
+        assert_eq!(&idx.nlsf_indices[1..=10], &[0, 0, 0, 0, 0, 0, 0, -1, 0, 0]);
+        // Interpolation factor (4 subframes)
+        assert_eq!(idx.nlsf_interp_coef_q2, 4);
+        // No pitch (unvoiced): lag_index and contour stay at 0
+        assert_eq!(idx.lag_index, 0);
+        assert_eq!(idx.contour_index, 0);
+        // Random seed
+        assert_eq!(idx.seed, 0);
+    }
 }

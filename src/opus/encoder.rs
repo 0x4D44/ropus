@@ -2961,6 +2961,11 @@ impl OpusEncoder {
         self.prev_mode
     }
 
+    /// Access the internal SILK encoder state (for diagnostic/debugging use).
+    pub fn silk_encoder(&self) -> Option<&SilkEncoder> {
+        self.silk_enc.as_ref()
+    }
+
     /// Return key SILK encoder internal state for comparison testing.
     /// Returns None if no SILK encoder is allocated.
     pub fn get_silk_state(&self) -> Option<SilkEncoderSnapshot> {
@@ -5023,5 +5028,360 @@ mod tests {
             OPUS_OK
         );
         assert_eq!(enc.get_expert_frame_duration(), OPUS_FRAMESIZE_120_MS);
+    }
+
+    // =========================================================================
+    // Mutation-killing pinning tests — exact value assertions for helpers
+    // =========================================================================
+
+    #[test]
+    fn test_pin_gen_toc_all_modes() {
+        // Pin exact TOC bytes for all 3 modes x representative frame sizes x bandwidths x channels.
+        // gen_toc(mode, framerate, bandwidth, channels) -> u8
+
+        // SILK_ONLY: toc = ((bw - NB) << 5) | ((period - 2) << 3) | stereo
+        // framerate=50 -> period=3, framerate=100 -> period=2, framerate=25 -> period=4
+
+        // SILK NB mono 20ms (fr=50, period=3)
+        assert_eq!(gen_toc(MODE_SILK_ONLY, 50, OPUS_BANDWIDTH_NARROWBAND, 1), 0x08);
+        // SILK NB stereo 20ms
+        assert_eq!(gen_toc(MODE_SILK_ONLY, 50, OPUS_BANDWIDTH_NARROWBAND, 2), 0x0C);
+        // SILK WB mono 10ms (fr=100, period=2)
+        assert_eq!(gen_toc(MODE_SILK_ONLY, 100, OPUS_BANDWIDTH_WIDEBAND, 1), 0x40);
+        // SILK WB stereo 10ms
+        assert_eq!(gen_toc(MODE_SILK_ONLY, 100, OPUS_BANDWIDTH_WIDEBAND, 2), 0x44);
+        // SILK MB mono 20ms (fr=50, period=3)
+        assert_eq!(gen_toc(MODE_SILK_ONLY, 50, OPUS_BANDWIDTH_MEDIUMBAND, 1), 0x28);
+        // SILK NB mono 40ms (fr=25, period=4)
+        assert_eq!(gen_toc(MODE_SILK_ONLY, 25, OPUS_BANDWIDTH_NARROWBAND, 1), 0x10);
+        // SILK NB mono ~60ms (fr=16, period=5)
+        assert_eq!(gen_toc(MODE_SILK_ONLY, 16, OPUS_BANDWIDTH_NARROWBAND, 1), 0x18);
+
+        // CELT_ONLY: toc = 0x80 | (max(0, bw - MB) << 5) | (period << 3) | stereo
+        // CELT NB mono 20ms (bw=NB, tmp=NB-MB<0 -> 0, fr=50 -> period=3) = 0x98
+        assert_eq!(gen_toc(MODE_CELT_ONLY, 50, OPUS_BANDWIDTH_NARROWBAND, 1), 0x98);
+        // CELT MB mono 20ms (tmp=0) = 0x98
+        assert_eq!(gen_toc(MODE_CELT_ONLY, 50, OPUS_BANDWIDTH_MEDIUMBAND, 1), 0x98);
+        // CELT WB mono 20ms (tmp=1) = 0xB8
+        assert_eq!(gen_toc(MODE_CELT_ONLY, 50, OPUS_BANDWIDTH_WIDEBAND, 1), 0xB8);
+        // CELT FB stereo 10ms (tmp=3, fr=100 -> period=2) = 0xF4
+        assert_eq!(gen_toc(MODE_CELT_ONLY, 100, OPUS_BANDWIDTH_FULLBAND, 2), 0xF4);
+        // CELT SWB mono 5ms (fr=200 -> period=1) = 0xC8
+        assert_eq!(gen_toc(MODE_CELT_ONLY, 200, OPUS_BANDWIDTH_SUPERWIDEBAND, 1), 0xC8);
+        // CELT FB mono 2.5ms (fr=400 -> period=0) = 0xE0
+        assert_eq!(gen_toc(MODE_CELT_ONLY, 400, OPUS_BANDWIDTH_FULLBAND, 1), 0xE0);
+
+        // HYBRID: toc = 0x60 | ((bw - SWB) << 4) | ((period - 2) << 3) | stereo
+        // Hybrid SWB mono 20ms (fr=50 -> period=3) = 0x68
+        assert_eq!(gen_toc(MODE_HYBRID, 50, OPUS_BANDWIDTH_SUPERWIDEBAND, 1), 0x68);
+        // Hybrid FB stereo 20ms = 0x7C
+        assert_eq!(gen_toc(MODE_HYBRID, 50, OPUS_BANDWIDTH_FULLBAND, 2), 0x7C);
+        // Hybrid SWB stereo 10ms (fr=100 -> period=2) = 0x64
+        assert_eq!(gen_toc(MODE_HYBRID, 100, OPUS_BANDWIDTH_SUPERWIDEBAND, 2), 0x64);
+        // Hybrid FB mono 10ms = 0x70
+        assert_eq!(gen_toc(MODE_HYBRID, 100, OPUS_BANDWIDTH_FULLBAND, 1), 0x70);
+    }
+
+    #[test]
+    fn test_pin_compute_equiv_rate_sweep() {
+        // Pin exact output for a sweep of configs covering all branches.
+        // compute_equiv_rate(bitrate, channels, frame_rate, vbr, mode, complexity, loss)
+
+        // Base: (32k, 1ch, 50fps, VBR, SILK, complexity=10, loss=0)
+        assert_eq!(compute_equiv_rate(32000, 1, 50, 1, MODE_SILK_ONLY, 10, 0), 32000);
+        // (64k, 2ch, 50fps, VBR, SILK, complexity=10, loss=0)
+        assert_eq!(compute_equiv_rate(64000, 2, 50, 1, MODE_SILK_ONLY, 10, 0), 64000);
+        // (128k, 2ch, 100fps, VBR, CELT, complexity=10, loss=0) -- frame_rate>50 branch
+        assert_eq!(compute_equiv_rate(128000, 2, 100, 1, MODE_CELT_ONLY, 10, 0), 123000);
+        // (16k, 1ch, 50fps, VBR, SILK, complexity=10, loss=5) -- loss penalty
+        assert_eq!(compute_equiv_rate(16000, 1, 50, 1, MODE_SILK_ONLY, 10, 5), 14000);
+        // (64k, 1ch, 50fps, CBR, SILK, complexity=1, loss=10) -- CBR + low complexity + loss
+        assert_eq!(compute_equiv_rate(64000, 1, 50, 0, MODE_SILK_ONLY, 1, 10), 36607);
+        // (64k, 1ch, 50fps, VBR, CELT, complexity=3, loss=0) -- CELT low complexity
+        assert_eq!(compute_equiv_rate(64000, 1, 50, 1, MODE_CELT_ONLY, 3, 0), 53568);
+        // Unknown mode (12345): moderate loss penalty
+        assert_eq!(compute_equiv_rate(64000, 1, 50, 1, 12345, 10, 10), 59429);
+        // HYBRID has same path as SILK
+        assert_eq!(compute_equiv_rate(64000, 1, 50, 1, MODE_HYBRID, 10, 0), 64000);
+        // HYBRID with loss=25
+        assert_eq!(compute_equiv_rate(64000, 1, 50, 1, MODE_HYBRID, 10, 25), 54000);
+    }
+
+    #[test]
+    fn test_pin_decide_fec_exact() {
+        // Pin exact FEC decisions for various loss rates and rates.
+
+        // Loss=0 always returns 0
+        let mut bw = OPUS_BANDWIDTH_WIDEBAND;
+        assert_eq!(decide_fec(1, 0, 0, MODE_SILK_ONLY, &mut bw, 100000), 0);
+        assert_eq!(bw, OPUS_BANDWIDTH_WIDEBAND);
+
+        // Loss=5, WB, last_fec=0, rate=20000: rate below scaled threshold -> 0
+        let mut bw = OPUS_BANDWIDTH_WIDEBAND;
+        assert_eq!(decide_fec(1, 5, 0, MODE_SILK_ONLY, &mut bw, 20000), 0);
+        assert_eq!(bw, OPUS_BANDWIDTH_WIDEBAND);
+
+        // Loss=10, WB, last_fec=1, rate=18000 (hysteresis keeps FEC)
+        let mut bw = OPUS_BANDWIDTH_WIDEBAND;
+        assert_eq!(decide_fec(1, 10, 1, MODE_SILK_ONLY, &mut bw, 18000), 1);
+        assert_eq!(bw, OPUS_BANDWIDTH_WIDEBAND);
+
+        // Loss=25, NB, last_fec=0, rate=20000: NB threshold exceeded -> 1
+        let mut bw = OPUS_BANDWIDTH_NARROWBAND;
+        assert_eq!(decide_fec(1, 25, 0, MODE_SILK_ONLY, &mut bw, 20000), 1);
+        assert_eq!(bw, OPUS_BANDWIDTH_NARROWBAND);
+
+        // Loss=50, FB, high rate -> FEC enabled, bandwidth preserved
+        let mut bw = OPUS_BANDWIDTH_FULLBAND;
+        assert_eq!(decide_fec(1, 50, 0, MODE_SILK_ONLY, &mut bw, 100000), 1);
+        assert_eq!(bw, OPUS_BANDWIDTH_FULLBAND);
+
+        // Loss=5, low rate -- loss<=5 returns 0 on walkdown
+        let mut bw = OPUS_BANDWIDTH_WIDEBAND;
+        assert_eq!(decide_fec(1, 5, 0, MODE_SILK_ONLY, &mut bw, 5000), 0);
+        assert_eq!(bw, OPUS_BANDWIDTH_WIDEBAND);
+    }
+
+    #[test]
+    fn test_pin_stereo_fade_exact() {
+        let window = crate::celt::modes::MODE_48000_960_120.window;
+
+        // Case 1: known stereo signal, g1=Q15ONE, g2=Q15ONE/2, fs=48000
+        // overlap48=120, at 48kHz inc=1, overlap=120. Need at least 130 stereo samples.
+        let frame_size = 150;
+        let mut pcm = vec![0i16; frame_size * 2];
+        for i in 0..frame_size {
+            pcm[i * 2] = 1000;
+            pcm[i * 2 + 1] = -1000;
+        }
+        stereo_fade(&mut pcm, Q15ONE, Q15ONE / 2, 120, frame_size as i32, 2, window, 48000);
+        // Overlap region fades from g1 to g2; post-overlap uses g2 constantly.
+        // Gains are inverted inside: g1'=Q15ONE-Q15ONE=0, g2'=Q15ONE-Q15ONE/2.
+        // At i=0: window value near zero, so almost no width reduction.
+        // At i=119 (end of overlap): nearly full g2 applied.
+        // At i=120+ (post-overlap): constant g2 applied.
+        assert_eq!((pcm[0], pcm[1]), (1000, -1000));
+        assert_eq!((pcm[2], pcm[3]), (1000, -1000));
+        assert_eq!((pcm[20], pcm[21]), (1000, -1000));
+        assert_eq!((pcm[120], pcm[121]), (745, -745));
+        assert_eq!((pcm[238], pcm[239]), (501, -501));
+        assert_eq!((pcm[240], pcm[241]), (500, -500));
+        assert_eq!((pcm[298], pcm[299]), (500, -500));
+
+        // Case 2: g1=0 -> g2=Q15ONE (transition from full width to no reduction)
+        // At fs=8000, inc=6, overlap=120/6=20. frame_size=30.
+        // Inverted: g1' = Q15ONE-0 = Q15ONE, g2' = Q15ONE-Q15ONE = 0.
+        // In overlap: interpolation from Q15ONE (full reduction) to 0 (no reduction).
+        // Post-overlap: g2'=0 means no width reduction.
+        let frame_size2 = 30;
+        let mut pcm2 = vec![0i16; frame_size2 * 2];
+        for i in 0..frame_size2 {
+            pcm2[i * 2] = 5000;
+            pcm2[i * 2 + 1] = -3000;
+        }
+        stereo_fade(&mut pcm2, 0, Q15ONE, 120, frame_size2 as i32, 2, window, 8000);
+        // Overlap region shows gradual transition from full reduction to none.
+        assert_eq!((pcm2[0], pcm2[1]), (1001, 999));     // near start: mostly reduced
+        assert_eq!((pcm2[10], pcm2[11]), (1222, 778));    // early overlap
+        assert_eq!((pcm2[20], pcm2[21]), (3042, -1042));  // mid overlap
+        assert_eq!((pcm2[30], pcm2[31]), (4805, -2805));  // late overlap
+        assert_eq!((pcm2[38], pcm2[39]), (5000, -3000));  // end of overlap: no reduction
+        assert_eq!((pcm2[40], pcm2[41]), (5000, -3000));  // post-overlap: no reduction
+        assert_eq!((pcm2[58], pcm2[59]), (5000, -3000));
+    }
+
+    #[test]
+    fn test_pin_gain_fade_exact() {
+        let window = crate::celt::modes::MODE_48000_960_120.window;
+
+        // Case 1: mono, g1=0, g2=Q15ONE (fade in), fs=48000
+        // overlap = overlap48 * fs / 48000 = 120 * 48000 / 48000 = 120. Need 130+ samples.
+        let frame_size = 150;
+        let mut pcm = vec![10000i16; frame_size];
+        gain_fade(&mut pcm, 0, Q15ONE, 120, frame_size as i32, 1, window, 48000);
+        // In overlap region (0..120), gain fades from g1=0 to g2=Q15ONE.
+        // After overlap (120..150), g2=Q15ONE so no change (g2==Q15ONE branch skips).
+        assert_eq!(pcm[0], 0);
+        assert_eq!(pcm[1], 0);
+        assert_eq!(pcm[10], 8);
+        assert_eq!(pcm[60], 5102);
+        assert_eq!(pcm[119], 9999);
+        assert_eq!(pcm[120], 10000);
+        assert_eq!(pcm[149], 10000);
+
+        // Case 2: stereo, g1=Q15ONE, g2=Q15ONE/2, fs=8000
+        // overlap = 120 * 8000 / 48000 = 20. inc = 48000/8000 = 6.
+        let frame_size2 = 30;
+        let mut pcm2 = vec![0i16; frame_size2 * 2];
+        for i in 0..frame_size2 {
+            pcm2[i * 2] = 8000;
+            pcm2[i * 2 + 1] = -4000;
+        }
+        gain_fade(&mut pcm2, Q15ONE, Q15ONE / 2, 120, frame_size2 as i32, 2, window, 8000);
+        // Fade from g1=Q15ONE to g2=Q15ONE/2 over 20 samples, then constant Q15ONE/2.
+        assert_eq!((pcm2[0], pcm2[1]), (7999, -4000));
+        assert_eq!((pcm2[10], pcm2[11]), (7778, -3890));
+        assert_eq!((pcm2[20], pcm2[21]), (5958, -2980));
+        assert_eq!((pcm2[38], pcm2[39]), (3999, -2000));
+        assert_eq!((pcm2[40], pcm2[41]), (3999, -2000));
+        assert_eq!((pcm2[58], pcm2[59]), (3999, -2000));
+    }
+
+    #[test]
+    fn test_pin_dc_reject_exact() {
+        // dc_reject(input, cutoff_hz, output, hp_mem, len, channels, fs)
+        // Mono: constant DC=5000, 16 samples at 48kHz, cutoff=3Hz
+        let input = vec![5000i16; 16];
+        let mut output = vec![0i16; 16];
+        let mut hp_mem = [0i32; 4];
+        dc_reject(&input, 3, &mut output, &mut hp_mem, 16, 1, 48000);
+        #[rustfmt::skip]
+        let expected_mono: [i16; 16] = [
+            5000, 4998, 4995, 4993, 4990, 4988, 4985, 4983,
+            4981, 4978, 4976, 4973, 4971, 4968, 4966, 4964,
+        ];
+        assert_eq!(output, expected_mono);
+        assert_eq!(hp_mem, [637660, 0, 0, 0]);
+
+        // Stereo: left=3000, right=-2000, 8 stereo frames at 48kHz
+        let mut input_s = vec![0i16; 16];
+        for i in 0..8 {
+            input_s[i * 2] = 3000;
+            input_s[i * 2 + 1] = -2000;
+        }
+        let mut output_s = vec![0i16; 16];
+        let mut hp_mem_s = [0i32; 4];
+        dc_reject(&input_s, 3, &mut output_s, &mut hp_mem_s, 8, 2, 48000);
+        #[rustfmt::skip]
+        let expected_stereo: [i16; 16] = [
+            3000, -2000, 2999, -1999, 2997, -1998, 2996, -1997,
+            2994, -1996, 2993, -1995, 2991, -1994, 2990, -1993,
+        ];
+        assert_eq!(output_s, expected_stereo);
+        assert_eq!(hp_mem_s, [191672, 0, -127781, 0]);
+    }
+
+    #[test]
+    fn test_pin_compute_stereo_width_exact() {
+        // Correlated stereo (both channels identical) -> width = 0
+        let corr: Vec<i16> = (0..480).flat_map(|i| {
+            let v = ((i as f64 * 0.1).sin() * 10000.0) as i16;
+            vec![v, v]
+        }).collect();
+        let mut mem = StereoWidthState::default();
+        assert_eq!(compute_stereo_width(&corr, 480, 48000, &mut mem), 0);
+        assert_eq!(mem.xx, 23163419);
+        assert_eq!(mem.xy, 23155344);
+        assert_eq!(mem.yy, 23163419);
+        assert_eq!(mem.smoothed_width, 0);
+        assert_eq!(mem.max_follower, 0);
+
+        // Anti-correlated stereo (right = -left) -> xy clamped to 0
+        let anti: Vec<i16> = (0..480).flat_map(|i| {
+            let v = ((i as f64 * 0.1).sin() * 10000.0) as i16;
+            vec![v, -v]
+        }).collect();
+        let mut mem2 = StereoWidthState::default();
+        assert_eq!(compute_stereo_width(&anti, 480, 48000, &mut mem2), 0);
+        assert_eq!(mem2.xx, 23163419);
+        assert_eq!(mem2.xy, 0);
+        assert_eq!(mem2.yy, 23163419);
+        assert_eq!(mem2.smoothed_width, 0);
+        assert_eq!(mem2.max_follower, 0);
+
+        // Uncorrelated: left and right are different signals -> some width
+        let uncorr: Vec<i16> = (0..480).flat_map(|i| {
+            let l = ((i as f64 * 0.1).sin() * 10000.0) as i16;
+            let r = ((i as f64 * 0.17 + 1.0).sin() * 8000.0) as i16;
+            vec![l, r]
+        }).collect();
+        let mut mem3 = StereoWidthState::default();
+        assert_eq!(compute_stereo_width(&uncorr, 480, 48000, &mut mem3), 340);
+        assert_eq!(mem3.xx, 23163419);
+        assert_eq!(mem3.xy, 0);
+        assert_eq!(mem3.yy, 14993283);
+        assert_eq!(mem3.smoothed_width, 17);
+        assert_eq!(mem3.max_follower, 17);
+    }
+
+    #[test]
+    fn test_pin_compute_silk_rate_for_hybrid() {
+        // Pin exact SILK rate for various total bitrates and bandwidths.
+
+        // Low rate, SWB, 10ms, VBR, no FEC, mono: entry=1
+        assert_eq!(compute_silk_rate_for_hybrid(14000, OPUS_BANDWIDTH_SUPERWIDEBAND, false, 1, 0, 1), 12050);
+        // Mid rate, FB, 20ms, VBR, FEC, mono: entry=4
+        assert_eq!(compute_silk_rate_for_hybrid(24000, OPUS_BANDWIDTH_FULLBAND, true, 1, 1, 1), 21000);
+        // Mid rate, SWB, 20ms, CBR, no FEC, stereo: entry=2
+        assert_eq!(compute_silk_rate_for_hybrid(32000, OPUS_BANDWIDTH_SUPERWIDEBAND, true, 0, 0, 2), 26800);
+        // Very high rate (exceeds table), FB, 20ms, VBR, no FEC, mono: entry=2
+        assert_eq!(compute_silk_rate_for_hybrid(150000, OPUS_BANDWIDTH_FULLBAND, true, 1, 0, 1), 81000);
+        // Rate at table boundary: 12000, FB, 10ms, VBR, no FEC, mono
+        assert_eq!(compute_silk_rate_for_hybrid(12000, OPUS_BANDWIDTH_FULLBAND, false, 1, 0, 1), 10000);
+        // Very low rate: 8000
+        assert_eq!(compute_silk_rate_for_hybrid(8000, OPUS_BANDWIDTH_SUPERWIDEBAND, false, 1, 0, 1), 6966);
+    }
+
+    #[test]
+    fn test_pin_compute_redundancy_bytes_exact() {
+        // Pin exact redundancy byte count.
+        // Existing known values
+        assert_eq!(compute_redundancy_bytes(20, 4000, 50, 1), 0);
+        assert_eq!(compute_redundancy_bytes(1000, 64000, 50, 2), 74);
+        assert_eq!(compute_redundancy_bytes(2000, 1_000_000, 50, 2), 257);
+
+        // Additional configs pinned
+        assert_eq!(compute_redundancy_bytes(500, 32000, 50, 1), 38);
+        assert_eq!(compute_redundancy_bytes(200, 48000, 100, 2), 54);
+        assert_eq!(compute_redundancy_bytes(100, 24000, 50, 1), 24);
+        assert_eq!(compute_redundancy_bytes(50, 64000, 50, 1), 14);
+        assert_eq!(compute_redundancy_bytes(300, 96000, 50, 2), 67);
+    }
+
+    #[test]
+    fn test_pin_decide_dtx_mode_exact() {
+        // decide_dtx_mode(activity, nb_no_activity_ms_q1, frame_size_ms_q1) -> bool
+        // threshold = NB_SPEECH_FRAMES_BEFORE_DTX(10) * 20 * 2 = 400
+        // max_threshold = (10 + 20) * 20 * 2 = 1200
+
+        // Case 1: Ramp up from 0 with activity=0, frame_size=40 (20ms Q1)
+        let mut nb = 0i32;
+        for i in 0..10 {
+            let result = decide_dtx_mode(0, &mut nb, 40);
+            assert!(!result, "frame {i}: nb={nb} should be <= threshold");
+        }
+        assert_eq!(nb, 400);
+
+        // Frame 11: nb=440 > 400 and <= 1200 -> DTX=true
+        assert!(decide_dtx_mode(0, &mut nb, 40));
+        assert_eq!(nb, 440);
+
+        // Count DTX frames until max_threshold triggers a reset.
+        // From nb=440, adding 40 each time: 480, 520, ..., 1200 (all DTX=true since > 400 && <= 1200).
+        // Next: nb=1240 > 1200 -> DTX=false, nb reset to 400.
+        // That's (1200 - 440) / 40 = 19 DTX=true frames, plus 1 DTX=false frame.
+        let mut dtx_count = 0;
+        let prev_nb = nb;
+        for _ in 0..25 {
+            let r = decide_dtx_mode(0, &mut nb, 40);
+            if r { dtx_count += 1; }
+            if nb < prev_nb { break; } // reset detected
+        }
+        assert_eq!(nb, 400); // reset to threshold
+        assert_eq!(dtx_count, 19);
+
+        // Activity resets counter
+        let mut nb2 = 500i32;
+        assert!(!decide_dtx_mode(1, &mut nb2, 40));
+        assert_eq!(nb2, 0);
+
+        // Large frame size (60ms -> Q1=120)
+        let mut nb3 = 0i32;
+        for _ in 0..3 {
+            assert!(!decide_dtx_mode(0, &mut nb3, 120));
+        }
+        assert_eq!(nb3, 360);
+        assert!(decide_dtx_mode(0, &mut nb3, 120));
+        assert_eq!(nb3, 480);
     }
 }

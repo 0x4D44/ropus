@@ -2712,4 +2712,310 @@ mod tests {
         dec.set_phase_inversion_disabled(false);
         assert!(!dec.get_phase_inversion_disabled());
     }
+
+    // =======================================================================
+    // Mutation-killing pinning tests
+    // =======================================================================
+
+    // --- Priority 1: comb_filter ---
+
+    #[test]
+    fn test_pin_comb_filter_nonzero_gain() {
+        // g0=g1=16384 (0.5 Q15), t0=t1=40, tapset0=tapset1=0, n=120, overlap=4
+        let mode = &MODE_48000_960_120;
+        let t: usize = 40;
+        let buf_off: usize = t + 4; // need room for t+2 backward reads
+        let total = buf_off + 120 + 4; // extra room beyond n
+        let mut buf = vec![0i32; total];
+        // Place impulse at buf_off (position 0 of the processing region)
+        buf[buf_off] = 1_000_000;
+        // Also place something at buf_off - t so the comb filter sees it
+        buf[buf_off - t] = 500_000;
+
+        comb_filter(
+            &mut buf,
+            buf_off,
+            40,  // t0
+            40,  // t1
+            120, // n
+            16384, // g0
+            16384, // g1
+            0,   // tapset0
+            0,   // tapset1
+            mode.window,
+            4,   // overlap
+        );
+
+        // Pin first 10 output samples, around comb feedback at index 40, and last 5
+        assert_eq!(
+            &buf[buf_off..buf_off + 10],
+            &[1076659, 54259, 32408, -1, -1, -1, -1, -1, -1, -1]
+        );
+        // Samples around index 40 where the impulse feeds back through the comb
+        assert_eq!(
+            &buf[buf_off + 38..buf_off + 43],
+            &[69787, 120355, 173060, 128673, 80643]
+        );
+        assert_eq!(
+            &buf[buf_off + 115..buf_off + 120],
+            &[1484, 4625, 10085, 17192, 23406]
+        );
+    }
+
+    #[test]
+    fn test_pin_comb_filter_param_transition() {
+        // Different old/new params: t0=40, t1=50, g0=8192, g1=16384, tapset0=0, tapset1=1
+        let mode = &MODE_48000_960_120;
+        let t_max: usize = 50;
+        let buf_off: usize = t_max + 4;
+        let total = buf_off + 120 + 4;
+        let mut buf = vec![0i32; total];
+        // Place data at pitch-history positions
+        buf[buf_off - 40] = 1_000_000;
+        buf[buf_off - 50] = 800_000;
+        buf[buf_off] = 500_000;
+
+        comb_filter(
+            &mut buf,
+            buf_off,
+            40,    // t0
+            50,    // t1
+            120,   // n
+            8192,  // g0
+            16384, // g1
+            0,     // tapset0
+            1,     // tapset1
+            mode.window,
+            4,     // overlap
+        );
+
+        // Pin the overlap region (first 4 samples) and a few after
+        assert_eq!(
+            &buf[buf_off..buf_off + 8],
+            &[576626, 54226, 32376, -3, -1, -1, -1, -1]
+        );
+    }
+
+    #[test]
+    fn test_pin_comb_filter_zero_g0_nonzero_g1() {
+        // g0=0, g1=16384 — old gain is zero, new gain is nonzero
+        let mode = &MODE_48000_960_120;
+        let t: usize = 40;
+        let buf_off: usize = t + 4;
+        let total = buf_off + 120 + 4;
+        let mut buf = vec![0i32; total];
+        buf[buf_off - t] = 1_000_000;
+        buf[buf_off] = 500_000;
+
+        comb_filter(
+            &mut buf,
+            buf_off,
+            40,    // t0
+            40,    // t1
+            120,   // n
+            0,     // g0
+            16384, // g1
+            0,     // tapset0
+            0,     // tapset1
+            mode.window,
+            4,     // overlap
+        );
+
+        assert_eq!(
+            &buf[buf_off..buf_off + 10],
+            &[499997, -3, -3, -3, -1, -1, -1, -1, -1, -1]
+        );
+    }
+
+    #[test]
+    fn test_pin_comb_filter_constant_region() {
+        // n=240, overlap=4. Pin 5 samples from constant region (after overlap).
+        let mode = &MODE_48000_960_120;
+        let t: usize = 40;
+        let buf_off: usize = t + 4;
+        let total = buf_off + 240 + 4;
+        let mut buf = vec![0i32; total];
+        // Place periodic signal at pitch history
+        for i in 0..240 {
+            buf[buf_off + i - t] = ((i as i32) * 1000) % 50000;
+        }
+        buf[buf_off] = 100_000;
+
+        comb_filter(
+            &mut buf,
+            buf_off,
+            40,    // t0
+            40,    // t1
+            240,   // n
+            16384, // g0
+            16384, // g1
+            0,     // tapset0
+            0,     // tapset1
+            mode.window,
+            4,     // overlap
+        );
+
+        // Pin 5 samples from the constant region (indices 10..15 in processing window)
+        assert_eq!(
+            &buf[buf_off + 10..buf_off + 15],
+            &[4998, 6498, 7997, 9498, 10997]
+        );
+    }
+
+    // --- Priority 2: deemphasis ---
+
+    #[test]
+    fn test_pin_deemphasis_downsample_3() {
+        // downsample=3, single channel, 30 input samples -> 10 output
+        let coef: [i32; 4] = [qconst16(0.85, 15), 0, 0, 0];
+        let mut mem = [0i32; 2];
+        let input: Vec<i32> = (0..30).map(|i| (i + 1) * 4096).collect();
+        let inp_slices: [&[i32]; 1] = [&input];
+        let mut pcm = vec![0i16; 10];
+
+        deemphasis(&inp_slices, &mut pcm, 30, 1, 3, &coef, &mut mem, false);
+
+        assert_eq!(&pcm[..], &[1i16, 9, 21, 36, 53, 72, 91, 110, 130, 149]);
+        assert_eq!(mem, [565814, 0]);
+    }
+
+    #[test]
+    fn test_pin_deemphasis_fast_path_exact() {
+        // downsample=1, single channel, 20 input samples
+        let coef: [i32; 4] = [qconst16(0.85, 15), 0, 0, 0];
+        let mut mem = [0i32; 2];
+        let input: Vec<i32> = (0..20).map(|i| (i + 1) * 4096).collect();
+        let inp_slices: [&[i32]; 1] = [&input];
+        let mut pcm = vec![0i16; 20];
+
+        deemphasis(&inp_slices, &mut pcm, 20, 1, 1, &coef, &mut mem, false);
+
+        assert_eq!(
+            &pcm[..],
+            &[1i16, 3, 5, 9, 12, 16, 21, 26, 31, 36, 42, 48, 53, 59, 66, 72, 78, 84, 91, 97]
+        );
+        assert_eq!(mem, [337792, 0]);
+    }
+
+    #[test]
+    fn test_pin_deemphasis_accum_mode() {
+        // accum=true, pre-fill PCM with known values, verify output adds to existing
+        let coef: [i32; 4] = [qconst16(0.85, 15), 0, 0, 0];
+        let mut mem = [0i32; 2];
+        let input: Vec<i32> = (0..10).map(|i| (i + 1) * 4096).collect();
+        let inp_slices: [&[i32]; 1] = [&input];
+        let mut pcm = vec![100i16; 10];
+
+        deemphasis(&inp_slices, &mut pcm, 10, 1, 1, &coef, &mut mem, true);
+
+        assert_eq!(&pcm[..], &[101i16, 103, 105, 109, 112, 116, 121, 126, 131, 136]);
+    }
+
+    #[test]
+    fn test_pin_deemphasis_mem_state() {
+        // Verify mem[c] value after processing two batches
+        let coef: [i32; 4] = [qconst16(0.85, 15), 0, 0, 0];
+        let mut mem = [0i32; 2];
+        let input1: Vec<i32> = vec![8192; 10];
+        let inp1: [&[i32]; 1] = [&input1];
+        let mut pcm1 = vec![0i16; 10];
+
+        deemphasis(&inp1, &mut pcm1, 10, 1, 1, &coef, &mut mem, false);
+        let mem_after_batch1 = mem;
+
+        let input2: Vec<i32> = vec![4096; 10];
+        let inp2: [&[i32]; 1] = [&input2];
+        let mut pcm2 = vec![0i16; 10];
+
+        deemphasis(&inp2, &mut pcm2, 10, 1, 1, &coef, &mut mem, false);
+        let mem_after_batch2 = mem;
+
+        assert_eq!(mem_after_batch1, [37280, 0]);
+        assert_eq!(mem_after_batch2, [25979, 0]);
+        assert_eq!(&pcm2[..], &[10i16, 10, 9, 9, 8, 8, 8, 8, 8, 7]);
+    }
+
+    // --- Priority 3: tf_decode ---
+
+    #[test]
+    fn test_pin_tf_decode_lm0() {
+        // lm=0 (no tf_select_rsv), non-transient, start=0, end=8
+        // 0xE9 produces a mixed toggle pattern at lm=0
+        let data = [0xE9u8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let mut dec = RangeDecoder::new(&data);
+        let mut tf_res = [0i32; NB_EBANDS];
+
+        let tf_select = tf_decode(0, 8, false, &mut tf_res, 0, &mut dec);
+
+        assert_eq!(tf_select, 0);
+        assert_eq!(&tf_res[..8], &[0, -1, -1, -1, -1, -1, -1, -1]);
+    }
+
+    #[test]
+    fn test_pin_tf_decode_toggle_pattern() {
+        // lm=2, non-transient. 0xFF produces tf_select=1 and mixed output.
+        let data = [0xFFu8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let mut dec = RangeDecoder::new(&data);
+        let mut tf_res = [0i32; NB_EBANDS];
+
+        let tf_select = tf_decode(0, 8, false, &mut tf_res, 2, &mut dec);
+
+        assert_eq!(tf_select, 1);
+        assert_eq!(&tf_res[..8], &[-3, -3, -3, 0, 0, -3, -3, -3]);
+    }
+
+    #[test]
+    fn test_pin_tf_decode_transient() {
+        // is_transient=true, lm=2, multiple bands
+        let data = [0xFFu8, 0x00, 0xAA, 0x55, 0x12, 0x34, 0x56, 0x78];
+        let mut dec = RangeDecoder::new(&data);
+        let mut tf_res = [0i32; NB_EBANDS];
+
+        let tf_select = tf_decode(0, 6, true, &mut tf_res, 2, &mut dec);
+
+        assert_eq!(tf_select, 1);
+        assert_eq!(&tf_res[..6], &[-1, 1, 1, 1, 1, 1]);
+    }
+
+    // --- Priority 4: celt_synthesis ---
+
+    #[test]
+    fn test_pin_celt_synthesis_nonzero_input() {
+        let mode = &MODE_48000_960_120;
+        let n = mode.short_mdct_size; // 120 for lm=0
+        let buf_size = (DECODE_BUFFER_SIZE + mode.overlap) as usize;
+        let start = 0;
+        let eff_end = mode.nb_ebands;
+
+        let mut out = vec![0i32; buf_size];
+        // Nonzero frequency-domain values with moderate magnitude
+        let mut x = vec![0i32; n as usize];
+        for i in 0..n as usize {
+            x[i] = ((i as i32) + 1) * 1000;
+        }
+        // Band energies in Q24: use larger values to get meaningful output
+        let band_e = vec![gconst(10.0); mode.nb_ebands as usize];
+
+        celt_synthesis(
+            mode,
+            &mut x,
+            &mut out,
+            &[0],
+            &band_e,
+            start,
+            eff_end,
+            1, // c (stream channels)
+            1, // cc (output channels)
+            false,
+            0, // lm
+            1, // downsample
+            false, // silence
+        );
+
+        // Pin first 10 time-domain output samples from the synthesis region
+        assert_eq!(
+            &out[..10],
+            &[8, -128, 136, -189, -718, 2675, -4443, -13, 529, -2337]
+        );
+    }
 }

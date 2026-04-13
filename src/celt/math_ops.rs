@@ -1301,6 +1301,102 @@ mod tests {
         assert_eq!(result, -2_147_483_647);
     }
 
+    // ===================================================================
+    // Mutation-killing pinning tests: exact-value assertions for all
+    // numerical approximation functions.
+    // ===================================================================
+
+    #[test]
+    fn test_pin_rcp_exact() {
+        // celt_rcp: general reciprocal (Q15 in, Q16 out)
+        assert_eq!(celt_rcp(16384), 131068);
+        assert_eq!(celt_rcp(32767), 65536);
+        assert_eq!(celt_rcp(1000), 2147456);
+        assert_eq!(celt_rcp(100), 21474304);
+        assert_eq!(celt_rcp(8192), 262136);
+    }
+
+    #[test]
+    fn test_pin_rcp_norm16_exact() {
+        // celt_rcp_norm16: 16-bit reciprocal with Newton iterations
+        assert_eq!(celt_rcp_norm16(16384), 21845);
+        assert_eq!(celt_rcp_norm16(0), 32767);
+        assert_eq!(celt_rcp_norm16(32767), 16384);
+        assert_eq!(celt_rcp_norm16(8000), 26338);
+    }
+
+    #[test]
+    fn test_pin_rcp_norm32_exact() {
+        // celt_rcp_norm32: 32-bit Newton refinement
+        assert_eq!(celt_rcp_norm32(1073741824), 2147483645);   // 1/0.5 Q30
+        assert_eq!(celt_rcp_norm32(1610612736), 1431655765);   // 1/0.75 Q30
+        assert_eq!(celt_rcp_norm32(2000000000), 1152921505);
+    }
+
+    #[test]
+    fn test_pin_sqrt_exact() {
+        // celt_sqrt: minimax polynomial approximation
+        assert_eq!(celt_sqrt(1), 1);
+        assert_eq!(celt_sqrt(100), 10);
+        assert_eq!(celt_sqrt(16384), 128);
+        assert_eq!(celt_sqrt(1000000), 999);
+        assert_eq!(celt_sqrt(268435456), 16386);
+    }
+
+    #[test]
+    fn test_pin_sqrt32_exact() {
+        assert_eq!(celt_sqrt32(16384), 8388608);
+        assert_eq!(celt_sqrt32(1000000), 65535999);
+        assert_eq!(celt_sqrt32(1073741824), 2147483647);
+    }
+
+    #[test]
+    fn test_pin_cos_norm_exact() {
+        // Non-boundary points — catches polynomial coefficient mutations
+        assert_eq!(celt_cos_norm(100), 32767);
+        assert_eq!(celt_cos_norm(1000), 32730);
+        assert_eq!(celt_cos_norm(10000), 29075);
+        assert_eq!(celt_cos_norm(16384), 23171);
+        assert_eq!(celt_cos_norm(20000), 18827);
+        // Quadrant 2 (negative cosine values)
+        assert_eq!(celt_cos_norm(40000), -11134);
+        assert_eq!(celt_cos_norm(50000), -24093);
+    }
+
+    #[test]
+    fn test_pin_log2_exact() {
+        assert_eq!(celt_log2(1), -14336);
+        assert_eq!(celt_log2(16384), 0);       // log2(1.0 Q14) = 0
+        assert_eq!(celt_log2(32768), 1024);    // log2(2.0 Q14) = 1.0 Q10
+        assert_eq!(celt_log2(1000), -4131);
+        assert_eq!(celt_log2(50000), 1648);
+    }
+
+    #[test]
+    fn test_pin_exp2_exact() {
+        assert_eq!(celt_exp2(0), 65532);
+        assert_eq!(celt_exp2(1024), 131064);   // 2^1.0 Q16
+        assert_eq!(celt_exp2(-1024), 32766);   // 2^-1.0 Q16
+        assert_eq!(celt_exp2(500), 91928);
+        assert_eq!(celt_exp2(5120), 2097024);
+    }
+
+    #[test]
+    fn test_pin_frac_div32_exact() {
+        assert_eq!(frac_div32(500_000, 1_000_000), 1073741824);  // 0.5 Q31
+        assert_eq!(frac_div32(250_000, 1_000_000), 536870904);   // ~0.25 Q31
+        assert_eq!(frac_div32(333_333, 1_000_000), 715827160);   // ~1/3 Q31
+        assert_eq!(frac_div32(1, 1_000_000), 2144);              // tiny value
+    }
+
+    #[test]
+    fn test_pin_atan_norm_exact() {
+        // Non-boundary points — catches polynomial coefficient mutations
+        assert_eq!(celt_atan_norm(100_000_000), 63478876);
+        assert_eq!(celt_atan_norm(500_000_000), 297898588);
+        assert_eq!(celt_atan_norm(-500_000_000), -297898589);
+    }
+
     #[test]
     fn test_frac_div32_quarter() {
         // a/b = 0.25 → Q31 = 536870912

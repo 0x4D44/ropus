@@ -943,4 +943,588 @@ mod tests {
             );
         }
     }
+
+    // ===================================================================
+    // Pinning tests: assert exact output values to catch arithmetic
+    // mutations during mutation testing.
+    // ===================================================================
+
+    // --- get_pulses ---
+
+    #[test]
+    fn test_pin_rate_get_pulses_exact() {
+        // Pin the full mapping from cache index to pulse count (0..48).
+        let vals: Vec<i32> = (0..48).map(get_pulses).collect();
+        assert_eq!(
+            vals,
+            [
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 26,
+                28, 30, 32, 36, 40, 44, 48, 52, 56, 60, 64, 72, 80, 88, 96, 104, 112, 120, 128,
+                144, 160, 176, 192, 208, 224, 240,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_pin_rate_get_pulses_boundary() {
+        // Pin specific boundary values between linear and exponential ranges.
+        assert_eq!(get_pulses(7), 7); // last linear
+        assert_eq!(get_pulses(8), 8); // first exponential: (8+0)<<0
+        assert_eq!(get_pulses(15), 15); // (8+7)<<0
+        assert_eq!(get_pulses(16), 16); // (8+0)<<1
+        assert_eq!(get_pulses(23), 30); // (8+7)<<1
+        assert_eq!(get_pulses(24), 32); // (8+0)<<2
+        assert_eq!(get_pulses(32), 64); // (8+0)<<3
+        assert_eq!(get_pulses(40), 128); // (8+0)<<4
+        assert_eq!(get_pulses(47), 240); // (8+7)<<4
+    }
+
+    // --- bits2pulses ---
+
+    #[test]
+    fn test_pin_rate_bits2pulses_lm0() {
+        // Pin bits2pulses for lm=0 across all tested bands and bit budgets.
+        let mode = mode_create(48000, 960).expect("static mode");
+        let budgets = [0, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
+
+        let b0: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 0, 0, b)).collect();
+        assert_eq!(b0, [0, 1, 40, 40, 40, 40, 40, 40, 40, 40]);
+
+        let b10: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 10, 0, b)).collect();
+        assert_eq!(b10, [0, 0, 1, 4, 31, 40, 40, 40, 40, 40]);
+
+        let b15: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 15, 0, b)).collect();
+        assert_eq!(b15, [0, 0, 1, 1, 3, 10, 35, 35, 35, 35]);
+
+        let b20: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 20, 0, b)).collect();
+        assert_eq!(b20, [0, 0, 0, 1, 2, 4, 9, 9, 9, 9]);
+    }
+
+    #[test]
+    fn test_pin_rate_bits2pulses_lm2() {
+        // Pin bits2pulses for lm=2 (10ms frames, most common).
+        let mode = mode_create(48000, 960).expect("static mode");
+        let budgets = [0, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
+
+        let b0: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 0, 2, b)).collect();
+        assert_eq!(b0, [0, 0, 1, 1, 4, 22, 40, 40, 40, 40]);
+
+        let b10: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 10, 2, b)).collect();
+        assert_eq!(b10, [0, 0, 0, 1, 2, 7, 25, 25, 25, 25]);
+
+        let b15: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 15, 2, b)).collect();
+        assert_eq!(b15, [0, 0, 0, 1, 2, 3, 9, 9, 9, 9]);
+
+        let b20: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 20, 2, b)).collect();
+        assert_eq!(b20, [0, 0, 0, 1, 1, 2, 5, 5, 5, 5]);
+    }
+
+    #[test]
+    fn test_pin_rate_bits2pulses_lm3() {
+        // Pin bits2pulses for lm=3 (20ms frames).
+        let mode = mode_create(48000, 960).expect("static mode");
+        let budgets = [0, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
+
+        let b0: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 0, 3, b)).collect();
+        assert_eq!(b0, [0, 0, 0, 1, 2, 7, 25, 25, 25, 25]);
+
+        let b10: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 10, 3, b)).collect();
+        assert_eq!(b10, [0, 0, 0, 1, 2, 4, 12, 12, 12, 12]);
+
+        let b20: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 20, 3, b)).collect();
+        assert_eq!(b20, [0, 0, 0, 0, 1, 2, 4, 4, 4, 4]);
+    }
+
+    // --- pulses2bits ---
+
+    #[test]
+    fn test_pin_rate_pulses2bits_lm0() {
+        // Pin pulses2bits for lm=0 across representative bands.
+        let mode = mode_create(48000, 960).expect("static mode");
+
+        // band=0, lm=0: single-coeff band, max_q=40
+        let b0: Vec<i32> = (0..=15).map(|q| pulses2bits(mode, 0, 0, q)).collect();
+        assert_eq!(b0, [0, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8]);
+
+        // band=10, lm=0: wider band, max_q=40
+        let b10: Vec<i32> = (0..=15).map(|q| pulses2bits(mode, 10, 0, q)).collect();
+        assert_eq!(b10, [0, 16, 24, 29, 32, 35, 37, 39, 40, 42, 43, 44, 45, 46, 47, 48]);
+
+        // band=15, lm=0: wider still, max_q=35
+        let b15: Vec<i32> = (0..=15).map(|q| pulses2bits(mode, 15, 0, q)).collect();
+        assert_eq!(
+            b15,
+            [0, 29, 50, 66, 79, 90, 100, 108, 115, 121, 127, 133, 137, 142, 146, 150]
+        );
+
+        // band=20, lm=0: widest band, max_q=9
+        let b20: Vec<i32> = (0..=9).map(|q| pulses2bits(mode, 20, 0, q)).collect();
+        assert_eq!(b20, [0, 44, 80, 111, 139, 164, 187, 208, 228, 247]);
+    }
+
+    #[test]
+    fn test_pin_rate_pulses2bits_lm2() {
+        // Pin pulses2bits for lm=2 across representative bands.
+        let mode = mode_create(48000, 960).expect("static mode");
+
+        let b0: Vec<i32> = (0..=15).map(|q| pulses2bits(mode, 0, 2, q)).collect();
+        assert_eq!(b0, [0, 24, 40, 52, 61, 68, 74, 80, 84, 88, 92, 95, 98, 101, 103, 106]);
+
+        let b10: Vec<i32> = (0..=15).map(|q| pulses2bits(mode, 10, 2, q)).collect();
+        assert_eq!(
+            b10,
+            [0, 32, 56, 76, 92, 106, 118, 129, 139, 147, 155, 162, 169, 175, 181, 186]
+        );
+
+        let b15: Vec<i32> = (0..=9).map(|q| pulses2bits(mode, 15, 2, q)).collect();
+        assert_eq!(b15, [0, 45, 82, 114, 143, 169, 193, 215, 236, 256]);
+
+        let b20: Vec<i32> = (0..=5).map(|q| pulses2bits(mode, 20, 2, q)).collect();
+        assert_eq!(b20, [0, 60, 112, 159, 203, 244]);
+    }
+
+    #[test]
+    fn test_pin_rate_pulses2bits_lm3() {
+        // Pin pulses2bits for lm=3.
+        let mode = mode_create(48000, 960).expect("static mode");
+
+        let b10: Vec<i32> = (0..=12).map(|q| pulses2bits(mode, 10, 3, q)).collect();
+        assert_eq!(b10, [0, 40, 72, 100, 124, 145, 165, 183, 199, 215, 229, 242, 254]);
+
+        let b15: Vec<i32> = (0..=6).map(|q| pulses2bits(mode, 15, 3, q)).collect();
+        assert_eq!(b15, [0, 53, 98, 138, 175, 209, 241]);
+
+        let b20: Vec<i32> = (0..=4).map(|q| pulses2bits(mode, 20, 3, q)).collect();
+        assert_eq!(b20, [0, 68, 128, 183, 235]);
+    }
+
+    // --- clt_compute_allocation: mono ---
+
+    /// Helper to run a mono allocation and return (coded_bands, balance, pulses, ebits, priority).
+    fn run_mono_alloc(
+        total: i32,
+        alloc_trim: i32,
+        lm: i32,
+        end: i32,
+        offsets: &[i32; NB_EBANDS],
+    ) -> (i32, i32, [i32; NB_EBANDS], [i32; NB_EBANDS], [i32; NB_EBANDS]) {
+        let mode = mode_create(48000, 960).expect("static mode");
+        let cap = [4096i32; NB_EBANDS];
+        let mut buf = [0u8; 256];
+        let mut pulses = [0i32; NB_EBANDS];
+        let mut ebits = [0i32; NB_EBANDS];
+        let mut priority = [0i32; NB_EBANDS];
+        let mut intensity = 0;
+        let mut dual_stereo = 0;
+        let mut balance = 0;
+
+        let mut enc = RangeEncoder::new(&mut buf);
+        let coded = clt_compute_allocation(
+            mode,
+            0,
+            end,
+            offsets,
+            &cap,
+            alloc_trim,
+            &mut intensity,
+            &mut dual_stereo,
+            total,
+            &mut balance,
+            &mut pulses,
+            &mut ebits,
+            &mut priority,
+            1,
+            lm,
+            &mut enc,
+            true,
+            end,
+            end,
+        );
+        (coded, balance, pulses, ebits, priority)
+    }
+
+    /// Helper to run a stereo allocation.
+    fn run_stereo_alloc(
+        total: i32,
+        alloc_trim: i32,
+        lm: i32,
+    ) -> (i32, i32, i32, i32, [i32; NB_EBANDS], [i32; NB_EBANDS], [i32; NB_EBANDS]) {
+        let mode = mode_create(48000, 960).expect("static mode");
+        let offsets = [0i32; NB_EBANDS];
+        let cap = [4096i32; NB_EBANDS];
+        let mut buf = [0u8; 256];
+        let mut pulses = [0i32; NB_EBANDS];
+        let mut ebits = [0i32; NB_EBANDS];
+        let mut priority = [0i32; NB_EBANDS];
+        let mut intensity = NB_EBANDS as i32;
+        let mut dual_stereo = 1;
+        let mut balance = 0;
+        let end = NB_EBANDS as i32;
+
+        let mut enc = RangeEncoder::new(&mut buf);
+        let coded = clt_compute_allocation(
+            mode,
+            0,
+            end,
+            &offsets,
+            &cap,
+            alloc_trim,
+            &mut intensity,
+            &mut dual_stereo,
+            total,
+            &mut balance,
+            &mut pulses,
+            &mut ebits,
+            &mut priority,
+            2,
+            lm,
+            &mut enc,
+            true,
+            end,
+            end,
+        );
+        (coded, intensity, dual_stereo, balance, pulses, ebits, priority)
+    }
+
+    #[test]
+    fn test_pin_rate_alloc_mono_low_budget() {
+        // 200 eighth-bits, mono, lm=0, neutral trim
+        let offsets = [0i32; NB_EBANDS];
+        let (coded, balance, pulses, ebits, priority) =
+            run_mono_alloc(200, 5, 0, NB_EBANDS as i32, &offsets);
+
+        assert_eq!(coded, 13);
+        assert_eq!(balance, 0);
+        assert_eq!(
+            pulses,
+            [8, 8, 8, 8, 8, 8, 8, 8, 25, 21, 17, 13, 20, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(ebits, [1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            priority,
+            [0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1]
+        );
+    }
+
+    #[test]
+    fn test_pin_rate_alloc_mono_medium_budget() {
+        // 1000 eighth-bits (~125 bytes), mono, lm=0, neutral trim
+        let offsets = [0i32; NB_EBANDS];
+        let (coded, balance, pulses, ebits, priority) =
+            run_mono_alloc(1000, 5, 0, NB_EBANDS as i32, &offsets);
+
+        assert_eq!(coded, 20);
+        assert_eq!(balance, 0);
+        assert_eq!(
+            pulses,
+            [8, 8, 8, 8, 8, 8, 8, 8, 41, 37, 34, 31, 65, 58, 52, 73, 64, 77, 99, 81, 0]
+        );
+        assert_eq!(ebits, [2, 3, 2, 2, 2, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]);
+        assert_eq!(
+            priority,
+            [0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 0, 1]
+        );
+    }
+
+    #[test]
+    fn test_pin_rate_alloc_mono_high_budget() {
+        // 4000 eighth-bits (~500 bytes), mono, lm=0 -- all 21 bands coded
+        let offsets = [0i32; NB_EBANDS];
+        let (coded, balance, pulses, ebits, priority) =
+            run_mono_alloc(4000, 5, 0, NB_EBANDS as i32, &offsets);
+
+        assert_eq!(coded, 21);
+        assert_eq!(balance, 0);
+        assert_eq!(
+            pulses,
+            [8, 8, 8, 8, 8, 8, 8, 8, 67, 64, 62, 67, 162, 157, 152, 236, 229, 306, 460, 616, 614]
+        );
+        assert_eq!(ebits, [4, 5, 5, 5, 4, 5, 5, 5, 5, 5, 5, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3]);
+        assert_eq!(
+            priority,
+            [0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]
+        );
+    }
+
+    #[test]
+    fn test_pin_rate_alloc_mono_2000_all_bands() {
+        // 2000 eighth-bits, mono, lm=0 -- all 21 bands coded
+        let offsets = [0i32; NB_EBANDS];
+        let (coded, balance, pulses, ebits, _) =
+            run_mono_alloc(2000, 5, 0, NB_EBANDS as i32, &offsets);
+
+        assert_eq!(coded, 21);
+        assert_eq!(balance, 0);
+        assert_eq!(
+            pulses,
+            [8, 8, 8, 8, 8, 8, 8, 8, 45, 50, 47, 44, 97, 89, 84, 124, 116, 149, 212, 260, 195]
+        );
+        assert_eq!(ebits, [3, 4, 3, 3, 3, 3, 2, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2]);
+    }
+
+    // --- clt_compute_allocation: stereo ---
+
+    #[test]
+    fn test_pin_rate_alloc_stereo_low_budget() {
+        // Stereo, 500 eighth-bits, lm=0
+        let (coded, intensity, dual_stereo, balance, pulses, ebits, priority) =
+            run_stereo_alloc(500, 5, 0);
+
+        assert_eq!(coded, 14);
+        assert_eq!(intensity, 14);
+        assert_eq!(dual_stereo, 1);
+        assert_eq!(balance, 0);
+        assert_eq!(
+            pulses,
+            [16, 16, 16, 16, 16, 16, 16, 16, 50, 44, 38, 31, 47, 34, 0, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(ebits, [1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            priority,
+            [0, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1]
+        );
+    }
+
+    #[test]
+    fn test_pin_rate_alloc_stereo_high_budget() {
+        // Stereo, 4000 eighth-bits, lm=0
+        let (coded, intensity, dual_stereo, balance, pulses, ebits, _) =
+            run_stereo_alloc(4000, 5, 0);
+
+        assert_eq!(coded, 21);
+        assert_eq!(intensity, 21);
+        assert_eq!(dual_stereo, 1);
+        assert_eq!(balance, 0);
+        assert_eq!(
+            pulses,
+            [16, 16, 16, 16, 16, 16, 16, 16, 99, 98, 92, 86, 194, 180, 169, 252, 235, 298, 416, 510, 375]
+        );
+        assert_eq!(ebits, [3, 3, 4, 3, 3, 2, 3, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2]);
+    }
+
+    // --- clt_compute_allocation: alloc_trim sweep ---
+
+    #[test]
+    fn test_pin_rate_alloc_trim_extremes() {
+        // Pin trim=0 (bass-heavy) and trim=10 (treble-heavy) at 1000 eighth-bits, mono
+        let offsets = [0i32; NB_EBANDS];
+
+        let (coded0, _, pulses0, ebits0, _) =
+            run_mono_alloc(1000, 0, 0, NB_EBANDS as i32, &offsets);
+        assert_eq!(coded0, 20);
+        assert_eq!(
+            pulses0,
+            [8, 8, 8, 8, 8, 8, 8, 8, 32, 30, 28, 26, 58, 53, 50, 73, 68, 88, 122, 124, 0]
+        );
+        assert_eq!(ebits0, [1, 1, 2, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1]);
+
+        let (coded10, _, pulses10, ebits10, _) =
+            run_mono_alloc(1000, 10, 0, NB_EBANDS as i32, &offsets);
+        assert_eq!(coded10, 20);
+        assert_eq!(
+            pulses10,
+            [8, 8, 8, 8, 8, 8, 8, 8, 42, 35, 39, 35, 70, 60, 52, 69, 57, 62, 69, 58, 0]
+        );
+        assert_eq!(ebits10, [3, 4, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]);
+    }
+
+    // --- clt_compute_allocation: LM sweep ---
+
+    #[test]
+    fn test_pin_rate_alloc_lm_sweep() {
+        // Pin allocation across frame sizes: lm=0 (2.5ms), lm=1 (5ms), lm=2 (10ms), lm=3 (20ms)
+        let offsets = [0i32; NB_EBANDS];
+
+        let (coded0, _, pulses0, ebits0, _) =
+            run_mono_alloc(2000, 5, 0, NB_EBANDS as i32, &offsets);
+        assert_eq!(coded0, 21);
+        assert_eq!(
+            pulses0,
+            [8, 8, 8, 8, 8, 8, 8, 8, 45, 50, 47, 44, 97, 89, 84, 124, 116, 149, 212, 260, 195]
+        );
+        assert_eq!(ebits0, [3, 4, 3, 3, 3, 3, 2, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2]);
+
+        let (coded1, _, pulses1, ebits1, _) =
+            run_mono_alloc(2000, 5, 1, NB_EBANDS as i32, &offsets);
+        assert_eq!(coded1, 20);
+        assert_eq!(
+            pulses1,
+            [47, 51, 47, 44, 40, 37, 34, 39, 74, 68, 71, 65, 121, 108, 105, 136, 120, 144, 185, 152, 0]
+        );
+        assert_eq!(ebits1, [3, 2, 2, 2, 2, 2, 2, 1, 2, 2, 1, 1, 2, 2, 1, 2, 2, 2, 2, 2, 1]);
+
+        let (coded2, _, pulses2, _, _) =
+            run_mono_alloc(2000, 5, 2, NB_EBANDS as i32, &offsets);
+        assert_eq!(coded2, 17);
+        assert_eq!(
+            pulses2,
+            [97, 91, 85, 79, 70, 73, 68, 63, 117, 107, 105, 93, 163, 137, 123, 147, 110, 0, 0, 0, 0]
+        );
+
+        let (coded3, _, pulses3, _, _) =
+            run_mono_alloc(2000, 5, 3, NB_EBANDS as i32, &offsets);
+        assert_eq!(coded3, 15);
+        assert_eq!(
+            pulses3,
+            [155, 141, 128, 113, 111, 101, 93, 84, 152, 134, 124, 105, 169, 117, 73, 0, 0, 0, 0, 0, 0]
+        );
+    }
+
+    // --- clt_compute_allocation: narrowband ---
+
+    #[test]
+    fn test_pin_rate_alloc_narrowband() {
+        // Narrowband: end=13, so only the lower 13 bands are considered.
+        let offsets = [0i32; NB_EBANDS];
+
+        let (coded, _, pulses, ebits, _) = run_mono_alloc(500, 5, 0, 13, &offsets);
+        assert_eq!(coded, 13);
+        assert_eq!(
+            pulses,
+            [8, 8, 8, 8, 8, 8, 8, 8, 39, 35, 40, 37, 69, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(ebits, [3, 2, 3, 2, 3, 1, 2, 2, 2, 2, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
+
+        let (coded2, _, pulses2, ebits2, _) = run_mono_alloc(1000, 5, 0, 13, &offsets);
+        assert_eq!(coded2, 13);
+        assert_eq!(
+            pulses2,
+            [8, 8, 8, 8, 8, 8, 8, 8, 69, 66, 64, 69, 156, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(ebits2, [4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 4, 5, 0, 0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    // --- clt_compute_allocation: dynalloc offsets ---
+
+    #[test]
+    fn test_pin_rate_alloc_with_offsets() {
+        // Dynalloc offsets boost specific bands.
+        let mut offsets = [0i32; NB_EBANDS];
+        offsets[3] = 16;
+        offsets[5] = 32;
+        offsets[8] = 64;
+
+        let (coded, balance, pulses, ebits, priority) =
+            run_mono_alloc(2000, 5, 0, NB_EBANDS as i32, &offsets);
+
+        assert_eq!(coded, 21);
+        assert_eq!(balance, 0);
+        assert_eq!(
+            pulses,
+            [8, 8, 8, 8, 8, 8, 8, 8, 79, 46, 44, 41, 92, 85, 79, 118, 110, 140, 199, 250, 173]
+        );
+        assert_eq!(ebits, [3, 4, 3, 5, 2, 7, 2, 2, 7, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]);
+        assert_eq!(
+            priority,
+            [0, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1]
+        );
+    }
+
+    // --- clt_compute_allocation: minimum budget ---
+
+    #[test]
+    fn test_pin_rate_alloc_minimum_budget() {
+        // Very small budgets -- mostly just 1 coded band.
+        let offsets = [0i32; NB_EBANDS];
+
+        let (coded0, _, pulses0, ebits0, _) =
+            run_mono_alloc(0, 5, 0, NB_EBANDS as i32, &offsets);
+        assert_eq!(coded0, 1);
+        assert_eq!(pulses0, [0; NB_EBANDS]);
+        assert_eq!(ebits0, [0; NB_EBANDS]);
+
+        let (coded8, _, pulses8, _, _) = run_mono_alloc(8, 5, 0, NB_EBANDS as i32, &offsets);
+        assert_eq!(coded8, 1);
+        assert_eq!(
+            pulses8,
+            [8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+
+        let (coded16, _, pulses16, ebits16, _) =
+            run_mono_alloc(16, 5, 0, NB_EBANDS as i32, &offsets);
+        assert_eq!(coded16, 1);
+        assert_eq!(
+            pulses16,
+            [8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            ebits16,
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+
+        let (coded64, _, pulses64, ebits64, _) =
+            run_mono_alloc(64, 5, 0, NB_EBANDS as i32, &offsets);
+        assert_eq!(coded64, 1);
+        assert_eq!(
+            pulses64,
+            [8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            ebits64,
+            [2, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+    }
+
+    // --- clt_compute_allocation: encode/decode pinning ---
+
+    #[test]
+    fn test_pin_rate_alloc_encode_decode_exact() {
+        // Verify that encode and decode produce identical allocation vectors.
+        // This pins both directions at 2000 eighth-bits, stereo.
+        let mode = mode_create(48000, 960).expect("static mode");
+        let offsets = [0i32; NB_EBANDS];
+        let cap = [4096i32; NB_EBANDS];
+        let end = NB_EBANDS as i32;
+        let mut buf = [0u8; 256];
+
+        // Encode
+        let mut enc_pulses = [0i32; NB_EBANDS];
+        let mut enc_ebits = [0i32; NB_EBANDS];
+        let mut enc_priority = [0i32; NB_EBANDS];
+        let mut enc_intensity = NB_EBANDS as i32;
+        let mut enc_dual_stereo = 1;
+        let mut enc_balance = 0;
+        let enc_coded = {
+            let mut enc = RangeEncoder::new(&mut buf);
+            let c = clt_compute_allocation(
+                mode, 0, end, &offsets, &cap, 5,
+                &mut enc_intensity, &mut enc_dual_stereo,
+                2000, &mut enc_balance,
+                &mut enc_pulses, &mut enc_ebits, &mut enc_priority,
+                2, 0, &mut enc, true, end, end,
+            );
+            enc.done();
+            c
+        };
+
+        // Pin encode outputs
+        assert_eq!(enc_coded, 20);
+        assert_eq!(enc_intensity, 20);
+        assert_eq!(enc_dual_stereo, 1);
+
+        // Decode
+        let mut dec_pulses = [0i32; NB_EBANDS];
+        let mut dec_ebits = [0i32; NB_EBANDS];
+        let mut dec_priority = [0i32; NB_EBANDS];
+        let mut dec_intensity = 0;
+        let mut dec_dual_stereo = 0;
+        let mut dec_balance = 0;
+        let mut dec = RangeDecoder::new(&buf);
+        let dec_coded = clt_compute_allocation(
+            mode, 0, end, &offsets, &cap, 5,
+            &mut dec_intensity, &mut dec_dual_stereo,
+            2000, &mut dec_balance,
+            &mut dec_pulses, &mut dec_ebits, &mut dec_priority,
+            2, 0, &mut dec, false, end, end,
+        );
+
+        // Both must match exactly
+        assert_eq!(dec_coded, enc_coded);
+        assert_eq!(dec_intensity, enc_intensity);
+        assert_eq!(dec_dual_stereo, enc_dual_stereo);
+        assert_eq!(dec_balance, enc_balance);
+        assert_eq!(dec_pulses, enc_pulses);
+        assert_eq!(dec_ebits, enc_ebits);
+        assert_eq!(dec_priority, enc_priority);
+    }
 }
