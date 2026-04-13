@@ -4459,7 +4459,7 @@ mod tests {
             x1[i] = (500 + i as i16 * 10) as i16;
             x2[i] = (100 - i as i16 * 5) as i16;
         }
-        let pred_q13 = [2000i16, -1000];
+        let pred_q13 = [2000i32, -1000];
 
         silk_stereo_ms_to_lr(&mut state, &mut x1, &mut x2, &pred_q13, 8, frame_length);
 
@@ -4547,7 +4547,7 @@ mod tests {
         ];
         let buf = encode_icdf_stream(&symbols);
         let mut rc = RangeDecoder::new(&buf);
-        let mut pred_q13 = [0i16; 2];
+        let mut pred_q13 = [0i32; 2];
         silk_stereo_decode_pred(&mut rc, &mut pred_q13);
         assert_eq!(pred_q13, [1459, -1459]);
     }
