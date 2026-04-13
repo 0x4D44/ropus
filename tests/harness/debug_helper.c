@@ -9,6 +9,7 @@
 #include "celt/mathops.h"
 #include "celt/vq.h"
 #include "celt/mdct.h"
+#include "celt/cpu_support.h"
 
 #include <stdio.h>
 #include <stddef.h>
@@ -1006,3 +1007,98 @@ void debug_dump_silk_plc_state(OpusDecoder *dec,
         ch0->sLPC_Q14_buf[0], ch0->sLPC_Q14_buf[1], ch0->sLPC_Q14_buf[2], ch0->sLPC_Q14_buf[3],
         ch0->exc_Q14[0], ch0->exc_Q14[1], ch0->exc_Q14[2], ch0->exc_Q14[3]);
 }
+
+/* Extract SILK encoder inter-frame state for multiframe divergence debugging. */
+void debug_get_silk_interframe_state(OpusEncoder *enc, int channel,
+    opus_int32 *last_gain_index,
+    opus_int32 *prev_gain_q16,
+    opus_int32 *variable_hp_smth1_q15,
+    opus_int32 *variable_hp_smth2_q15,
+    opus_int32 *harm_shape_gain_smth,
+    opus_int32 *tilt_smth,
+    opus_int32 *prev_signal_type,
+    opus_int32 *prev_lag,
+    opus_int32 *ec_prev_lag_index,
+    opus_int32 *ec_prev_signal_type,
+    opus_int16 *prev_nlsfq_q15,  /* 16 elements */
+    /* stereo state (shared, not per-channel) */
+    opus_int32 *stereo_width_prev_q14,
+    opus_int32 *stereo_smth_width_q14,
+    opus_int32 *stereo_pred_prev_q13_0,
+    opus_int32 *stereo_pred_prev_q13_1,
+    opus_int32 *n_bits_exceeded)
+{
+    OpusEncoderOffsets *hdr = (OpusEncoderOffsets *)enc;
+    silk_encoder *psEnc = (silk_encoder *)((char *)enc + hdr->silk_enc_offset);
+    silk_encoder_state_FIX *ch = &psEnc->state_Fxx[channel];
+    silk_encoder_state *st = &ch->sCmn;
+
+    *last_gain_index = (opus_int32)ch->sShape.LastGainIndex;
+    *prev_gain_q16 = st->sNSQ.prev_gain_Q16;
+    *variable_hp_smth1_q15 = st->variable_HP_smth1_Q15;
+    *variable_hp_smth2_q15 = st->variable_HP_smth2_Q15;
+    *harm_shape_gain_smth = ch->sShape.HarmShapeGain_smth_Q16;
+    *tilt_smth = ch->sShape.Tilt_smth_Q16;
+    *prev_signal_type = st->prevSignalType;
+    *prev_lag = st->prevLag;
+    *ec_prev_lag_index = (opus_int32)st->ec_prevLagIndex;
+    *ec_prev_signal_type = st->ec_prevSignalType;
+
+    int i;
+    for (i = 0; i < 16; i++) {
+        prev_nlsfq_q15[i] = st->prev_NLSFq_Q15[i];
+    }
+
+    /* Stereo state is shared */
+    *stereo_width_prev_q14 = (opus_int32)psEnc->sStereo.width_prev_Q14;
+    *stereo_smth_width_q14 = (opus_int32)psEnc->sStereo.smth_width_Q14;
+    *stereo_pred_prev_q13_0 = (opus_int32)psEnc->sStereo.pred_prev_Q13[0];
+    *stereo_pred_prev_q13_1 = (opus_int32)psEnc->sStereo.pred_prev_Q13[1];
+    *n_bits_exceeded = psEnc->nBitsExceeded;
+}
+
+/* Extract NLSF indices from SILK encoder state */
+void debug_get_silk_nlsf_indices(OpusEncoder *enc, int channel,
+    opus_int8 *nlsf_indices,   /* MAX_LPC_ORDER + 1 = 17 elements */
+    opus_int32 *predict_lpc_order,
+    opus_int32 *signal_type,
+    opus_int32 *nlsf_interp_coef_q2)
+{
+    OpusEncoderOffsets *hdr = (OpusEncoderOffsets *)enc;
+    silk_encoder *psEnc = (silk_encoder *)((char *)enc + hdr->silk_enc_offset);
+    silk_encoder_state_FIX *ch = &psEnc->state_Fxx[channel];
+    silk_encoder_state *st = &ch->sCmn;
+
+    int i;
+    for (i = 0; i < 17; i++) {
+        nlsf_indices[i] = st->indices.NLSFIndices[i];
+    }
+    *predict_lpc_order = st->predictLPCOrder;
+    *signal_type = st->indices.signalType;
+    *nlsf_interp_coef_q2 = (opus_int32)st->indices.NLSFInterpCoef_Q2;
+}
+
+/* Hash the input buffer (x_buf) for quick divergence detection */
+void debug_get_silk_xbuf_hash(OpusEncoder *enc, int channel,
+    opus_int32 *hash_out,
+    opus_int32 *buf_len)
+{
+    OpusEncoderOffsets *hdr = (OpusEncoderOffsets *)enc;
+    silk_encoder *psEnc = (silk_encoder *)((char *)enc + hdr->silk_enc_offset);
+    silk_encoder_state_FIX *ch = &psEnc->state_Fxx[channel];
+    silk_encoder_state *st = &ch->sCmn;
+
+    /* inputBuf is MAX_FRAME_LENGTH + 2 = 322 elements */
+    int total_len = MAX_FRAME_LENGTH + 2;
+    *buf_len = total_len;
+
+    /* Simple hash of the input buffer */
+    opus_int32 h = 0;
+    const opus_int16 *buf = st->inputBuf;
+    int j;
+    for (j = 0; j < total_len; j++) {
+        h = h * 31 + (opus_int32)buf[j];
+    }
+    *hash_out = h;
+}
+

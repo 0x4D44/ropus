@@ -444,6 +444,43 @@ unsafe extern "C" {
         prev_signal_type: *mut opus_int32,
     );
 
+    pub fn debug_get_silk_interframe_state(
+        enc: *mut OpusEncoder,
+        channel: c_int,
+        last_gain_index: *mut opus_int32,
+        prev_gain_q16: *mut opus_int32,
+        variable_hp_smth1_q15: *mut opus_int32,
+        variable_hp_smth2_q15: *mut opus_int32,
+        harm_shape_gain_smth: *mut opus_int32,
+        tilt_smth: *mut opus_int32,
+        prev_signal_type: *mut opus_int32,
+        prev_lag: *mut opus_int32,
+        ec_prev_lag_index: *mut opus_int32,
+        ec_prev_signal_type: *mut opus_int32,
+        prev_nlsfq_q15: *mut opus_int16,
+        stereo_width_prev_q14: *mut opus_int32,
+        stereo_smth_width_q14: *mut opus_int32,
+        stereo_pred_prev_q13_0: *mut opus_int32,
+        stereo_pred_prev_q13_1: *mut opus_int32,
+        n_bits_exceeded: *mut opus_int32,
+    );
+
+    pub fn debug_get_silk_nlsf_indices(
+        enc: *mut OpusEncoder,
+        channel: c_int,
+        nlsf_indices: *mut i8,
+        predict_lpc_order: *mut opus_int32,
+        signal_type: *mut opus_int32,
+        nlsf_interp_coef_q2: *mut opus_int32,
+    );
+
+    pub fn debug_get_silk_xbuf_hash(
+        enc: *mut OpusEncoder,
+        channel: c_int,
+        hash_out: *mut opus_int32,
+        buf_len: *mut opus_int32,
+    );
+
 }
 
 // ---------------------------------------------------------------------------

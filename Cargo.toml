@@ -16,6 +16,9 @@ dnn = []
 [dependencies]
 wide = { version = "0.7", optional = true }
 
+[dev-dependencies]
+proptest = "1"
+
 [build-dependencies]
 cc = "1"
 
@@ -39,3 +42,7 @@ path = "tools/replay_fuzz_decode.rs"
 [[bin]]
 name = "diff_fuzz_decode"
 path = "tools/diff_fuzz_decode.rs"
+
+[[bin]]
+name = "mdopus-interframe"
+path = "tests/harness/interframe_compare.rs"
