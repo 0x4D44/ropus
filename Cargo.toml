@@ -46,3 +46,7 @@ path = "tools/diff_fuzz_decode.rs"
 [[bin]]
 name = "mdopus-interframe"
 path = "tests/harness/interframe_compare.rs"
+
+[[bin]]
+name = "repro-fuzz-roundtrip"
+path = "tools/repro_fuzz_roundtrip.rs"
