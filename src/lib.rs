@@ -110,3 +110,7 @@ pub(crate) use uc_set;
 
 #[cfg(test)]
 mod coverage_tests;
+#[cfg(test)]
+mod property_tests_packet;
+#[cfg(test)]
+mod property_tests_codec;
