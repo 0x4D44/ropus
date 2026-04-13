@@ -744,3 +744,85 @@ proptest! {
         );
     }
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 100, max_shrink_iters: 100, .. ProptestConfig::default() })]
+
+    /// PLC-then-recovery: decoder re-syncs gracefully after extended packet loss.
+    #[test]
+    fn prop_plc_then_recovery(
+        config in config_strategy(),
+        bitrate in 16000..=128000i32,
+        seed in 0..10000i32,
+    ) {
+        let (fs, channels, _app, frame_size, _mode) = config;
+        let mut enc = make_encoder(fs, channels, _app, _mode, bitrate, 5);
+        let mut dec = OpusDecoder::new(fs, channels).unwrap();
+        let n = frame_size as usize * channels as usize;
+
+        // Encode 10 frames
+        let packets = encode_sequence(&mut enc, frame_size, channels, 10, seed);
+
+        // Decode frames 0..5 normally, track pre-loss energies
+        let mut pre_loss_energies = Vec::new();
+        for i in 0..5 {
+            let mut out = vec![0i16; n];
+            let r = dec.decode(Some(&packets[i]), &mut out, frame_size, false);
+            prop_assert!(
+                r.is_ok() && r.unwrap() == frame_size,
+                "pre-loss frame {}: decode failed: {:?}", i, r,
+            );
+            pre_loss_energies.push(rms_energy(&out));
+        }
+
+        let avg_pre_loss = pre_loss_energies.iter().sum::<f64>() / pre_loss_energies.len() as f64;
+        let avg_pre_loss = avg_pre_loss.max(100.0); // floor for near-silence
+
+        // Run 3 PLC frames (simulate 3 consecutive lost packets)
+        for plc_idx in 0..3 {
+            let mut out = vec![0i16; n];
+            let r = dec.decode(None, &mut out, frame_size, false);
+            prop_assert!(
+                r.is_ok() && r.unwrap() == frame_size,
+                "PLC frame {}: decode failed: {:?}", plc_idx, r,
+            );
+        }
+
+        // Decode frames 5 and 6 normally (recovery frames after loss)
+        let mut recovery_energies = Vec::new();
+        for i in 5..7 {
+            let mut out = vec![0i16; n];
+            let r = dec.decode(Some(&packets[i]), &mut out, frame_size, false);
+            prop_assert!(
+                r.is_ok() && r.unwrap() == frame_size,
+                "recovery frame {}: decode failed: {:?}", i, r,
+            );
+            recovery_energies.push(rms_energy(&out));
+        }
+
+        // By the 2nd recovery frame (frame 6), energy returns to within 4x of pre-loss average
+        let recovery_energy = recovery_energies[1];
+        prop_assert!(
+            recovery_energy < 4.0 * avg_pre_loss,
+            "recovery frame 6: energy {:.1} > 4x avg pre-loss {:.1}",
+            recovery_energy, avg_pre_loss,
+        );
+
+        // Decode frames 7..10 normally
+        let explosion_threshold = 10.0 * avg_pre_loss;
+        for i in 7..10 {
+            let mut out = vec![0i16; n];
+            let r = dec.decode(Some(&packets[i]), &mut out, frame_size, false);
+            prop_assert!(
+                r.is_ok() && r.unwrap() == frame_size,
+                "post-recovery frame {}: decode failed: {:?}", i, r,
+            );
+            let energy = rms_energy(&out);
+            prop_assert!(
+                energy < explosion_threshold,
+                "post-recovery frame {}: energy {:.1} > 10x avg pre-loss {:.1}",
+                i, energy, avg_pre_loss,
+            );
+        }
+    }
+}
