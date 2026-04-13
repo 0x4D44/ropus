@@ -5098,7 +5098,10 @@ pub fn silk_corr_matrix(
         }
     }
 
-    *nrg = xx[0];
+    // C: *nrg is set once by silk_sum_sqr_shift and never modified —
+    // it's the energy of the FULL x[0..L+order-1] window, NOT xx[0]
+    // which has the first (order-1) samples removed.
+    *nrg = energy_raw;
 }
 
 /// Correlation vector computation. Matches C: `silk_corrVector_FIX`.
@@ -5188,6 +5191,7 @@ pub fn silk_find_ltp(
             silk_smlawb(1, nrg, (LTP_CORR_INV_MAX * 65536.0 + 0.5) as i16),
             xx_val,
         );
+
         for i in 0..LTP_ORDER * LTP_ORDER {
             xxltp_q17[xx_base + i] = (((xxltp_q17[xx_base + i] as i64) << 17) / temp as i64) as i32;
         }
@@ -5535,6 +5539,7 @@ pub fn silk_find_pred_coefs_fix(
         // C passes res_pitch starting at ltp_mem offset; silk_find_ltp uses
         // negative indexing (r_offset - lag) to access the lag history.
         let ltp_mem = ps_enc.s_cmn.ltp_mem_length as usize;
+
         silk_find_ltp(
             &mut xxltp_q17,
             nb_subfr * LTP_ORDER * LTP_ORDER,
