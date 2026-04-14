@@ -268,6 +268,9 @@ fn main() {
     // Debug helper for direct function comparisons
     build.file(harness_dir.join("debug_helper.c"));
 
+    // SILK decode trace helper for Bug #13 investigation
+    build.file(harness_dir.join("debug_silk_trace.c"));
+
     build.compile("opus_ref");
 
     // Tell cargo to link the static library
@@ -275,6 +278,7 @@ fn main() {
     println!("cargo:rerun-if-changed=tests/harness/config.h");
     println!("cargo:rerun-if-changed=tests/harness/build.rs");
     println!("cargo:rerun-if-changed=tests/harness/debug_helper.c");
+    println!("cargo:rerun-if-changed=tests/harness/debug_silk_trace.c");
     println!("cargo:rerun-if-changed=reference/celt/celt_decoder.c");
 }
 // force rebuild

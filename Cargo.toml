@@ -50,3 +50,7 @@ path = "tests/harness/interframe_compare.rs"
 [[bin]]
 name = "repro-fuzz-roundtrip"
 path = "tools/repro_fuzz_roundtrip.rs"
+
+[[bin]]
+name = "trace_silk_wb"
+path = "tools/trace_silk_wb.rs"

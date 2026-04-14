@@ -1400,6 +1400,11 @@ impl OpusDecoder {
         )
     }
 
+    /// Debug: borrow the SILK decoder (read-only) for state inspection.
+    pub fn debug_silk_dec(&self) -> &crate::silk::decoder::SilkDecoder {
+        &self.silk_dec
+    }
+
     /// Get the pitch period of the last decoded frame (samples at 48 kHz).
     pub fn get_pitch(&self) -> i32 {
         if self.prev_mode == MODE_CELT_ONLY {

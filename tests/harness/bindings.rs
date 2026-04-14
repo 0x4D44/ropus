@@ -481,6 +481,80 @@ unsafe extern "C" {
         buf_len: *mut opus_int32,
     );
 
+    // ----- SILK decode trace (debug_silk_trace.c) -----
+
+    pub fn debug_silk_trace_get_persistent_state(
+        dec: *mut OpusDecoder,
+        prev_gain_q16: *mut opus_int32,
+        s_lpc_q14_buf: *mut opus_int32,
+        lag_prev: *mut opus_int32,
+        last_gain_index: *mut opus_int32,
+        fs_khz: *mut opus_int32,
+        nb_subfr: *mut opus_int32,
+        frame_length: *mut opus_int32,
+        subfr_length: *mut opus_int32,
+        ltp_mem_length: *mut opus_int32,
+        lpc_order: *mut opus_int32,
+        first_frame_after_reset: *mut opus_int32,
+        loss_cnt: *mut opus_int32,
+        prev_signal_type: *mut opus_int32,
+    );
+
+    pub fn debug_silk_trace_get_indices(
+        dec: *mut OpusDecoder,
+        signal_type: *mut opus_int32,
+        quant_offset_type: *mut opus_int32,
+        gains_indices: *mut opus_int32,
+        nlsf_indices: *mut opus_int32,
+        lag_index: *mut opus_int32,
+        contour_index: *mut opus_int32,
+        nlsf_interp_coef_q2: *mut opus_int32,
+        per_index: *mut opus_int32,
+        ltp_index: *mut opus_int32,
+        ltp_scale_index: *mut opus_int32,
+        seed: *mut opus_int32,
+    );
+
+    pub fn debug_silk_trace_get_prev_nlsf(
+        dec: *mut OpusDecoder,
+        prev_nlsf_q15: *mut opus_int16,
+    );
+
+    pub fn debug_silk_trace_get_exc(
+        dec: *mut OpusDecoder,
+        exc_q14: *mut opus_int32,
+        count: opus_int32,
+    );
+
+    pub fn debug_silk_trace_get_outbuf(
+        dec: *mut OpusDecoder,
+        out_buf: *mut opus_int16,
+        count: opus_int32,
+    );
+
+    pub fn debug_silk_traced_decode(
+        dec: *mut OpusDecoder,
+        silk_data: *const c_uchar,
+        silk_len: c_int,
+        cond_coding: c_int,
+        gains_q16_out: *mut opus_int32,
+        pred_coef_q12_0_out: *mut opus_int16,
+        pred_coef_q12_1_out: *mut opus_int16,
+        pitch_l_out: *mut opus_int32,
+        ltp_coef_q14_out: *mut opus_int16,
+        ltp_scale_q14_out: *mut opus_int32,
+        pulses_out: *mut opus_int16,
+        pcm_out: *mut opus_int16,
+    ) -> c_int;
+
+    pub fn debug_silk_trace_get_config(
+        dec: *mut OpusDecoder,
+        fs_khz: *mut opus_int32,
+        frame_length: *mut opus_int32,
+        n_frames_decoded: *mut opus_int32,
+    );
+
+    pub fn debug_silk_trace_reset(dec: *mut OpusDecoder);
 }
 
 // ---------------------------------------------------------------------------
