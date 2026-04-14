@@ -769,6 +769,8 @@ fn silk_decode_parameters(
 
     // 4. NLSF interpolation
     let interp_coef = if dec.first_frame_after_reset {
+        // Write back to persistent indices (C: decode_parameters.c:60)
+        dec.indices.nlsf_interp_coef_q2 = 4;
         4i32 // Force no interpolation
     } else {
         indices.nlsf_interp_coef_q2 as i32
@@ -1090,28 +1092,53 @@ fn silk_plc_update(dec: &mut SilkDecoderState, dec_ctrl: &SilkDecoderControl) {
     let nb_subfr = dec.nb_subfr;
 
     if dec.indices.signal_type as i32 == TYPE_VOICED {
-        // Find subframe with strongest pitch pulse (use last subframe for simplicity)
-        let k = nb_subfr - 1;
-
-        // Sum LTP coefficients
+        // Find the subframe with the strongest total LTP gain, searching backward
+        // from the last subframe. C: PLC.c lines 135-151.
         let mut ltp_gain_q14: i32 = 0;
-        for i in 0..LTP_ORDER {
-            ltp_gain_q14 += dec_ctrl.ltp_coef_q14[k * LTP_ORDER + i] as i32;
+        let subfr_len = dec.subfr_length as i32;
+        let mut j = 0i32;
+        while j * subfr_len < dec_ctrl.pitch_l[nb_subfr - 1] {
+            if j as usize == nb_subfr {
+                break;
+            }
+            let k = nb_subfr - 1 - j as usize;
+            let mut temp_ltp_gain_q14: i32 = 0;
+            for i in 0..LTP_ORDER {
+                temp_ltp_gain_q14 += dec_ctrl.ltp_coef_q14[k * LTP_ORDER + i] as i32;
+            }
+            if temp_ltp_gain_q14 > ltp_gain_q14 {
+                ltp_gain_q14 = temp_ltp_gain_q14;
+                let coef_start = k * LTP_ORDER;
+                dec.s_plc
+                    .ltp_coef_q14
+                    .copy_from_slice(&dec_ctrl.ltp_coef_q14[coef_start..coef_start + LTP_ORDER]);
+                dec.s_plc.pitch_l_q8 = dec_ctrl.pitch_l[k] << 8;
+            }
+            j += 1;
         }
 
-        // Save LTP state, collapse to single tap
+        // Collapse to single center tap, then apply gain limiting via scaling
         dec.s_plc.ltp_coef_q14 = [0; LTP_ORDER];
-        let gain_clamped = imin(
-            imax(ltp_gain_q14, V_PITCH_GAIN_START_MIN_Q14),
-            V_PITCH_GAIN_START_MAX_Q14,
-        );
-        dec.s_plc.ltp_coef_q14[LTP_ORDER / 2] = gain_clamped as i16;
+        dec.s_plc.ltp_coef_q14[LTP_ORDER / 2] = ltp_gain_q14 as i16;
 
-        // Save pitch in Q8
-        dec.s_plc.pitch_l_q8 = dec_ctrl.pitch_l[nb_subfr - 1] << 8;
+        if ltp_gain_q14 < V_PITCH_GAIN_START_MIN_Q14 {
+            let tmp = V_PITCH_GAIN_START_MIN_Q14 << 10;
+            let scale_q10 = tmp / imax(ltp_gain_q14, 1);
+            for i in 0..LTP_ORDER {
+                dec.s_plc.ltp_coef_q14[i] =
+                    (silk_smulbb(dec.s_plc.ltp_coef_q14[i] as i32, scale_q10) >> 10) as i16;
+            }
+        } else if ltp_gain_q14 > V_PITCH_GAIN_START_MAX_Q14 {
+            let tmp = V_PITCH_GAIN_START_MAX_Q14 << 14;
+            let scale_q14 = tmp / imax(ltp_gain_q14, 1);
+            for i in 0..LTP_ORDER {
+                dec.s_plc.ltp_coef_q14[i] =
+                    (silk_smulbb(dec.s_plc.ltp_coef_q14[i] as i32, scale_q14) >> 14) as i16;
+            }
+        }
     } else {
         // Unvoiced
-        dec.s_plc.pitch_l_q8 = (dec.fs_khz * MAX_PITCH_LAG_MS) << 8;
+        dec.s_plc.pitch_l_q8 = silk_smulbb(dec.fs_khz, MAX_PITCH_LAG_MS) << 8;
         dec.s_plc.ltp_coef_q14 = [0; LTP_ORDER];
     }
 
@@ -1430,13 +1457,13 @@ fn silk_cng(
             }
         }
 
-        // Smooth gain
+        // Smooth gain (C: CNG.c lines 118-125)
         for k in 0..dec.nb_subfr {
             let diff = dec_ctrl.gains_q16[k] - dec.s_cng.cng_smth_gain_q16;
-            dec.s_cng.cng_smth_gain_q16 += ((diff as i64 * CNG_GAIN_SMTH_Q16 as i64) >> 16) as i32;
+            dec.s_cng.cng_smth_gain_q16 += silk_smulwb_i32(diff, CNG_GAIN_SMTH_Q16);
             // Fast adapt if 3dB above
-            if dec.s_cng.cng_smth_gain_q16
-                > ((dec_ctrl.gains_q16[k] as i64 * CNG_GAIN_SMTH_THRESHOLD_Q16 as i64) >> 16) as i32
+            if silk_smulww(dec.s_cng.cng_smth_gain_q16, CNG_GAIN_SMTH_THRESHOLD_Q16)
+                > dec_ctrl.gains_q16[k]
             {
                 dec.s_cng.cng_smth_gain_q16 = dec_ctrl.gains_q16[k];
             }
@@ -1445,8 +1472,22 @@ fn silk_cng(
 
     // Generate CNG during loss
     if dec.loss_cnt > 0 {
-        let gain_q16 = dec.s_cng.cng_smth_gain_q16;
-        let gain_q10 = gain_q16 >> 6;
+        // Compute CNG gain subtracting PLC energy (C: CNG.c lines 133-144)
+        let mut gain_q16 =
+            silk_smulww(dec.s_plc.rand_scale_q14 as i32, dec.s_plc.prev_gain_q16[1]);
+        let cng_smth = dec.s_cng.cng_smth_gain_q16;
+        if gain_q16 >= (1 << 21) || cng_smth > (1 << 23) {
+            // High-gain path: use SMULTT to avoid overflow
+            gain_q16 = silk_smultt(gain_q16, gain_q16);
+            gain_q16 = silk_smultt(cng_smth, cng_smth) - shl32(gain_q16, 5);
+            gain_q16 = silk_lshift32(silk_sqrt_approx(gain_q16), 16);
+        } else {
+            // Low-gain path: use SMULWW for precision
+            gain_q16 = silk_smulww(gain_q16, gain_q16);
+            gain_q16 = silk_smulww(cng_smth, cng_smth) - shl32(gain_q16, 5);
+            gain_q16 = silk_lshift32(silk_sqrt_approx(gain_q16), 8);
+        }
+        let gain_q10 = silk_rshift(gain_q16, 6);
 
         // Generate random excitation
         let mut cng_sig_q14 = vec![0i32; length + MAX_LPC_ORDER];
@@ -4606,5 +4647,196 @@ mod tests {
         assert_eq!(idx.contour_index, 0);
         // Random seed
         assert_eq!(idx.seed, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug #13: nlsf_interp_coef_q2 write-back on first_frame_after_reset
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_decode_params_writes_back_nlsf_interp_coef_on_reset() {
+        // Bug #13: When first_frame_after_reset is true, C writes
+        // indices.NLSFInterpCoef_Q2 = 4 to persistent state. Rust must too,
+        // otherwise decode_core reads a stale value and incorrectly enables
+        // re-whitening at subframe k=2 for WB (order 16).
+        let mut dec = SilkDecoderState::new();
+        dec.first_frame_after_reset = true;
+        dec.fs_khz = 16;
+        dec.nb_subfr = 4;
+        dec.subfr_length = 80;
+        dec.frame_length = 320;
+        dec.lpc_order = 16;
+        // Simulate a bitstream-decoded interp coef != 4
+        dec.indices.nlsf_interp_coef_q2 = 1;
+
+        let mut dec_ctrl = SilkDecoderControl::default();
+        silk_decode_parameters(&mut dec, &mut dec_ctrl, 0);
+        assert_eq!(
+            dec.indices.nlsf_interp_coef_q2, 4,
+            "first_frame_after_reset must write back nlsf_interp_coef_q2=4 to indices"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug L3: silk_plc_update must search backward through subframes
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_plc_update_searches_strongest_subframe() {
+        let mut dec = SilkDecoderState::new();
+        dec.nb_subfr = 4;
+        dec.subfr_length = 40;
+        dec.fs_khz = 8;
+        dec.lpc_order = 10;
+        dec.indices.signal_type = TYPE_VOICED as i8;
+
+        let mut ctrl = SilkDecoderControl::default();
+        ctrl.pitch_l = [80, 80, 80, 120];
+
+        for i in 0..LTP_ORDER {
+            ctrl.ltp_coef_q14[3 * LTP_ORDER + i] = 100;  // subframe 3: total = 500
+            ctrl.ltp_coef_q14[2 * LTP_ORDER + i] = 2000; // subframe 2: total = 10000
+            ctrl.ltp_coef_q14[1 * LTP_ORDER + i] = 500;  // subframe 1: total = 2500
+            ctrl.ltp_coef_q14[0 * LTP_ORDER + i] = 300;  // subframe 0: total = 1500
+        }
+        ctrl.gains_q16 = [65536, 65536, 65536, 65536];
+        ctrl.pred_coef_q12 = [[0; MAX_LPC_ORDER]; 2];
+        ctrl.ltp_scale_q14 = 1 << 14;
+
+        silk_plc_update(&mut dec, &ctrl);
+
+        assert_eq!(
+            dec.s_plc.pitch_l_q8,
+            ctrl.pitch_l[2] << 8,
+            "pitch_l_q8 should come from strongest subframe (2), not last (3)"
+        );
+        assert_ne!(dec.s_plc.ltp_coef_q14[LTP_ORDER / 2], 0);
+        for i in 0..LTP_ORDER {
+            if i != LTP_ORDER / 2 {
+                assert_eq!(dec.s_plc.ltp_coef_q14[i], 0,
+                    "Non-center tap {} should be zero", i);
+            }
+        }
+    }
+
+    #[test]
+    fn test_plc_update_gain_scaling_not_simple_clamp() {
+        let mut dec = SilkDecoderState::new();
+        dec.nb_subfr = 2;
+        dec.subfr_length = 40;
+        dec.fs_khz = 8;
+        dec.lpc_order = 10;
+        dec.indices.signal_type = TYPE_VOICED as i8;
+
+        let mut ctrl = SilkDecoderControl::default();
+        ctrl.pitch_l = [80, 80, 0, 0];
+        let target_gain = 8000i32;
+        ctrl.ltp_coef_q14[1 * LTP_ORDER + 0] = target_gain as i16;
+        ctrl.gains_q16 = [65536, 65536, 0, 0];
+        ctrl.pred_coef_q12 = [[0; MAX_LPC_ORDER]; 2];
+        ctrl.ltp_scale_q14 = 1 << 14;
+
+        silk_plc_update(&mut dec, &ctrl);
+
+        let center = dec.s_plc.ltp_coef_q14[LTP_ORDER / 2] as i32;
+        let scale_q10 = (V_PITCH_GAIN_START_MIN_Q14 << 10) / imax(target_gain, 1);
+        let expected = silk_smulbb(target_gain, scale_q10) >> 10;
+        assert_eq!(center, expected as i16 as i32,
+            "Center tap should use scaling, not simple clamping. Got {}, expected {}",
+            center, expected);
+    }
+
+    #[test]
+    fn test_plc_update_gain_above_max_scales_down() {
+        let mut dec = SilkDecoderState::new();
+        dec.nb_subfr = 2;
+        dec.subfr_length = 40;
+        dec.fs_khz = 8;
+        dec.lpc_order = 10;
+        dec.indices.signal_type = TYPE_VOICED as i8;
+
+        let mut ctrl = SilkDecoderControl::default();
+        ctrl.pitch_l = [80, 80, 0, 0];
+        let target_gain = 16000i32;
+        ctrl.ltp_coef_q14[1 * LTP_ORDER + 0] = target_gain as i16;
+        ctrl.gains_q16 = [65536, 65536, 0, 0];
+        ctrl.pred_coef_q12 = [[0; MAX_LPC_ORDER]; 2];
+        ctrl.ltp_scale_q14 = 1 << 14;
+
+        silk_plc_update(&mut dec, &ctrl);
+
+        let center = dec.s_plc.ltp_coef_q14[LTP_ORDER / 2] as i32;
+        let scale_q14 = (V_PITCH_GAIN_START_MAX_Q14 << 14) / imax(target_gain, 1);
+        let expected = silk_smulbb(target_gain, scale_q14) >> 14;
+        assert_eq!(center, expected as i16 as i32,
+            "Center tap should use scaling for above-max gain");
+    }
+
+    // -----------------------------------------------------------------------
+    // Finding B: CNG threshold comparison uses silk_smulwb / silk_smulww
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_cng_smoothing_uses_smulwb() {
+        let diff = 100000i32;
+        let smulwb_result = silk_smulwb_i32(diff, CNG_GAIN_SMTH_Q16);
+        let full_result = ((diff as i64 * CNG_GAIN_SMTH_Q16 as i64) >> 16) as i32;
+        assert_eq!(smulwb_result, full_result,
+            "For CNG_GAIN_SMTH_Q16={}, smulwb and full multiply should agree",
+            CNG_GAIN_SMTH_Q16);
+    }
+
+    #[test]
+    fn test_cng_threshold_comparison_operand_order() {
+        let cng_smth = 70000i32;
+        let gains_q16 = 100000i32;
+
+        let correct_lhs = silk_smulww(cng_smth, CNG_GAIN_SMTH_THRESHOLD_Q16);
+        let buggy_rhs = ((gains_q16 as i64 * CNG_GAIN_SMTH_THRESHOLD_Q16 as i64) >> 16) as i32;
+
+        assert_ne!(correct_lhs, buggy_rhs,
+            "LHS and RHS computations should differ: correct_lhs={}, buggy_rhs={}",
+            correct_lhs, buggy_rhs);
+    }
+
+    // -----------------------------------------------------------------------
+    // Finding A: CNG gain during loss must subtract PLC energy
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_cng_gain_during_loss_subtracts_plc_energy() {
+        let cng_smth = 1 << 16;
+        let rand_scale_q14: i16 = 1 << 13;
+        let prev_gain_q16_1: i32 = 1 << 16;
+
+        let plc_gain = silk_smulww(rand_scale_q14 as i32, prev_gain_q16_1);
+        let plc_sq = silk_smulww(plc_gain, plc_gain);
+        let cng_sq = silk_smulww(cng_smth, cng_smth);
+        let diff_val = cng_sq - shl32(plc_sq, 5);
+        let expected_gain_q16 = silk_lshift32(silk_sqrt_approx(diff_val), 8);
+        let expected_gain_q10 = expected_gain_q16 >> 6;
+
+        let buggy_gain_q10 = cng_smth >> 6;
+
+        assert_ne!(expected_gain_q10, buggy_gain_q10,
+            "CNG gain should account for PLC energy subtraction");
+        assert!(expected_gain_q10 < buggy_gain_q10,
+            "Corrected CNG gain ({}) should be less than smoothed gain ({})",
+            expected_gain_q10, buggy_gain_q10);
+    }
+
+    #[test]
+    fn test_cng_gain_high_path_uses_smultt() {
+        let cng_smth = 1 << 24;
+        let rand_scale_q14: i32 = 1 << 14;
+        let prev_gain_q16: i32 = 1 << 16;
+
+        let gain = silk_smulww(rand_scale_q14, prev_gain_q16);
+        assert!(cng_smth > (1 << 23));
+        let gain_sq = silk_smultt(gain, gain);
+        let cng_sq = silk_smultt(cng_smth, cng_smth);
+        let diff_val = cng_sq - shl32(gain_sq, 5);
+        let result = silk_lshift32(silk_sqrt_approx(diff_val), 16);
+        assert!(result > 0, "High-gain CNG path should produce positive result");
     }
 }

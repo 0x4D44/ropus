@@ -939,6 +939,13 @@ pub fn silk_smulbb(a: i32, b: i32) -> i32 {
     (a as i16 as i32) * (b as i16 as i32)
 }
 
+/// `silk_SMULTT`: top16 x top16 → 32.
+/// Matches C: `((a32) >> 16) * ((b32) >> 16)`.
+#[inline(always)]
+pub fn silk_smultt(a: i32, b: i32) -> i32 {
+    (a >> 16) * (b >> 16)
+}
+
 /// Signed multiply-add bottom-by-bottom: `a + (i16)b * (i16)c`.
 /// Matches C: `silk_SMLABB`.
 #[inline(always)]
@@ -1355,8 +1362,8 @@ pub fn silk_nlsf_stabilize(nlsf_q15: &mut [i16], delta_min_q15: &[i16], order: u
     // Enforce lower bound
     nlsf_q15[0] = imax(nlsf_q15[0] as i32, delta_min_q15[0] as i32) as i16;
     for i in 1..order {
-        let min_val = nlsf_q15[i - 1] as i32 + delta_min_q15[i] as i32;
-        nlsf_q15[i] = imax(nlsf_q15[i] as i32, min_val) as i16;
+        let min_val = silk_add_sat16(nlsf_q15[i - 1], delta_min_q15[i]);
+        nlsf_q15[i] = imax(nlsf_q15[i] as i32, min_val as i32) as i16;
     }
     // Enforce upper bound
     nlsf_q15[order - 1] = imin(
@@ -2817,5 +2824,79 @@ mod tests {
             "nlsf[9]={} > upper={upper}",
             nlsf[9]
         );
+    }
+
+    #[test]
+    fn test_nlsf_stabilize_fallback_saturates_large_delta() {
+        let delta_min: [i16; 3] = [20000, 20000, 100];
+        let mut nlsf = [32000i16, 32000];
+        silk_nlsf_stabilize(&mut nlsf, &delta_min, 2);
+
+        for i in 0..2 {
+            assert!(
+                nlsf[i] >= 0,
+                "nlsf[{i}]={} is negative (wrapping overflow in fallback forward pass)",
+                nlsf[i]
+            );
+        }
+        assert!(
+            nlsf[1] as i32 > nlsf[0] as i32,
+            "nlsf[1]={} not > nlsf[0]={}",
+            nlsf[1],
+            nlsf[0]
+        );
+    }
+
+    #[test]
+    fn test_nlsf_stabilize_fallback_saturates_order4() {
+        let delta_min: [i16; 5] = [5000, 10000, 10000, 10000, 100];
+        let mut nlsf = [32000i16; 4];
+        silk_nlsf_stabilize(&mut nlsf, &delta_min, 4);
+
+        for i in 0..4 {
+            assert!(
+                nlsf[i] >= 0,
+                "nlsf[{i}]={} is negative (wrapping overflow)",
+                nlsf[i]
+            );
+        }
+        for i in 1..4 {
+            assert!(
+                nlsf[i] as i32 > nlsf[i - 1] as i32,
+                "nlsf[{i}]={} not > nlsf[{}]={}",
+                nlsf[i],
+                i - 1,
+                nlsf[i - 1]
+            );
+        }
+    }
+
+    #[test]
+    fn test_nlsf_stabilize_add_sat16_vs_wrapping() {
+        let delta_min: [i16; 3] = [20000, 20000, 100];
+        let mut nlsf = [32000i16, 32000];
+        silk_nlsf_stabilize(&mut nlsf, &delta_min, 2);
+
+        let upper = (1i32 << 15) - delta_min[2] as i32;
+        assert!(
+            nlsf[1] as i32 <= upper,
+            "nlsf[1]={} > upper bound {upper}",
+            nlsf[1]
+        );
+        assert!(
+            nlsf[1] as i32 >= nlsf[0] as i32,
+            "nlsf[1]={} < nlsf[0]={} — expected monotonic output",
+            nlsf[1],
+            nlsf[0]
+        );
+    }
+
+    #[test]
+    fn test_silk_smultt() {
+        assert_eq!(silk_smultt(0x10000, 0x10000), 1); // 1 * 1
+        assert_eq!(silk_smultt(0x20000, 0x30000), 6); // 2 * 3
+        assert_eq!(silk_smultt(0x7FFF0000u32 as i32, 0x00020000), 0x7FFF * 2);
+        assert_eq!(silk_smultt(0, 0x10000), 0);
+        assert_eq!(silk_smultt(0x10000, 0), 0);
     }
 }
