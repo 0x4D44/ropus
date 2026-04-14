@@ -1416,11 +1416,12 @@ impl OpusEncoder {
             mode = MODE_CELT_ONLY;
         } else if self.user_forced_mode == OPUS_AUTO {
             // Interpolate threshold between voice and music
-            let mode_voice = MODE_THRESHOLDS[0][0]
-                + (stereo_width as i64 * (MODE_THRESHOLDS[1][0] - MODE_THRESHOLDS[0][0]) as i64
-                    / Q15ONE as i64) as i32;
-            // C: both MULT16_32_Q15 terms use mode_thresholds[1][1]
-            let mode_music = MODE_THRESHOLDS[1][1];
+            // C: MULT16_32_Q15(Q15ONE-stereo_width, A) + MULT16_32_Q15(stereo_width, B)
+            let mode_voice = mult16_32_q15(Q15ONE - stereo_width, MODE_THRESHOLDS[0][0])
+                + mult16_32_q15(stereo_width, MODE_THRESHOLDS[1][0]);
+            // C: both terms use mode_thresholds[1][1] (not [0][1])
+            let mode_music = mult16_32_q15(Q15ONE - stereo_width, MODE_THRESHOLDS[1][1])
+                + mult16_32_q15(stereo_width, MODE_THRESHOLDS[1][1]);
             let mut threshold = mode_music
                 + (voice_est as i64 * voice_est as i64 * (mode_voice - mode_music) as i64 / 16384)
                     as i32;
