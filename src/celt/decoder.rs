@@ -1310,6 +1310,7 @@ impl CeltDecoder {
                     } else if s1 < s2 {
                         // Attenuate smoothly
                         let ratio = celt_sqrt(frac_div32(shr32(s1, 1) + 1, s2 + 1));
+
                         for i in 0..overlap as usize {
                             let w = mode.window[i] as i32;
                             let tmp_g = Q15ONE - mult16_16_q15(w, Q15ONE - ratio);

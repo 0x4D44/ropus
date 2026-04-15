@@ -232,6 +232,14 @@ pub fn celt_fir(x: &[i32], num: &[i32], y: &mut [i32], n: usize, ord: usize) {
     }
 
     // Unrolled 4-at-a-time loop
+    //
+    // Saturation note: the C reference's x86 SSE4.1 path (celt_fir_sse4_1)
+    // uses _mm_packs_epi32 which saturates to the full int16_t range
+    // [-32768, 32767].  The C scalar path uses SROUND16 which saturates to
+    // [-32767, 32767] (via SATURATE(x, 32767)).  On x86, the SSE4.1 path
+    // is always taken.  We match the SSE4.1 behaviour by clamping to
+    // [-32768, 32767] so that bit-exact output is achieved on the x86
+    // platform where the C reference is built and tested.
     let mut i = 0;
     while i + 3 < n {
         let mut sum = [0i32; 4];
@@ -244,20 +252,20 @@ pub fn celt_fir(x: &[i32], num: &[i32], y: &mut [i32], n: usize, ord: usize) {
         // = xcorr_kernel(rnum, x + i, sum, ord)
         xcorr_kernel(&rnum, &x[i..], &mut sum, ord);
 
-        y[i] = sround16(sum[0], SIG_SHIFT);
-        y[i + 1] = sround16(sum[1], SIG_SHIFT);
-        y[i + 2] = sround16(sum[2], SIG_SHIFT);
-        y[i + 3] = sround16(sum[3], SIG_SHIFT);
+        y[i] = pshr32(sum[0], SIG_SHIFT).clamp(-32768, 32767);
+        y[i + 1] = pshr32(sum[1], SIG_SHIFT).clamp(-32768, 32767);
+        y[i + 2] = pshr32(sum[2], SIG_SHIFT).clamp(-32768, 32767);
+        y[i + 3] = pshr32(sum[3], SIG_SHIFT).clamp(-32768, 32767);
         i += 4;
     }
 
-    // Scalar tail
+    // Scalar tail — also matches SSE4.1's SATURATE16 [-32768, 32767]
     while i < n {
         let mut sum = shl32(extend32(x[i + ord]), SIG_SHIFT);
         for j in 0..ord {
             sum = mac16_16(sum, rnum[j], x[i + j]);
         }
-        y[i] = sround16(sum, SIG_SHIFT);
+        y[i] = pshr32(sum, SIG_SHIFT).clamp(-32768, 32767);
         i += 1;
     }
 }

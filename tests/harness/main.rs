@@ -9895,6 +9895,309 @@ fn cmd_debug_stereo_voip() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Bug A repro: CELT decode divergence with code-3 multi-frame PLC packet
+// ---------------------------------------------------------------------------
+
+fn cmd_repro_bug_a() {
+    use mdopus::opus::decoder::OpusDecoder as RustDecoder;
+
+    // Crash packet from fuzz_crashes/crash_67b601097a4dc027.bin
+    // First 2 bytes are fuzz config (sr_idx=0 → 8kHz, ch_byte=0x04 → mono)
+    let crash_data: &[u8] = &[
+        0x00, 0x04, 0x83, 0xdd, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x07, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x77, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x7d, 0x7d, 0x72, 0x7d, 0x7d, 0x7d, 0x7d,
+        0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d,
+        0x7d, 0x00,
+    ];
+
+    let sample_rate = 8000i32;
+    let channels = 1i32;
+    let packet = &crash_data[2..];
+    let max_frame = 5760;
+
+    println!("=== Bug A Repro: CELT code-3 multi-frame PLC ===");
+    println!("Packet: {} bytes, sr={}, ch={}", packet.len(), sample_rate, channels);
+    println!("TOC=0x{:02x}: config={}, code={}", packet[0], (packet[0] >> 3) & 0x1F, packet[0] & 3);
+
+    // --- Rust decode ---
+    let mut rust_dec = RustDecoder::new(sample_rate, channels).expect("Rust decoder");
+    let mut rust_pcm = vec![0i16; max_frame as usize * channels as usize];
+    let rust_samples = rust_dec.decode(Some(packet), &mut rust_pcm, max_frame, false)
+        .expect("Rust decode failed");
+    rust_pcm.truncate(rust_samples as usize * channels as usize);
+
+    // --- C reference decode ---
+    let c_pcm = unsafe {
+        let mut error: std::os::raw::c_int = 0;
+        let dec = bindings::opus_decoder_create(sample_rate, channels, &mut error);
+        assert!(!dec.is_null() && error == 0, "C decoder create failed");
+        let mut pcm = vec![0i16; max_frame as usize * channels as usize];
+        let ret = bindings::opus_decode(
+            dec,
+            packet.as_ptr(),
+            packet.len() as i32,
+            pcm.as_mut_ptr(),
+            max_frame,
+            0,
+        );
+        bindings::opus_decoder_destroy(dec);
+        assert!(ret > 0, "C decode failed: {}", ret);
+        pcm.truncate(ret as usize * channels as usize);
+        pcm
+    };
+
+    println!("Rust: {} samples, C: {} samples", rust_pcm.len(), c_pcm.len());
+    assert_eq!(rust_pcm.len(), c_pcm.len(), "Sample count mismatch!");
+
+    // Find first divergence
+    let mut first_diff = None;
+    let mut diff_count = 0;
+    let mut max_diff = 0i32;
+    for i in 0..rust_pcm.len() {
+        let d = (rust_pcm[i] as i32 - c_pcm[i] as i32).abs();
+        if d != 0 {
+            if first_diff.is_none() {
+                first_diff = Some(i);
+            }
+            diff_count += 1;
+            max_diff = max_diff.max(d);
+        }
+    }
+
+    match first_diff {
+        None => {
+            println!("PASS: All {} samples match perfectly!", rust_pcm.len());
+        }
+        Some(idx) => {
+            let frame_idx = idx / 20; // 20 samples per CELT frame at 8kHz
+            println!("DIVERGENCE at sample {} (frame {}):", idx, frame_idx);
+            println!("  Rust[{}] = {}, C[{}] = {}, diff = {}",
+                idx, rust_pcm[idx], idx, c_pcm[idx], rust_pcm[idx] as i32 - c_pcm[idx] as i32);
+            println!("  Total differing samples: {} / {}", diff_count, rust_pcm.len());
+            println!("  Max absolute diff: {}", max_diff);
+
+            // Show all diverging samples with frame boundaries
+            println!("\n  All differing samples:");
+            for i in 0..rust_pcm.len() {
+                let d = rust_pcm[i] as i32 - c_pcm[i] as i32;
+                if d != 0 {
+                    let frame = i / 20;
+                    println!("    [{}] (frame {}) rust={:6}, c={:6}, diff={:4}",
+                        i, frame, rust_pcm[i], c_pcm[i], d);
+                }
+            }
+
+            // Show context around first divergence
+            let start = if idx >= 5 { idx - 5 } else { 0 };
+            let end = (idx + 20).min(rust_pcm.len());
+            println!("\n  Context (samples {}..{}):", start, end);
+            for i in start..end {
+                let d = rust_pcm[i] as i32 - c_pcm[i] as i32;
+                let marker = if d != 0 { " <--" } else { "" };
+                println!("    [{}] rust={:6}, c={:6}, diff={:4}{}", i, rust_pcm[i], c_pcm[i], d, marker);
+            }
+
+            // Also dump decode_mem state for debugging
+            println!("\n  Rust decoder state:");
+            let preemph = rust_dec.debug_get_preemph_mem();
+            println!("    preemph_mem_d = {:?}", preemph);
+            let pf = rust_dec.debug_get_postfilter();
+            println!("    postfilter: period={}/{}, gain={}/{}, tapset={}/{}",
+                pf.0, pf.1, pf.2, pf.3, pf.4, pf.5);
+        }
+    }
+}
+
+fn cmd_repro_bug_b() {
+    use mdopus::opus::encoder::{
+        OpusEncoder as RustEncoder, OPUS_APPLICATION_VOIP,
+    };
+
+    let sample_rate = 8000i32;
+    let channels = 1i32;
+    let application = OPUS_APPLICATION_VOIP; // 2048
+    let bitrate = 6000i32;
+    let complexity = 0i32;
+    let frame_size = sample_rate / 50; // 160 samples for 20ms
+    let num_frames = 10;
+
+    println!("=== Bug B Repro: Encoder multiframe divergence ===");
+    println!("sr={}, ch={}, app={}, br={}, cx={}, frames={}",
+        sample_rate, channels, application, bitrate, complexity, num_frames);
+
+    // Try several PCM patterns
+    let patterns: Vec<(&str, Box<dyn Fn(usize) -> i16>)> = vec![
+        ("silence", Box::new(|_| 0i16)),
+        ("sine440", Box::new(|i| {
+            let t = i as f64 / sample_rate as f64;
+            (f64::sin(2.0 * std::f64::consts::PI * 440.0 * t) * 16000.0) as i16
+        })),
+        ("noise_low", Box::new(|i| {
+            // Simple deterministic pseudo-noise
+            let x = (i as u32).wrapping_mul(1103515245).wrapping_add(12345);
+            ((x >> 16) as i16) / 8
+        })),
+        ("noise_full", Box::new(|i| {
+            let x = (i as u32).wrapping_mul(1103515245).wrapping_add(12345);
+            (x >> 16) as i16
+        })),
+        ("impulse", Box::new(|i| if i % 160 == 0 { 32767 } else { 0 })),
+        ("sawtooth", Box::new(|i| ((i % 160) as i32 * 400 - 32000) as i16)),
+        ("dc_offset", Box::new(|_| 1000i16)),
+        ("alternating", Box::new(|i| if i % 2 == 0 { 10000 } else { -10000 })),
+    ];
+
+    let mut any_fail = false;
+    for (name, pcm_fn) in &patterns {
+        // Generate PCM for all frames
+        let total_samples = frame_size as usize * num_frames;
+        let pcm: Vec<i16> = (0..total_samples).map(|i| pcm_fn(i)).collect();
+        let pcm_frames: Vec<&[i16]> = pcm.chunks_exact(frame_size as usize).collect();
+
+        // Rust encode
+        let mut rust_enc = RustEncoder::new(sample_rate, channels, application).unwrap();
+        rust_enc.set_bitrate(bitrate);
+        rust_enc.set_vbr(0);
+        rust_enc.set_complexity(complexity);
+
+        let mut rust_packets: Vec<Vec<u8>> = Vec::new();
+        for frame in &pcm_frames {
+            let mut out = vec![0u8; 4000];
+            let len = rust_enc.encode(frame, frame_size, &mut out, 4000).unwrap();
+            out.truncate(len as usize);
+            rust_packets.push(out);
+        }
+
+        // C encode
+        let c_packets = unsafe {
+            let mut error: std::os::raw::c_int = 0;
+            let enc = bindings::opus_encoder_create(sample_rate, channels, application, &mut error);
+            assert!(!enc.is_null() && error == 0);
+            bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
+            bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_VBR_REQUEST, 0 as std::os::raw::c_int);
+            bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, complexity);
+
+            let mut results = Vec::new();
+            for frame in &pcm_frames {
+                let mut out = vec![0u8; 4000];
+                let ret = bindings::opus_encode(
+                    enc, (*frame).as_ptr(), frame_size,
+                    out.as_mut_ptr(), 4000 as bindings::opus_int32,
+                );
+                assert!(ret > 0, "C encode failed: {}", ret);
+                out.truncate(ret as usize);
+                results.push(out);
+            }
+            bindings::opus_encoder_destroy(enc);
+            results
+        };
+
+        // Compare
+        let mut diverged = false;
+        for (i, (r, c)) in rust_packets.iter().zip(c_packets.iter()).enumerate() {
+            if r != c {
+                if !diverged {
+                    println!("\n  [{}] DIVERGENCE at frame {}:", name, i);
+                    diverged = true;
+                    any_fail = true;
+                }
+                println!("    frame {}: Rust {} bytes = {:?}", i, r.len(), &r[..r.len().min(20)]);
+                println!("    frame {}: C    {} bytes = {:?}", i, c.len(), &c[..c.len().min(20)]);
+                // Show TOC byte analysis
+                if !r.is_empty() && !c.is_empty() {
+                    let r_toc = r[0];
+                    let c_toc = c[0];
+                    println!("    TOC: Rust=0x{:02x} (config={}, s={}, code={}), C=0x{:02x} (config={}, s={}, code={})",
+                        r_toc, (r_toc >> 3) & 0x1F, (r_toc >> 2) & 1, r_toc & 3,
+                        c_toc, (c_toc >> 3) & 0x1F, (c_toc >> 2) & 1, c_toc & 3);
+                }
+            }
+        }
+        if !diverged {
+            println!("  [{}] PASS ({} frames match)", name, num_frames);
+        }
+    }
+
+    // Also try many random seeds with the exact crash parameters
+    println!("\n  Testing random PCM inputs (1000 seeds x {} frames)...", num_frames);
+    let mut random_fails = 0;
+    for seed in 0u32..1000 {
+        let total_samples = frame_size as usize * num_frames;
+        let pcm: Vec<i16> = (0..total_samples).map(|i| {
+            let x = (i as u32).wrapping_add(seed.wrapping_mul(65537))
+                .wrapping_mul(1103515245).wrapping_add(12345);
+            (x >> 16) as i16
+        }).collect();
+        let pcm_frames: Vec<&[i16]> = pcm.chunks_exact(frame_size as usize).collect();
+
+        // Rust encode
+        let mut rust_enc = RustEncoder::new(sample_rate, channels, application).unwrap();
+        rust_enc.set_bitrate(bitrate);
+        rust_enc.set_vbr(0);
+        rust_enc.set_complexity(complexity);
+        let mut rust_packets: Vec<Vec<u8>> = Vec::new();
+        for frame in &pcm_frames {
+            let mut out = vec![0u8; 4000];
+            let len = rust_enc.encode(frame, frame_size, &mut out, 4000).unwrap();
+            out.truncate(len as usize);
+            rust_packets.push(out);
+        }
+
+        // C encode
+        let c_packets = unsafe {
+            let mut error: std::os::raw::c_int = 0;
+            let enc = bindings::opus_encoder_create(sample_rate, channels, application, &mut error);
+            assert!(!enc.is_null() && error == 0);
+            bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
+            bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_VBR_REQUEST, 0 as std::os::raw::c_int);
+            bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, complexity);
+            let mut results = Vec::new();
+            for frame in &pcm_frames {
+                let mut out = vec![0u8; 4000];
+                let ret = bindings::opus_encode(
+                    enc, (*frame).as_ptr(), frame_size,
+                    out.as_mut_ptr(), 4000 as bindings::opus_int32,
+                );
+                assert!(ret > 0);
+                out.truncate(ret as usize);
+                results.push(out);
+            }
+            bindings::opus_encoder_destroy(enc);
+            results
+        };
+
+        for (i, (r, c)) in rust_packets.iter().zip(c_packets.iter()).enumerate() {
+            if r != c {
+                if random_fails == 0 {
+                    println!("  FAIL at seed={}, frame {}:", seed, i);
+                    println!("    Rust {} bytes = {:?}", r.len(), &r[..r.len().min(20)]);
+                    println!("    C    {} bytes = {:?}", c.len(), &c[..c.len().min(20)]);
+                    if !r.is_empty() && !c.is_empty() {
+                        println!("    TOC: Rust=0x{:02x}, C=0x{:02x}", r[0], c[0]);
+                    }
+                }
+                random_fails += 1;
+                break;
+            }
+        }
+    }
+    if random_fails > 0 {
+        println!("  Random test: {}/1000 seeds diverged", random_fails);
+        any_fail = true;
+    } else {
+        println!("  Random test: all 1000 seeds PASS");
+    }
+
+    if any_fail {
+        println!("\nFAIL: Some patterns diverged");
+    } else {
+        println!("\nPASS: All patterns match across {} frames", num_frames);
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
@@ -10105,6 +10408,12 @@ fn main() {
         }
         "test-all" => {
             cmd_test_all();
+        }
+        "repro-bug-a" => {
+            cmd_repro_bug_a();
+        }
+        "repro-bug-b" => {
+            cmd_repro_bug_b();
         }
         "--help" | "-h" | "help" => {
             usage();
