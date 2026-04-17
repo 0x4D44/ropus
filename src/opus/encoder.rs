@@ -1991,6 +1991,10 @@ impl OpusEncoder {
         let mut ret: i32 = 0;
         let nb_compr_bytes: i32;
         let mut redundant_rng: u32 = 0;
+        // Bit count of the range encoder captured just before `enc` is dropped
+        // so the outer budget-bust check (C: opus_encoder.c:2580) has access to
+        // `ec_tell(&enc)` after the inner scope ends.
+        let bits_used: i32;
 
         // --- SILK processing ---
         let mut hb_gain = Q15ONE;
@@ -2487,6 +2491,11 @@ impl OpusEncoder {
             // NOTE: enc.done() is NOT called here — the CELT encoder already
             // calls done() internally (matching C's celt_encoder.c:2861).
             // Calling it twice corrupts the buffer layout.
+
+            // Capture range-coder bit count for the outer budget-bust check
+            // (C: opus_encoder.c:2580 — `ec_tell(&enc) > (max_data_bytes-1)*8`).
+            // Must be read here, before `enc` is dropped at the end of this scope.
+            bits_used = enc.tell();
         }
         // enc is now dropped, enc_data is available
 
@@ -2576,12 +2585,20 @@ impl OpusEncoder {
         //   - SILK-only: the SILK compressed bytes (set at line ~2128)
         //   - Other modes: the CELT return value (VBR-shrunk bytes)
         // Budget-bust check (C: lines 2578-2589)
-        if self.mode != MODE_SILK_ONLY {
-            // For CELT/hybrid modes, check if encoder busted the budget
-            // (shouldn't happen normally, but matches C safety check)
-        }
-        // Strip trailing zeros (SILK-only, no redundancy) (C: lines 2590-2598)
-        if self.mode == MODE_SILK_ONLY && !redundancy {
+        // In the unlikely case that the SILK encoder busted its target, tell
+        // the decoder to call the PLC: emit a 1-byte packet with TOC + data[1]=0
+        // and clear rangeFinal so the concealment path runs on decode.
+        if bits_used > (max_data_bytes - 1) * 8 {
+            if max_data_bytes < 2 {
+                return Err(OPUS_BUFFER_TOO_SMALL);
+            }
+            // Note: `data` layout is [TOC | enc_data]; writing `data[1]` is the
+            // first byte of the encoded-data slice (C: data[1] = 0).
+            enc_data[0] = 0;
+            ret = 1;
+            self.range_final = 0;
+        } else if self.mode == MODE_SILK_ONLY && !redundancy {
+            // Strip trailing zeros (C: lines 2590-2598)
             while ret > 2 && data[ret as usize] == 0 {
                 ret -= 1;
             }
