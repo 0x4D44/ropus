@@ -742,6 +742,128 @@ mod tests {
         }
     }
 
+    mod branch_coverage_stage5 {
+        use super::*;
+
+        /// pvq_u_row out-of-bounds fallback: row=14 with large col should return 0.
+        /// Drives the `else` branch of `if idx < CELT_PVQ_U_DATA.len()` at L182.
+        #[test]
+        fn pvq_u_row_out_of_range() {
+            // celt_pvq_u(14, 100) -> row=min(14,100)=14, col=100.
+            // Offset 1257 + 100 = 1357, beyond table length 1272 → else branch.
+            let u = celt_pvq_u(14, 100);
+            assert_eq!(u, 0, "out-of-range should return 0");
+            // Another out-of-range case
+            let u2 = celt_pvq_u(14, 50);
+            assert_eq!(u2, 0);
+            // In-range for comparison
+            let u3 = celt_pvq_u(14, 14);
+            assert_eq!(u3, 1409933619);
+        }
+
+        /// log2_frac with val==0: edge input for the val < 0x8000 check.
+        #[test]
+        fn log2_frac_edges() {
+            // log2_frac with frac=0
+            let _ = log2_frac(1, 0);
+            let _ = log2_frac(2, 0);
+            let _ = log2_frac(100, 0);
+            // Various frac values
+            for frac in 0..=6 {
+                let _ = log2_frac(100, frac);
+            }
+        }
+
+        /// encode_pulses / decode_pulses at n=2, k=1 — the minimal case.
+        #[test]
+        fn encode_decode_pulses_n2_k1() {
+            for y_orig in &[[1i32, 0], [-1, 0], [0, 1], [0, -1]] {
+                let mut buf = vec![0u8; 32];
+                {
+                    let mut enc = RangeEncoder::new(&mut buf);
+                    encode_pulses(y_orig, 2, 1, &mut enc);
+                    enc.done();
+                }
+                let mut y_dec = [0i32; 2];
+                {
+                    let mut dec = RangeDecoder::new(&buf);
+                    let _ = decode_pulses(&mut y_dec, 2, 1, &mut dec);
+                }
+                assert_eq!(&y_dec, y_orig);
+            }
+        }
+
+        /// encode_pulses / decode_pulses at larger (n, k) — stresses CWRS tables.
+        #[test]
+        fn encode_decode_pulses_larger_cases() {
+            let cases: &[(&[i32], i32)] = &[
+                (&[2, 0, -1, 0, 0, 0, 0, 1], 4),
+                (&[0, 0, 0, 1, 0, 0, 0, 0, 0, 0], 1),
+                (&[-1, 1, -1, 1, -1, 1], 6),
+            ];
+            for &(y_orig, k) in cases {
+                let n = y_orig.len() as i32;
+                let mut buf = vec![0u8; 256];
+                {
+                    let mut enc = RangeEncoder::new(&mut buf);
+                    encode_pulses(y_orig, n, k, &mut enc);
+                    enc.done();
+                }
+                let mut y_dec = vec![0i32; n as usize];
+                {
+                    let mut dec = RangeDecoder::new(&buf);
+                    let _ = decode_pulses(&mut y_dec, n, k, &mut dec);
+                }
+                assert_eq!(&y_dec[..], y_orig);
+            }
+        }
+
+        /// cwrsi / icwrs with larger n — varied dimensions stress.
+        #[test]
+        fn cwrsi_icwrs_larger_dimensions() {
+            // Larger n values exercise different code paths (n>2 branch).
+            let cases: &[(i32, i32)] = &[(7, 2), (12, 3), (6, 4), (5, 5)];
+            for &(n, k) in cases {
+                let v = celt_pvq_v(n, k);
+                for &idx in &[0u32, v / 4, v / 2, v - 1] {
+                    if idx >= v {
+                        continue;
+                    }
+                    let mut y = vec![0i32; n as usize];
+                    cwrsi(n, k, idx, &mut y);
+                    let l1: i32 = y.iter().map(|&yi| yi.abs()).sum();
+                    assert_eq!(l1, k, "n={n}, k={k}, idx={idx}");
+                    assert_eq!(icwrs(n, &y), idx, "n={n}, k={k}, idx={idx}");
+                }
+            }
+        }
+
+        /// Single-pulse encode_pulses across various n — exercises encoder path.
+        #[test]
+        fn encode_pulses_single_pulse_various_n() {
+            for n in 2..=8i32 {
+                for pos in 0..n {
+                    for sign in [-1i32, 1] {
+                        let mut y = vec![0i32; n as usize];
+                        y[pos as usize] = sign;
+                        let mut buf = vec![0u8; 64];
+                        {
+                            let mut enc = RangeEncoder::new(&mut buf);
+                            encode_pulses(&y, n, 1, &mut enc);
+                            enc.done();
+                        }
+                        let mut y_dec = vec![0i32; n as usize];
+                        {
+                            let mut dec = RangeDecoder::new(&buf);
+                            let _ = decode_pulses(&mut y_dec, n, 1, &mut dec);
+                        }
+                        assert_eq!(y_dec, y, "n={n}, pos={pos}, sign={sign}");
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_n2_large_k() {
         // N=2 with larger K values

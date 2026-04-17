@@ -1407,4 +1407,150 @@ mod tests {
             "frac_div32(250K, 1M) = {result}, expected ~536870912, diff={diff}"
         );
     }
+
+    mod branch_coverage_stage5 {
+        use super::*;
+
+        /// celt_ilog2 x<=0 branch (L43 true side never hit).
+        #[test]
+        fn celt_ilog2_non_positive() {
+            assert_eq!(celt_ilog2(0), 0);
+            assert_eq!(celt_ilog2(-1), 0);
+            assert_eq!(celt_ilog2(-100), 0);
+            assert_eq!(celt_ilog2(i32::MIN), 0);
+        }
+
+        /// celt_exp2 with extreme inputs to hit saturation branches.
+        #[test]
+        fn celt_exp2_extremes() {
+            // Very large positive — should not panic, should saturate.
+            let big = celt_exp2(i32::MAX / 2);
+            let _ = big; // just ensure it runs
+            // Very large negative — should underflow to 0-ish.
+            let small = celt_exp2(-1_000_000);
+            assert!(small >= 0 && small < 100);
+            // Middle values.
+            let _ = celt_exp2(2048); // 2^2 = 4 in Q16 = 262144
+            let _ = celt_exp2(-2048); // 2^-2 = 0.25 in Q16 = 16384
+            let _ = celt_exp2(i32::MIN / 2);
+        }
+
+        /// frac_div32 saturation branches — exercise both positive and negative
+        /// saturation plus the normal path.
+        #[test]
+        fn frac_div32_saturation_sweep() {
+            // Already tested elsewhere that -10000/5000 saturates negatively.
+            // Here exercise very large a/b ratios in the positive/negative
+            // directions plus a normal mid-range value.
+            let pos = frac_div32(50_000, 1000);
+            let neg = frac_div32(-50_000, 1000);
+            // Symmetry-ish: both far from zero
+            assert!(pos.abs() >= 500_000_000, "pos={pos}");
+            assert!(neg.abs() >= 500_000_000, "neg={neg}");
+            // Normal in-range case
+            let mid = frac_div32(100, 1000);
+            assert!(mid > 0 && mid < 2_147_483_647);
+            // Exact saturation at -10000/5000
+            assert_eq!(frac_div32(-10000, 5000), -2_147_483_647);
+        }
+
+        /// celt_sqrt with x < 0 is not supported, but we can hit the x==0 path
+        /// and the saturation path.
+        #[test]
+        fn celt_sqrt_edge_branches() {
+            assert_eq!(celt_sqrt(0), 0);
+            // Exactly at saturation boundary
+            assert_eq!(celt_sqrt(1_073_741_824), 32767);
+            // Above saturation
+            assert_eq!(celt_sqrt(2_000_000_000), 32767);
+            assert_eq!(celt_sqrt(i32::MAX), 32767);
+        }
+
+        /// celt_sqrt32 edge cases.
+        #[test]
+        fn celt_sqrt32_edge_branches() {
+            assert_eq!(celt_sqrt32(0), 0);
+            // Saturation path
+            assert_eq!(celt_sqrt32(1_073_741_824), 2_147_483_647);
+            assert_eq!(celt_sqrt32(i32::MAX), 2_147_483_647);
+            // Small path
+            let r = celt_sqrt32(4);
+            assert!(r > 0);
+        }
+
+        /// celt_atan2p_norm boundary cases.
+        #[test]
+        fn celt_atan2p_norm_boundaries() {
+            // y==0, x==0 → 0 branch
+            assert_eq!(celt_atan2p_norm(0, 0), 0);
+            // y == x → mid
+            let r = celt_atan2p_norm(1 << 29, 1 << 29);
+            assert!(r > 0);
+            // y < x path
+            let _ = celt_atan2p_norm(100, 1 << 30);
+            // y > x path
+            let _ = celt_atan2p_norm(1 << 30, 100);
+            // y == x but both small
+            let _ = celt_atan2p_norm(100, 100);
+        }
+
+        /// celt_atan_norm exact boundary inputs (L445, L448).
+        #[test]
+        fn celt_atan_norm_boundary_exact() {
+            assert_eq!(celt_atan_norm(1_073_741_824), 536_870_912);
+            assert_eq!(celt_atan_norm(-1_073_741_824), -536_870_912);
+            // Zero
+            assert_eq!(celt_atan_norm(0), 0);
+            // Small positive
+            let r = celt_atan_norm(1000);
+            assert!(r > 0);
+            // Small negative
+            let r = celt_atan_norm(-1000);
+            assert!(r < 0);
+        }
+
+        /// celt_rcp boundary sweep.
+        #[test]
+        fn celt_rcp_sweep() {
+            // Various inputs — exercises the celt_ilog2 path internally.
+            for x in [1, 2, 10, 100, 1000, 10000, 32767] {
+                let _ = celt_rcp(x);
+            }
+        }
+
+        /// celt_log2 edge — x=1 → smallest valid input.
+        #[test]
+        fn celt_log2_edge() {
+            // log2(1) in Q14 = log2(1/16384) = -14 → Q10 = -14336
+            assert_eq!(celt_log2(1), -14336);
+            assert_eq!(celt_log2(2), -13312);
+            // Very large value — exercises upper path.
+            let r = celt_log2(i32::MAX);
+            assert!(r > 0);
+        }
+
+        /// celt_zlog2 non-positive branch.
+        #[test]
+        fn celt_zlog2_non_positive() {
+            assert_eq!(celt_zlog2(0), 0);
+            assert_eq!(celt_zlog2(-1), 0);
+            assert_eq!(celt_zlog2(i32::MIN), 0);
+            // Also exercise positive branch.
+            assert_eq!(celt_zlog2(1), 0);
+        }
+
+        /// celt_rsqrt_norm/norm32 edges.
+        #[test]
+        fn celt_rsqrt_norm_sweep() {
+            // Several points in the [0.25, 1.0) range.
+            for x in [16500, 20000, 32768, 49152, 60000, 65535] {
+                let r = celt_rsqrt_norm(x);
+                assert!(r > 0);
+            }
+            for x in [1_073_741_824i32, 1_500_000_000, 2_000_000_000, 2_147_483_647] {
+                let r = celt_rsqrt_norm32(x);
+                assert!(r > 0);
+            }
+        }
+    }
 }

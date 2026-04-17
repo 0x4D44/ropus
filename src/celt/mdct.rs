@@ -1291,4 +1291,116 @@ mod tests {
         let max_abs = output.iter().map(|x| x.abs()).max().unwrap_or(0);
         assert!(max_abs < i32::MAX / 2, "stride=2 output should be bounded");
     }
+
+    mod branch_coverage_stage5 {
+        use super::*;
+
+        /// Pass input shorter than n2 to trigger the defensive `idx < input_len`
+        /// else branches (L104, L132, L140).
+        #[test]
+        fn backward_short_input_triggers_defensive_bounds() {
+            let l = &MDCT_48000_960;
+            let mode = &crate::celt::modes::MODE_48000_960_120;
+            let overlap = 120;
+            let shift = 3; // N=240, N2=120
+            let n = 240;
+
+            // Half-sized input: forces idx >= input_len for roughly half the indices.
+            let input = vec![100i32; 40]; // n2=120, so 80 reads will fall to else branch
+            let mut output = vec![0i32; n];
+            clt_mdct_backward(l, &input, &mut output, mode.window, overlap, shift, 1);
+            // Just verify it doesn't panic and output is bounded.
+            let max_abs = output.iter().map(|x| x.abs()).max().unwrap_or(0);
+            assert!(max_abs < i32::MAX / 2);
+        }
+
+        /// Empty input: every idx hits the else branch.
+        #[test]
+        fn backward_empty_input_all_defensive() {
+            let l = &MDCT_48000_960;
+            let mode = &crate::celt::modes::MODE_48000_960_120;
+            let shift = 3;
+            let n = 240;
+            let input: Vec<i32> = Vec::new();
+            let mut output = vec![0i32; n];
+            clt_mdct_backward(l, &input, &mut output, mode.window, 120, shift, 1);
+            // With zero input, output should be all zero.
+            assert!(output.iter().all(|&v| v == 0));
+        }
+
+        /// Stride sweep: exercise stride=4 path on shift=3.
+        #[test]
+        fn backward_stride_4() {
+            let l = &MDCT_48000_960;
+            let mode = &crate::celt::modes::MODE_48000_960_120;
+            let shift = 3;
+            let n = 240;
+            let n2 = 120;
+            let mut input = vec![0i32; n2 * 4];
+            input[0] = 1 << 15;
+            let mut output = vec![0i32; n];
+            clt_mdct_backward(l, &input, &mut output, mode.window, 120, shift, 4);
+            let max_abs = output.iter().map(|x| x.abs()).max().unwrap_or(0);
+            assert!(max_abs < i32::MAX / 2);
+        }
+
+        /// Exercise short input on every shift level.
+        #[test]
+        fn backward_short_input_all_shifts() {
+            let l = &MDCT_48000_960;
+            let mode = &crate::celt::modes::MODE_48000_960_120;
+            for shift in 0..=3 {
+                let n = (1920i32 >> shift) as usize;
+                // Truncate input to drive the defensive else branches.
+                let input = vec![10i32; n / 8];
+                let mut output = vec![0i32; n];
+                clt_mdct_backward(l, &input, &mut output, mode.window, 120, shift, 1);
+                let max_abs = output.iter().map(|x| x.abs()).max().unwrap_or(0);
+                assert!(max_abs < i32::MAX / 2, "shift={shift}");
+            }
+        }
+
+        /// Forward MDCT across all four shift levels with small DC input.
+        #[test]
+        fn forward_all_shifts_dc() {
+            use crate::celt::encoder::{clt_mdct_forward, get_fft_state};
+            let l = &MDCT_48000_960;
+            let mode = &crate::celt::modes::MODE_48000_960_120;
+            let overlap = 120i32;
+            for shift in 0..=3i32 {
+                let n = (1920 >> shift) as usize;
+                let n2 = n / 2;
+                let fft_st = get_fft_state(shift);
+                let input = vec![500i32; n + overlap as usize];
+                let mut freq = vec![0i32; n2];
+                clt_mdct_forward(
+                    &input, &mut freq, mode.window, overlap, shift, 1, fft_st, l.trig,
+                );
+                // Output should be bounded.
+                let max_abs = freq.iter().map(|x| x.abs()).max().unwrap_or(0);
+                assert!(max_abs < i32::MAX / 2, "shift={shift}");
+            }
+        }
+
+        /// Two-frame backward with minimal overlap (drives the TDAC OLA path).
+        #[test]
+        fn backward_two_frames_minimal() {
+            let l = &MDCT_48000_960;
+            let mode = &crate::celt::modes::MODE_48000_960_120;
+            let overlap = 120;
+            let shift = 2; // N=480, N2=240
+            let n = 480;
+            let n2 = 240;
+            let input1 = vec![100i32; n2];
+            let mut output1 = vec![0i32; n];
+            clt_mdct_backward(l, &input1, &mut output1, mode.window, overlap, shift, 1);
+            let input2 = vec![-50i32; n2];
+            let mut output2 = vec![0i32; n];
+            clt_mdct_backward(l, &input2, &mut output2, mode.window, overlap, shift, 1);
+            // Both outputs should be non-panicking and bounded.
+            for v in output1.iter().chain(output2.iter()) {
+                assert!(v.abs() < i32::MAX / 2);
+            }
+        }
+    }
 }

@@ -830,4 +830,95 @@ mod tests {
             );
         }
     }
+
+    mod branch_coverage_stage5 {
+        use super::*;
+
+        /// Exercise all four FFT states (shifts 0..3) with DC inputs so the full
+        /// range of radix factorizations gets covered.
+        #[test]
+        fn fft_all_states_dc() {
+            let states: [&KissFftState; 4] = [
+                &FFT_STATE_48000_960_0,
+                &FFT_STATE_48000_960_1,
+                &FFT_STATE_48000_960_2,
+                &FFT_STATE_48000_960_3,
+            ];
+            for st in states {
+                let n = st.nfft as usize;
+                let fin: Vec<KissFftCpx> =
+                    (0..n).map(|_| KissFftCpx { r: 1 << 15, i: 0 }).collect();
+                let mut fout = vec![KissFftCpx::default(); n];
+                opus_fft(st, &fin, &mut fout);
+                // DC should concentrate at bin 0; just verify no panic and
+                // non-DC bins are relatively small.
+                let dc_mag = fout[0].r.abs() + fout[0].i.abs();
+                let non_dc_max = (1..n)
+                    .map(|k| fout[k].r.abs() + fout[k].i.abs())
+                    .max()
+                    .unwrap_or(0);
+                assert!(
+                    dc_mag >= non_dc_max,
+                    "N={n}: DC mag={dc_mag}, non-DC max={non_dc_max}"
+                );
+            }
+        }
+
+        /// IFFT across all states — exercises the conjugate path branch.
+        #[test]
+        fn ifft_all_states_ramp() {
+            let states: [&KissFftState; 4] = [
+                &FFT_STATE_48000_960_0,
+                &FFT_STATE_48000_960_1,
+                &FFT_STATE_48000_960_2,
+                &FFT_STATE_48000_960_3,
+            ];
+            for st in states {
+                let n = st.nfft as usize;
+                let input: Vec<KissFftCpx> = (0..n)
+                    .map(|i| KissFftCpx {
+                        r: (i as i32) * 50,
+                        i: -(i as i32) * 25,
+                    })
+                    .collect();
+                let mut freq = vec![KissFftCpx::default(); n];
+                let mut back = vec![KissFftCpx::default(); n];
+                opus_fft(st, &input, &mut freq);
+                opus_ifft(st, &freq, &mut back);
+                // Just verify it runs without panic; loose tolerance check.
+                // Loose check: verify bounds only (larger N accumulates more
+                // fixed-point rounding noise per sample).
+                for c in &back {
+                    assert!(c.r.abs() < i32::MAX / 2 && c.i.abs() < i32::MAX / 2);
+                }
+            }
+        }
+
+        /// opus_fft_impl directly with each state and a few downshift values.
+        #[test]
+        fn fft_impl_downshift_sweep() {
+            let states: [&KissFftState; 4] = [
+                &FFT_STATE_48000_960_0,
+                &FFT_STATE_48000_960_1,
+                &FFT_STATE_48000_960_2,
+                &FFT_STATE_48000_960_3,
+            ];
+            for st in states {
+                let n = st.nfft as usize;
+                for downshift in 0..3 {
+                    let mut buf: Vec<KissFftCpx> = (0..n)
+                        .map(|i| KissFftCpx {
+                            r: ((i as i32) << 10) - 100,
+                            i: 200 - ((i as i32) << 9),
+                        })
+                        .collect();
+                    opus_fft_impl(st, &mut buf, downshift);
+                    // Verify nothing saturated wildly.
+                    for c in &buf {
+                        assert!(c.r.abs() < i32::MAX / 2 && c.i.abs() < i32::MAX / 2);
+                    }
+                }
+            }
+        }
+    }
 }

@@ -665,4 +665,173 @@ mod tests {
         exp_rotation(&mut x, 4, 1, 1, 1, SPREAD_NONE);
         assert_eq!(x, original);
     }
+
+    mod branch_coverage_stage5 {
+        use super::*;
+        use crate::celt::range_coder::{RangeDecoder, RangeEncoder};
+
+        /// alg_quant with resynth=false — drives the `if resynth` false branches
+        /// at L395 and L400. Use runtime value to avoid const-folding.
+        #[test]
+        fn alg_quant_no_resynth() {
+            let n = 4i32;
+            let k = 3i32;
+            // Use a runtime-computed boolean so `resynth` isn't const-folded.
+            let resynth_values: &[bool] = &[false, true, false];
+            for &resynth in resynth_values {
+                let mut x = [
+                    (0.6 * (1 << NORM_SHIFT) as f64) as i32,
+                    (0.3 * (1 << NORM_SHIFT) as f64) as i32,
+                    (-0.5 * (1 << NORM_SHIFT) as f64) as i32,
+                    (0.2 * (1 << NORM_SHIFT) as f64) as i32,
+                ];
+                let mut buf = vec![0u8; 64];
+                let mut enc = RangeEncoder::new(&mut buf);
+                let _mask = alg_quant(
+                    &mut enc,
+                    &mut x,
+                    n,
+                    k,
+                    2, // SPREAD_NORMAL
+                    1,
+                    NORM_SCALING,
+                    resynth,
+                );
+                enc.done();
+                assert!(!enc.error());
+            }
+        }
+
+        /// alg_quant / alg_unquant roundtrip with each spread mode.
+        #[test]
+        fn alg_quant_all_spread_modes() {
+            for spread in 0..=3i32 {
+                // n/k where 2k < n so exp_rotation runs.
+                let n = 8i32;
+                let k = 3i32;
+                let gain = NORM_SCALING;
+                let mut x: [i32; 8] = [
+                    100_000, -200_000, 300_000, -400_000, 500_000, -600_000, 700_000, -800_000,
+                ];
+
+                let mut buf = vec![0u8; 128];
+                {
+                    let mut enc = RangeEncoder::new(&mut buf);
+                    let _ = alg_quant(&mut enc, &mut x, n, k, spread, 1, gain, true);
+                    enc.done();
+                    assert!(!enc.error());
+                }
+
+                let mut y = vec![0i32; n as usize];
+                {
+                    let mut dec = RangeDecoder::new(&buf);
+                    let _ = alg_unquant(&mut dec, &mut y, n, k, spread, 1, gain);
+                }
+                // Verify the decoded vector is bounded.
+                assert!(y.iter().all(|v| v.abs() < i32::MAX / 2));
+            }
+        }
+
+        /// alg_quant with B > 1 (multi-block collapse).
+        #[test]
+        fn alg_quant_multiblock() {
+            let n = 8i32;
+            let k = 4i32;
+            let b = 2i32; // 2 blocks of 4
+            let gain = NORM_SCALING;
+            let mut x: [i32; 8] = [
+                (0.5 * (1 << NORM_SHIFT) as f64) as i32,
+                (0.4 * (1 << NORM_SHIFT) as f64) as i32,
+                (-0.3 * (1 << NORM_SHIFT) as f64) as i32,
+                (0.2 * (1 << NORM_SHIFT) as f64) as i32,
+                (-0.5 * (1 << NORM_SHIFT) as f64) as i32,
+                (0.4 * (1 << NORM_SHIFT) as f64) as i32,
+                (0.3 * (1 << NORM_SHIFT) as f64) as i32,
+                (-0.2 * (1 << NORM_SHIFT) as f64) as i32,
+            ];
+            let mut buf = vec![0u8; 128];
+            let mut enc = RangeEncoder::new(&mut buf);
+            let mask = alg_quant(&mut enc, &mut x, n, k, 2, b, gain, true);
+            enc.done();
+            // With B=2 blocks, mask should have at most 2 bits set.
+            assert!(mask & !0b11 == 0);
+        }
+
+        /// alg_quant with K=1 and B>1 — collapse conditions.
+        #[test]
+        fn alg_quant_k1_multiblock() {
+            let n = 4i32;
+            let k = 1i32;
+            let b = 2i32;
+            let gain = NORM_SCALING;
+            let mut x: [i32; 4] = [1_000_000, 500_000, -200_000, 300_000];
+            let mut buf = vec![0u8; 64];
+            let mut enc = RangeEncoder::new(&mut buf);
+            let mask = alg_quant(&mut enc, &mut x, n, k, 0, b, gain, true);
+            enc.done();
+            // Exactly one block should have a pulse with K=1.
+            assert_eq!(mask.count_ones(), 1);
+        }
+
+        /// extract_collapse_mask via alg_unquant with zeros-only scenario not
+        /// achievable, but verify the B=1 path returns mask=1.
+        #[test]
+        fn alg_quant_b1_mask_one() {
+            let n = 4i32;
+            let k = 2i32;
+            let b = 1i32;
+            let gain = NORM_SCALING;
+            let mut x: [i32; 4] = [500_000, 300_000, -200_000, 100_000];
+            let mut buf = vec![0u8; 64];
+            let mut enc = RangeEncoder::new(&mut buf);
+            let mask = alg_quant(&mut enc, &mut x, n, k, 0, b, gain, true);
+            enc.done();
+            assert_eq!(mask, 1);
+        }
+
+        /// alg_quant with SPREAD_AGGRESSIVE — specifically L132 factor lookup.
+        #[test]
+        fn alg_quant_spread_aggressive_large_n() {
+            // Larger n (triggers stride2 >= 1 path in exp_rotation)
+            let n = 32i32;
+            let k = 5i32;
+            let gain = NORM_SCALING;
+            let mut x = vec![0i32; n as usize];
+            for (i, v) in x.iter_mut().enumerate() {
+                *v = ((i as i32 - 16) * 100_000) as i32;
+            }
+            let mut buf = vec![0u8; 256];
+            let mut enc = RangeEncoder::new(&mut buf);
+            let _ = alg_quant(&mut enc, &mut x, n, k, 3 /* AGGRESSIVE */, 1, gain, true);
+            enc.done();
+            assert!(!enc.error());
+        }
+
+        /// Test op_pvq_search with K > N/2 to drive the pre-search path.
+        #[test]
+        fn op_pvq_search_k_greater_than_half_n() {
+            let mut x = [
+                (0.5 * (1 << NORM_SHIFT) as f64) as i32,
+                (0.4 * (1 << NORM_SHIFT) as f64) as i32,
+                (-0.3 * (1 << NORM_SHIFT) as f64) as i32,
+                (0.2 * (1 << NORM_SHIFT) as f64) as i32,
+            ];
+            let mut iy = [0i32; 4];
+            let yy = op_pvq_search(&mut x, &mut iy, 5, 4); // K=5 > N/2=2
+            let l1: i32 = iy.iter().map(|v| v.abs()).sum();
+            assert_eq!(l1, 5);
+            assert!(yy >= 5);
+        }
+
+        /// op_pvq_search with near-zero input triggers degenerate-input path.
+        #[test]
+        fn op_pvq_search_near_zero_degenerate() {
+            let mut x = [0i32, 0, 0, 0];
+            let mut iy = [0i32; 4];
+            let yy = op_pvq_search(&mut x, &mut iy, 3, 4);
+            let l1: i32 = iy.iter().map(|v| v.abs()).sum();
+            assert_eq!(l1, 3);
+            assert!(yy >= 3);
+        }
+    }
 }
