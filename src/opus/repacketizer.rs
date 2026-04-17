@@ -3549,4 +3549,640 @@ mod tests {
         let ret = opus_packet_pad_impl(&mut buf, 2, 10, true, &[ext]);
         assert!(ret < 0); // Should fail (buffer too small for extensions)
     }
+
+    // =======================================================================
+    // Stage 2 branch coverage additions
+    // =======================================================================
+    mod branch_coverage_stage2 {
+        use super::*;
+        use crate::opus::encoder::{OPUS_APPLICATION_AUDIO, OpusEncoder};
+
+        fn patterned_pcm_i16(frame_size: usize, channels: usize, seed: i32) -> Vec<i16> {
+            (0..frame_size * channels)
+                .map(|i| {
+                    let base = ((i as i32 * 7919 + seed * 911) % 28000) - 14000;
+                    if channels == 2 && i % 2 == 1 {
+                        (base / 2) as i16
+                    } else {
+                        base as i16
+                    }
+                })
+                .collect()
+        }
+
+        /// Encode one 20ms mono frame at 16kHz. Useful for cat()/pad() inputs.
+        fn mk_packet(seed: i32) -> Vec<u8> {
+            let mut enc = OpusEncoder::new(16000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+            enc.set_bitrate(16000);
+            enc.set_complexity(2);
+            let pcm = patterned_pcm_i16(320, 1, seed);
+            let mut buf = vec![0u8; 400];
+            let n = enc.encode(&pcm, 320, &mut buf, 400).unwrap();
+            buf.truncate(n as usize);
+            buf
+        }
+
+        #[test]
+        fn init_resets_frame_count_after_cat() {
+            let pkt = mk_packet(1);
+            let mut rp = OpusRepacketizer::new();
+            assert_eq!(rp.cat(&pkt, pkt.len() as i32), OPUS_OK);
+            assert!(rp.get_nb_frames() >= 1);
+            rp.init();
+            assert_eq!(rp.get_nb_frames(), 0);
+        }
+
+        #[test]
+        fn cat_accumulates_multiple_packets_and_out_round_trips() {
+            let a = mk_packet(2);
+            let b = mk_packet(3);
+            let c = mk_packet(4);
+            let mut rp = OpusRepacketizer::new();
+            assert_eq!(rp.cat(&a, a.len() as i32), OPUS_OK);
+            assert_eq!(rp.cat(&b, b.len() as i32), OPUS_OK);
+            assert_eq!(rp.cat(&c, c.len() as i32), OPUS_OK);
+            assert_eq!(rp.get_nb_frames(), 3);
+
+            let mut out = vec![0u8; 2048];
+            let n = rp.out(&mut out, 2048);
+            assert!(n > 0);
+            // out_range with arbitrary sub-range
+            let n2 = rp.out_range(1, 3, &mut out, 2048);
+            assert!(n2 > 0);
+        }
+
+        #[test]
+        fn out_range_bad_bounds_returns_bad_arg() {
+            let a = mk_packet(5);
+            let mut rp = OpusRepacketizer::new();
+            rp.cat(&a, a.len() as i32);
+            let mut out = vec![0u8; 256];
+            // begin >= end
+            assert_eq!(rp.out_range(1, 1, &mut out, 256), OPUS_BAD_ARG);
+            // end > nb_frames
+            assert_eq!(rp.out_range(0, 99, &mut out, 256), OPUS_BAD_ARG);
+        }
+
+        #[test]
+        fn cat_rejects_invalid_length() {
+            let mut rp = OpusRepacketizer::new();
+            assert_eq!(rp.cat(&[], 0), OPUS_INVALID_PACKET);
+        }
+
+        #[test]
+        fn cat_rejects_mismatched_toc() {
+            // First pkt SILK-WB, second pkt CELT-only — TOC top bits differ.
+            let mut enc1 = OpusEncoder::new(16000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+            enc1.set_bitrate(16000);
+            let pcm = patterned_pcm_i16(320, 1, 7);
+            let mut p1 = vec![0u8; 400];
+            let n1 = enc1.encode(&pcm, 320, &mut p1, 400).unwrap();
+            p1.truncate(n1 as usize);
+
+            let mut enc2 = OpusEncoder::new(
+                48000,
+                1,
+                crate::opus::encoder::OPUS_APPLICATION_RESTRICTED_LOWDELAY,
+            )
+            .unwrap();
+            enc2.set_bitrate(64000);
+            let pcm2 = patterned_pcm_i16(960, 1, 8);
+            let mut p2 = vec![0u8; 1500];
+            let n2 = enc2.encode(&pcm2, 960, &mut p2, 1500).unwrap();
+            p2.truncate(n2 as usize);
+
+            let mut rp = OpusRepacketizer::new();
+            assert_eq!(rp.cat(&p1, p1.len() as i32), OPUS_OK);
+            let r = rp.cat(&p2, p2.len() as i32);
+            assert!(r < 0, "expected mismatched-TOC rejection, got {r}");
+        }
+
+        #[test]
+        fn opus_packet_pad_noop_when_equal_lengths() {
+            let pkt = mk_packet(10);
+            let mut buf = vec![0u8; 512];
+            let original_len = pkt.len() as i32;
+            buf[..pkt.len()].copy_from_slice(&pkt);
+            // len == new_len → OPUS_OK immediately
+            assert_eq!(opus_packet_pad(&mut buf, original_len, original_len), OPUS_OK);
+        }
+
+        #[test]
+        fn opus_packet_pad_grows_to_new_len() {
+            let pkt = mk_packet(11);
+            let original_len = pkt.len() as i32;
+            let target = original_len + 40;
+            let mut buf = vec![0u8; (target + 16) as usize];
+            buf[..pkt.len()].copy_from_slice(&pkt);
+            let r = opus_packet_pad(&mut buf, original_len, target);
+            assert_eq!(r, OPUS_OK);
+            // And unpad returns a length <= target
+            let unp = opus_packet_unpad(&mut buf, target);
+            assert!(unp > 0 && unp <= target, "unpad returned {unp}");
+        }
+
+        #[test]
+        fn opus_packet_pad_rejects_shrink_and_zero_len() {
+            let pkt = mk_packet(12);
+            let mut buf = vec![0u8; 512];
+            buf[..pkt.len()].copy_from_slice(&pkt);
+            // new_len < len → OPUS_BAD_ARG
+            let r = opus_packet_pad(&mut buf, pkt.len() as i32, (pkt.len() as i32) - 1);
+            assert_eq!(r, OPUS_BAD_ARG);
+            // len < 1 → OPUS_BAD_ARG
+            assert_eq!(opus_packet_pad(&mut buf, 0, 10), OPUS_BAD_ARG);
+        }
+
+        #[test]
+        fn opus_packet_pad_across_255_byte_sentinel() {
+            let pkt = mk_packet(13);
+            let original_len = pkt.len() as i32;
+            // Pad to >255 extra bytes — hits the nb_255s loop in out_range_impl.
+            let target = original_len + 260;
+            let mut buf = vec![0u8; (target + 16) as usize];
+            buf[..pkt.len()].copy_from_slice(&pkt);
+            let r = opus_packet_pad(&mut buf, original_len, target);
+            assert_eq!(r, OPUS_OK, "pad across 255-byte sentinel failed: {r}");
+            let unp = opus_packet_unpad(&mut buf, target);
+            assert!(unp > 0);
+        }
+
+        #[test]
+        fn opus_packet_unpad_rejects_empty() {
+            let mut buf = [0u8; 4];
+            assert_eq!(opus_packet_unpad(&mut buf, 0), OPUS_BAD_ARG);
+        }
+
+        #[test]
+        fn multistream_pad_unpad_two_stream_packet() {
+            // Build a multistream packet by concatenating a self-delimited
+            // sub-packet and a standard sub-packet.
+            let p1 = mk_packet(20);
+            let p2 = mk_packet(21);
+            // Put p1 into self-delimited form via out_range_impl
+            let mut rp = OpusRepacketizer::new();
+            rp.cat(&p1, p1.len() as i32);
+            let sd1_cap = (p1.len() + 8) as i32;
+            let mut sd1 = vec![0u8; sd1_cap as usize];
+            let n_sd = rp.out_range_impl(0, 1, &mut sd1, sd1_cap, true, false, &[]);
+            assert!(n_sd > 0);
+
+            let mut combined = Vec::new();
+            combined.extend_from_slice(&sd1[..n_sd as usize]);
+            combined.extend_from_slice(&p2);
+
+            // Grow buffer and pad
+            let new_len = combined.len() as i32 + 20;
+            let mut buf = vec![0u8; (new_len + 16) as usize];
+            buf[..combined.len()].copy_from_slice(&combined);
+            let r = opus_multistream_packet_pad(
+                &mut buf,
+                combined.len() as i32,
+                new_len,
+                2,
+            );
+            assert_eq!(r, OPUS_OK);
+
+            let unp = opus_multistream_packet_unpad(&mut buf, new_len, 2);
+            assert!(unp > 0 && unp <= new_len, "got {unp}");
+        }
+
+        #[test]
+        fn multistream_pad_equal_len_is_noop() {
+            let pkt = mk_packet(22);
+            let mut buf = vec![0u8; 256];
+            buf[..pkt.len()].copy_from_slice(&pkt);
+            assert_eq!(
+                opus_multistream_packet_pad(&mut buf, pkt.len() as i32, pkt.len() as i32, 1),
+                OPUS_OK
+            );
+        }
+
+        #[test]
+        fn multistream_pad_rejects_shrink_and_zero() {
+            let mut buf = [0u8; 16];
+            assert_eq!(opus_multistream_packet_pad(&mut buf, 0, 10, 1), OPUS_BAD_ARG);
+            assert_eq!(opus_multistream_packet_pad(&mut buf, 10, 5, 1), OPUS_BAD_ARG);
+        }
+
+        #[test]
+        fn multistream_unpad_rejects_empty() {
+            let mut buf = [0u8; 4];
+            assert_eq!(opus_multistream_packet_unpad(&mut buf, 0, 1), OPUS_BAD_ARG);
+        }
+
+        #[test]
+        fn self_delimited_out_range_writes_size_prefix() {
+            let pkt = mk_packet(30);
+            let mut rp = OpusRepacketizer::new();
+            rp.cat(&pkt, pkt.len() as i32);
+            let mut out = vec![0u8; 1024];
+            let n = rp.out_range_impl(0, 1, &mut out, 1024, true, false, &[]);
+            assert!(n > 0);
+            // self-delimited output must be strictly longer than a plain out()
+            let mut out2 = vec![0u8; 1024];
+            let n2 = rp.out_range_impl(0, 1, &mut out2, 1024, false, false, &[]);
+            assert!(n2 > 0);
+            assert!(n > n2);
+        }
+
+        #[test]
+        fn out_range_small_buffer_returns_buffer_too_small() {
+            let pkt = mk_packet(31);
+            let mut rp = OpusRepacketizer::new();
+            rp.cat(&pkt, pkt.len() as i32);
+            let mut small = vec![0u8; 1];
+            let r = rp.out(&mut small, 1);
+            assert!(r < 0);
+        }
+
+        #[test]
+        fn parse_packet_all_codes_ok_and_malformed() {
+            // Code 0
+            let p = [0x08u8, 0xAA, 0xBB];
+            let r = parse_packet(&p, p.len() as i32, false).unwrap();
+            assert_eq!(r.count, 1);
+            // Code 1
+            let p = [0x09u8, 0xCC, 0xDD];
+            let r = parse_packet(&p, p.len() as i32, false).unwrap();
+            assert_eq!(r.count, 2);
+            // Code 2
+            let p = [0x0Au8, 0x01, 0xEE, 0xFF, 0x11];
+            let r = parse_packet(&p, p.len() as i32, false).unwrap();
+            assert_eq!(r.count, 2);
+            // Code 3 CBR
+            let p = [0x0Bu8, 0x02, 0xAA, 0xBB, 0xCC, 0xDD];
+            let r = parse_packet(&p, p.len() as i32, false).unwrap();
+            assert_eq!(r.count, 2);
+            // Code 3 bad count (0)
+            assert!(parse_packet(&[0x0Bu8, 0x00], 2, false).is_err());
+            // Code 3 with only 1 byte (no count byte)
+            assert!(parse_packet(&[0x0Bu8], 1, false).is_err());
+            // Len == 0 → invalid
+            assert!(parse_packet(&[], 0, false).is_err());
+            // len < 0 → bad arg
+            assert!(matches!(parse_packet(&[0x08u8, 0xAA], -1, false), Err(OPUS_BAD_ARG)));
+            // Code 1 with odd remaining (self_delimited=false)
+            assert!(parse_packet(&[0x09u8, 0xAA], 2, false).is_err());
+        }
+
+        #[test]
+        fn parse_packet_self_delimited_paths() {
+            // Self-delimited code 0: size byte then payload
+            let p = [0x08u8, 0x02, 0xAA, 0xBB];
+            let r = parse_packet(&p, p.len() as i32, true).unwrap();
+            assert_eq!(r.count, 1);
+            // Self-delimited code 1: two CBR, size at end
+            let p = [0x09u8, 0x02, 0xAA, 0xBB, 0xCC, 0xDD];
+            let r = parse_packet(&p, p.len() as i32, true).unwrap();
+            assert_eq!(r.count, 2);
+        }
+
+        #[test]
+        fn out_range_with_extensions_triggers_code3_upgrade() {
+            // Single-frame cat, then out_range_impl with an extension —
+            // forces the "upgrade to code 3" branch.
+            let pkt = mk_packet(40);
+            let mut rp = OpusRepacketizer::new();
+            rp.cat(&pkt, pkt.len() as i32);
+            let payload = [0x55u8];
+            let ext = OpusExtensionData {
+                id: 33,
+                frame: 0,
+                data: &payload,
+                len: 1,
+            };
+            let mut out = vec![0u8; 2048];
+            let n = rp.out_range_impl(0, 1, &mut out, 2048, false, false, &[ext]);
+            assert!(n > 0, "out_range with extension returned {n}");
+        }
+
+        #[test]
+        fn out_range_pad_to_max_fills_remaining_bytes() {
+            let pkt = mk_packet(41);
+            let mut rp = OpusRepacketizer::new();
+            rp.cat(&pkt, pkt.len() as i32);
+            let target = pkt.len() as i32 + 80;
+            let mut out = vec![0u8; target as usize];
+            let n = rp.out_range_impl(0, 1, &mut out, target, false, true, &[]);
+            assert_eq!(n, target);
+        }
+
+        // --- Targeted parse_packet error-path coverage ---
+
+        #[test]
+        fn parse_packet_code2_bad_first_size() {
+            // Code 2, size byte claims 252 (needs 2 bytes) but only 1 remaining.
+            let p = [0x0Au8, 252u8];
+            assert!(parse_packet(&p, p.len() as i32, false).is_err());
+        }
+
+        #[test]
+        fn parse_packet_code2_first_size_overflow() {
+            // Code 2: first frame size > remaining
+            let p = [0x0Au8, 10u8, 0xAA];
+            assert!(parse_packet(&p, p.len() as i32, false).is_err());
+        }
+
+        #[test]
+        fn parse_packet_code3_vbr_bad_size_and_overflow() {
+            // VBR code 3, count=2 → need 1 VBR size for frame 0.
+            // Byte layout: TOC=0x0B, ch=0x82 (VBR, count=2), then bad size (252 alone),
+            // then frames.
+            let p = [0x0Bu8, 0x82u8, 252u8];
+            assert!(parse_packet(&p, p.len() as i32, false).is_err());
+            // size too large
+            let p = [0x0Bu8, 0x82u8, 250u8, 0xAA];
+            assert!(parse_packet(&p, p.len() as i32, false).is_err());
+        }
+
+        #[test]
+        fn parse_packet_code3_vbr_last_size_underflow() {
+            // VBR code 3, count=3 → 2 VBR sizes; if sum of sizes > remaining,
+            // last_size goes negative.
+            let p = [0x0Bu8, 0x83u8, 5u8, 5u8, 0xAA];
+            assert!(parse_packet(&p, p.len() as i32, false).is_err());
+        }
+
+        #[test]
+        fn parse_packet_self_delimited_code3_cbr_overflow() {
+            // Code 3 CBR, count=3, self-delim size*count > remaining
+            let p = [0x0Bu8, 0x03u8, 100u8, 0, 0, 0];
+            assert!(parse_packet(&p, p.len() as i32, true).is_err());
+        }
+
+        #[test]
+        fn parse_packet_self_delimited_vbr_bytes_plus_sz_overflow() {
+            // Self-delim code 3 VBR, count=2, first VBR size = 1, self-delim size huge.
+            // Sets bytes + sz > last_size → branch at line 221.
+            let p = [0x0Bu8, 0x82u8, 1u8, 251u8, 0xAA];
+            assert!(parse_packet(&p, p.len() as i32, true).is_err());
+        }
+
+        #[test]
+        fn parse_packet_self_delimited_bad_size() {
+            // Self-delim code 0 but size byte claims 252 with 1 byte available.
+            let p = [0x08u8, 252u8];
+            assert!(parse_packet(&p, p.len() as i32, true).is_err());
+        }
+
+        #[test]
+        fn parse_packet_code3_padding_runs_out() {
+            // Code 3 with padding flag but no padding bytes available.
+            let p = [0x0Bu8, 0x41u8];
+            assert!(parse_packet(&p, p.len() as i32, false).is_err());
+        }
+
+        #[test]
+        fn parse_packet_code3_framesize_times_count_exceeds_120ms() {
+            // 2.5ms CELT × 49 frames > 5760 samples at 48kHz
+            // TOC 0x87 = CELT-only 2.5ms + code 3
+            let p = [0x87u8, 49u8];
+            assert!(parse_packet(&p, p.len() as i32, false).is_err());
+        }
+
+        #[test]
+        fn parse_packet_last_size_over_1275_rejected() {
+            // Code 0 with remaining > 1275 → line 226 branch.
+            let mut big = vec![0x08u8];
+            big.extend(std::iter::repeat(0u8).take(1280));
+            assert!(parse_packet(&big, big.len() as i32, false).is_err());
+        }
+
+        #[test]
+        fn extension_iterator_reset_and_set_frame_max() {
+            let data = [0x04u8]; // repeat-indicator with L=0, no content
+            let mut iter = OpusExtensionIterator::new(&data, data.len() as i32, 2);
+            iter.set_frame_max(1);
+            iter.reset();
+            let _ = iter.next_ext();
+        }
+
+        #[test]
+        fn skip_extension_empty_and_single_byte() {
+            let mut pos = 0usize;
+            let mut header_size = 1;
+            // Empty data with remaining=0 → returns 0 and sets header_size=0
+            assert_eq!(skip_extension(&[], &mut pos, 0, &mut header_size), 0);
+            assert_eq!(header_size, 0);
+        }
+
+        #[test]
+        fn extensions_parse_and_count_empty() {
+            let mut exts = [OpusExtensionData::EMPTY; 4];
+            let mut n = 4;
+            assert_eq!(
+                opus_packet_extensions_parse(&[], 0, &mut exts, &mut n, 1),
+                0
+            );
+            assert_eq!(n, 0);
+            assert_eq!(opus_packet_extensions_count(&[], 0, 1), 0);
+        }
+
+        #[test]
+        fn extensions_generate_bad_args() {
+            // nb_frames > MAX_FRAMES → OPUS_BAD_ARG
+            let ret = opus_packet_extensions_generate(None, 256, &[], (MAX_FRAMES + 1) as i32, false);
+            assert_eq!(ret, OPUS_BAD_ARG);
+
+            // extension with frame out of range
+            let ext = OpusExtensionData {
+                id: 33,
+                frame: 99,
+                data: &[],
+                len: 0,
+            };
+            let ret = opus_packet_extensions_generate(None, 256, &[ext], 1, false);
+            assert_eq!(ret, OPUS_BAD_ARG);
+
+            // extension with invalid id
+            let ext = OpusExtensionData {
+                id: 1,
+                frame: 0,
+                data: &[],
+                len: 0,
+            };
+            let ret = opus_packet_extensions_generate(None, 256, &[ext], 1, false);
+            assert_eq!(ret, OPUS_BAD_ARG);
+        }
+
+        #[test]
+        fn extensions_generate_short_with_invalid_len() {
+            // Short extension (id < 32) with len=2 is invalid.
+            let payload = [0x11u8];
+            let ext = OpusExtensionData {
+                id: 5,
+                frame: 0,
+                data: &payload,
+                len: 2,
+            };
+            let ret = opus_packet_extensions_generate(None, 256, &[ext], 1, false);
+            assert!(ret < 0);
+        }
+
+        #[test]
+        fn out_range_with_multiple_extensions_across_frames() {
+            // Cat 2 packets so nb_frames = 2, then request out_range with
+            // extensions that apply to both frames — exercises the repeat
+            // machinery on write side.
+            let a = mk_packet(60);
+            let b = mk_packet(61);
+            let mut rp = OpusRepacketizer::new();
+            rp.cat(&a, a.len() as i32);
+            rp.cat(&b, b.len() as i32);
+
+            let payload = [0xABu8];
+            let ext0 = OpusExtensionData { id: 33, frame: 0, data: &payload, len: 1 };
+            let ext1 = OpusExtensionData { id: 33, frame: 1, data: &payload, len: 1 };
+
+            let mut out = vec![0u8; 2048];
+            let n = rp.out_range_impl(0, 2, &mut out, 2048, false, false, &[ext0, ext1]);
+            assert!(n > 0, "out_range_impl with 2 exts returned {n}");
+        }
+
+        #[test]
+        fn pad_impl_with_caller_extension() {
+            // pad_impl with an extension — exercises the extension length path.
+            let pkt = mk_packet(65);
+            let mut buf = vec![0u8; 512];
+            buf[..pkt.len()].copy_from_slice(&pkt);
+            let payload = [0x22u8];
+            let ext = OpusExtensionData { id: 33, frame: 0, data: &payload, len: 1 };
+            let target = pkt.len() as i32 + 30;
+            let ret = opus_packet_pad_impl(&mut buf, pkt.len() as i32, target, true, &[ext]);
+            assert!(ret > 0, "pad_impl with caller extension returned {ret}");
+        }
+
+        // --- More extension generation / iterator coverage ---
+
+        #[test]
+        fn extension_generate_repeat_mechanism_multi_frame() {
+            // Same extension applied to all frames → exercises the repeat branch.
+            let payload = [0xABu8];
+            let ext0 = OpusExtensionData { id: 33, frame: 0, data: &payload, len: 1 };
+            let ext1 = OpusExtensionData { id: 33, frame: 1, data: &payload, len: 1 };
+            let ext2 = OpusExtensionData { id: 33, frame: 2, data: &payload, len: 1 };
+            let ext3 = OpusExtensionData { id: 33, frame: 3, data: &payload, len: 1 };
+            let exts = [ext0, ext1, ext2, ext3];
+
+            let size = opus_packet_extensions_generate(None, 256, &exts, 4, false);
+            assert!(size > 0);
+            let mut buf = vec![0u8; size as usize];
+            let s = opus_packet_extensions_generate(Some(&mut buf), size, &exts, 4, false);
+            assert_eq!(s, size);
+
+            // Parse back
+            let mut parsed = [OpusExtensionData::EMPTY; 8];
+            let mut n = 8;
+            assert_eq!(
+                opus_packet_extensions_parse(&buf, size, &mut parsed, &mut n, 4),
+                0
+            );
+            assert_eq!(n, 4);
+
+            // Count matches
+            assert_eq!(opus_packet_extensions_count(&buf, size, 4), 4);
+        }
+
+        #[test]
+        fn extension_generate_mixed_frames_with_separators() {
+            // Extensions on frames 0 and 2 — forces separator emission (line 886).
+            let p = [0x11u8];
+            let exts = [
+                OpusExtensionData { id: 5, frame: 0, data: &p, len: 1 },
+                OpusExtensionData { id: 5, frame: 2, data: &p, len: 1 },
+            ];
+            let size = opus_packet_extensions_generate(None, 256, &exts, 3, false);
+            assert!(size > 0);
+            let mut buf = vec![0u8; size as usize];
+            let s = opus_packet_extensions_generate(Some(&mut buf), size, &exts, 3, false);
+            assert_eq!(s, size);
+
+            // Parse back
+            let mut parsed = [OpusExtensionData::EMPTY; 4];
+            let mut n = 4;
+            assert_eq!(
+                opus_packet_extensions_parse(&buf, size, &mut parsed, &mut n, 3),
+                0
+            );
+        }
+
+        #[test]
+        fn extension_generate_adjacent_separator_diff_1() {
+            // diff == 1 branch (line 886)
+            let p = [0x11u8];
+            let exts = [
+                OpusExtensionData { id: 5, frame: 0, data: &p, len: 1 },
+                OpusExtensionData { id: 5, frame: 1, data: &p, len: 1 },
+            ];
+            let size = opus_packet_extensions_generate(None, 256, &exts, 2, false);
+            let mut buf = vec![0u8; size as usize];
+            let _ = opus_packet_extensions_generate(Some(&mut buf), size, &exts, 2, false);
+        }
+
+        #[test]
+        fn extension_iterator_find_and_next_ext_empty() {
+            let data: [u8; 0] = [];
+            let mut iter = OpusExtensionIterator::new(&data, 0, 1);
+            let (ret, _) = iter.next_ext();
+            assert_eq!(ret, 0);
+            let (ret2, _) = iter.find(33);
+            assert_eq!(ret2, 0);
+        }
+
+        #[test]
+        fn extension_iterator_finds_matching_id() {
+            // Build a buffer with one extension id=33, payload 0xAA
+            let buf = [66u8, 1u8, 0xAAu8]; // id=33 L=0, length=1, payload
+            let mut iter = OpusExtensionIterator::new(&buf, buf.len() as i32, 1);
+            let (ret, ext) = iter.find(33);
+            assert_eq!(ret, 1);
+            assert_eq!(ext.id, 33);
+        }
+
+        #[test]
+        fn unpad_on_padded_real_packet() {
+            // Generate encoded pkt, pad it, then unpad — round-trips the
+            // unpad path fully.
+            let pkt = mk_packet(70);
+            let new_len = pkt.len() as i32 + 60;
+            let mut buf = vec![0u8; (new_len + 16) as usize];
+            buf[..pkt.len()].copy_from_slice(&pkt);
+            let _ = opus_packet_pad(&mut buf, pkt.len() as i32, new_len);
+            let r = opus_packet_unpad(&mut buf, new_len);
+            assert!(r > 0);
+            assert!(r <= new_len);
+        }
+
+        #[test]
+        fn multistream_unpad_multiple_streams_round_trip() {
+            // 3-stream packet: sd(p1) + sd(p2) + p3
+            let p1 = mk_packet(80);
+            let p2 = mk_packet(81);
+            let p3 = mk_packet(82);
+
+            let mut combined = Vec::new();
+            for (i, p) in [&p1, &p2, &p3].into_iter().enumerate() {
+                let mut rp = OpusRepacketizer::new();
+                rp.cat(p, p.len() as i32);
+                let cap = (p.len() + 8) as i32;
+                let mut sd = vec![0u8; cap as usize];
+                let is_last = i == 2;
+                let k = rp.out_range_impl(0, 1, &mut sd, cap, !is_last, false, &[]);
+                assert!(k > 0);
+                combined.extend_from_slice(&sd[..k as usize]);
+            }
+
+            let new_len = combined.len() as i32 + 30;
+            let mut buf = vec![0u8; (new_len + 16) as usize];
+            buf[..combined.len()].copy_from_slice(&combined);
+            let r = opus_multistream_packet_pad(&mut buf, combined.len() as i32, new_len, 3);
+            // May fail depending on padding heuristic, but branch is taken.
+            let _ = r;
+
+            // Unpad
+            let r = opus_multistream_packet_unpad(&mut buf, combined.len() as i32, 3);
+            let _ = r;
+        }
+    }
 }

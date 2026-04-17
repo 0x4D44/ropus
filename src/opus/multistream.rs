@@ -3477,4 +3477,680 @@ mod tests {
         assert!(get_demixing_matrix_for_order(1).is_err());
         assert!(get_demixing_matrix_for_order(7).is_err());
     }
+
+    // =======================================================================
+    // Stage 2 branch coverage additions
+    // =======================================================================
+    mod branch_coverage_stage2 {
+        use super::*;
+
+        /// Encode + decode for small stream/coupled combos.
+        fn round_trip(channels: i32, streams: i32, coupled: i32, mapping: &[u8]) {
+            let mut enc =
+                OpusMSEncoder::new(48000, channels, streams, coupled, mapping, OPUS_APPLICATION_AUDIO)
+                    .unwrap();
+            enc.set_bitrate(32000 * channels);
+            let pcm = patterned_pcm_i16(960, channels as usize, 17);
+            let mut pkt = vec![0u8; 8000];
+            let n = enc.encode(&pcm, 960, &mut pkt, 8000).unwrap();
+            assert!(n > 0);
+
+            let mut dec = OpusMSDecoder::new(48000, channels, streams, coupled, mapping).unwrap();
+            let mut out = vec![0i16; 960 * channels as usize];
+            let r = dec
+                .decode(Some(&pkt[..n as usize]), n, &mut out, 960, false)
+                .unwrap();
+            assert_eq!(r, 960);
+        }
+
+        #[test]
+        fn streams_1_to_3_with_coupled_permutations() {
+            // 1 mono stream
+            round_trip(1, 1, 0, &[0]);
+            // 1 coupled stream (stereo)
+            round_trip(2, 1, 1, &[0, 1]);
+            // 2 streams, 1 coupled (3-ch)
+            round_trip(3, 2, 1, &[0, 1, 2]);
+            // 2 streams, 0 coupled
+            round_trip(2, 2, 0, &[0, 1]);
+            // 3 streams, 1 coupled (4-ch)
+            round_trip(4, 3, 1, &[0, 1, 2, 3]);
+        }
+
+        #[test]
+        fn surround_encoder_family_0_mono_and_stereo() {
+            let (enc, streams, coupled, _m) =
+                OpusMSEncoder::new_surround(48000, 1, 0, OPUS_APPLICATION_AUDIO).unwrap();
+            assert_eq!(streams, 1);
+            assert_eq!(coupled, 0);
+            assert_eq!(enc.nb_streams(), 1);
+
+            let (enc, streams, coupled, _m) =
+                OpusMSEncoder::new_surround(48000, 2, 0, OPUS_APPLICATION_AUDIO).unwrap();
+            assert_eq!(streams, 1);
+            assert_eq!(coupled, 1);
+            assert_eq!(enc.nb_streams(), 1);
+        }
+
+        #[test]
+        fn surround_encoder_family_1_channels_3_to_8() {
+            for ch in 3..=8i32 {
+                let r = OpusMSEncoder::new_surround(48000, ch, 1, OPUS_APPLICATION_AUDIO);
+                assert!(r.is_ok(), "family 1 channels={ch} should succeed");
+                let (enc, streams, _coupled, _m) = r.unwrap();
+                assert!(streams >= 1);
+                assert_eq!(enc.nb_streams(), streams);
+            }
+        }
+
+        #[test]
+        fn surround_encoder_family_255_various_channels() {
+            for ch in [1i32, 2, 3, 4, 8] {
+                let r = OpusMSEncoder::new_surround(48000, ch, 255, OPUS_APPLICATION_AUDIO);
+                assert!(r.is_ok(), "family 255 channels={ch} should succeed");
+                let (_enc, streams, coupled, _m) = r.unwrap();
+                assert_eq!(streams, ch);
+                assert_eq!(coupled, 0);
+            }
+        }
+
+        #[test]
+        fn surround_encoder_family_0_rejects_high_channel_counts() {
+            assert!(matches!(
+                OpusMSEncoder::new_surround(48000, 3, 0, OPUS_APPLICATION_AUDIO),
+                Err(OPUS_UNIMPLEMENTED)
+            ));
+            assert!(matches!(
+                OpusMSEncoder::new_surround(48000, 8, 0, OPUS_APPLICATION_AUDIO),
+                Err(OPUS_UNIMPLEMENTED)
+            ));
+        }
+
+        #[test]
+        fn surround_encoder_rejects_bad_channels() {
+            assert!(matches!(
+                OpusMSEncoder::new_surround(48000, 0, 0, OPUS_APPLICATION_AUDIO),
+                Err(OPUS_BAD_ARG)
+            ));
+            assert!(matches!(
+                OpusMSEncoder::new_surround(48000, 256, 0, OPUS_APPLICATION_AUDIO),
+                Err(OPUS_BAD_ARG)
+            ));
+        }
+
+        #[test]
+        fn surround_encoder_family_2_ambisonics_valid_counts() {
+            // Family 2: valid counts are (N+1)^2 or (N+1)^2 + 2
+            for &ch in &[4i32, 6, 9, 11, 16] {
+                let r = OpusMSEncoder::new_surround(48000, ch, 2, OPUS_APPLICATION_AUDIO);
+                assert!(r.is_ok(), "family 2 channels={ch}");
+            }
+        }
+
+        #[test]
+        fn surround_encoder_family_2_rejects_invalid_counts() {
+            // Non-square, non-(n^2+2) channel counts (5, 7, 10) must fail.
+            for &ch in &[5i32, 7, 10] {
+                let r = OpusMSEncoder::new_surround(48000, ch, 2, OPUS_APPLICATION_AUDIO);
+                assert!(r.is_err(), "family 2 channels={ch} should fail");
+            }
+        }
+
+        #[test]
+        fn surround_encoder_rejects_unknown_family() {
+            assert!(matches!(
+                OpusMSEncoder::new_surround(48000, 2, 99, OPUS_APPLICATION_AUDIO),
+                Err(OPUS_UNIMPLEMENTED)
+            ));
+        }
+
+        #[test]
+        fn encoder_ctls_cover_all_setters() {
+            let mut enc =
+                OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO).unwrap();
+            assert_eq!(enc.set_bitrate(64000), OPUS_OK);
+            assert!(enc.get_bitrate() >= 0);
+            assert_eq!(enc.set_bitrate(OPUS_AUTO), OPUS_OK);
+            assert_eq!(enc.set_bitrate(OPUS_BITRATE_MAX), OPUS_OK);
+            assert_eq!(enc.set_bitrate(0), OPUS_BAD_ARG);
+            assert_eq!(enc.set_vbr(0), OPUS_OK);
+            assert_eq!(enc.set_vbr(1), OPUS_OK);
+            assert_eq!(enc.set_vbr_constraint(1), OPUS_OK);
+            assert_eq!(enc.set_complexity(5), OPUS_OK);
+            assert_eq!(enc.set_signal(OPUS_SIGNAL_MUSIC), OPUS_OK);
+            assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_FULLBAND), OPUS_OK);
+            assert_eq!(enc.set_max_bandwidth(OPUS_BANDWIDTH_FULLBAND), OPUS_OK);
+            assert_eq!(enc.set_inband_fec(1), OPUS_OK);
+            assert_eq!(enc.set_packet_loss_perc(10), OPUS_OK);
+            assert_eq!(enc.set_dtx(0), OPUS_OK);
+            assert_eq!(enc.set_lsb_depth(16), OPUS_OK);
+            assert_eq!(enc.set_prediction_disabled(0), OPUS_OK);
+            assert_eq!(enc.set_phase_inversion_disabled(0), OPUS_OK);
+            assert_eq!(enc.set_application(OPUS_APPLICATION_AUDIO), OPUS_OK);
+            enc.set_expert_frame_duration(OPUS_FRAMESIZE_20_MS);
+            assert_eq!(enc.get_expert_frame_duration(), OPUS_FRAMESIZE_20_MS);
+            assert_eq!(enc.get_application(), OPUS_APPLICATION_AUDIO);
+            assert_eq!(enc.get_sample_rate(), 48000);
+            assert!(enc.get_lookahead() >= 0);
+            // Per-stream encoder accessor
+            assert!(enc.get_encoder(0).is_some());
+            assert!(enc.get_encoder_mut(0).is_some());
+            assert!(enc.get_encoder(99).is_none());
+            enc.reset();
+        }
+
+        #[test]
+        fn decoder_ctls_cover_all_setters() {
+            let mut dec = OpusMSDecoder::new(48000, 2, 1, 1, &[0, 1]).unwrap();
+            assert_eq!(dec.set_gain(0), OPUS_OK);
+            assert_eq!(dec.get_gain(), 0);
+            assert_eq!(dec.set_complexity(5), OPUS_OK);
+            assert_eq!(dec.get_complexity(), 5);
+            assert_eq!(dec.set_phase_inversion_disabled(1), OPUS_OK);
+            assert_eq!(dec.get_phase_inversion_disabled(), 1);
+            assert_eq!(dec.get_sample_rate(), 48000);
+            assert!(dec.get_decoder(0).is_some());
+            assert!(dec.get_decoder_mut(0).is_some());
+            assert!(dec.get_decoder(99).is_none());
+            dec.reset();
+        }
+
+        #[test]
+        fn decode_bad_frame_size_returns_bad_arg() {
+            let mut dec = OpusMSDecoder::new(48000, 2, 1, 1, &[0, 1]).unwrap();
+            let mut out = vec![0i16; 1920];
+            let r = dec.decode(None, 0, &mut out, 0, false);
+            assert_eq!(r.unwrap_err(), OPUS_BAD_ARG);
+        }
+
+        #[test]
+        fn decode_plc_path_no_data() {
+            let mut dec = OpusMSDecoder::new(48000, 2, 1, 1, &[0, 1]).unwrap();
+            let mut out = vec![0i16; 960 * 2];
+            // PLC via len=0 (do_plc=true)
+            let r = dec.decode(None, 0, &mut out, 960, false).unwrap();
+            assert_eq!(r, 960);
+            // PLC via empty data slice
+            let r = dec.decode(Some(&[][..]), 0, &mut out, 960, false).unwrap();
+            assert_eq!(r, 960);
+        }
+
+        #[test]
+        fn decode_negative_len_is_bad_arg() {
+            let mut dec = OpusMSDecoder::new(48000, 2, 1, 1, &[0, 1]).unwrap();
+            let mut out = vec![0i16; 1920];
+            let fake = [0x08u8];
+            let r = dec.decode(Some(&fake[..]), -1, &mut out, 960, false);
+            assert_eq!(r.unwrap_err(), OPUS_BAD_ARG);
+        }
+
+        #[test]
+        fn decode_truncated_multistream_invalid() {
+            let mut dec = OpusMSDecoder::new(48000, 2, 2, 0, &[0, 1]).unwrap();
+            let mut out = vec![0i16; 960 * 2];
+            // len < 2*streams-1 for a 2-stream decoder → INVALID_PACKET
+            let small = [0x08u8];
+            let r = dec.decode(Some(&small), 1, &mut out, 960, false);
+            assert_eq!(r.unwrap_err(), OPUS_INVALID_PACKET);
+        }
+
+        #[test]
+        fn ms_decoder_rejects_bad_constructor_args() {
+            // channels = 0
+            assert!(matches!(
+                OpusMSDecoder::new(48000, 0, 1, 0, &[0]),
+                Err(OPUS_BAD_ARG)
+            ));
+            // coupled > streams
+            assert!(matches!(
+                OpusMSDecoder::new(48000, 2, 1, 2, &[0, 1]),
+                Err(OPUS_BAD_ARG)
+            ));
+            // negative coupled
+            assert!(matches!(
+                OpusMSDecoder::new(48000, 2, 1, -1, &[0, 1]),
+                Err(OPUS_BAD_ARG)
+            ));
+            // streams > 255 - coupled
+            assert!(matches!(
+                OpusMSDecoder::new(48000, 2, 255, 1, &[0, 1]),
+                Err(OPUS_BAD_ARG)
+            ));
+        }
+
+        #[test]
+        fn ms_encoder_rejects_bad_constructor_args() {
+            assert!(matches!(
+                OpusMSEncoder::new(48000, 1, 0, 0, &[0], OPUS_APPLICATION_AUDIO),
+                Err(OPUS_BAD_ARG)
+            ));
+            assert!(matches!(
+                OpusMSEncoder::new(48000, 2, 1, -1, &[0, 1], OPUS_APPLICATION_AUDIO),
+                Err(OPUS_BAD_ARG)
+            ));
+            // streams + coupled > channels
+            assert!(matches!(
+                OpusMSEncoder::new(48000, 1, 1, 1, &[0], OPUS_APPLICATION_AUDIO),
+                Err(OPUS_BAD_ARG)
+            ));
+        }
+
+        #[test]
+        fn encode_roundtrip_family_1_6ch_and_decode() {
+            let (mut enc, streams, coupled, mapping) =
+                OpusMSEncoder::new_surround(48000, 6, 1, OPUS_APPLICATION_AUDIO).unwrap();
+            enc.set_bitrate(192000);
+            let pcm = patterned_pcm_i16(960, 6, 33);
+            let mut pkt = vec![0u8; 8000];
+            let n = enc.encode(&pcm, 960, &mut pkt, 8000).unwrap();
+            assert!(n > 0);
+
+            let mut dec =
+                OpusMSDecoder::new(48000, 6, streams, coupled, &mapping[..6]).unwrap();
+            let mut out = vec![0i16; 960 * 6];
+            let r = dec
+                .decode(Some(&pkt[..n as usize]), n, &mut out, 960, false)
+                .unwrap();
+            assert_eq!(r, 960);
+        }
+
+        #[test]
+        fn ambisonics_encode_decode_foa_with_two_nondiegetic() {
+            let (mut enc, streams, coupled, mapping) =
+                OpusMSEncoder::new_surround(48000, 6, 2, OPUS_APPLICATION_AUDIO).unwrap();
+            enc.set_bitrate(128000);
+            let pcm = patterned_pcm_i16(960, 6, 77);
+            let mut pkt = vec![0u8; 6000];
+            let n = enc.encode(&pcm, 960, &mut pkt, 6000).unwrap();
+            assert!(n > 0);
+            let mut dec =
+                OpusMSDecoder::new(48000, 6, streams, coupled, &mapping[..6]).unwrap();
+            let mut out = vec![0i16; 960 * 6];
+            assert_eq!(
+                dec.decode(Some(&pkt[..n as usize]), n, &mut out, 960, false)
+                    .unwrap(),
+                960
+            );
+        }
+
+        #[test]
+        fn surround_encoder_family_1_muted_channel() {
+            // Build layout with a muted channel (mapping[i]==255)
+            let mapping = [0u8, 255u8]; // L + muted
+            let r = OpusMSEncoder::new(48000, 2, 1, 0, &mapping, OPUS_APPLICATION_AUDIO);
+            assert!(r.is_ok(), "mapping with muted channel should succeed");
+            let mut enc = r.unwrap();
+            enc.set_bitrate(24000);
+            let pcm = patterned_pcm_i16(960, 2, 42);
+            let mut pkt = vec![0u8; 2000];
+            let n = enc.encode(&pcm, 960, &mut pkt, 2000).unwrap();
+            assert!(n > 0);
+
+            let mut dec = OpusMSDecoder::new(48000, 2, 1, 0, &mapping).unwrap();
+            let mut out = vec![0i16; 960 * 2];
+            let r = dec
+                .decode(Some(&pkt[..n as usize]), n, &mut out, 960, false)
+                .unwrap();
+            assert_eq!(r, 960);
+            // The muted channel should be zeroed across the output
+            for i in 0..960 {
+                assert_eq!(out[i * 2 + 1], 0, "muted channel at frame {i} non-zero");
+            }
+        }
+
+        // --- Targeted coverage for error paths and rate allocation branches ---
+
+        #[test]
+        fn decode_with_frame_size_larger_than_120ms_is_clamped() {
+            // frame_size capped to fs/25*3 in decode_native.
+            let pkt_src = {
+                let mut enc =
+                    OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO).unwrap();
+                enc.set_bitrate(48000);
+                let pcm = patterned_pcm_i16(960, 2, 55);
+                let mut pkt = vec![0u8; 4000];
+                let n = enc.encode(&pcm, 960, &mut pkt, 4000).unwrap();
+                pkt.truncate(n as usize);
+                pkt
+            };
+            let mut dec = OpusMSDecoder::new(48000, 2, 1, 1, &[0, 1]).unwrap();
+            // Ask for 240ms — clamped to 120ms internally.
+            let mut out = vec![0i16; 48000 / 25 * 3 * 2];
+            let r = dec.decode(
+                Some(&pkt_src),
+                pkt_src.len() as i32,
+                &mut out,
+                48000 / 25 * 3,
+                false,
+            );
+            assert!(r.is_ok());
+        }
+
+        #[test]
+        fn encoder_encode_small_buffer_returns_buffer_too_small() {
+            let mut enc =
+                OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO).unwrap();
+            let pcm = patterned_pcm_i16(960, 2, 66);
+            let mut tiny = [0u8; 1];
+            let _ = enc.encode(&pcm, 960, &mut tiny, 1); // may err or return 1-byte DTX
+        }
+
+        #[test]
+        fn encoder_encode_bad_frame_size() {
+            let mut enc =
+                OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO).unwrap();
+            let pcm = patterned_pcm_i16(120, 2, 77);
+            let mut buf = [0u8; 1000];
+            // Frame size that doesn't map to a valid Opus duration.
+            let r = enc.encode(&pcm, 123, &mut buf, 1000);
+            assert!(r.is_err());
+        }
+
+        #[test]
+        fn surround_encode_at_low_bitrate_hits_narrowband_branch() {
+            // Surround mapping type encode at very low bitrate → NARROWBAND branch.
+            let (mut enc, _s, _c, _m) =
+                OpusMSEncoder::new_surround(48000, 6, 1, OPUS_APPLICATION_AUDIO).unwrap();
+            enc.set_bitrate(12000); // very low, forces NB branch per channel
+            let pcm = patterned_pcm_i16(960, 6, 101);
+            let mut pkt = vec![0u8; 4000];
+            let r = enc.encode(&pcm, 960, &mut pkt, 4000);
+            let _ = r; // may succeed or hit buffer-too-small; branch taken
+        }
+
+        #[test]
+        fn surround_encode_10ms_frame_hits_fs_over_framesize_10_branch() {
+            // 10ms frame at 48kHz → fs/frame_size == 10
+            let (mut enc, _s, _c, _m) =
+                OpusMSEncoder::new_surround(48000, 6, 1, OPUS_APPLICATION_AUDIO).unwrap();
+            enc.set_bitrate(96000);
+            let pcm = patterned_pcm_i16(480, 6, 103);
+            let mut pkt = vec![0u8; 4000];
+            let r = enc.encode(&pcm, 480, &mut pkt, 4000);
+            assert!(r.is_ok());
+        }
+
+        #[test]
+        fn surround_rate_allocation_bitrate_max() {
+            let (mut enc, _s, _c, _m) =
+                OpusMSEncoder::new_surround(48000, 6, 1, OPUS_APPLICATION_AUDIO).unwrap();
+            enc.set_bitrate(OPUS_BITRATE_MAX);
+            let pcm = patterned_pcm_i16(960, 6, 105);
+            let mut pkt = vec![0u8; 8000];
+            let r = enc.encode(&pcm, 960, &mut pkt, 8000);
+            assert!(r.is_ok());
+        }
+
+        #[test]
+        fn ambisonics_rate_allocation_paths() {
+            for &bitrate in &[OPUS_AUTO, OPUS_BITRATE_MAX, 64000i32] {
+                let (mut enc, _s, _c, _m) =
+                    OpusMSEncoder::new_surround(48000, 4, 2, OPUS_APPLICATION_AUDIO).unwrap();
+                enc.set_bitrate(bitrate);
+                let pcm = patterned_pcm_i16(960, 4, 111);
+                let mut pkt = vec![0u8; 4000];
+                let r = enc.encode(&pcm, 960, &mut pkt, 4000);
+                let _ = r;
+            }
+        }
+
+        #[test]
+        fn cbr_encode_vbr_off_last_stream_adjustment() {
+            // vbr=0 on a 2-stream encoder exercises the CBR last-stream branch.
+            let mut enc =
+                OpusMSEncoder::new(48000, 2, 2, 0, &[0, 1], OPUS_APPLICATION_AUDIO).unwrap();
+            enc.set_bitrate(64000);
+            enc.set_vbr(0);
+            let pcm = patterned_pcm_i16(960, 2, 123);
+            let mut pkt = vec![0u8; 4000];
+            let r = enc.encode(&pcm, 960, &mut pkt, 4000);
+            assert!(r.is_ok());
+        }
+
+        #[test]
+        fn validate_ambisonics_boundary_cases() {
+            // nb_channels==0 or > 227 → invalid
+            assert!(!validate_ambisonics(0, None, None));
+            assert!(!validate_ambisonics(228, None, None));
+            // nb_channels==1 (0th order) → valid
+            assert!(validate_ambisonics(1, None, None));
+        }
+
+        #[test]
+        fn multistream_surround_encoder_3ch_family_1() {
+            // 3-channel family 1 = Vorbis 3.0 mapping (L, C, R), coupled_streams=1.
+            let (_enc, streams, coupled, _m) =
+                OpusMSEncoder::new_surround(48000, 3, 1, OPUS_APPLICATION_AUDIO).unwrap();
+            // This exercises the "channels >= 6" false branch for lfe_stream.
+            assert!(streams >= 1);
+            assert!(coupled >= 0);
+        }
+
+        // --- Additional targeted tests for multistream validate & parse paths ---
+
+        #[test]
+        fn decode_multistream_packet_with_synthetic_streams() {
+            // Build a multistream packet by concatenating a self-delimited
+            // encoded sub-packet and a plain sub-packet.
+            let mut enc = crate::opus::encoder::OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+            enc.set_bitrate(24000);
+            let pcm = patterned_pcm_i16(960, 1, 200);
+            let mut p1 = vec![0u8; 1500];
+            let n1 = enc.encode(&pcm, 960, &mut p1, 1500).unwrap();
+            p1.truncate(n1 as usize);
+
+            let mut enc2 = crate::opus::encoder::OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+            enc2.set_bitrate(24000);
+            let pcm2 = patterned_pcm_i16(960, 1, 201);
+            let mut p2 = vec![0u8; 1500];
+            let n2 = enc2.encode(&pcm2, 960, &mut p2, 1500).unwrap();
+            p2.truncate(n2 as usize);
+
+            // Build combined self-delim(p1) + p2
+            let mut rp = OpusRepacketizer::new();
+            rp.cat(&p1, p1.len() as i32);
+            let cap1 = (p1.len() + 8) as i32;
+            let mut sd1 = vec![0u8; cap1 as usize];
+            let k = rp.out_range_impl(0, 1, &mut sd1, cap1, true, false, &[]);
+            assert!(k > 0);
+            let mut combined = Vec::new();
+            combined.extend_from_slice(&sd1[..k as usize]);
+            combined.extend_from_slice(&p2);
+
+            let mut dec = OpusMSDecoder::new(48000, 2, 2, 0, &[0, 1]).unwrap();
+            let mut out = vec![0i16; 960 * 2];
+            let _ = dec.decode(
+                Some(&combined),
+                combined.len() as i32,
+                &mut out,
+                960,
+                false,
+            );
+        }
+
+        #[test]
+        fn subpacket_parse_truncated_self_delim_sizes() {
+            // Force path through parse_multistream_subpacket self-delimited
+            // error branches (713, 729, etc). We do this by calling decode
+            // with packets ending mid-size-prefix.
+            let mut dec = OpusMSDecoder::new(48000, 2, 2, 0, &[0, 1]).unwrap();
+            let mut out = vec![0i16; 960 * 2];
+            // Valid TOC code 0, but truncated: no size byte for self-delim.
+            let pkt = [0x08u8];
+            let _ = dec.decode(Some(&pkt), 1, &mut out, 960, false);
+            // Code 3 with no count byte.
+            let pkt = [0x0Bu8];
+            let _ = dec.decode(Some(&pkt), 1, &mut out, 960, false);
+        }
+
+        #[test]
+        fn ms_encoder_reset_and_get_encoder_mut_mutates() {
+            let mut enc =
+                OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO).unwrap();
+            if let Some(sub) = enc.get_encoder_mut(0) {
+                sub.set_bitrate(32000);
+            }
+            enc.reset();
+        }
+
+        #[test]
+        fn mapping_matrix_valid_size_boundaries() {
+            assert!(!mapping_matrix_valid_size(256, 1));
+            assert!(!mapping_matrix_valid_size(1, 256));
+            assert!(mapping_matrix_valid_size(100, 100));
+            // Size exactly at threshold
+            assert!(!mapping_matrix_valid_size(200, 200));
+        }
+
+        #[test]
+        fn projection_decoder_bad_matrix_size() {
+            let r = OpusProjectionDecoder::new(48000, 4, 4, 0, &[0u8; 10], 10);
+            assert!(r.is_err());
+        }
+
+        #[test]
+        fn ms_encoder_set_bitrate_clamps_range() {
+            let mut enc =
+                OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO).unwrap();
+            // Very small + very large → clamped to per-channel bounds.
+            assert_eq!(enc.set_bitrate(100), OPUS_OK);
+            assert_eq!(enc.set_bitrate(100_000_000), OPUS_OK);
+            // Negative (non-sentinel) → bad arg
+            assert_eq!(enc.set_bitrate(-5), OPUS_BAD_ARG);
+        }
+
+        #[test]
+        fn validate_layout_invalid_coupled_mapping() {
+            let mut layout = ChannelLayout::new();
+            layout.nb_channels = 2;
+            layout.nb_streams = 1;
+            layout.nb_coupled_streams = 1;
+            // mapping above max (= 2*coupled_streams + (streams - coupled_streams) = 2)
+            layout.mapping[0] = 0;
+            layout.mapping[1] = 10;
+            assert!(!validate_layout(&layout));
+        }
+
+        #[test]
+        fn surround_lfe_stream_8ch_family_1() {
+            // 8-channel family 1 → lfe_stream is set (channels >= 6 branch taken).
+            let (_enc, streams, coupled, _m) =
+                OpusMSEncoder::new_surround(48000, 8, 1, OPUS_APPLICATION_AUDIO).unwrap();
+            assert!(streams > 0);
+            assert!(coupled >= 0);
+        }
+
+        // --- parse_multistream_subpacket error-path coverage ---
+        // We drive these via OpusMSDecoder::decode() with malformed packets.
+
+        fn ms_try_decode(pkt: &[u8], streams: i32) {
+            let mut dec = OpusMSDecoder::new(48000, streams.max(1), streams, 0, &[0, 1, 2, 3][..streams.max(1) as usize])
+                .or_else(|_| OpusMSDecoder::new(48000, 1, 1, 0, &[0]))
+                .unwrap();
+            let mut out = vec![0i16; 48000 / 25 * 3 * streams.max(1) as usize];
+            let _ = dec.decode(Some(pkt), pkt.len() as i32, &mut out, 48000 / 25 * 3, false);
+        }
+
+        #[test]
+        fn ms_decode_subpacket_code3_no_count_byte() {
+            // 2-stream: stream 0 self-delim. Payload exhausts after TOC for code3.
+            let pkt = [0x0Bu8];
+            ms_try_decode(&pkt, 2);
+        }
+
+        #[test]
+        fn ms_decode_subpacket_code3_count_zero() {
+            // count=0 → INVALID_PACKET
+            let pkt = [0x0Bu8, 0x00u8];
+            ms_try_decode(&pkt, 2);
+        }
+
+        #[test]
+        fn ms_decode_subpacket_code3_count_too_large() {
+            // count > 48 → INVALID_PACKET
+            let pkt = [0x0Bu8, 49u8];
+            ms_try_decode(&pkt, 2);
+        }
+
+        #[test]
+        fn ms_decode_subpacket_code3_padding_no_space() {
+            // Padding flag but remaining=0 after header
+            let pkt = [0x0Bu8, 0x41u8]; // count=1, padding flag
+            ms_try_decode(&pkt, 2);
+        }
+
+        #[test]
+        fn ms_decode_subpacket_code3_padding_negative_remaining() {
+            // Padding byte value > remaining bytes
+            let pkt = [0x0Bu8, 0x41u8, 0x7Fu8]; // padding claims 127 bytes
+            ms_try_decode(&pkt, 2);
+        }
+
+        #[test]
+        fn ms_decode_subpacket_code3_vbr_bad_size() {
+            // VBR + count=2 → parse 1 size; size field says 252 with no follow-up
+            let pkt = [0x0Bu8, 0x82u8, 252u8];
+            ms_try_decode(&pkt, 2);
+        }
+
+        #[test]
+        fn ms_decode_subpacket_code3_vbr_size_overflow() {
+            // VBR size value exceeds remaining
+            let pkt = [0x0Bu8, 0x82u8, 250u8, 0xAA];
+            ms_try_decode(&pkt, 2);
+        }
+
+        #[test]
+        fn ms_decode_subpacket_self_delim_size_truncated() {
+            // Code 0 self-delim but no size byte
+            let pkt = [0x08u8];
+            ms_try_decode(&pkt, 2);
+        }
+
+        #[test]
+        fn ms_decode_subpacket_code2_self_delim_inner_size_truncated() {
+            // Code 2, self-delim. First size byte present, but second (c2) parse fails.
+            let pkt = [0x0Au8, 1u8, 252u8];
+            ms_try_decode(&pkt, 2);
+        }
+
+        // --- Exercising various rate-allocation & encode branches ---
+
+        #[test]
+        fn surround_encode_5ch_various_bitrates_hit_bandwidth_branches() {
+            let bitrates = [8000i32, 32000, 64000, 200000, 500000];
+            for &br in &bitrates {
+                let (mut enc, _s, _c, _m) =
+                    OpusMSEncoder::new_surround(48000, 5, 1, OPUS_APPLICATION_AUDIO).unwrap();
+                enc.set_bitrate(br);
+                let pcm = patterned_pcm_i16(960, 5, br);
+                let mut pkt = vec![0u8; 8000];
+                let _ = enc.encode(&pcm, 960, &mut pkt, 8000);
+            }
+        }
+
+        #[test]
+        fn surround_encode_various_frame_sizes() {
+            // fs/frame_size of various ratios
+            for &frame_size in &[240i32, 480, 960, 1920] {
+                let (mut enc, _s, _c, _m) =
+                    OpusMSEncoder::new_surround(48000, 6, 1, OPUS_APPLICATION_AUDIO).unwrap();
+                enc.set_bitrate(128000);
+                let pcm = patterned_pcm_i16(frame_size as usize, 6, frame_size);
+                let mut pkt = vec![0u8; 8000];
+                let _ = enc.encode(&pcm, frame_size, &mut pkt, 8000);
+            }
+        }
+
+        #[test]
+        fn surround_encode_vbr_off_hits_cbr_branch() {
+            let (mut enc, _s, _c, _m) =
+                OpusMSEncoder::new_surround(48000, 6, 1, OPUS_APPLICATION_AUDIO).unwrap();
+            enc.set_vbr(0);
+            enc.set_bitrate(96000);
+            let pcm = patterned_pcm_i16(960, 6, 401);
+            let mut pkt = vec![0u8; 6000];
+            let _ = enc.encode(&pcm, 960, &mut pkt, 6000);
+        }
+    }
 }

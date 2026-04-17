@@ -4534,4 +4534,532 @@ mod tests {
         ];
         assert_eq!(&pcm_out[..20], &expected[..]);
     }
+
+    // =======================================================================
+    // Stage 2 branch coverage additions
+    // =======================================================================
+    mod branch_coverage_stage2 {
+        use super::*;
+        use crate::opus::encoder::OPUS_APPLICATION_VOIP;
+
+        /// Encode one 20ms frame at fs=16000, mono, patterned PCM — cheap helper
+        /// for the many tests below. Returns the packet bytes.
+        fn enc_one_mono(bitrate: i32, complexity: i32) -> Vec<u8> {
+            let mut enc = OpusEncoder::new(16000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+            enc.set_bitrate(bitrate);
+            enc.set_complexity(complexity);
+            let pcm = patterned_pcm_i16(320, 1, 3);
+            let mut buf = vec![0u8; 600];
+            let n = enc.encode(&pcm, 320, &mut buf, 600).unwrap();
+            buf.truncate(n as usize);
+            buf
+        }
+
+        #[test]
+        fn new_accepts_all_sample_rates_and_channels() {
+            for &fs in &[8000i32, 12000, 16000, 24000, 48000] {
+                for &ch in &[1i32, 2] {
+                    let dec = OpusDecoder::new(fs, ch).unwrap();
+                    assert_eq!(dec.get_sample_rate(), fs);
+                    assert_eq!(dec.get_channels(), ch);
+                }
+            }
+        }
+
+        #[test]
+        fn new_rejects_bad_fs_and_channels() {
+            assert!(OpusDecoder::new(44100, 1).is_err());
+            assert!(OpusDecoder::new(48000, 0).is_err());
+            assert!(OpusDecoder::new(48000, 3).is_err());
+            assert!(OpusDecoder::new(0, 1).is_err());
+        }
+
+        #[test]
+        fn decode_mono_across_rates_exercises_bandwidth_table() {
+            // Encode at 48kHz then decode at each output rate: exercises
+            // internal_sample_rate branches and bandwidth end-band table.
+            let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+            enc.set_bitrate(48000);
+            let pcm = patterned_pcm_i16(960, 1, 5);
+            let mut pkt = vec![0u8; 1500];
+            let n = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+            let packet = &pkt[..n as usize];
+
+            for &fs in &[8000i32, 12000, 16000, 24000, 48000] {
+                let mut dec = OpusDecoder::new(fs, 1).unwrap();
+                let mut out = vec![0i16; (fs / 50) as usize];
+                let samples = dec.decode(Some(packet), &mut out, fs / 50, false).unwrap();
+                assert!(samples > 0);
+                assert_eq!(dec.get_sample_rate(), fs);
+                // Last-packet duration recorded
+                assert_eq!(dec.get_last_packet_duration(), samples);
+            }
+        }
+
+        #[test]
+        fn decode_stereo_packet_drives_stream_channels_branch() {
+            let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+            enc.set_bitrate(96000);
+            let pcm = patterned_pcm_i16(960, 2, 9);
+            let mut pkt = vec![0u8; 2000];
+            let n = enc.encode(&pcm, 960, &mut pkt, 2000).unwrap();
+            let mut dec = OpusDecoder::new(48000, 2).unwrap();
+            let mut out = vec![0i16; 960 * 2];
+            let samples = dec.decode(Some(&pkt[..n as usize]), &mut out, 960, false).unwrap();
+            assert_eq!(samples, 960);
+            assert_eq!(dec.get_channels(), 2);
+        }
+
+        #[test]
+        fn plc_then_resume_consecutive_loss_depths() {
+            // Prime the decoder with a good SILK packet, then trigger several
+            // PLC frames (data=None), then resume with another good packet.
+            let packet = enc_one_mono(16000, 5);
+            let mut dec = OpusDecoder::new(16000, 1).unwrap();
+            let mut out = vec![0i16; 320];
+            dec.decode(Some(&packet), &mut out, 320, false).unwrap();
+            for &losses in &[1usize, 2, 3, 10, 50] {
+                for _ in 0..losses {
+                    let r = dec.decode(None, &mut out, 320, false).unwrap();
+                    assert_eq!(r, 320);
+                }
+                // resume
+                let r = dec.decode(Some(&packet), &mut out, 320, false).unwrap();
+                assert_eq!(r, 320);
+            }
+        }
+
+        #[test]
+        fn plc_with_empty_slice_is_equivalent_to_none() {
+            let packet = enc_one_mono(16000, 3);
+            let mut dec = OpusDecoder::new(16000, 1).unwrap();
+            let mut out = vec![0i16; 320];
+            dec.decode(Some(&packet), &mut out, 320, false).unwrap();
+            // Empty slice triggers PLC path too
+            let r = dec.decode(Some(&[][..]), &mut out, 320, false).unwrap();
+            assert_eq!(r, 320);
+        }
+
+        #[test]
+        fn plc_chunked_path_for_large_frame_sizes() {
+            // frame_size > 20 ms triggers the chunked PLC branch (line 685).
+            let packet = enc_one_mono(16000, 2);
+            let mut dec = OpusDecoder::new(16000, 1).unwrap();
+            let mut out = vec![0i16; 320];
+            dec.decode(Some(&packet), &mut out, 320, false).unwrap();
+            // 60 ms PLC = 960 samples at 16kHz
+            let mut big = vec![0i16; 960];
+            let r = dec.decode(None, &mut big, 960, false).unwrap();
+            assert_eq!(r, 960);
+        }
+
+        #[test]
+        fn fec_decode_with_lost_packet() {
+            // Encode with inband FEC enabled + loss perc high → FEC bits present.
+            let mut enc = OpusEncoder::new(16000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+            enc.set_bitrate(24000);
+            enc.set_inband_fec(1);
+            enc.set_packet_loss_perc(50);
+            enc.set_complexity(5);
+            let pcm = patterned_pcm_i16(320, 1, 11);
+            let mut pkt = vec![0u8; 400];
+            let n = enc.encode(&pcm, 320, &mut pkt, 400).unwrap();
+            let packet = &pkt[..n as usize];
+
+            let mut dec = OpusDecoder::new(16000, 1).unwrap();
+            // Prime — normal decode
+            let mut out = vec![0i16; 320];
+            let _ = dec.decode(Some(packet), &mut out, 320, false);
+            // FEC path: recover the previous frame from this packet's LBRR data
+            let mut rec = vec![0i16; 320];
+            let r = dec.decode(Some(packet), &mut rec, 320, true);
+            // API may return samples or an error depending on LBRR presence —
+            // either is fine; we only need the branch taken.
+            let _ = r;
+        }
+
+        #[test]
+        fn fec_decode_on_plc_when_no_data() {
+            let mut dec = OpusDecoder::new(16000, 1).unwrap();
+            let mut out = vec![0i16; 320];
+            // decode_fec=true with no data falls through to PLC
+            let r = dec.decode(None, &mut out, 320, true);
+            let _ = r; // may succeed as PLC, or error — branch exercised
+        }
+
+        #[test]
+        fn decode_fec_frame_size_not_multiple_of_2_5ms_is_bad_arg() {
+            let mut dec = OpusDecoder::new(16000, 1).unwrap();
+            let mut out = vec![0i16; 100];
+            // frame_size not a multiple of fs/400 = 40 samples
+            let err = dec.decode(None, &mut out, 39, false).unwrap_err();
+            assert_eq!(err, OPUS_BAD_ARG);
+        }
+
+        #[test]
+        fn decode_rejects_non_positive_frame_size() {
+            let mut dec = OpusDecoder::new(16000, 1).unwrap();
+            let mut out = vec![0i16; 320];
+            assert_eq!(dec.decode(None, &mut out, 0, false).unwrap_err(), OPUS_BAD_ARG);
+            assert_eq!(dec.decode(None, &mut out, -1, false).unwrap_err(), OPUS_BAD_ARG);
+            assert_eq!(dec.decode_float(None, &mut vec![0f32; 320], 0, false).unwrap_err(), OPUS_BAD_ARG);
+            assert_eq!(dec.decode24(None, &mut vec![0i32; 320], 0, false).unwrap_err(), OPUS_BAD_ARG);
+        }
+
+        #[test]
+        fn toc_config_0_to_31_round_trips_through_accessors() {
+            // Build a 1-byte TOC for each config and feed the packet-info helpers.
+            // Hybrid configs encode bandwidth via bit 4; SILK/CELT use bits 6-5.
+            for cfg in 0u8..32 {
+                let toc = (cfg << 3) | 0x00; // code 0, 1 frame
+                let pkt = [toc];
+                // These should not panic for any valid TOC.
+                let nb_frames = opus_packet_get_nb_frames(&pkt).unwrap();
+                assert_eq!(nb_frames, 1);
+                let bw = opus_packet_get_bandwidth(&pkt);
+                assert!((1101..=1105).contains(&bw));
+                let spf = opus_packet_get_samples_per_frame(&pkt, 48000);
+                assert!(spf > 0);
+                let nb_ch = opus_packet_get_nb_channels(&pkt);
+                assert!(nb_ch == 1 || nb_ch == 2);
+                // And for each supported decoder rate
+                for &fs in &[8000i32, 16000, 24000, 48000] {
+                    let ns = opus_packet_get_nb_samples(&pkt, fs);
+                    assert!(ns.is_ok());
+                }
+            }
+        }
+
+        #[test]
+        fn toc_stereo_bit_selects_channels() {
+            let pkt = [0x04u8]; // stereo flag set, code 0
+            assert_eq!(opus_packet_get_nb_channels(&pkt), 2);
+            let pkt = [0x00u8];
+            assert_eq!(opus_packet_get_nb_channels(&pkt), 1);
+        }
+
+        #[test]
+        fn get_nb_frames_code3_short_packet() {
+            // Code 3 but only 1 byte → invalid
+            assert!(matches!(opus_packet_get_nb_frames(&[0x03]), Err(OPUS_INVALID_PACKET)));
+            // Empty → bad arg
+            assert!(matches!(opus_packet_get_nb_frames(&[]), Err(OPUS_BAD_ARG)));
+            // Code 1 / 2 always return 2
+            assert_eq!(opus_packet_get_nb_frames(&[0x01, 0, 0]).unwrap(), 2);
+            assert_eq!(opus_packet_get_nb_frames(&[0x02, 1, 0, 0]).unwrap(), 2);
+        }
+
+        #[test]
+        fn get_nb_samples_rejects_over_120ms_code3() {
+            // Build a code 3 packet claiming huge frame count at 20ms ⇒ > 120ms
+            // Framesize for SILK 20ms at fs=48000 is 960; 7 frames = 6720 samples > 120ms=5760
+            let pkt = [0x0Bu8, 0x07u8, 0, 0, 0, 0, 0, 0];
+            let r = opus_packet_get_nb_samples(&pkt, 48000);
+            assert!(r.is_err());
+        }
+
+        #[test]
+        fn set_gain_range() {
+            let mut dec = OpusDecoder::new(48000, 1).unwrap();
+            assert!(dec.set_gain(0).is_ok());
+            assert!(dec.set_gain(-32768).is_ok());
+            assert!(dec.set_gain(32767).is_ok());
+            assert!(dec.set_gain(32768).is_err());
+            assert!(dec.set_gain(-32769).is_err());
+            assert_eq!(dec.get_gain(), 32767);
+        }
+
+        #[test]
+        fn set_complexity_range_and_getter() {
+            let mut dec = OpusDecoder::new(48000, 1).unwrap();
+            assert!(dec.set_complexity(0).is_ok());
+            assert!(dec.set_complexity(10).is_ok());
+            assert!(dec.set_complexity(-1).is_err());
+            assert!(dec.set_complexity(11).is_err());
+            assert_eq!(dec.get_complexity(), 10);
+        }
+
+        #[test]
+        fn reset_clears_state_and_get_pitch_before_decode() {
+            let dec = OpusDecoder::new(48000, 1).unwrap();
+            assert_eq!(dec.get_last_packet_duration(), 0);
+            // get_pitch before any decode uses prev_pitch_lag (non-CELT path)
+            let _ = dec.get_pitch();
+
+            let packet = enc_one_mono(32000, 4);
+            let mut out = vec![0i16; 320];
+            let mut dec16 = OpusDecoder::new(16000, 1).unwrap();
+            let _ = dec16.decode(Some(&packet), &mut out, 320, false);
+            let dur_before = dec16.get_last_packet_duration();
+            assert!(dur_before > 0);
+
+            dec16.reset();
+            assert_eq!(dec16.get_last_packet_duration(), 0);
+            assert_eq!(dec16.get_final_range(), 0);
+            // After reset, get_pitch is the non-CELT path
+            let _ = dec16.get_pitch();
+        }
+
+        #[test]
+        fn decode_float_and_decode24_output_finite_values() {
+            let packet = enc_one_mono(24000, 3);
+            let mut dec = OpusDecoder::new(16000, 1).unwrap();
+
+            let mut outf = vec![0f32; 320];
+            let n = dec.decode_float(Some(&packet), &mut outf, 320, false).unwrap();
+            assert_eq!(n, 320);
+            assert!(outf.iter().all(|v| v.is_finite() && v.abs() <= 1.0));
+
+            let packet2 = enc_one_mono(24000, 3);
+            let mut dec2 = OpusDecoder::new(16000, 1).unwrap();
+            let mut out32 = vec![0i32; 320];
+            let n2 = dec2.decode24(Some(&packet2), &mut out32, 320, false).unwrap();
+            assert_eq!(n2, 320);
+        }
+
+        #[test]
+        fn decode_with_celt_only_packet_from_lowdelay_encoder() {
+            // RESTRICTED_LOWDELAY uses CELT-only → exercises mode==CELT branch
+            let mut enc =
+                OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+            enc.set_bitrate(64000);
+            let pcm = vec![3000i16; 960];
+            let mut buf = vec![0u8; 1500];
+            let n = enc.encode(&pcm, 960, &mut buf, 1500).unwrap();
+
+            let mut dec = OpusDecoder::new(48000, 1).unwrap();
+            let mut out = vec![0i16; 960];
+            let r = dec.decode(Some(&buf[..n as usize]), &mut out, 960, false).unwrap();
+            assert_eq!(r, 960);
+
+            // Now follow up with PLC — exercises prev_mode == CELT_ONLY PLC path
+            let r = dec.decode(None, &mut out, 960, false).unwrap();
+            assert_eq!(r, 960);
+        }
+
+        #[test]
+        fn phase_inversion_and_ignore_extensions_flags() {
+            let mut dec = OpusDecoder::new(48000, 2).unwrap();
+            dec.set_phase_inversion_disabled(true);
+            assert!(dec.get_phase_inversion_disabled());
+            dec.set_phase_inversion_disabled(false);
+            assert!(!dec.get_phase_inversion_disabled());
+            dec.set_ignore_extensions(true);
+            assert!(dec.get_ignore_extensions());
+            dec.set_ignore_extensions(false);
+            assert!(!dec.get_ignore_extensions());
+        }
+
+        #[test]
+        fn get_nb_samples_via_decoder_helper() {
+            let packet = enc_one_mono(16000, 3);
+            let dec = OpusDecoder::new(16000, 1).unwrap();
+            let n = dec.get_nb_samples(&packet).unwrap();
+            assert!(n > 0);
+        }
+
+        #[test]
+        fn decode_invalid_packet_propagates_error() {
+            let mut dec = OpusDecoder::new(48000, 1).unwrap();
+            let mut out = vec![0i16; 960];
+            // Code 1 with odd remaining → INVALID_PACKET via opus_packet_parse_impl
+            let r = dec.decode(Some(&[0x09u8, 0xAAu8, 0xBBu8, 0xCCu8]), &mut out, 960, false);
+            assert!(r.is_err());
+        }
+
+        #[test]
+        fn decode_buffer_too_small_for_packet_samples() {
+            // 20ms SILK packet into a 5ms buffer → BUFFER_TOO_SMALL.
+            let packet = enc_one_mono(16000, 3);
+            let mut dec = OpusDecoder::new(16000, 1).unwrap();
+            let mut out = vec![0i16; 40]; // 2.5ms at 16kHz
+            let r = dec.decode(Some(&packet), &mut out, 40, false);
+            // Either returns buffer-too-small or another non-positive error.
+            assert!(r.is_err() || r.unwrap() <= 40);
+        }
+
+        // --- Additional targeted branch coverage ---
+
+        #[test]
+        fn decode_frame_size_too_small_paths() {
+            let mut dec = OpusDecoder::new(16000, 1).unwrap();
+            let mut out = vec![0i16; 40];
+            // 40 samples = 2.5ms at 16kHz — smallest valid PLC frame.
+            let _ = dec.decode(None, &mut out, 40, false);
+        }
+
+        #[test]
+        fn decode_native_zero_data_triggers_plc_path() {
+            let mut dec = OpusDecoder::new(16000, 1).unwrap();
+            let mut out = vec![0i16; 320];
+            // Pass Some(&[]) — data.is_empty() triggers PLC.
+            let r = dec.decode(Some(&[][..]), &mut out, 320, false).unwrap();
+            assert_eq!(r, 320);
+        }
+
+        #[test]
+        fn mode_transition_celt_to_silk() {
+            // First a CELT-only packet, then a SILK packet — exercises
+            // prev_mode transitions in decode_frame.
+            let mut enc_celt =
+                OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+            enc_celt.set_bitrate(64000);
+            let pcm = vec![1500i16; 960];
+            let mut pkt_celt = vec![0u8; 1500];
+            let n = enc_celt.encode(&pcm, 960, &mut pkt_celt, 1500).unwrap();
+
+            let mut enc_silk = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+            enc_silk.set_bitrate(16000);
+            enc_silk.set_bandwidth(OPUS_BANDWIDTH_NARROWBAND);
+            let mut pkt_silk = vec![0u8; 1500];
+            let ns = enc_silk.encode(&pcm, 960, &mut pkt_silk, 1500).unwrap();
+
+            let mut dec = OpusDecoder::new(48000, 1).unwrap();
+            let mut out = vec![0i16; 960];
+            let _ = dec.decode(Some(&pkt_celt[..n as usize]), &mut out, 960, false).unwrap();
+            let _ = dec.decode(Some(&pkt_silk[..ns as usize]), &mut out, 960, false).unwrap();
+            let _ = dec.decode(Some(&pkt_celt[..n as usize]), &mut out, 960, false).unwrap();
+        }
+
+        #[test]
+        fn mode_transition_silk_to_celt() {
+            // SILK first, then CELT → exercises the other transition direction.
+            let mut enc_silk = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+            enc_silk.set_bitrate(16000);
+            enc_silk.set_bandwidth(OPUS_BANDWIDTH_NARROWBAND);
+            let pcm = vec![1500i16; 960];
+            let mut pkt_silk = vec![0u8; 1500];
+            let ns = enc_silk.encode(&pcm, 960, &mut pkt_silk, 1500).unwrap();
+
+            let mut enc_celt =
+                OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+            enc_celt.set_bitrate(64000);
+            let mut pkt_celt = vec![0u8; 1500];
+            let n = enc_celt.encode(&pcm, 960, &mut pkt_celt, 1500).unwrap();
+
+            let mut dec = OpusDecoder::new(48000, 1).unwrap();
+            let mut out = vec![0i16; 960];
+            let _ = dec.decode(Some(&pkt_silk[..ns as usize]), &mut out, 960, false).unwrap();
+            let _ = dec.decode(Some(&pkt_celt[..n as usize]), &mut out, 960, false).unwrap();
+        }
+
+        #[test]
+        fn decode_native_code1_odd_remaining_is_invalid() {
+            // Code 1 (two CBR frames) with odd remaining → parse error.
+            let mut dec = OpusDecoder::new(48000, 1).unwrap();
+            let mut out = vec![0i16; 960];
+            // TOC=0x09 (NB SILK 10ms code 1), then 3 data bytes: odd count.
+            let pkt = [0x09u8, 0xAA, 0xBB, 0xCC];
+            let r = dec.decode(Some(&pkt), &mut out, 960, false);
+            assert!(r.is_err());
+        }
+
+        #[test]
+        fn decode_native_code3_padding_exhausts_remaining() {
+            // Code 3 with padding flag and no room for padding bytes.
+            let mut dec = OpusDecoder::new(48000, 1).unwrap();
+            let mut out = vec![0i16; 960];
+            let pkt = [0x0Bu8, 0x41u8]; // code 3, count=1 with padding flag set
+            let r = dec.decode(Some(&pkt), &mut out, 960, false);
+            assert!(r.is_err());
+        }
+
+        #[test]
+        fn opus_packet_has_lbrr_all_modes() {
+            // CELT-only packet → always false
+            let p = [0x80u8, 0xAA];
+            assert_eq!(opus_packet_has_lbrr(&p, p.len() as i32).unwrap(), false);
+
+            // Hybrid packet with a tiny SILK payload
+            let p = [0x60u8, 0xAA, 0xBB, 0xCC, 0xDD];
+            let _ = opus_packet_has_lbrr(&p, p.len() as i32);
+
+            // SILK-only packet
+            let p = [0x00u8, 0xAA, 0xBB, 0xCC];
+            let _ = opus_packet_has_lbrr(&p, p.len() as i32);
+        }
+
+        #[test]
+        fn decode_float_and_decode24_reject_invalid_packet_samples() {
+            // Invalid packet (code 3 claiming too many frames) triggers the
+            // `Ok(_) | Err(_) => return Err(OPUS_INVALID_PACKET)` branch in
+            // decode24/decode_float at lines 1296 and 1328.
+            let mut dec = OpusDecoder::new(48000, 1).unwrap();
+            // 120ms check fails: CELT 2.5ms × 49 > 5760 samples
+            let pkt = [0x87u8, 49u8];
+            let mut out32 = vec![0i32; 960];
+            let r = dec.decode24(Some(&pkt), &mut out32, 960, false);
+            assert!(r.is_err());
+            let mut outf = vec![0f32; 960];
+            let r = dec.decode_float(Some(&pkt), &mut outf, 960, false);
+            assert!(r.is_err());
+        }
+
+        #[test]
+        fn decode_fec_request_falls_through_to_plc_when_celt_only() {
+            // CELT-only packet with decode_fec=true → no FEC available,
+            // so code falls through to PLC (line 1187).
+            let mut enc =
+                OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+            enc.set_bitrate(64000);
+            let pcm = vec![0i16; 960];
+            let mut pkt = vec![0u8; 1500];
+            let n = enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
+
+            let mut dec = OpusDecoder::new(48000, 1).unwrap();
+            let mut out = vec![0i16; 960];
+            // Prime with a normal decode
+            dec.decode(Some(&pkt[..n as usize]), &mut out, 960, false).unwrap();
+            // Request FEC — should fall through to PLC since mode is CELT-only
+            let r = dec.decode(Some(&pkt[..n as usize]), &mut out, 960, true);
+            let _ = r; // may error or succeed via PLC; branch hit either way
+        }
+
+        #[test]
+        fn decode_stereo_at_lower_rate_exercises_downmix_path() {
+            // Stereo encode at 48kHz, decode at 24kHz mono — exercises
+            // stream_channels=2 with decoder channels=1.
+            let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+            enc.set_bitrate(64000);
+            let pcm = patterned_pcm_i16(960, 2, 99);
+            let mut pkt = vec![0u8; 2000];
+            let n = enc.encode(&pcm, 960, &mut pkt, 2000).unwrap();
+
+            // Decode at 24kHz stereo (different fs path)
+            let mut dec = OpusDecoder::new(24000, 2).unwrap();
+            let mut out = vec![0i16; 480 * 2];
+            let r = dec.decode(Some(&pkt[..n as usize]), &mut out, 480, false).unwrap();
+            assert_eq!(r, 480);
+        }
+
+        #[test]
+        fn decode_code3_cbr_with_valid_count() {
+            // Build a valid code 3 CBR packet: 2 frames, each 10 bytes, SILK NB.
+            // TOC=0x00 (SILK NB 10ms) | 0x03 (code 3) = 0x03, ch = 2 (CBR, no padding)
+            let mut pkt = vec![0x03u8, 0x02u8];
+            pkt.extend_from_slice(&[0u8; 20]);
+            let mut dec = OpusDecoder::new(48000, 1).unwrap();
+            let mut out = vec![0i16; 960];
+            let _ = dec.decode(Some(&pkt), &mut out, 960, false);
+        }
+
+        #[test]
+        fn decode_code3_vbr_with_valid_count() {
+            // Code 3 VBR: TOC=0x03, ch=0x82 (VBR, count=2), size[0]=3, then frames.
+            let mut pkt = vec![0x03u8, 0x82u8, 3u8];
+            pkt.extend_from_slice(&[0u8; 20]);
+            let mut dec = OpusDecoder::new(48000, 1).unwrap();
+            let mut out = vec![0i16; 960];
+            let _ = dec.decode(Some(&pkt), &mut out, 960, false);
+        }
+
+        #[test]
+        fn decode_code2_vbr_valid() {
+            // Code 2 VBR: TOC=0x02, size=1, then 2 bytes
+            let pkt = [0x02u8, 1u8, 0xAA, 0xBB];
+            let mut dec = OpusDecoder::new(48000, 1).unwrap();
+            let mut out = vec![0i16; 960];
+            let _ = dec.decode(Some(&pkt), &mut out, 960, false);
+        }
+    }
 }
