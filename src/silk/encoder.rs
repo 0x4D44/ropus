@@ -8545,6 +8545,74 @@ mod tests {
     }
 
     #[test]
+    fn test_check_control_input_negative_params_hit_lt_zero_branches() {
+        // Cover the `< 0` side of the short-circuit OR for use_dtx, use_cbr,
+        // use_in_band_fec, complexity, packet_loss_percentage.
+        let cases = [
+            ("dtx", SILK_ENC_INVALID_DTX_SETTING),
+            ("cbr", SILK_ENC_INVALID_CBR_SETTING),
+            ("fec", SILK_ENC_INVALID_INBAND_FEC_SETTING),
+            ("complexity", SILK_ENC_INVALID_COMPLEXITY_SETTING),
+            ("loss", SILK_ENC_INVALID_LOSS_RATE),
+        ];
+        for (which, want) in cases {
+            let mut ctrl = SilkEncControlStruct::default();
+            match which {
+                "dtx" => ctrl.use_dtx = -1,
+                "cbr" => ctrl.use_cbr = -2,
+                "fec" => ctrl.use_in_band_fec = -1,
+                "complexity" => ctrl.complexity = -1,
+                "loss" => ctrl.packet_loss_percentage = -1,
+                _ => unreachable!(),
+            }
+            assert_eq!(check_control_input(&ctrl), want, "case {which}");
+        }
+    }
+
+    #[test]
+    fn test_check_control_input_min_equals_12000_and_16000() {
+        // Hits the `min != 12000` and `min != 16000` false-branch sides.
+        for min in [8000, 12000, 16000] {
+            let mut ctrl = SilkEncControlStruct::default();
+            ctrl.min_internal_sample_rate = min;
+            ctrl.max_internal_sample_rate = 16000;
+            ctrl.desired_internal_sample_rate = 16000;
+            assert_eq!(check_control_input(&ctrl), SILK_NO_ERROR, "min={min}");
+        }
+        for max in [8000, 12000, 16000] {
+            let mut ctrl = SilkEncControlStruct::default();
+            ctrl.max_internal_sample_rate = max;
+            ctrl.min_internal_sample_rate = 8000;
+            ctrl.desired_internal_sample_rate = 8000;
+            assert_eq!(check_control_input(&ctrl), SILK_NO_ERROR, "max={max}");
+        }
+    }
+
+    #[test]
+    fn test_check_control_input_min_greater_than_max() {
+        // Exercise the `min > max` final-condition branch.
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.min_internal_sample_rate = 16000;
+        ctrl.max_internal_sample_rate = 8000;
+        ctrl.desired_internal_sample_rate = 8000;
+        assert_eq!(check_control_input(&ctrl), SILK_ENC_FS_NOT_SUPPORTED);
+    }
+
+    #[test]
+    fn test_check_control_input_channels_api_zero_and_negative() {
+        // Hits the `< 1` side of the n_channels_api check.
+        for c in [-5, 0, ENCODER_NUM_CHANNELS as i32 + 5] {
+            let mut ctrl = SilkEncControlStruct::default();
+            ctrl.n_channels_api = c;
+            assert_eq!(
+                check_control_input(&ctrl),
+                SILK_ENC_INVALID_NUMBER_OF_CHANNELS_ERROR,
+                "c={c}"
+            );
+        }
+    }
+
+    #[test]
     fn test_vad_init() {
         let mut vad = SilkVadState::default();
         assert_eq!(silk_vad_init(&mut vad), 0);
