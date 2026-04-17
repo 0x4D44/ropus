@@ -1466,4 +1466,60 @@ mod tests {
             "moderate value should give period >= 0, got {period3}"
         );
     }
+
+    // ------------------------------------------------------------------
+    // Stage 6 branch-coverage additions
+    // ------------------------------------------------------------------
+
+    mod branch_coverage_stage6 {
+        use super::*;
+
+        // Cover init() reset path: after a synthesize, init() should zero state.
+        #[test]
+        fn test_init_resets_state_after_synthesize() {
+            let mut st = FarganState::new(&valid_zero_weight_arrays()).expect("zero model");
+            st.cont(
+                &vec![0.5f32; FARGAN_CONT_SAMPLES],
+                &vec![0.0f32; 5 * NB_FEATURES],
+            );
+            assert!(st.cont_initialized);
+            st.last_period = 42;
+            st.init();
+            assert!(!st.cont_initialized);
+            assert_eq!(st.deemph_mem, 0.0);
+            assert_eq!(st.last_period, 0);
+            assert!(st.pitch_buf.iter().all(|&v| v == 0.0));
+        }
+
+        // Cover load_model failure branch: malformed blob.
+        #[test]
+        fn test_load_model_rejects_invalid_blob() {
+            let mut st = FarganState::new(&valid_zero_weight_arrays()).expect("zero model");
+            // Too-short / malformed data -> parse_weights fails.
+            assert_eq!(st.load_model(&[0u8; 4]), -1);
+            // A syntactically-parseable but semantically-empty blob also fails init.
+            let bogus = vec![0u8; 64];
+            // size field = 0, block_size = 0, so parse_record succeeds but init_fargan fails.
+            assert_eq!(st.load_model(&bogus), -1);
+            let mut bogus2 = bogus.clone();
+            bogus2.extend_from_slice(&[0u8; 64]);
+            assert_eq!(st.load_model(&bogus2), -1);
+        }
+
+        // Cover synthesize path with non-zero pitch period features.
+        #[test]
+        fn test_synthesize_with_nonzero_pitch_feature() {
+            let mut st = FarganState::new(&valid_zero_weight_arrays()).expect("zero model");
+            st.cont(
+                &vec![0.0f32; FARGAN_CONT_SAMPLES],
+                &vec![0.0f32; 5 * NB_FEATURES],
+            );
+            let mut features = [0.0f32; NB_FEATURES];
+            features[NB_BANDS] = 0.5; // non-zero pitch feature
+            let mut pcm = [0.0f32; FARGAN_FRAME_SIZE];
+            st.synthesize(&mut pcm, &features);
+            assert!(pcm.iter().all(|v| v.is_finite()));
+            assert!(st.last_period >= 0);
+        }
+    }
 }

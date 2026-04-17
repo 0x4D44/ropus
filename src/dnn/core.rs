@@ -2939,4 +2939,359 @@ mod tests {
             SPARSE_BLOCK_SIZE
         );
     }
+
+    // ------------------------------------------------------------------
+    // Stage 6 branch-coverage additions
+    // ------------------------------------------------------------------
+
+    mod branch_coverage_stage6 {
+        use super::*;
+
+        // L930 false branch: compute_conv2d with bias = None.
+        // L905 false branch: kheight != 3 || ktime != 3 (generic path).
+        #[test]
+        fn test_conv2d_generic_without_bias_hits_no_bias_branch() {
+            let layer = Conv2dLayer {
+                bias: None,
+                float_weights: Some(vec![2.0; 1]),
+                in_channels: 1,
+                out_channels: 1,
+                ktime: 1,
+                kheight: 1,
+            };
+            let mut out = vec![0.0f32; 2];
+            let mut mem = vec![];
+            let input = vec![3.0f32, 5.0];
+            compute_conv2d(&layer, &mut out, &mut mem, &input, 2, 2, ACTIVATION_LINEAR);
+            assert!(approx_eq(out[0], 6.0, EPS));
+            assert!(approx_eq(out[1], 10.0, EPS));
+        }
+
+        // L905 false branch redux with ktime=2 kheight=2 (specialized 3x3 path skipped).
+        #[test]
+        fn test_conv2d_2x2_enters_generic_branch() {
+            let layer = Conv2dLayer {
+                bias: Some(vec![0.0]),
+                float_weights: Some(vec![1.0, 0.0, 0.0, 0.0]),
+                in_channels: 1,
+                out_channels: 1,
+                ktime: 2,
+                kheight: 2,
+            };
+            let mut out = vec![0.0f32; 1];
+            let mut mem = vec![0.0f32; 2];
+            let input = vec![1.0f32, 2.0];
+            compute_conv2d(&layer, &mut out, &mut mem, &input, 1, 1, ACTIVATION_LINEAR);
+            assert!(out[0].is_finite());
+        }
+
+        // L905: kheight==3 but ktime != 3 -> second operand of `&&` evaluates to false.
+        #[test]
+        fn test_conv2d_kheight3_ktime_not3_takes_generic_path() {
+            let in_ch = 1;
+            let out_ch = 1;
+            let ktime = 1;
+            let kheight = 3;
+            let weights: Vec<f32> = vec![0.0; in_ch * out_ch * ktime * kheight];
+            let layer = Conv2dLayer {
+                bias: Some(vec![0.0]),
+                float_weights: Some(weights),
+                in_channels: in_ch,
+                out_channels: out_ch,
+                ktime,
+                kheight,
+            };
+            // time_stride = in_channels * (height + kheight - 1)
+            // For height=1, kheight=3: time_stride = 1 * 3 = 3
+            // mem is (ktime-1)*time_stride = 0 for ktime=1.
+            let mut out = vec![0.0f32; 1];
+            let mut mem: Vec<f32> = vec![];
+            let input = vec![0.0f32; 3];
+            compute_conv2d(&layer, &mut out, &mut mem, &input, 1, 1, ACTIVATION_LINEAR);
+            assert!(out[0].is_finite());
+        }
+
+        // L991 true branch: block_size field larger than remaining payload.
+        #[test]
+        fn test_parse_weights_block_size_overflow_returns_err() {
+            let mut rec = make_weight_record(
+                "bad",
+                WEIGHT_TYPE_FLOAT,
+                &f32_bytes(&[0.0]),
+                4,
+                true,
+            );
+            // block_size field (offset 16..20) declares 1000 but record only has 68 bytes.
+            rec[16..20].copy_from_slice(&(1000i32).to_ne_bytes());
+            // size field (offset 12..16) must be <= block_size.
+            rec[12..16].copy_from_slice(&(4i32).to_ne_bytes());
+            assert!(parse_weights(&rec).is_err());
+        }
+
+        // L1052 `Some(_)` size-mismatch arm: opt_array_check returns Err(()).
+        // Routed via linear_init's float-weights path when the named record's size is wrong.
+        #[test]
+        fn test_linear_init_float_weights_size_mismatch_is_err() {
+            // weights_name None, so we go into the `else` branch.  float_weights_name is
+            // present but the record's size doesn't match nb_inputs * nb_outputs * 4.
+            let arrays = vec![WeightArray {
+                name: "fw".into(),
+                weight_type: WEIGHT_TYPE_FLOAT,
+                size: 4, // wrong: expected 2*3*4 = 24
+                data: vec![0u8; 4],
+            }];
+            let res = linear_init(
+                &arrays,
+                None,
+                None,
+                None,
+                Some("fw"),
+                None,
+                None,
+                None,
+                2,
+                3,
+            );
+            assert!(res.is_err());
+        }
+
+        // L1075 true branch: find_idx_check with pos+nb_blocks exceeding idx length.
+        #[test]
+        fn test_linear_init_sparse_idx_truncated_is_err() {
+            let arrays = vec![
+                WeightArray {
+                    name: "idx".into(),
+                    weight_type: WEIGHT_TYPE_INT,
+                    // nb_blocks=5 but only 2 u32s follow-- pos+5 > 3.
+                    size: 12,
+                    data: i32_bytes(&[5, 0, 0]),
+                },
+                WeightArray {
+                    name: "scale".into(),
+                    weight_type: WEIGHT_TYPE_FLOAT,
+                    size: 32,
+                    data: f32_bytes(&[1.0f32; 8]),
+                },
+            ];
+            let res = linear_init(
+                &arrays,
+                None,
+                None,
+                Some("weights"),
+                None,
+                Some("idx"),
+                None,
+                Some("scale"),
+                4,
+                8,
+            );
+            assert!(res.is_err());
+        }
+
+        // L1081 true branch: col_pos misaligned (not multiple of 4) or out of range.
+        #[test]
+        fn test_linear_init_sparse_idx_col_misaligned_is_err() {
+            let arrays = vec![
+                WeightArray {
+                    name: "idx".into(),
+                    weight_type: WEIGHT_TYPE_INT,
+                    // nb_blocks=1 with col_pos=2 => 2 & 0x3 != 0.
+                    size: 8,
+                    data: i32_bytes(&[1, 2]),
+                },
+                WeightArray {
+                    name: "scale".into(),
+                    weight_type: WEIGHT_TYPE_FLOAT,
+                    size: 32,
+                    data: f32_bytes(&[1.0f32; 8]),
+                },
+            ];
+            let res = linear_init(
+                &arrays,
+                None,
+                None,
+                Some("weights"),
+                None,
+                Some("idx"),
+                None,
+                Some("scale"),
+                8,
+                8,
+            );
+            assert!(res.is_err());
+        }
+
+        // L1088 true branch: remaining_outs != 0 at end of idx traversal.
+        #[test]
+        fn test_linear_init_sparse_idx_remaining_outs_mismatch_is_err() {
+            // idx with one block_count=0 chunk -> remaining_outs starts at nb_out=4 and
+            // gets decremented by 8 once, ending at -4.
+            let arrays = vec![
+                WeightArray {
+                    name: "idx".into(),
+                    weight_type: WEIGHT_TYPE_INT,
+                    size: 4,
+                    data: i32_bytes(&[0]),
+                },
+                WeightArray {
+                    name: "scale".into(),
+                    weight_type: WEIGHT_TYPE_FLOAT,
+                    size: 16,
+                    data: f32_bytes(&[1.0f32; 4]),
+                },
+            ];
+            let res = linear_init(
+                &arrays,
+                None,
+                None,
+                Some("weights"),
+                None,
+                Some("idx"),
+                None,
+                Some("scale"),
+                4,
+                4, // not a multiple of 8 -> remaining_outs can't hit zero.
+            );
+            assert!(res.is_err());
+        }
+
+        // L1132 None branch: sparse path where float_weights name is given but the
+        // array is simply absent -> opt_array_check returns Ok(None).
+        #[test]
+        fn test_linear_init_sparse_float_weights_absent_ok() {
+            // Valid idx: nb_blocks=1, col_pos=0 -> 1 block of 32 bytes.
+            let arrays = vec![
+                WeightArray {
+                    name: "idx".into(),
+                    weight_type: WEIGHT_TYPE_INT,
+                    size: 8,
+                    data: i32_bytes(&[1, 0]),
+                },
+                WeightArray {
+                    name: "weights".into(),
+                    weight_type: WEIGHT_TYPE_INT8,
+                    size: SPARSE_BLOCK_SIZE,
+                    data: vec![0u8; SPARSE_BLOCK_SIZE],
+                },
+                WeightArray {
+                    name: "scale".into(),
+                    weight_type: WEIGHT_TYPE_FLOAT,
+                    size: 32,
+                    data: f32_bytes(&[1.0f32; 8]),
+                },
+                // Intentionally NO "fw" record -> opt_array_check returns Ok(None).
+            ];
+            let layer = linear_init(
+                &arrays,
+                None,
+                None,
+                Some("weights"),
+                Some("fw"),
+                Some("idx"),
+                None,
+                Some("scale"),
+                4,
+                8,
+            )
+            .expect("missing optional float_weights should not fail");
+            assert!(layer.float_weights.is_none());
+        }
+
+        // L1187 None branch: conv2d_init where float_weights name is absent.
+        #[test]
+        fn test_conv2d_init_float_weights_absent_ok() {
+            let arrays = vec![WeightArray {
+                name: "conv_bias".into(),
+                weight_type: WEIGHT_TYPE_FLOAT,
+                size: 8,
+                data: f32_bytes(&[0.0f32; 2]),
+            }];
+            let layer = conv2d_init(
+                &arrays,
+                Some("conv_bias"),
+                Some("absent_fw"),
+                1,
+                2,
+                1,
+                1,
+            )
+            .expect("absent float_weights should not fail");
+            assert!(layer.float_weights.is_none());
+        }
+
+        // L1598 false branch: leaky ReLU triggers on negative combined activation.
+        #[test]
+        fn test_adashape_leaky_relu_negative_branch() {
+            // alpha1f has a large negative bias so compute_generic_conv1d yields
+            // a strongly negative out_buffer, driving tmp < 0 in the leaky ReLU.
+            let neg_dense = |nb_inputs: usize, nb_outputs: usize| LinearLayer {
+                bias: Some(vec![-10.0; nb_outputs]),
+                float_weights: Some(vec![0.0; nb_inputs * nb_outputs]),
+                nb_inputs,
+                nb_outputs,
+                ..Default::default()
+            };
+            let zero_dense = |nb_inputs: usize, nb_outputs: usize| LinearLayer {
+                bias: Some(vec![0.0; nb_outputs]),
+                float_weights: Some(vec![0.0; nb_inputs * nb_outputs]),
+                nb_inputs,
+                nb_outputs,
+                ..Default::default()
+            };
+            let mut st = AdaShapeState::new();
+            let alpha1f = neg_dense(2, 4);
+            let alpha1t = zero_dense(3, 4);
+            let alpha2 = zero_dense(2, 4);
+            let mut out = vec![0.0f32; 4];
+            adashape_process_frame(
+                &mut st,
+                &mut out,
+                &[1.0, 2.0, 3.0, 4.0],
+                &[0.25, -0.5],
+                &alpha1f,
+                &alpha1t,
+                &alpha2,
+                2,
+                4,
+                2,
+                2,
+            );
+            assert!(out.iter().all(|v| v.is_finite()));
+        }
+
+        // L315 false branch: ulaw2lin with u < 128.0 so the internal u is negative.
+        #[test]
+        fn test_ulaw2lin_negative_branch() {
+            // u = 0.0 < 128.0 -> internal (u-128) is negative, takes s=-1.0 path.
+            let v = ulaw2lin(0.0);
+            assert!(v.is_finite());
+            assert!(v <= 0.0);
+            // Symmetric side already covered elsewhere; cover positive branch here too.
+            let w = ulaw2lin(200.0);
+            assert!(w.is_finite());
+            assert!(w >= 0.0);
+        }
+
+        // Extra activation exercises: SWISH, SOFTMAX, EXP branches of compute_activation.
+        #[test]
+        fn test_compute_activation_swish_softmax_exp_branches() {
+            let mut swish = vec![-1.0f32, 0.0, 1.0];
+            let n = swish.len();
+            compute_activation(&mut swish, n, ACTIVATION_SWISH);
+            assert!(swish.iter().all(|v| v.is_finite()));
+
+            let mut softmax = vec![1.0f32, 2.0, 3.0];
+            let before = softmax.clone();
+            compute_activation(&mut softmax, 3, ACTIVATION_SOFTMAX);
+            // SOFTMAX_HACK: identity pass-through.
+            assert_eq!(softmax, before);
+
+            let mut expv = vec![0.0f32, 1.0, -1.0];
+            compute_activation(&mut expv, 3, ACTIVATION_EXP);
+            for v in &expv {
+                assert!(v.is_finite());
+                assert!(*v > 0.0);
+            }
+        }
+    }
 }

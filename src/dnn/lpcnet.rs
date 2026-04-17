@@ -3666,4 +3666,189 @@ mod tests {
         let v2: Vec<u32> = (0..10).map(|_| rng2.rand()).collect();
         assert_eq!(v1, v2, "same seed should produce same sequence");
     }
+
+    // ------------------------------------------------------------------
+    // Stage 6 branch-coverage additions
+    // ------------------------------------------------------------------
+
+    mod branch_coverage_stage6 {
+        use super::*;
+
+        // L613 true branch: fmin where a < b (rarely reached via internal callers).
+        #[test]
+        fn test_fmin_a_less_than_b_returns_a() {
+            assert_eq!(fmin(-1.0, 2.0), -1.0);
+            assert_eq!(fmin(0.5, 1.0), 0.5);
+        }
+
+        // L1076 false branch: EmbeddingLayer::compute with idx out of range
+        // falls through to the zero-fill path.
+        #[test]
+        fn test_embedding_compute_out_of_range_fills_zero() {
+            let emb = EmbeddingLayer {
+                weights: vec![1.0, 2.0, 3.0, 4.0],
+                dim: 2,
+            };
+            let mut out = [9.0f32, 9.0];
+            emb.compute(&mut out, 5); // start=10 > weights.len()=4
+            assert_eq!(out, [0.0, 0.0]);
+        }
+
+        #[test]
+        fn test_embedding_accum_out_of_range_is_noop() {
+            let emb = EmbeddingLayer {
+                weights: vec![1.0, 2.0],
+                dim: 2,
+            };
+            let mut out = [7.0f32, 7.0];
+            emb.accum(&mut out, 10);
+            assert_eq!(out, [7.0, 7.0]);
+        }
+
+        // L2195 false branch: conceal() with blend != 0 and analysis_pos < FRAME_SIZE
+        // sets analysis_gap = true.
+        #[test]
+        fn test_plc_conceal_blend_active_sets_analysis_gap() {
+            let blob = make_plc_weight_blob();
+            let mut plc = LPCNetPLCState::new();
+            assert_eq!(plc.load_model(&blob), 0);
+            plc.blend = 1; // skip while-loop body inside conceal
+            plc.analysis_pos = 0; // so analysis_pos < FRAME_SIZE at the tail check
+            plc.analysis_gap = false;
+            plc.predict_pos = FRAME_SIZE;
+            plc.loss_count = 0;
+            // When blend != 0 we skip the fargan.cont() init inside conceal, so prime
+            // the FARGAN continuation here to satisfy the debug_assert in synthesize_int.
+            let cont_pcm = vec![0.0f32; FARGAN_CONT_SAMPLES];
+            let cont_feat = vec![0.0f32; CONT_VECTORS * NB_FEATURES];
+            plc.fargan.cont(&cont_pcm, &cont_feat);
+
+            let mut pcm = [0i16; FRAME_SIZE];
+            assert_eq!(plc.conceal(&mut pcm), 0);
+            assert!(plc.analysis_gap);
+        }
+
+        // L2127 partial coverage: conceal() with analysis_gap=true forces
+        // the false side of (!analysis_gap || count > 0) at count==0, and then
+        // the true side of count > 0 on subsequent iterations.
+        #[test]
+        fn test_plc_conceal_with_analysis_gap_true_short_circuits_feature_update() {
+            let blob = make_plc_weight_blob();
+            let mut plc = LPCNetPLCState::new();
+            assert_eq!(plc.load_model(&blob), 0);
+            for i in 0..PLC_BUF_SIZE {
+                plc.pcm[i] = ((i % 17) as f32 - 8.0) / 64.0;
+            }
+            plc.analysis_gap = true;
+            // Two while-loop iterations: count goes 0 -> 1, so second iter hits
+            // the count > 0 true branch of the compound condition.
+            plc.analysis_pos = PLC_BUF_SIZE - 2 * FRAME_SIZE;
+            plc.predict_pos = PLC_BUF_SIZE - 2 * FRAME_SIZE;
+            plc.blend = 0;
+            plc.loss_count = 0;
+
+            let mut pcm = [0i16; FRAME_SIZE];
+            assert_eq!(plc.conceal(&mut pcm), 0);
+        }
+
+        // Exercise the opposite side of the predict-pos compare: analysis_pos < predict_pos
+        // hits the false branch of self.analysis_pos >= self.predict_pos.
+        #[test]
+        fn test_plc_conceal_analysis_behind_predict_skips_feature_update() {
+            let blob = make_plc_weight_blob();
+            let mut plc = LPCNetPLCState::new();
+            assert_eq!(plc.load_model(&blob), 0);
+            for i in 0..PLC_BUF_SIZE {
+                plc.pcm[i] = ((i % 13) as f32 - 6.0) / 64.0;
+            }
+            plc.analysis_gap = false;
+            plc.analysis_pos = PLC_BUF_SIZE - FRAME_SIZE;
+            plc.predict_pos = PLC_BUF_SIZE; // > analysis_pos
+            plc.blend = 0;
+            plc.loss_count = 0;
+
+            let mut pcm = [0i16; FRAME_SIZE];
+            assert_eq!(plc.conceal(&mut pcm), 0);
+        }
+
+        // Kiss99: cover the three short-cycle fix branches in srand (L96, L99, L102).
+        // We cannot easily drive srand to produce z==0 or the magic constants, but we
+        // can independently drive rand() from a manually-crafted state that starts at
+        // those boundary values -- this won't hit srand's branches but does exercise
+        // rand()'s state machine near fixed points.
+        #[test]
+        fn test_kiss99_near_boundary_states_still_deterministic() {
+            let mut a = Kiss99Ctx {
+                z: 1,
+                w: 1,
+                jsr: 1,
+                jcong: 0,
+            };
+            let mut b = a.clone();
+            for _ in 0..16 {
+                assert_eq!(a.rand(), b.rand());
+            }
+        }
+
+        // Try a variety of pathological signals in silk_burg_analysis: one of them
+        // may drive `nrg_f - FIND_LPC_COND_FAC * c0_full * t1` negative, covering the
+        // true side of the final `nrg_f < 0.0` clamp.
+        #[test]
+        fn test_silk_burg_analysis_on_adversarial_signals() {
+            let configs: &[(&[f32], usize, usize)] = &[
+                (&[0.0f32; 48][..], 48, 1),
+                (&[1.0f32; 48][..], 48, 1),
+                (&[-1.0f32; 48][..], 48, 1),
+                (&[1e-20f32; 48][..], 48, 1),
+            ];
+            for (data, len, nb) in configs {
+                let mut a = [0.0f32; LPC_ORDER];
+                let v = silk_burg_analysis(&mut a, data, 1e-3, *len, *nb, LPC_ORDER);
+                assert!(v.is_finite());
+            }
+
+            // Alternating impulse: introduces sharp correlation that can stress
+            // the numerical stabilization inside the Burg recursion.
+            let mut alt = [0.0f32; 96];
+            for (i, v) in alt.iter_mut().enumerate() {
+                *v = if i % 2 == 0 { 1.0 } else { -1.0 };
+            }
+            let mut a = [0.0f32; LPC_ORDER];
+            let v = silk_burg_analysis(&mut a, &alt, 1e-3, 96, 1, LPC_ORDER);
+            assert!(v.is_finite());
+
+            // Ramp with saturation-like behavior.
+            let mut ramp = [0.0f32; 96];
+            for (i, v) in ramp.iter_mut().enumerate() {
+                *v = (i as f32 / 95.0) * 2.0 - 1.0;
+            }
+            let mut a2 = [0.0f32; LPC_ORDER];
+            let v2 = silk_burg_analysis(&mut a2, &ramp, 1e-3, 96, 1, LPC_ORDER);
+            assert!(v2.is_finite());
+
+            // Very small min_inv_gain -> forces reached_max path rarely.
+            let mut a3 = [0.0f32; LPC_ORDER];
+            let v3 = silk_burg_analysis(&mut a3, &alt, 1e-30, 96, 1, LPC_ORDER);
+            assert!(v3.is_finite());
+
+            // Large min_inv_gain (>=1) forces reached_max=true immediately: the
+            // resulting c0 subtraction can go negative for correlated signals,
+            // covering the nrg_f < 0.0 branch.
+            let mut a4 = [0.0f32; LPC_ORDER];
+            let v4 = silk_burg_analysis(&mut a4, &alt, 10.0, 96, 1, LPC_ORDER);
+            assert!(v4.is_finite());
+
+            // Same with zeros input - c0_full is 1e-9 but large min_inv_gain clamps
+            // things immediately.
+            let mut a5 = [0.0f32; LPC_ORDER];
+            let v5 = silk_burg_analysis(&mut a5, &[0.0f32; 48], 10.0, 48, 1, LPC_ORDER);
+            assert!(v5.is_finite());
+
+            // Pure DC signal stresses the correlation math.
+            let mut a6 = [0.0f32; LPC_ORDER];
+            let dc = [0.99f32; 96];
+            let v6 = silk_burg_analysis(&mut a6, &dc, 100.0, 96, 1, LPC_ORDER);
+            assert!(v6.is_finite());
+        }
+    }
 }

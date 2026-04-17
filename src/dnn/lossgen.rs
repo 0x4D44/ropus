@@ -805,4 +805,50 @@ mod tests {
         assert_eq!(LOSSGEN_GRU2_STATE_SIZE, 32);
         assert_eq!(WARMUP_COUNT, 1000);
     }
+
+    // ------------------------------------------------------------------
+    // Stage 6 branch-coverage additions
+    // ------------------------------------------------------------------
+
+    mod branch_coverage_stage6 {
+        use super::*;
+
+        // Drive the sigmoid output very high so the rng.next_f32() < out[0] comparison
+        // almost always succeeds -> loss == 1, exercising the true branch that
+        // default-weights tests never reach.
+        #[test]
+        fn test_sample_loss_saturated_high_returns_ones() {
+            let arrays = make_zero_weights_with_out_bias(100.0);
+            let mut st = LossGenState::new_with_seed(&arrays, 1).unwrap();
+            st.used = true; // skip warm-up for determinism
+            for _ in 0..8 {
+                let loss = st.sample_loss(0.5);
+                assert_eq!(loss, 1);
+            }
+        }
+
+        // Drive sigmoid output very low so rng.next_f32() < out[0] is always false
+        // -> loss == 0, covering the other side of the Bernoulli decision.
+        #[test]
+        fn test_sample_loss_saturated_low_returns_zeros() {
+            let arrays = make_zero_weights_with_out_bias(-100.0);
+            let mut st = LossGenState::new_with_seed(&arrays, 1).unwrap();
+            st.used = true;
+            for _ in 0..8 {
+                let loss = st.sample_loss(0.5);
+                assert_eq!(loss, 0);
+            }
+        }
+
+        // Reset() path: after sampling, resetting should re-trigger warm-up.
+        #[test]
+        fn test_reset_reenables_warmup() {
+            let arrays = make_zero_weights();
+            let mut st = LossGenState::new_with_seed(&arrays, 7).unwrap();
+            st.sample_loss(0.5); // triggers warm-up, sets used=true
+            assert!(st.used);
+            st.reset();
+            assert!(!st.used);
+        }
+    }
 }
