@@ -2899,4 +2899,190 @@ mod tests {
         assert_eq!(silk_smultt(0, 0x10000), 0);
         assert_eq!(silk_smultt(0x10000, 0), 0);
     }
+
+    // =======================================================================
+    // Stage 4 branch coverage
+    // =======================================================================
+    mod branch_coverage_stage4 {
+        use super::*;
+
+        // silk_sum_sqr_shift_i32: force the `nrg > i32::MAX` shift-loop to
+        // iterate (line 395 falsebranch).  Feed large squared values.
+        #[test]
+        fn test_bc_sum_sqr_shift_i32_overflow() {
+            // Each element squared (after scale=0) near i32::MAX; sum overflows i32
+            let x = vec![1_000_000_000i32; 64];
+            let (nrg, shift) = silk_sum_sqr_shift_i32(&x, 0);
+            assert!(nrg >= 0);
+            // Non-crashing return; shift may be 0 if the caller's scale is
+            // large, but large squared sums must not panic.
+            let _ = shift;
+        }
+
+        // silk_rshift_round: cover zero-shift and large-shift fast paths
+        #[test]
+        fn test_bc_rshift_round_paths() {
+            assert_eq!(silk_rshift_round(42, 0), 42);
+            assert_eq!(silk_rshift_round(42, -5), 42);
+            assert_eq!(silk_rshift_round(12345, 32), 0);
+            assert_eq!(silk_rshift_round(12345, 40), 0);
+            assert_eq!(silk_rshift_round(1, 1), 1);
+        }
+
+        // silk_lpc_inverse_pred_gain: drive unstable/boundary cases for
+        // line 536/545 (tmp64 out-of-range) and 553 (final a_qa[0] check).
+        #[test]
+        fn test_bc_ipg_various_coefficients() {
+            // Order-1 stable
+            let mut a = [0i16; MAX_LPC_ORDER];
+            a[0] = 2048; // rc ~ 0.5
+            let r = silk_lpc_inverse_pred_gain(&a, 10);
+            assert!(r > 0);
+
+            // Order-1 marginal |rc|~1 -> returns 0 or tiny
+            let mut a = [0i16; MAX_LPC_ORDER];
+            a[0] = 4095; // just under the DC cutoff
+            let _ = silk_lpc_inverse_pred_gain(&a, 10);
+
+            // Unstable: large first coefficient
+            let mut a = [0i16; MAX_LPC_ORDER];
+            a[0] = -8000;
+            assert_eq!(silk_lpc_inverse_pred_gain(&a, 10), 0);
+
+            // k=0 final check: craft a filter whose final reduced a_qa[0]
+            // exceeds A_LIMIT via large higher-order coeffs.
+            for &v in &[3000i16, -3000, 4000, -4000, 2000, -2000] {
+                let mut a = [0i16; MAX_LPC_ORDER];
+                a[0] = v;
+                a[1] = v / 2;
+                let _ = silk_lpc_inverse_pred_gain(&a, 10);
+            }
+        }
+
+        // silk_lpc_fit: both the reached_max_iter branch (line 610) and the
+        // converged-early branch by feeding large vs small coefficients.
+        #[test]
+        fn test_bc_lpc_fit_paths() {
+            // Small coefficients: converge early, hit the else branch
+            let mut a_q_from = [100i32, 200, -300, 400];
+            let mut a_q_to = [0i16; 4];
+            silk_lpc_fit(&mut a_q_to, &mut a_q_from, 12, 16, 4);
+            let _ = a_q_to;
+
+            // Huge coefficients that force many BW expansion rounds.
+            // silk_bwexpander_32 multiplies by chirp_q16 but may not shrink
+            // below i16::MAX after 10 rounds on pathological inputs.
+            let mut a_q_from = [i32::MAX / 2, i32::MIN / 2, i32::MAX / 4, i32::MIN / 4];
+            let mut a_q_to = [0i16; 4];
+            silk_lpc_fit(&mut a_q_to, &mut a_q_from, 12, 16, 4);
+
+            // Another variation to hit reached_max_iter.
+            let mut a_q_from = [1 << 30, 1 << 30, 1 << 30, 1 << 30];
+            let mut a_q_to = [0i16; 4];
+            silk_lpc_fit(&mut a_q_to, &mut a_q_from, 12, 16, 4);
+        }
+
+        // silk_sigm_q15: drive the segment-boundary (>=192) branch at line 1889
+        #[test]
+        fn test_bc_sigm_q15_large_positive() {
+            // x >= 192 is the clamped upper path.
+            for x in [192i32, 200, 1000, 10000] {
+                let v = silk_sigm_q15(x);
+                let _ = v;
+            }
+            // Extreme negative
+            for x in [-1000i32, -192, -100] {
+                let v = silk_sigm_q15(x);
+                let _ = v;
+            }
+        }
+
+        // silk_gains_dequant: cover extreme ind values for branches at
+        // lines 2212/2222 (clamp edges of prev_ind).
+        #[test]
+        fn test_bc_gains_dequant_extremes() {
+            // Very large negative initial delta, then large positive
+            let mut gain_q16 = [0i32; 4];
+            let ind = [-128i8, -128, 127, 127];
+            let mut prev_ind: i8 = 0;
+            silk_gains_dequant(&mut gain_q16, &ind, &mut prev_ind, false, 4);
+            assert!(gain_q16.iter().all(|&g| g > 0));
+
+            // Reverse direction: positive then negative
+            let mut gain_q16 = [0i32; 4];
+            let ind = [127i8, -128, -128, -128];
+            let mut prev_ind: i8 = 0;
+            silk_gains_dequant(&mut gain_q16, &ind, &mut prev_ind, true, 4);
+            assert!(gain_q16.iter().all(|&g| g > 0));
+
+            // Alternating zigzag
+            let mut gain_q16 = [0i32; 4];
+            let ind = [0i8, 127, -128, 127];
+            let mut prev_ind: i8 = 0;
+            silk_gains_dequant(&mut gain_q16, &ind, &mut prev_ind, false, 4);
+            assert!(gain_q16.iter().all(|&g| g > 0));
+        }
+
+        // silk_bwexpander: extreme chirp and zero-chirp edges
+        #[test]
+        fn test_bc_bwexpander_extremes() {
+            // chirp=0: all coefficients become 0 after first multiply
+            let mut a = [10_000i16; 8];
+            silk_bwexpander(&mut a, 8, 0);
+            // chirp=65536 ~ 1.0: mostly unchanged
+            let mut b = [10_000i16; 8];
+            silk_bwexpander(&mut b, 8, 65536);
+            // Large chirp doesn't crash
+            let mut c = [10_000i16; 8];
+            silk_bwexpander(&mut c, 8, 32768);
+            assert!(c[0].abs() <= 10_000);
+        }
+
+        // silk_inverse32_var_q: sweep across magnitudes to cover normalization
+        #[test]
+        fn test_bc_inverse32_var_q_sweep() {
+            // Small/medium b: result should be non-zero at Q28.
+            for &b in &[1i32, 2, 7, 100, 1024] {
+                let r = silk_inverse32_var_q(b, 28);
+                assert!(r > 0, "b={b}: got r={r}");
+            }
+            // Large b at Q28 may underflow to 0 — just check non-crash.
+            for &b in &[1_000_000i32, i32::MAX / 4] {
+                let _ = silk_inverse32_var_q(b, 28);
+            }
+            // Negative input: small magnitude produces negative result.
+            for &b in &[-1i32, -100, -1024] {
+                let r = silk_inverse32_var_q(b, 28);
+                assert!(r < 0);
+            }
+        }
+
+        // silk_nlsf_stabilize: tightly-packed NLSFs that drive all the
+        // lower/upper-bound violation branches.
+        #[test]
+        fn test_bc_nlsf_stabilize_extreme_packing() {
+            // All at the top
+            let mut nlsf: [i16; 10] = [32000, 32100, 32200, 32300, 32400,
+                                       32500, 32600, 32700, 32750, 32767];
+            silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
+            for i in 1..10 {
+                assert!(nlsf[i] >= nlsf[i - 1]);
+            }
+
+            // All at the bottom
+            let mut nlsf: [i16; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+            silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
+            for i in 1..10 {
+                assert!(nlsf[i] >= nlsf[i - 1]);
+            }
+
+            // Decreasing input (violates monotonicity everywhere)
+            let mut nlsf: [i16; 10] = [30000, 27000, 24000, 21000, 18000,
+                                       15000, 12000, 9000, 6000, 3000];
+            silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
+            for i in 1..10 {
+                assert!(nlsf[i] >= nlsf[i - 1]);
+            }
+        }
+    }
 }

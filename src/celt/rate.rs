@@ -1527,4 +1527,195 @@ mod tests {
         assert_eq!(dec_ebits, enc_ebits);
         assert_eq!(dec_priority, enc_priority);
     }
+
+    // =======================================================================
+    // Stage 4 branch coverage
+    // =======================================================================
+    mod branch_coverage_stage4 {
+        use super::*;
+
+        /// Run an encode + decode allocation pair; returns (enc_coded, dec_coded).
+        fn roundtrip_alloc(
+            total: i32,
+            alloc_trim: i32,
+            lm: i32,
+            c: i32,
+            start: i32,
+            end: i32,
+            signal_bandwidth: i32,
+            prev: i32,
+            offsets: &[i32; NB_EBANDS],
+            caps: i32,
+        ) -> (i32, i32) {
+            let mode = mode_create(48000, 960).expect("static mode");
+            let cap = [caps; NB_EBANDS];
+            let mut buf = [0u8; 512];
+
+            let mut enc_pulses = [0i32; NB_EBANDS];
+            let mut enc_ebits = [0i32; NB_EBANDS];
+            let mut enc_priority = [0i32; NB_EBANDS];
+            let mut enc_intensity = if c == 2 { end } else { 0 };
+            let mut enc_dual_stereo = if c == 2 { 1 } else { 0 };
+            let mut enc_balance = 0;
+
+            let enc_coded = {
+                let mut enc = RangeEncoder::new(&mut buf);
+                let c_ = clt_compute_allocation(
+                    mode, start, end, offsets, &cap, alloc_trim,
+                    &mut enc_intensity, &mut enc_dual_stereo,
+                    total, &mut enc_balance,
+                    &mut enc_pulses, &mut enc_ebits, &mut enc_priority,
+                    c, lm, &mut enc, true, prev, signal_bandwidth,
+                );
+                enc.done();
+                c_
+            };
+
+            let mut dec_pulses = [0i32; NB_EBANDS];
+            let mut dec_ebits = [0i32; NB_EBANDS];
+            let mut dec_priority = [0i32; NB_EBANDS];
+            let mut dec_intensity = 0;
+            let mut dec_dual_stereo = 0;
+            let mut dec_balance = 0;
+
+            let mut dec = RangeDecoder::new(&buf);
+            let dec_coded = clt_compute_allocation(
+                mode, start, end, offsets, &cap, alloc_trim,
+                &mut dec_intensity, &mut dec_dual_stereo,
+                total, &mut dec_balance,
+                &mut dec_pulses, &mut dec_ebits, &mut dec_priority,
+                c, lm, &mut dec, false, prev, signal_bandwidth,
+            );
+            (enc_coded, dec_coded)
+        }
+
+        // Sweep total-bit budgets across the full range to hit the
+        // skip-decision encoder paths (lines 235, 237, 238, 242-244, 250).
+        #[test]
+        fn test_bc_alloc_total_bits_sweep_stereo() {
+            let offsets = [0i32; NB_EBANDS];
+            let end = NB_EBANDS as i32;
+            for &total in &[0i32, 16, 64, 256, 1000, 2500, 8000, 20000] {
+                for trim in &[0i32, 5, 10] {
+                    for lm in &[0i32, 1, 2, 3] {
+                        let (enc_c, dec_c) =
+                            roundtrip_alloc(total, *trim, *lm, 2, 0, end, end, end, &offsets, 4096);
+                        assert_eq!(enc_c, dec_c, "total={total} trim={trim} lm={lm}");
+                    }
+                }
+            }
+        }
+
+        // Cover signal_bandwidth < j and prev < j hysteresis branches
+        // (lines 237-244) by sweeping both.
+        #[test]
+        fn test_bc_alloc_signal_bandwidth_and_prev_sweep() {
+            let offsets = [0i32; NB_EBANDS];
+            let end = NB_EBANDS as i32;
+            for sig_bw in &[0i32, 5, 10, 15, 20, end] {
+                for prev in &[0i32, 5, 10, 17, end] {
+                    let (enc_c, dec_c) = roundtrip_alloc(
+                        2000, 5, 0, 2, 0, end, *sig_bw, *prev, &offsets, 4096,
+                    );
+                    assert_eq!(enc_c, dec_c, "sig_bw={sig_bw} prev={prev}");
+                }
+            }
+        }
+
+        // Low caps force band_bits to be saturated and change the
+        // skip-decision threshold path.
+        #[test]
+        fn test_bc_alloc_small_caps() {
+            let offsets = [0i32; NB_EBANDS];
+            let end = NB_EBANDS as i32;
+            for caps in &[8i32, 32, 128, 512, 4096] {
+                let (enc_c, dec_c) = roundtrip_alloc(
+                    1500, 5, 0, 2, 0, end, end, end, &offsets, *caps,
+                );
+                assert_eq!(enc_c, dec_c, "caps={caps}");
+            }
+        }
+
+        // Tiny total below intensity_rsv forces the "intensity_rsv > total"
+        // branch (line 496 / pulses falsed at 500). Also target the narrow
+        // window where intensity fits but dual_stereo_rsv does not (line 500
+        // else: total < 1<<BITRES after intensity subtraction).
+        #[test]
+        fn test_bc_alloc_tiny_stereo_budget() {
+            let offsets = [0i32; NB_EBANDS];
+            let end = NB_EBANDS as i32;
+            // Sweep around the LOG2_FRAC_TABLE[21]=36 intensity_rsv boundary.
+            for total in 0..=60i32 {
+                let (_e, _d) = roundtrip_alloc(
+                    total, 5, 0, 2, 0, end, end, end, &offsets, 4096,
+                );
+            }
+            // Also sweep narrower stereo windows: intensity_rsv scales with end-start.
+            for end in 2..=10i32 {
+                for total in 0..=30i32 {
+                    let (_e, _d) = roundtrip_alloc(
+                        total, 5, 0, 2, 0, end, end, end, &offsets, 4096,
+                    );
+                }
+            }
+        }
+
+        // Narrow band end to force intensity_rsv coding with a small
+        // coded_bands window (hits lines 279, 281-286).
+        #[test]
+        fn test_bc_alloc_narrow_stereo_ranges() {
+            let offsets = [0i32; NB_EBANDS];
+            for end in 3..=8i32 {
+                let (enc_c, dec_c) =
+                    roundtrip_alloc(600, 5, 0, 2, 0, end, end, end, &offsets, 4096);
+                assert_eq!(enc_c, dec_c, "end={end}");
+            }
+        }
+
+        // skip_start offset trick: setting offsets boosts skip_start to keep
+        // coded_bands bumped up against the boost point.
+        #[test]
+        fn test_bc_alloc_boost_offsets_sweep() {
+            let end = NB_EBANDS as i32;
+            for boost_band in [3, 7, 10, 15].iter() {
+                let mut offsets = [0i32; NB_EBANDS];
+                offsets[*boost_band] = 80;
+                let (enc_c, dec_c) =
+                    roundtrip_alloc(1200, 5, 0, 2, 0, end, end, end, &offsets, 4096);
+                assert_eq!(enc_c, dec_c, "boost_band={boost_band}");
+            }
+        }
+
+        // bits2pulses roundtrip: exercise q=0 path.
+        #[test]
+        fn test_bc_bits2pulses_q0_roundtrip() {
+            let mode = mode_create(48000, 960).expect("static mode");
+            // For small budgets, q will be 0.
+            for band in 0..mode.nb_ebands {
+                for lm in 0..=3 {
+                    let q0 = bits2pulses(mode, band, lm, 0);
+                    let b = pulses2bits(mode, band, lm, q0);
+                    let _ = bits2pulses(mode, band, lm, b);
+                }
+            }
+        }
+
+        // Mono allocation sweep at various trim/lm/end values.
+        #[test]
+        fn test_bc_alloc_mono_sweep() {
+            let offsets = [0i32; NB_EBANDS];
+            for &total in &[0i32, 64, 500, 1000, 3000, 10000] {
+                for trim in [0i32, 3, 5, 7, 10].iter() {
+                    for lm in [0i32, 1, 2, 3].iter() {
+                        let (enc_c, dec_c) = roundtrip_alloc(
+                            total, *trim, *lm, 1,
+                            0, NB_EBANDS as i32, NB_EBANDS as i32, NB_EBANDS as i32,
+                            &offsets, 4096,
+                        );
+                        assert_eq!(enc_c, dec_c, "total={total} trim={trim} lm={lm}");
+                    }
+                }
+            }
+        }
+    }
 }

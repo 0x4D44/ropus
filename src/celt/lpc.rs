@@ -777,4 +777,98 @@ mod tests {
             "feedback should produce non-zero tail"
         );
     }
+
+    // ===================================================================
+    // Stage 4 branch coverage
+    // ===================================================================
+    mod branch_coverage_stage4 {
+        use super::*;
+
+        // celt_lpc: drive the bandwidth-expansion path by crafting an
+        // autocorrelation that produces a huge coefficient on the first pass
+        // (line 72: maxabs_val > 32767 branch taken; line 93: !converged edge).
+        #[test]
+        fn test_bc_lpc_bw_expansion_iterations() {
+            // Sweep a range of near-singular autocorrelations; each drives
+            // the inner bandwidth-expansion loop at least once.
+            for gap in 0..8i32 {
+                let mut ac = [0i32; 5];
+                ac[0] = 1 << 24;
+                for i in 1..5 {
+                    ac[i] = ac[0] - (gap * (i as i32));
+                }
+                let mut lpc_out = [0i32; 4];
+                celt_lpc(&mut lpc_out, &ac, 4);
+                // Non-crash is the assertion.
+                let _ = lpc_out;
+            }
+        }
+
+        // celt_fir: small block (n small), fixed valid ord, zero coefficients.
+        #[test]
+        fn test_bc_fir_small_block_sweep() {
+            for n in 1..=8 {
+                let ord = 4;
+                let mut x = vec![0i32; n + ord];
+                for i in 0..x.len() {
+                    x[i] = (i as i32) - (ord as i32);
+                }
+                let num = vec![0i32; ord];
+                let mut y = vec![0i32; n];
+                celt_fir(&x, &num, &mut y, n, ord);
+                // Zero coefficients: output == x[ord..ord+n]
+                for i in 0..n {
+                    assert_eq!(y[i], x[i + ord], "n={n} i={i}");
+                }
+            }
+        }
+
+        // celt_iir sweep: zero-feedback, fixed valid ord, varying n (>= ord).
+        #[test]
+        fn test_bc_iir_small_block_sweep() {
+            let ord = 4;
+            for n in [ord, ord + 1, ord + 2, ord + 3, ord + 4, 12, 16] {
+                let den = vec![0i32; ord];
+                let x: Vec<i32> = (0..n).map(|i| (i as i32 + 1) * 10).collect();
+                let mut y = vec![0i32; n];
+                let mut mem = vec![0i32; ord];
+                celt_iir(&x, &den, &mut y, n, ord, &mut mem);
+                assert_eq!(&y, &x, "n={n}");
+            }
+        }
+
+        // celt_fir / celt_iir: zero-coefficient + zero-input sanity.
+        #[test]
+        fn test_bc_fir_iir_all_zero_input() {
+            let n = 8;
+            let ord = 4;
+            let x = vec![0i32; n + ord];
+            let num = vec![0i32; ord];
+            let mut y = vec![0i32; n];
+            celt_fir(&x, &num, &mut y, n, ord);
+            assert!(y.iter().all(|&v| v == 0));
+
+            let den = vec![0i32; ord];
+            let xi = vec![0i32; n];
+            let mut yi = vec![0i32; n];
+            let mut mem = vec![0i32; ord];
+            celt_iir(&xi, &den, &mut yi, n, ord, &mut mem);
+            assert!(yi.iter().all(|&v| v == 0));
+        }
+
+        // celt_lpc: trivially stable across a range of orders
+        #[test]
+        fn test_bc_lpc_order_sweep_stable() {
+            for order in [1usize, 2, 4, 8, 12, 16, CELT_LPC_ORDER] {
+                let mut ac = vec![0i32; order + 1];
+                ac[0] = 1 << 20;
+                ac[1] = 1 << 18;
+                let mut lpc_out = vec![0i32; order];
+                celt_lpc(&mut lpc_out, &ac, order);
+                for (i, &c) in lpc_out.iter().enumerate() {
+                    assert!(c.abs() <= 32767, "order={order} i={i}: {c}");
+                }
+            }
+        }
+    }
 }
