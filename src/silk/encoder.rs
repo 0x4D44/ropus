@@ -10999,4 +10999,1108 @@ mod tests {
         // FEC should have been set up
         assert_eq!(enc.state_fxx[0].s_cmn.lbrr_enabled, 1);
     }
+
+    // ========================================================================
+    // Branch-coverage sweep tests
+    // ========================================================================
+    //
+    // These tests aim to push as many interior branches through silk_encode as
+    // possible in a short runtime. They exercise the parameter matrix described
+    // in `wrk_docs/2026.04.16 - PLN - branch coverage to 98 percent.md`.
+
+    /// Deterministic PRNG helper (LCG) used by sweep tests for reproducible input.
+    fn sweep_rng_step(state: &mut u64) -> i16 {
+        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (*state >> 49) as i16
+    }
+
+    /// Build a PCM buffer of `frame_samples * channels` i16 samples using shape `kind`.
+    /// kind: 0 = silence, 1 = 1 kHz sine (voiced-like), 2 = voiced chirp, 3 = white noise.
+    fn make_sweep_pcm(
+        frame_samples: usize,
+        channels: usize,
+        api_rate: i32,
+        kind: u8,
+        seed: u64,
+    ) -> Vec<i16> {
+        let n = frame_samples * channels;
+        let mut out = vec![0i16; n];
+        let mut rng = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let amp = 8_000.0f64;
+        for i in 0..frame_samples {
+            let t = i as f64 / api_rate as f64;
+            let v: i16 = match kind {
+                0 => 0,
+                1 => (amp * (2.0 * std::f64::consts::PI * 1_000.0 * t).sin()) as i16,
+                2 => {
+                    let freq = 200.0 + 50.0 * (i as f64);
+                    let inst = freq * t;
+                    (amp * (2.0 * std::f64::consts::PI * inst).sin()) as i16
+                }
+                _ => sweep_rng_step(&mut rng),
+            };
+            for c in 0..channels {
+                // Slight decorrelation for stereo
+                let adj = if c == 1 && kind != 0 {
+                    v.wrapping_sub((v / 4) as i16)
+                } else {
+                    v
+                };
+                out[i * channels + c] = adj;
+            }
+        }
+        out
+    }
+
+    /// Single 20ms encode wrapper with prefill — used by the main sweep.
+    /// Returns `true` if the encode produced output bytes, `false` if skipped
+    /// (e.g., API rate / internal rate combination returns an error).
+    fn try_encode_sweep(
+        fs_api_khz: i32,
+        n_ch_api: i32,
+        n_ch_internal: i32,
+        bitrate: i32,
+        complexity: i32,
+        packet_loss: i32,
+        use_in_band_fec: i32,
+        use_dtx: i32,
+        use_cbr: i32,
+        lbrr_coded: i32,
+        signal_kind: u8,
+        n_frames: usize,
+    ) -> bool {
+        let api_rate = fs_api_khz * 1000;
+
+        let mut enc = SilkEncoder::new();
+        if silk_init_encoder_top(&mut enc, n_ch_api as usize) != 0 {
+            return false;
+        }
+
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.n_channels_api = n_ch_api;
+        ctrl.n_channels_internal = n_ch_internal;
+        ctrl.api_sample_rate = api_rate;
+        // Internal rates: keep desired at min(api, 16kHz), but allow the encoder to
+        // pick narrower rates based on bitrate/VAD.
+        let max_internal = if api_rate >= 16_000 { 16_000 } else { api_rate };
+        let desired_internal = max_internal;
+        ctrl.max_internal_sample_rate = max_internal;
+        ctrl.min_internal_sample_rate = 8_000;
+        ctrl.desired_internal_sample_rate = desired_internal;
+        ctrl.payload_size_ms = 20;
+        ctrl.bit_rate = bitrate;
+        // A generous max_bits budget so we hit the VBR path in most iterations.
+        ctrl.max_bits = ((bitrate as i64 * 20) / 1000) as i32 + 512;
+        ctrl.complexity = complexity;
+        ctrl.use_in_band_fec = use_in_band_fec;
+        ctrl.use_dtx = use_dtx;
+        ctrl.use_cbr = use_cbr;
+        ctrl.packet_loss_percentage = packet_loss;
+        ctrl.lbrr_coded = lbrr_coded;
+
+        // Generate one PCM buffer big enough for `n_frames` of 20ms + a 10ms prefill.
+        let samples_per_10ms = (api_rate / 100) as usize;
+        let samples_per_20ms = samples_per_10ms * 2;
+        let total_frames = samples_per_20ms * n_frames + samples_per_10ms; // +prefill
+        let seed = (fs_api_khz as u64) * 100
+            + (bitrate as u64 / 1000)
+            + (complexity as u64)
+            + (signal_kind as u64);
+        let pcm = make_sweep_pcm(total_frames, n_ch_api as usize, api_rate, signal_kind, seed);
+
+        // Prefill
+        let mut prefill_buf = [0u8; 512];
+        let mut re_pre = RangeEncoder::new(&mut prefill_buf);
+        let mut n_bytes = 0i32;
+        let prefill_slice = &pcm[..samples_per_10ms * n_ch_api as usize];
+        let ret = silk_encode(
+            &mut enc,
+            &mut ctrl,
+            prefill_slice,
+            (samples_per_10ms as i32) * n_ch_api,
+            &mut re_pre,
+            &mut n_bytes,
+            1,
+            0,
+        );
+        if ret != SILK_NO_ERROR {
+            return false;
+        }
+
+        // n_frames actual encodes
+        ctrl.payload_size_ms = 20;
+        ctrl.complexity = complexity;
+        let mut ok_any = false;
+        let mut cursor = samples_per_10ms * n_ch_api as usize;
+        for f in 0..n_frames {
+            let frame_len = samples_per_20ms * n_ch_api as usize;
+            if cursor + frame_len > pcm.len() {
+                break;
+            }
+            let frame = &pcm[cursor..cursor + frame_len];
+            cursor += frame_len;
+
+            let mut payload = vec![0u8; 4096];
+            let mut re = RangeEncoder::new(&mut payload);
+            let mut n_out = 0i32;
+            // Alternate activity flag across frames to exercise both branches
+            let activity = ((f & 1) as i32) ^ 1;
+            let ret = silk_encode(
+                &mut enc,
+                &mut ctrl,
+                frame,
+                (samples_per_20ms as i32) * n_ch_api,
+                &mut re,
+                &mut n_out,
+                0,
+                activity,
+            );
+            if ret == SILK_NO_ERROR {
+                ok_any = true;
+            }
+        }
+        ok_any
+    }
+
+    #[test]
+    fn test_sweep_encode_parameter_matrix() {
+        // Main branch-coverage sweep. Keep the matrix reasonably small so the
+        // whole test runs in well under the 60s budget. Each iteration runs
+        // ~2 frames of 20ms through the full silk_encode pipeline.
+        let fs_api_khzs = [8, 12, 16, 24, 48];
+        let bitrates = [5_000, 12_000, 24_000, 40_000, 64_000];
+        let complexities = [0, 5, 10];
+        let signal_kinds = [0u8, 1, 2, 3];
+
+        let mut encoded_any = false;
+        for &fs in &fs_api_khzs {
+            for &br in &bitrates {
+                for &cx in &complexities {
+                    for &kind in &signal_kinds {
+                        if try_encode_sweep(
+                            fs, 1, 1, br, cx, 0, 0, 0, 0, 0, kind, 2,
+                        ) {
+                            encoded_any = true;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(encoded_any, "sweep should have produced at least one frame");
+    }
+
+    #[test]
+    fn test_sweep_stereo_parameter_matrix() {
+        // Stereo sweep exercising LR→MS, stereo LTP quant, mid-only flag paths.
+        let fs_api_khzs = [16, 24, 48];
+        let bitrates = [12_000, 32_000, 64_000];
+        let complexities = [2, 8];
+
+        let mut ok = false;
+        for &fs in &fs_api_khzs {
+            for &br in &bitrates {
+                for &cx in &complexities {
+                    for &kind in &[0u8, 1, 3] {
+                        for &n_ch_int in &[1i32, 2i32] {
+                            if try_encode_sweep(
+                                fs, 2, n_ch_int, br, cx, 10, 0, 0, 0, 0, kind, 2,
+                            ) {
+                                ok = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(ok, "stereo sweep should have produced at least one frame");
+    }
+
+    #[test]
+    fn test_sweep_dtx_cbr_fec_combinations() {
+        // Exercise the DTX / CBR / FEC / LBRR code paths. For DTX we include
+        // a silence run so the encoder actually enters the DTX output path.
+        for &use_dtx in &[0, 1] {
+            for &use_cbr in &[0, 1] {
+                for &use_fec in &[0, 1] {
+                    for &lbrr in &[0, 1] {
+                        for &pkt_loss in &[0, 25, 50] {
+                            // Silence input exercises DTX.
+                            let _ = try_encode_sweep(
+                                16, 1, 1, 16_000, 2, pkt_loss, use_fec, use_dtx,
+                                use_cbr, lbrr, 0, 3,
+                            );
+                            // Voiced input exercises FEC / LBRR activation.
+                            let _ = try_encode_sweep(
+                                16, 1, 1, 24_000, 5, pkt_loss, use_fec, use_dtx,
+                                use_cbr, lbrr, 1, 3,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_sweep_bandwidth_switch_sequence() {
+        // Initialize at 16kHz, then force transitions by changing
+        // desired/max internal sample rates mid-stream.
+        let mut enc = SilkEncoder::new();
+        assert_eq!(silk_init_encoder_top(&mut enc, 1), 0);
+
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.n_channels_api = 1;
+        ctrl.n_channels_internal = 1;
+        ctrl.api_sample_rate = 48_000;
+        ctrl.max_internal_sample_rate = 16_000;
+        ctrl.min_internal_sample_rate = 8_000;
+        ctrl.desired_internal_sample_rate = 16_000;
+        ctrl.payload_size_ms = 20;
+        ctrl.bit_rate = 24_000;
+        ctrl.max_bits = 4_000;
+        ctrl.complexity = 5;
+
+        // 20ms @ 48kHz = 960 samples per frame.
+        let samples_per_10ms = 480usize;
+        let samples_per_20ms = 960usize;
+
+        let pcm = make_sweep_pcm(samples_per_20ms * 8 + samples_per_10ms, 1, 48_000, 1, 42);
+
+        // Prefill (10ms)
+        let mut buf_pre = [0u8; 512];
+        let mut re_pre = RangeEncoder::new(&mut buf_pre);
+        let mut n = 0i32;
+        let _ = silk_encode(
+            &mut enc,
+            &mut ctrl,
+            &pcm[..samples_per_10ms],
+            samples_per_10ms as i32,
+            &mut re_pre,
+            &mut n,
+            1,
+            0,
+        );
+
+        // Frame 0: wideband
+        let mut pos = samples_per_10ms;
+        for _ in 0..2 {
+            let mut buf = vec![0u8; 4096];
+            let mut re = RangeEncoder::new(&mut buf);
+            let mut nb = 0i32;
+            let _ = silk_encode(
+                &mut enc,
+                &mut ctrl,
+                &pcm[pos..pos + samples_per_20ms],
+                samples_per_20ms as i32,
+                &mut re,
+                &mut nb,
+                0,
+                1,
+            );
+            pos += samples_per_20ms;
+        }
+
+        // Switch down to narrowband: allow_bandwidth_switch + desired low.
+        ctrl.desired_internal_sample_rate = 8_000;
+        ctrl.max_internal_sample_rate = 8_000;
+        ctrl.opus_can_switch = 1;
+        for _ in 0..2 {
+            if pos + samples_per_20ms > pcm.len() {
+                break;
+            }
+            let mut buf = vec![0u8; 4096];
+            let mut re = RangeEncoder::new(&mut buf);
+            let mut nb = 0i32;
+            let _ = silk_encode(
+                &mut enc,
+                &mut ctrl,
+                &pcm[pos..pos + samples_per_20ms],
+                samples_per_20ms as i32,
+                &mut re,
+                &mut nb,
+                0,
+                1,
+            );
+            pos += samples_per_20ms;
+            ctrl.opus_can_switch = 0;
+        }
+
+        // Switch back up (wideband) with opus_can_switch again
+        ctrl.desired_internal_sample_rate = 16_000;
+        ctrl.max_internal_sample_rate = 16_000;
+        ctrl.opus_can_switch = 1;
+        for _ in 0..2 {
+            if pos + samples_per_20ms > pcm.len() {
+                break;
+            }
+            let mut buf = vec![0u8; 4096];
+            let mut re = RangeEncoder::new(&mut buf);
+            let mut nb = 0i32;
+            let _ = silk_encode(
+                &mut enc,
+                &mut ctrl,
+                &pcm[pos..pos + samples_per_20ms],
+                samples_per_20ms as i32,
+                &mut re,
+                &mut nb,
+                0,
+                1,
+            );
+            pos += samples_per_20ms;
+            ctrl.opus_can_switch = 0;
+        }
+    }
+
+    #[test]
+    fn test_sweep_stereo_to_mono_transition() {
+        // Initialize as stereo, then flip nChannelsInternal to 1 to exercise the
+        // stereo→mono transition branch (and to_mono bit).
+        let mut enc = SilkEncoder::new();
+        assert_eq!(silk_init_encoder_top(&mut enc, 2), 0);
+
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.n_channels_api = 2;
+        ctrl.n_channels_internal = 2;
+        ctrl.api_sample_rate = 16_000;
+        ctrl.max_internal_sample_rate = 16_000;
+        ctrl.min_internal_sample_rate = 8_000;
+        ctrl.desired_internal_sample_rate = 16_000;
+        ctrl.payload_size_ms = 20;
+        ctrl.bit_rate = 48_000;
+        ctrl.max_bits = 4_000;
+        ctrl.complexity = 3;
+
+        // 10ms = 160 per channel = 320 interleaved; 20ms = 320 per ch = 640
+        let samples_per_10ms = 160usize;
+        let samples_per_20ms = 320usize;
+        let pcm = make_sweep_pcm(samples_per_20ms * 6 + samples_per_10ms, 2, 16_000, 1, 7);
+
+        let mut buf = [0u8; 1024];
+        let mut re = RangeEncoder::new(&mut buf);
+        let mut n = 0i32;
+        let _ = silk_encode(
+            &mut enc,
+            &mut ctrl,
+            &pcm[..samples_per_10ms * 2],
+            (samples_per_10ms * 2) as i32,
+            &mut re,
+            &mut n,
+            1,
+            0,
+        );
+
+        // Encode 2 stereo frames
+        let mut pos = samples_per_10ms * 2;
+        for _ in 0..2 {
+            let mut buf2 = vec![0u8; 4096];
+            let mut re2 = RangeEncoder::new(&mut buf2);
+            let mut nb = 0i32;
+            let _ = silk_encode(
+                &mut enc,
+                &mut ctrl,
+                &pcm[pos..pos + samples_per_20ms * 2],
+                (samples_per_20ms * 2) as i32,
+                &mut re2,
+                &mut nb,
+                0,
+                1,
+            );
+            pos += samples_per_20ms * 2;
+        }
+
+        // Request to_mono (drops side channel via stereo_lr_to_ms).
+        ctrl.to_mono = 1;
+        for _ in 0..2 {
+            if pos + samples_per_20ms * 2 > pcm.len() {
+                break;
+            }
+            let mut buf3 = vec![0u8; 4096];
+            let mut re3 = RangeEncoder::new(&mut buf3);
+            let mut nb = 0i32;
+            let _ = silk_encode(
+                &mut enc,
+                &mut ctrl,
+                &pcm[pos..pos + samples_per_20ms * 2],
+                (samples_per_20ms * 2) as i32,
+                &mut re3,
+                &mut nb,
+                0,
+                1,
+            );
+            pos += samples_per_20ms * 2;
+        }
+        ctrl.to_mono = 0;
+
+        // Switch to mono internal (n_channels_internal = 1)
+        ctrl.n_channels_internal = 1;
+        for _ in 0..2 {
+            if pos + samples_per_20ms * 2 > pcm.len() {
+                break;
+            }
+            let mut buf4 = vec![0u8; 4096];
+            let mut re4 = RangeEncoder::new(&mut buf4);
+            let mut nb = 0i32;
+            let _ = silk_encode(
+                &mut enc,
+                &mut ctrl,
+                &pcm[pos..pos + samples_per_20ms * 2],
+                (samples_per_20ms * 2) as i32,
+                &mut re4,
+                &mut nb,
+                0,
+                1,
+            );
+            pos += samples_per_20ms * 2;
+        }
+
+        // Back to stereo (mono → stereo transition)
+        ctrl.n_channels_internal = 2;
+        if pos + samples_per_20ms * 2 <= pcm.len() {
+            let mut buf5 = vec![0u8; 4096];
+            let mut re5 = RangeEncoder::new(&mut buf5);
+            let mut nb = 0i32;
+            let _ = silk_encode(
+                &mut enc,
+                &mut ctrl,
+                &pcm[pos..pos + samples_per_20ms * 2],
+                (samples_per_20ms * 2) as i32,
+                &mut re5,
+                &mut nb,
+                0,
+                1,
+            );
+        }
+    }
+
+    #[test]
+    fn test_check_control_input_covers_remaining_negative_branches() {
+        // Walk through each remaining error path that the existing tests miss.
+        // Baseline covers: bad API rate, bad payload size, bad loss rate,
+        // bad channels, internal>api, bad internal range, bad complexity,
+        // bad internal/desired rel, bad DTX, bad CBR, bad FEC.
+        // Still uncovered: desired-rate/max-rate/min-rate individual-value branches
+        // (lines 680-688) and the cross checks (689-691).
+
+        // bad desired_internal_sample_rate (not 8/12/16k)
+        let mut c1 = SilkEncControlStruct::default();
+        c1.desired_internal_sample_rate = 11_025;
+        assert_eq!(check_control_input(&c1), SILK_ENC_FS_NOT_SUPPORTED);
+
+        // bad max_internal_sample_rate
+        let mut c2 = SilkEncControlStruct::default();
+        c2.max_internal_sample_rate = 22_050;
+        assert_eq!(check_control_input(&c2), SILK_ENC_FS_NOT_SUPPORTED);
+
+        // bad min_internal_sample_rate
+        let mut c3 = SilkEncControlStruct::default();
+        c3.min_internal_sample_rate = 24_000;
+        assert_eq!(check_control_input(&c3), SILK_ENC_FS_NOT_SUPPORTED);
+
+        // max < desired
+        let mut c4 = SilkEncControlStruct::default();
+        c4.max_internal_sample_rate = 8_000;
+        c4.desired_internal_sample_rate = 16_000;
+        assert_eq!(check_control_input(&c4), SILK_ENC_FS_NOT_SUPPORTED);
+
+        // min > max
+        let mut c5 = SilkEncControlStruct::default();
+        c5.min_internal_sample_rate = 16_000;
+        c5.max_internal_sample_rate = 8_000;
+        c5.desired_internal_sample_rate = 16_000;
+        assert_eq!(check_control_input(&c5), SILK_ENC_FS_NOT_SUPPORTED);
+
+        // All valid API rates accepted
+        for &rate in &[8_000, 12_000, 16_000, 24_000, 32_000, 44_100, 48_000] {
+            let mut c = SilkEncControlStruct::default();
+            c.api_sample_rate = rate;
+            assert_eq!(check_control_input(&c), SILK_NO_ERROR, "rate {rate}");
+        }
+
+        // All valid payload sizes
+        for &ms in &[10, 20, 40, 60] {
+            let mut c = SilkEncControlStruct::default();
+            c.payload_size_ms = ms;
+            assert_eq!(check_control_input(&c), SILK_NO_ERROR, "payload {ms}");
+        }
+
+        // Negative use_in_band_fec
+        let mut c6 = SilkEncControlStruct::default();
+        c6.use_in_band_fec = -1;
+        assert_eq!(check_control_input(&c6), SILK_ENC_INVALID_INBAND_FEC_SETTING);
+
+        // Negative packet_loss_percentage
+        let mut c7 = SilkEncControlStruct::default();
+        c7.packet_loss_percentage = -1;
+        assert_eq!(check_control_input(&c7), SILK_ENC_INVALID_LOSS_RATE);
+
+        // Negative complexity
+        let mut c8 = SilkEncControlStruct::default();
+        c8.complexity = -1;
+        assert_eq!(check_control_input(&c8), SILK_ENC_INVALID_COMPLEXITY_SETTING);
+
+        // Negative n_channels_internal
+        let mut c9 = SilkEncControlStruct::default();
+        c9.n_channels_internal = 0;
+        assert_eq!(
+            check_control_input(&c9),
+            SILK_ENC_INVALID_NUMBER_OF_CHANNELS_ERROR
+        );
+    }
+
+    #[test]
+    fn test_control_audio_bandwidth_switch_down_and_hysteresis() {
+        // Already-initialised state, allow_bandwidth_switch=1, desired<current:
+        // drives the "switch down" path inside silk_control_audio_bandwidth.
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.max_bits = 2_000;
+        ctrl.payload_size_ms = 20;
+
+        // switch-down with opus_can_switch=1 and orig_khz=16 → 12
+        let mut st = SilkEncoderState::default();
+        st.fs_khz = 16;
+        st.api_fs_hz = 48_000;
+        st.desired_internal_fs_hz = 8_000;
+        st.max_internal_fs_hz = 16_000;
+        st.min_internal_fs_hz = 8_000;
+        st.allow_bandwidth_switch = 1;
+        ctrl.opus_can_switch = 1;
+        let got = silk_control_audio_bandwidth(&mut st, &mut ctrl);
+        assert_eq!(got, 12);
+
+        // switch-down, opus_can_switch=0, transition_frame_no>0 → mode=-2
+        let mut st2 = SilkEncoderState::default();
+        st2.fs_khz = 12;
+        st2.api_fs_hz = 48_000;
+        st2.desired_internal_fs_hz = 8_000;
+        st2.max_internal_fs_hz = 16_000;
+        st2.min_internal_fs_hz = 8_000;
+        st2.allow_bandwidth_switch = 1;
+        st2.s_lp.mode = 0;
+        st2.s_lp.transition_frame_no = 3;
+        let mut ctrl2 = SilkEncControlStruct::default();
+        ctrl2.max_bits = 2_000;
+        ctrl2.payload_size_ms = 20;
+        ctrl2.opus_can_switch = 0;
+        let _ = silk_control_audio_bandwidth(&mut st2, &mut ctrl2);
+        assert_eq!(st2.s_lp.mode, -2);
+
+        // switch-up, opus_can_switch=1, orig=8 → 12
+        let mut st3 = SilkEncoderState::default();
+        st3.fs_khz = 8;
+        st3.api_fs_hz = 48_000;
+        st3.desired_internal_fs_hz = 16_000;
+        st3.max_internal_fs_hz = 16_000;
+        st3.min_internal_fs_hz = 8_000;
+        st3.allow_bandwidth_switch = 1;
+        let mut ctrl3 = SilkEncControlStruct::default();
+        ctrl3.opus_can_switch = 1;
+        ctrl3.payload_size_ms = 20;
+        ctrl3.max_bits = 2_000;
+        assert_eq!(silk_control_audio_bandwidth(&mut st3, &mut ctrl3), 12);
+        assert_eq!(st3.s_lp.mode, 1);
+
+        // switch-up, opus_can_switch=0, mode!=0 → mode set to 1 (else branch of L1360)
+        let mut st4 = SilkEncoderState::default();
+        st4.fs_khz = 8;
+        st4.api_fs_hz = 48_000;
+        st4.desired_internal_fs_hz = 16_000;
+        st4.max_internal_fs_hz = 16_000;
+        st4.min_internal_fs_hz = 8_000;
+        st4.allow_bandwidth_switch = 1;
+        st4.s_lp.mode = -1;
+        let mut ctrl4 = SilkEncControlStruct::default();
+        ctrl4.opus_can_switch = 0;
+        ctrl4.payload_size_ms = 20;
+        ctrl4.max_bits = 2_000;
+        let _ = silk_control_audio_bandwidth(&mut st4, &mut ctrl4);
+        assert_eq!(st4.s_lp.mode, 1);
+
+        // orig == desired and mode<0 → mode=1 (L1367 branch)
+        let mut st5 = SilkEncoderState::default();
+        st5.fs_khz = 16;
+        st5.api_fs_hz = 48_000;
+        st5.desired_internal_fs_hz = 16_000;
+        st5.max_internal_fs_hz = 16_000;
+        st5.min_internal_fs_hz = 8_000;
+        st5.allow_bandwidth_switch = 1;
+        st5.s_lp.mode = -2;
+        let mut ctrl5 = SilkEncControlStruct::default();
+        ctrl5.payload_size_ms = 20;
+        ctrl5.max_bits = 2_000;
+        let _ = silk_control_audio_bandwidth(&mut st5, &mut ctrl5);
+        assert_eq!(st5.s_lp.mode, 1);
+
+        // fs_khz=0 branch (encoder just initialised)
+        let mut st6 = SilkEncoderState::default();
+        st6.fs_khz = 0;
+        st6.api_fs_hz = 16_000;
+        st6.desired_internal_fs_hz = 16_000;
+        st6.max_internal_fs_hz = 16_000;
+        st6.min_internal_fs_hz = 8_000;
+        let mut ctrl6 = SilkEncControlStruct::default();
+        ctrl6.payload_size_ms = 20;
+        let picked = silk_control_audio_bandwidth(&mut st6, &mut ctrl6);
+        assert!(picked > 0);
+
+        // fs_hz out of [min,max] range — forces the clamp branch (L1323).
+        let mut st7 = SilkEncoderState::default();
+        st7.fs_khz = 24; // fs_hz = 24_000, > max 16_000
+        st7.api_fs_hz = 48_000;
+        st7.desired_internal_fs_hz = 16_000;
+        st7.max_internal_fs_hz = 16_000;
+        st7.min_internal_fs_hz = 8_000;
+        let mut ctrl7 = SilkEncControlStruct::default();
+        ctrl7.payload_size_ms = 20;
+        let clamped = silk_control_audio_bandwidth(&mut st7, &mut ctrl7);
+        assert_eq!(clamped, 16);
+    }
+
+    #[test]
+    fn test_sweep_packet_sizes_and_multi_frame_encode() {
+        // Cover 10/20/40/60 ms payload sizes via full silk_encode. Longer
+        // payloads (40/60ms) exercise the tot_blocks > 1 rate-allocation branch.
+        for &ms in &[10i32, 20, 40, 60] {
+            for &fs in &[16, 24] {
+                let mut enc = SilkEncoderState::default();
+                let _ = &mut enc;
+                let mut enc = SilkEncoder::new();
+                assert_eq!(silk_init_encoder_top(&mut enc, 1), 0);
+
+                let mut ctrl = SilkEncControlStruct::default();
+                ctrl.n_channels_api = 1;
+                ctrl.n_channels_internal = 1;
+                ctrl.api_sample_rate = fs * 1000;
+                ctrl.max_internal_sample_rate = 16_000.min(fs * 1000);
+                ctrl.min_internal_sample_rate = 8_000;
+                ctrl.desired_internal_sample_rate = 16_000.min(fs * 1000);
+                ctrl.payload_size_ms = ms;
+                ctrl.bit_rate = 32_000;
+                ctrl.max_bits = (32_000 * ms / 1000) + 512;
+                ctrl.complexity = 3;
+
+                let samples_per_10ms = (fs * 1000 / 100) as usize;
+                let samples_per_pkt = samples_per_10ms * (ms as usize / 10);
+                let pcm = make_sweep_pcm(samples_per_pkt + samples_per_10ms, 1, fs * 1000, 1, 9);
+
+                // Prefill
+                let mut pre_buf = [0u8; 256];
+                let mut pre_re = RangeEncoder::new(&mut pre_buf);
+                let mut n = 0i32;
+                let _ = silk_encode(
+                    &mut enc,
+                    &mut ctrl,
+                    &pcm[..samples_per_10ms],
+                    samples_per_10ms as i32,
+                    &mut pre_re,
+                    &mut n,
+                    1,
+                    0,
+                );
+
+                // One encode of the full payload window
+                ctrl.payload_size_ms = ms;
+                ctrl.complexity = 3;
+                let mut buf = vec![0u8; 8192];
+                let mut re = RangeEncoder::new(&mut buf);
+                let mut n = 0i32;
+                let _ = silk_encode(
+                    &mut enc,
+                    &mut ctrl,
+                    &pcm[samples_per_10ms..samples_per_10ms + samples_per_pkt],
+                    samples_per_pkt as i32,
+                    &mut re,
+                    &mut n,
+                    0,
+                    1,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_sweep_silence_vs_voiced_state_evolution() {
+        // Multi-frame runs: alternating silence / voiced / noise. Drives
+        // signal-type transitions (TYPE_VOICED ↔ TYPE_UNVOICED ↔ TYPE_NO_VOICE_ACTIVITY)
+        // and the `first_frame_after_reset` → subsequent-frame LPC-interp branches.
+        let mut enc = SilkEncoder::new();
+        assert_eq!(silk_init_encoder_top(&mut enc, 1), 0);
+
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.n_channels_api = 1;
+        ctrl.n_channels_internal = 1;
+        ctrl.api_sample_rate = 16_000;
+        ctrl.max_internal_sample_rate = 16_000;
+        ctrl.min_internal_sample_rate = 8_000;
+        ctrl.desired_internal_sample_rate = 16_000;
+        ctrl.payload_size_ms = 20;
+        ctrl.bit_rate = 20_000;
+        ctrl.max_bits = 2_000;
+        ctrl.complexity = 6;
+        ctrl.use_dtx = 1;
+        ctrl.use_in_band_fec = 1;
+        ctrl.packet_loss_percentage = 15;
+        ctrl.lbrr_coded = 1;
+
+        // Prefill with a voiced frame (gets the HP filter / LP state set up).
+        let prefill = make_sweep_pcm(160, 1, 16_000, 1, 1);
+        let mut pre_buf = [0u8; 512];
+        let mut pre_re = RangeEncoder::new(&mut pre_buf);
+        let mut n = 0i32;
+        let _ = silk_encode(
+            &mut enc,
+            &mut ctrl,
+            &prefill,
+            160,
+            &mut pre_re,
+            &mut n,
+            1,
+            0,
+        );
+
+        // 8 frames alternating silence / voice / chirp / noise.
+        ctrl.payload_size_ms = 20;
+        ctrl.complexity = 6;
+        for i in 0..8 {
+            let kind = (i % 4) as u8;
+            let frame = make_sweep_pcm(320, 1, 16_000, kind, i as u64 + 1);
+            let mut buf = vec![0u8; 4096];
+            let mut re = RangeEncoder::new(&mut buf);
+            let mut nb = 0i32;
+            // Alternate activity flag — both 0 and 1 paths
+            let activity = (i & 1) as i32;
+            let _ = silk_encode(
+                &mut enc,
+                &mut ctrl,
+                &frame,
+                320,
+                &mut re,
+                &mut nb,
+                0,
+                activity,
+            );
+        }
+    }
+
+    #[test]
+    fn test_sweep_cbr_low_and_high_bitrate_clamp() {
+        // CBR at extremes: very low bitrate (hits the clamp in silk_control_snr
+        // and the damage-control branch in silk_encode_frame_fix), and very
+        // high bitrate (gain_mult upper branches).
+        for &br in &[5_000, 8_000, 64_000, 100_000] {
+            for &cx in &[0, 5] {
+                let _ = try_encode_sweep(
+                    16, 1, 1, br, cx, 0, 0, 0, 1, 0, 3, 3,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_silk_encode_invalid_sample_count_paths() {
+        // Cover the return-paths at L7804 (prefill wrong length), L7835
+        // (non-10ms multiple) and L7840 (too many samples) in silk_encode.
+        let mut enc = SilkEncoder::new();
+        assert_eq!(silk_init_encoder_top(&mut enc, 1), 0);
+
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.n_channels_api = 1;
+        ctrl.n_channels_internal = 1;
+        ctrl.api_sample_rate = 16_000;
+        ctrl.max_internal_sample_rate = 16_000;
+        ctrl.min_internal_sample_rate = 8_000;
+        ctrl.desired_internal_sample_rate = 16_000;
+        ctrl.payload_size_ms = 20;
+        ctrl.bit_rate = 16_000;
+        ctrl.max_bits = 1_600;
+
+        // Prefill must be 10ms — give 20ms instead.
+        let samples = vec![0i16; 320];
+        let mut buf = [0u8; 256];
+        let mut re = RangeEncoder::new(&mut buf);
+        let mut n = 0i32;
+        let ret_bad_prefill = silk_encode(
+            &mut enc, &mut ctrl, &samples, 320, &mut re, &mut n, 1, 0,
+        );
+        assert_eq!(ret_bad_prefill, SILK_ENC_INPUT_INVALID_NO_OF_SAMPLES);
+
+        // Now exit prefill mode and feed an oddly-sized buffer (not multiple of 10ms).
+        let odd = vec![0i16; 123];
+        let mut buf2 = [0u8; 256];
+        let mut re2 = RangeEncoder::new(&mut buf2);
+        let ret_bad_len = silk_encode(
+            &mut enc, &mut ctrl, &odd, 123, &mut re2, &mut n, 0, 0,
+        );
+        assert_eq!(ret_bad_len, SILK_ENC_INPUT_INVALID_NO_OF_SAMPLES);
+
+        // 30ms of samples but payload_size_ms=20 → too many samples.
+        let too_many = vec![0i16; 480];
+        let mut buf3 = [0u8; 256];
+        let mut re3 = RangeEncoder::new(&mut buf3);
+        let ret_too_many = silk_encode(
+            &mut enc, &mut ctrl, &too_many, 480, &mut re3, &mut n, 0, 0,
+        );
+        assert_eq!(ret_too_many, SILK_ENC_INPUT_INVALID_NO_OF_SAMPLES);
+    }
+
+    #[test]
+    fn test_silk_encode_invalid_control_propagates_error() {
+        // Make silk_encode return early from check_control_input.
+        let mut enc = SilkEncoder::new();
+        assert_eq!(silk_init_encoder_top(&mut enc, 1), 0);
+
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.n_channels_api = 1;
+        ctrl.n_channels_internal = 1;
+        ctrl.api_sample_rate = 11025; // not supported
+        ctrl.max_internal_sample_rate = 16_000;
+        ctrl.min_internal_sample_rate = 8_000;
+        ctrl.desired_internal_sample_rate = 16_000;
+        ctrl.payload_size_ms = 20;
+
+        let s = [0i16; 160];
+        let mut buf = [0u8; 64];
+        let mut re = RangeEncoder::new(&mut buf);
+        let mut n = 0i32;
+        let ret = silk_encode(&mut enc, &mut ctrl, &s, 160, &mut re, &mut n, 0, 0);
+        assert_eq!(ret, SILK_ENC_FS_NOT_SUPPORTED);
+    }
+
+    #[test]
+    fn test_sweep_multi_frame_40_60ms_lbrr_active() {
+        // 40/60ms packets with LBRR + FEC on let the encoder produce multiple
+        // LBRR frames inside one packet — covers the "previous LBRR present"
+        // conditional (L8097) plus the inter-frame accounting in L8140/L8161.
+        for &ms in &[40i32, 60] {
+            let mut enc = SilkEncoder::new();
+            assert_eq!(silk_init_encoder_top(&mut enc, 1), 0);
+
+            let mut ctrl = SilkEncControlStruct::default();
+            ctrl.n_channels_api = 1;
+            ctrl.n_channels_internal = 1;
+            ctrl.api_sample_rate = 16_000;
+            ctrl.max_internal_sample_rate = 16_000;
+            ctrl.min_internal_sample_rate = 8_000;
+            ctrl.desired_internal_sample_rate = 16_000;
+            ctrl.payload_size_ms = ms;
+            ctrl.bit_rate = 32_000;
+            ctrl.max_bits = (32_000 * ms / 1000) + 1024;
+            ctrl.complexity = 4;
+            ctrl.use_in_band_fec = 1;
+            ctrl.packet_loss_percentage = 40;
+            ctrl.lbrr_coded = 1;
+
+            // Prefill
+            let prefill = make_sweep_pcm(160, 1, 16_000, 1, ms as u64);
+            let mut pre_buf = [0u8; 512];
+            let mut pre_re = RangeEncoder::new(&mut pre_buf);
+            let mut n = 0i32;
+            let _ = silk_encode(
+                &mut enc, &mut ctrl, &prefill, 160, &mut pre_re, &mut n, 1, 0,
+            );
+
+            ctrl.payload_size_ms = ms;
+            ctrl.complexity = 4;
+
+            // Encode full packet (ms) worth of voiced samples
+            let samples_per_pkt = 16 * ms as usize; // 16kHz, ms ms
+            let pkt = make_sweep_pcm(samples_per_pkt, 1, 16_000, 1, ms as u64 + 99);
+            let mut buf = vec![0u8; 4096];
+            let mut re = RangeEncoder::new(&mut buf);
+            let mut nb = 0i32;
+            let _ = silk_encode(
+                &mut enc,
+                &mut ctrl,
+                &pkt,
+                samples_per_pkt as i32,
+                &mut re,
+                &mut nb,
+                0,
+                1,
+            );
+
+            // A second packet to drive inter-packet bit reservoir state (L8161).
+            let pkt2 = make_sweep_pcm(samples_per_pkt, 1, 16_000, 1, ms as u64 + 777);
+            let mut buf2 = vec![0u8; 4096];
+            let mut re2 = RangeEncoder::new(&mut buf2);
+            let mut nb = 0i32;
+            let _ = silk_encode(
+                &mut enc,
+                &mut ctrl,
+                &pkt2,
+                samples_per_pkt as i32,
+                &mut re2,
+                &mut nb,
+                0,
+                1,
+            );
+        }
+    }
+
+    #[test]
+    fn test_sweep_tight_rate_control_cbr_iteration() {
+        // A tight max_bits forces the rate-control loop to cycle through
+        // upper/lower gain bounds — exercises the cache-hit arms (L7141/L7143),
+        // the found_lower/interpolation branch (L7335), and the gain_mult
+        // tracking (L7311).
+        let mut enc = SilkEncoder::new();
+        assert_eq!(silk_init_encoder_top(&mut enc, 1), 0);
+
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.n_channels_api = 1;
+        ctrl.n_channels_internal = 1;
+        ctrl.api_sample_rate = 16_000;
+        ctrl.max_internal_sample_rate = 16_000;
+        ctrl.min_internal_sample_rate = 8_000;
+        ctrl.desired_internal_sample_rate = 16_000;
+        ctrl.payload_size_ms = 20;
+        ctrl.bit_rate = 24_000;
+        // Very small max_bits + CBR → forces rate-control iterations
+        ctrl.max_bits = 300;
+        ctrl.complexity = 2;
+        ctrl.use_cbr = 1;
+
+        let prefill = make_sweep_pcm(160, 1, 16_000, 1, 100);
+        let mut pre_buf = [0u8; 512];
+        let mut pre_re = RangeEncoder::new(&mut pre_buf);
+        let mut n = 0i32;
+        let _ = silk_encode(
+            &mut enc, &mut ctrl, &prefill, 160, &mut pre_re, &mut n, 1, 0,
+        );
+
+        ctrl.payload_size_ms = 20;
+        for seed in 0..4 {
+            let pcm = make_sweep_pcm(320, 1, 16_000, 3, seed);
+            let mut buf = vec![0u8; 2048];
+            let mut re = RangeEncoder::new(&mut buf);
+            let mut nb = 0i32;
+            let _ = silk_encode(
+                &mut enc, &mut ctrl, &pcm, 320, &mut re, &mut nb, 0, 1,
+            );
+        }
+    }
+
+    #[test]
+    fn test_schur_extra_scaling_and_saturation_branches() {
+        // lz > 2: c[0] small enough to left-shift (top-branch of L4629).
+        let mut rc = [0i16; MAX_SHAPE_LPC_ORDER];
+        let corr_small = [1_000i32, 500, 250, 125];
+        let e = silk_schur(&mut rc, &corr_small, 3);
+        assert!(e >= 1);
+
+        // cc[k+1][0] > 0 path (L4645): a positive large lag-1 correlation that
+        // exceeds cc[0][1] drives rc into the negative clip.
+        let mut rc_pos = [0i16; MAX_SHAPE_LPC_ORDER];
+        let corr_pos = [100i32, 1_000_000, 0, 0];
+        let _ = silk_schur(&mut rc_pos, &corr_pos, 3);
+        assert!(rc_pos[0] < 0);
+
+        // schur64 analog — L4693 positive branch
+        let mut rc64 = [0i32; MAX_SHAPE_LPC_ORDER];
+        let _ = silk_schur64(&mut rc64, &[10_000, 1_000_000, 0, 0], 3);
+        assert!(rc64[0] < 0);
+    }
+
+    #[test]
+    fn test_residual_energy16_covar_overflow_and_clamp_paths() {
+        // Force nrg > (i32::MAX >> (lshifts+2)) → i32::MAX >> 1 clamp (L4982).
+        let wxs = [i32::MAX >> 4; 4];
+        let wxx = [i32::MAX >> 4; 16];
+        let cb = [i16::MAX, i16::MAX, i16::MAX, i16::MAX];
+        let _ = silk_residual_energy16_covar(&cb, &wxx, &wxs, i32::MAX, 4, 0);
+    }
+
+    #[test]
+    fn test_noise_shape_quantizer_rdo_offset_branches() {
+        // Drive lambda_q10 > 2048 in silk_noise_shape_quantizer to hit the
+        // RDO-offset sub-branches (L3715-3723). We pick an r_q10 sequence that
+        // forces each of the three comparison sides of q1_q10 vs rdo_offset.
+        let mut nsq = NsqState::default();
+        nsq.s_ltp_buf_idx = 8;
+        nsq.s_ltp_shp_buf_idx = 8;
+        nsq.rand_seed = 7;
+
+        // lambda_q10 = 8192 → rdo_offset = 8192/2 - 512 = 3584
+        // We want r_q10 values that are just above, inside, and below ±rdo_offset.
+        // Input is x_sc_q10 (scaled input). A sequence of small alternating values
+        // will generate residuals on both sides of the offset.
+        let mut pulses = [0i8; 8];
+        let mut s_ltp_q15 = [0i32; 32];
+        silk_noise_shape_quantizer(
+            &mut nsq,
+            TYPE_VOICED,
+            &[5 << 10, -(2 << 10), 1 << 10, 0, -(5 << 10), 2 << 10, 100, -100],
+            &mut pulses,
+            0,
+            &mut s_ltp_q15,
+            &[1_024, -512],
+            &[16_384, 8_192, 0, 0, 0],
+            &[768, -384],
+            2,
+            1 << 14,
+            512,
+            256,
+            1 << 16,
+            8_192, // lambda_q10 > 2048
+            128,
+            8,
+            2,
+            2,
+        );
+    }
+
+    #[test]
+    fn test_sweep_reduced_dependency_flag() {
+        // reduced_dependency=1 forces first_frame_after_reset=1 at each encode,
+        // exercising the first-frame LPC branches across consecutive calls.
+        let mut enc = SilkEncoder::new();
+        assert_eq!(silk_init_encoder_top(&mut enc, 1), 0);
+
+        let mut ctrl = SilkEncControlStruct::default();
+        ctrl.n_channels_api = 1;
+        ctrl.n_channels_internal = 1;
+        ctrl.api_sample_rate = 16_000;
+        ctrl.max_internal_sample_rate = 16_000;
+        ctrl.min_internal_sample_rate = 8_000;
+        ctrl.desired_internal_sample_rate = 16_000;
+        ctrl.payload_size_ms = 20;
+        ctrl.bit_rate = 24_000;
+        ctrl.max_bits = 2_400;
+        ctrl.complexity = 4;
+        ctrl.reduced_dependency = 1;
+
+        let samples_per_10ms = 160usize;
+        let pcm = make_sweep_pcm(320 * 4 + samples_per_10ms, 1, 16_000, 1, 11);
+
+        // Prefill
+        let mut pre_buf = [0u8; 256];
+        let mut pre_re = RangeEncoder::new(&mut pre_buf);
+        let mut n = 0i32;
+        let _ = silk_encode(
+            &mut enc,
+            &mut ctrl,
+            &pcm[..samples_per_10ms],
+            samples_per_10ms as i32,
+            &mut pre_re,
+            &mut n,
+            1,
+            0,
+        );
+
+        for f in 0..4 {
+            let off = samples_per_10ms + f * 320;
+            let mut buf = vec![0u8; 4096];
+            let mut re = RangeEncoder::new(&mut buf);
+            let mut nb = 0i32;
+            let _ = silk_encode(
+                &mut enc,
+                &mut ctrl,
+                &pcm[off..off + 320],
+                320,
+                &mut re,
+                &mut nb,
+                0,
+                1,
+            );
+        }
+    }
 }
