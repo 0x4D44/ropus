@@ -2904,4 +2904,920 @@ mod tests {
             false, // decode path: exercises the C==1 && !encode branch
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Stage 3 branch-coverage additions
+    // -----------------------------------------------------------------------
+    mod branch_coverage_stage3 {
+        use super::*;
+        use crate::celt::decoder::CeltDecoder;
+        use crate::celt::encoder::{celt_encode_with_ec, CeltEncoder};
+
+        #[cfg(feature = "dnn")]
+        fn plc_arg<'a>() -> crate::celt::decoder::DnnPlcArg<'a> {
+            None
+        }
+        #[cfg(not(feature = "dnn"))]
+        fn plc_arg<'a>() -> crate::celt::decoder::DnnPlcArg<'a> {
+            ()
+        }
+
+        /// Noisy PCM helper — useful for exercising encoder/decoder paths.
+        fn gen_pcm(frame_size: usize, channels: usize, seed: i32) -> Vec<i16> {
+            (0..frame_size * channels)
+                .map(|i| (((i as i32 * 7919 + seed * 911) % 28000) - 14000) as i16)
+                .collect()
+        }
+
+        fn gen_sine(frame_size: usize, channels: usize, freq_hz: f64) -> Vec<i16> {
+            let mut out = vec![0i16; frame_size * channels];
+            let sr = 48000.0;
+            for i in 0..frame_size {
+                let s = (7000.0 * (2.0 * std::f64::consts::PI * freq_hz * i as f64 / sr).sin())
+                    as i16;
+                for c in 0..channels {
+                    out[i * channels + c] = s;
+                }
+            }
+            out
+        }
+
+        /// Encode/decode roundtrip for a few frames. Drives quant_all_bands
+        /// (encode side) and the matching decode paths, including all the
+        /// compute_theta / quant_band / quant_partition / anti_collapse
+        /// splits depending on signal type, stereo mode, bitrate, and LM.
+        fn roundtrip_signal(
+            pcm_frames: &[Vec<i16>],
+            frame_size: i32,
+            channels: i32,
+            bitrate: i32,
+            complexity: i32,
+            vbr: i32,
+        ) {
+            let mut enc = CeltEncoder::new(48000, channels).unwrap();
+            enc.vbr = vbr;
+            enc.bitrate = bitrate;
+            enc.complexity = complexity;
+            let mut dec = CeltDecoder::new(48000, channels).unwrap();
+            let mut compressed = vec![0u8; 1275];
+            let mut pcm_out = vec![0i16; frame_size as usize * channels as usize];
+
+            let buf_len = compressed.len() as i32;
+            for pcm in pcm_frames {
+                let n = celt_encode_with_ec(
+                    &mut enc,
+                    pcm,
+                    frame_size,
+                    &mut compressed,
+                    buf_len,
+                    None,
+                );
+                assert!(n > 0, "encode returned {n}");
+                let res = dec.decode_with_ec(
+                    Some(&compressed[..n as usize]),
+                    &mut pcm_out,
+                    frame_size,
+                    None,
+                    false,
+                    plc_arg(),
+                );
+                assert!(res.is_ok(), "decode failed: {:?}", res);
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // Roundtrips at a range of bitrates/frame sizes/channels to hit
+        // compute_theta/quant_partition/quant_band_stereo branches
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn roundtrip_mono_lm2_varied_bitrates() {
+            // 10 ms frame (LM=2): short-block / long-block dispatch, B>1 splits
+            for br in [16_000, 32_000, 64_000] {
+                let frames: Vec<Vec<i16>> = (0..3).map(|i| gen_pcm(480, 1, i + br)).collect();
+                roundtrip_signal(&frames, 480, 1, br, 10, 1);
+            }
+        }
+
+        #[test]
+        fn roundtrip_mono_lm3_varied_bitrates() {
+            for br in [12_000, 24_000, 48_000, 96_000] {
+                let frames: Vec<Vec<i16>> = (0..3).map(|i| gen_pcm(960, 1, i + br)).collect();
+                roundtrip_signal(&frames, 960, 1, br, 10, 1);
+            }
+        }
+
+        #[test]
+        fn roundtrip_stereo_low_bitrate_intensity() {
+            // Low bitrate stereo drives intensity_stereo via quant_band_stereo
+            // (qn==1 path in compute_theta, line 860+).
+            let frames: Vec<Vec<i16>> = (0..3).map(|i| gen_pcm(960, 2, i * 13)).collect();
+            roundtrip_signal(&frames, 960, 2, 14_000, 5, 1);
+        }
+
+        #[test]
+        fn roundtrip_stereo_high_bitrate_dual() {
+            // High bitrate stereo enables dual stereo
+            let frames: Vec<Vec<i16>> = (0..2).map(|i| gen_sine(960, 2, 300.0 + i as f64)).collect();
+            roundtrip_signal(&frames, 960, 2, 192_000, 10, 1);
+        }
+
+        #[test]
+        fn roundtrip_stereo_lm2_medium_bitrate() {
+            let frames: Vec<Vec<i16>> = (0..3).map(|i| gen_pcm(480, 2, i * 17)).collect();
+            roundtrip_signal(&frames, 480, 2, 64_000, 8, 1);
+        }
+
+        #[test]
+        fn roundtrip_mono_impulses_drive_transient_anti_collapse() {
+            // Alternate impulse / silent frames drive transient short blocks
+            // and keep anti-collapse data flowing through.
+            let mut frames: Vec<Vec<i16>> = Vec::new();
+            for f in 0..4 {
+                let mut pcm = vec![0i16; 960];
+                if f % 2 == 0 {
+                    for v in pcm.iter_mut().take(40) {
+                        *v = 28000;
+                    }
+                }
+                frames.push(pcm);
+            }
+            roundtrip_signal(&frames, 960, 1, 48_000, 10, 1);
+        }
+
+        #[test]
+        fn roundtrip_mono_tone_drives_spreading_decisions() {
+            // Pure tone: spreading decision drifts, hf_average populated
+            let frames: Vec<Vec<i16>> = (0..4).map(|i| gen_sine(960, 1, 440.0 + i as f64 * 5.0)).collect();
+            roundtrip_signal(&frames, 960, 1, 72_000, 10, 1);
+        }
+
+        #[test]
+        fn roundtrip_mono_very_low_bitrate_cbr() {
+            // Very low CBR: quant_band_n1 / qn==1 paths dominate
+            let frames: Vec<Vec<i16>> = (0..3).map(|i| gen_pcm(960, 1, i * 7)).collect();
+            roundtrip_signal(&frames, 960, 1, 8_000, 5, 0);
+        }
+
+        #[test]
+        fn roundtrip_stereo_mid_bitrate_cbr() {
+            let frames: Vec<Vec<i16>> = (0..2).map(|i| gen_pcm(960, 2, i * 11)).collect();
+            roundtrip_signal(&frames, 960, 2, 48_000, 8, 0);
+        }
+
+        #[test]
+        fn roundtrip_mono_lm1_short_frame() {
+            // 5ms frame (LM=1): smaller bands, exercises different qn branches
+            let frames: Vec<Vec<i16>> = (0..4).map(|i| gen_pcm(240, 1, i)).collect();
+            roundtrip_signal(&frames, 240, 1, 32_000, 8, 1);
+        }
+
+        #[test]
+        fn roundtrip_stereo_phase_inversion_disabled() {
+            let mut enc = CeltEncoder::new(48000, 2).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 24_000;
+            enc.complexity = 5;
+            enc.disable_inv = 1;
+            let mut dec = CeltDecoder::new(48000, 2).unwrap();
+            let mut compressed = vec![0u8; 1275];
+            let mut pcm_out = vec![0i16; 960 * 2];
+            let buf_len = compressed.len() as i32;
+            for f in 0..3 {
+                let pcm = gen_pcm(960, 2, f);
+                let n = celt_encode_with_ec(
+                    &mut enc,
+                    &pcm,
+                    960,
+                    &mut compressed,
+                    buf_len,
+                    None,
+                );
+                assert!(n > 0);
+                let res = dec.decode_with_ec(
+                    Some(&compressed[..n as usize]),
+                    &mut pcm_out,
+                    960,
+                    None,
+                    false,
+                    plc_arg(),
+                );
+                assert!(res.is_ok());
+            }
+        }
+
+        #[test]
+        fn roundtrip_mono_dc_step_transients() {
+            // DC-step in the middle of the frame exercises the patch_transient
+            // detection and short-block path.
+            let mut frames: Vec<Vec<i16>> = Vec::new();
+            for f in 0..3 {
+                let mut pcm = vec![0i16; 960];
+                let step = 400 + f * 100;
+                for v in pcm.iter_mut().skip(step.min(959)) {
+                    *v = 9000;
+                }
+                frames.push(pcm);
+            }
+            roundtrip_signal(&frames, 960, 1, 64_000, 10, 1);
+        }
+
+        // ---------------------------------------------------------------
+        // Direct bands-level tests that don't need a full pipeline
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn spreading_decision_update_hf_tapset_two_branches() {
+            // Exercises both (tapset_decision==2) and (tapset_decision==0)
+            // arms of spreading_decision.
+            let mode = mode_create(48000, 960).unwrap();
+            let n = mode.short_mdct_size as usize;
+            let mut x = vec![0i32; n];
+            // Sparse HF content
+            for i in (n * 3 / 4)..n {
+                x[i] = 1 << 22;
+            }
+            let spread_weight = vec![1i32; mode.nb_ebands as usize];
+
+            for initial_tapset in [0, 2] {
+                let mut average = 0;
+                let mut hf_average = 0;
+                let mut tapset = initial_tapset;
+                let _ = spreading_decision(
+                    mode,
+                    &x,
+                    &mut average,
+                    SPREAD_NONE,
+                    &mut hf_average,
+                    &mut tapset,
+                    true,
+                    mode.nb_ebands,
+                    1,
+                    1,
+                    &spread_weight,
+                );
+            }
+        }
+
+        #[test]
+        fn haar1_lm_variants() {
+            // Exercise haar1 at several n0/stride combinations
+            let mut x = vec![0i32; 64];
+            for (i, v) in x.iter_mut().enumerate() {
+                *v = ((i as i32 + 1) << 16) - (1 << 20);
+            }
+            haar1(&mut x, 16, 1);
+            haar1(&mut x, 8, 2);
+            haar1(&mut x, 4, 4);
+        }
+
+        #[test]
+        fn compute_qn_sweep() {
+            // Sweep N/b/offset/stereo combinations to exercise branches in
+            // compute_qn (n2 adjustment, qb clamps).
+            for &n in &[2, 4, 8, 16, 64] {
+                for stereo in [false, true] {
+                    let qn = compute_qn(n, 500, 40, 30, stereo);
+                    assert!(qn >= 1 && qn <= 256);
+                }
+            }
+        }
+
+        #[test]
+        fn denormalise_bands_downsample_variants() {
+            let mode = mode_create(48000, 960).unwrap();
+            let n = mode.short_mdct_size as usize;
+            let x = vec![1 << NORM_SHIFT; n];
+            let band_log_e = vec![0i32; mode.nb_ebands as usize];
+            // downsample=2 drops bound; downsample=3 reduces further
+            for ds in [1, 2, 3, 6] {
+                let mut freq = vec![999i32; n];
+                denormalise_bands(mode, &x, &mut freq, &band_log_e, 0, 5, 1, ds, false);
+            }
+        }
+
+        #[test]
+        fn denormalise_bands_lm_variants() {
+            // big_m corresponds to (1<<lm). Exercise lm=0..3.
+            let mode = mode_create(48000, 960).unwrap();
+            let big_m_values = [1, 2, 4, 8];
+            for &big_m in &big_m_values {
+                let n = (big_m * mode.short_mdct_size) as usize;
+                let x = vec![1 << NORM_SHIFT; n];
+                let band_log_e = vec![(2 << DB_SHIFT) as i32; mode.nb_ebands as usize];
+                let mut freq = vec![0i32; n];
+                denormalise_bands(mode, &x, &mut freq, &band_log_e, 0, 3, big_m, 1, false);
+            }
+        }
+
+        #[test]
+        fn compute_band_energies_lm_sweep() {
+            let mode = mode_create(48000, 960).unwrap();
+            for lm in 0..=3 {
+                let n = (mode.short_mdct_size << lm) as usize;
+                let mut freq = vec![0i32; n];
+                for (i, v) in freq.iter_mut().enumerate().take(n / 4) {
+                    *v = 1 << (15 + (i % 6) as i32);
+                }
+                let mut band_e = vec![0i32; mode.nb_ebands as usize];
+                compute_band_energies(mode, &freq, &mut band_e, mode.nb_ebands - 1, 1, lm);
+                assert!(band_e.iter().any(|&e| e > EPSILON));
+            }
+        }
+
+        #[test]
+        fn normalise_bands_lm_sweep() {
+            let mode = mode_create(48000, 960).unwrap();
+            for lm in 0..=3 {
+                let big_m = 1 << lm;
+                let n = (mode.short_mdct_size << lm) as usize;
+                let mut freq = vec![0i32; n];
+                for (i, v) in freq.iter_mut().enumerate().take(n / 2) {
+                    *v = 1 << (14 + (i % 8) as i32);
+                }
+                let mut band_e = vec![0i32; mode.nb_ebands as usize];
+                compute_band_energies(mode, &freq, &mut band_e, mode.nb_ebands - 1, 1, lm);
+                let mut norm = vec![0i32; n];
+                normalise_bands(mode, &freq, &mut norm, &band_e, mode.nb_ebands - 1, 1, big_m);
+            }
+        }
+
+        #[test]
+        fn anti_collapse_lm_variants() {
+            // Test anti_collapse at lm=1,2,3 (C loops 2^lm times)
+            let mode = mode_create(48000, 960).unwrap();
+            let nb_ebands = mode.nb_ebands as usize;
+
+            for lm in 1..=3 {
+                let size = (mode.short_mdct_size << lm) as usize;
+                let mut x_dec = vec![0i32; size];
+                let old_log_e = vec![0i32; nb_ebands * 2];
+                let old_log_e2 = vec![0i32; nb_ebands * 2];
+                let pulses = vec![1i32; nb_ebands];
+                let mut collapsed_masks = vec![0u8; nb_ebands]; // force collapse on all
+                anti_collapse(
+                    mode,
+                    &mut x_dec,
+                    &mut collapsed_masks,
+                    lm,
+                    1,
+                    size as i32,
+                    0,
+                    nb_ebands as i32 - 1,
+                    &old_log_e,
+                    &old_log_e2,
+                    &old_log_e,
+                    &pulses,
+                    12345,
+                    false, // decode path
+                );
+            }
+        }
+
+        #[test]
+        fn anti_collapse_large_ediff() {
+            // Log-E diff greater than 16 dB exercises the r == 0 branch.
+            // Use lm=1 (size = short_mdct_size << 1).
+            let mode = mode_create(48000, 960).unwrap();
+            let nb_ebands = mode.nb_ebands as usize;
+            let lm = 1;
+            let size = (mode.short_mdct_size << lm) as usize;
+
+            let mut x_dec = vec![0i32; size];
+            let mut log_e = vec![0i32; nb_ebands * 2];
+            for v in log_e.iter_mut() {
+                *v = 40 << DB_SHIFT;
+            }
+            let old_log_e = vec![0i32; nb_ebands * 2];
+            let old_log_e2 = vec![0i32; nb_ebands * 2];
+            let pulses = vec![4i32; nb_ebands];
+            let mut collapsed_masks = vec![0u8; nb_ebands];
+            anti_collapse(
+                mode,
+                &mut x_dec,
+                &mut collapsed_masks,
+                lm,
+                1,
+                size as i32,
+                0,
+                nb_ebands as i32 - 1,
+                &log_e,
+                &old_log_e,
+                &old_log_e2,
+                &pulses,
+                77,
+                false,
+            );
+        }
+
+        #[test]
+        fn intensity_stereo_equal_energies() {
+            let mode = mode_create(48000, 960).unwrap();
+            let nb = mode.nb_ebands as usize;
+            let band_w = (mode.ebands[1] - mode.ebands[0]) as usize;
+            let mut x = vec![1 << 19; band_w];
+            let y = vec![1 << 19; band_w];
+            let mut band_e = vec![0i32; nb * 2];
+            band_e[0] = 1 << 20;
+            band_e[nb] = 1 << 20;
+            intensity_stereo(mode, &mut x, &y, &band_e, 0, band_w as i32);
+        }
+
+        #[test]
+        fn stereo_merge_large_mid_normal_path() {
+            // Large mid + moderate side: exercises full rsqrt + shift paths
+            let mut x = vec![1 << 22; 8];
+            let mut y = vec![1 << 21; 8];
+            stereo_merge(&mut x, &mut y, 1 << 30, 8);
+        }
+
+        #[test]
+        fn hysteresis_decision_all_transitions() {
+            let thr = [50, 150, 250, 350];
+            let hys = [5, 5, 5, 5];
+            // Walk val from below min to above max across several prev values
+            for prev in 0..=4 {
+                for val in (0..400).step_by(40) {
+                    let r = hysteresis_decision(val, &thr, &hys, 4, prev);
+                    assert!(r <= 4);
+                }
+            }
+        }
+
+        #[test]
+        fn bitexact_cos_sweep() {
+            // Sweep input across range to exercise polynomial branches
+            for x in (0..16384).step_by(512) {
+                let c = bitexact_cos(x);
+                let _ = c;
+            }
+        }
+
+        #[test]
+        fn bitexact_log2tan_sweep() {
+            for n in (1000..40000).step_by(4000) {
+                for d in (1000..40000).step_by(4000) {
+                    let _ = bitexact_log2tan(n as i32, d as i32);
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // Additional roundtrips targeting specific branches
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn roundtrip_stereo_asymmetric_channels() {
+            // Different content per channel stresses compute_theta's
+            // low-energy equalization path (L1354-L1362).
+            let mut enc = CeltEncoder::new(48000, 2).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 24_000;
+            enc.complexity = 8;
+            let mut dec = CeltDecoder::new(48000, 2).unwrap();
+            let mut compressed = vec![0u8; 1275];
+            let mut pcm_out = vec![0i16; 960 * 2];
+            for f in 0..4 {
+                // Left channel: sine; Right channel: silence (or very quiet)
+                let mut pcm = vec![0i16; 960 * 2];
+                for i in 0..960 {
+                    let s = (8000.0
+                        * (2.0 * std::f64::consts::PI * (220.0 + f as f64 * 30.0) * i as f64
+                            / 48000.0)
+                            .sin()) as i16;
+                    pcm[2 * i] = s;
+                    pcm[2 * i + 1] = if f % 2 == 0 { 0 } else { s / 64 };
+                }
+                let buf_len = compressed.len() as i32;
+                let n = celt_encode_with_ec(
+                    &mut enc, &pcm, 960, &mut compressed, buf_len, None,
+                );
+                assert!(n > 0);
+                let res = dec.decode_with_ec(
+                    Some(&compressed[..n as usize]),
+                    &mut pcm_out,
+                    960,
+                    None,
+                    false,
+                    plc_arg(),
+                );
+                assert!(res.is_ok());
+            }
+        }
+
+        #[test]
+        fn roundtrip_stereo_mid_heavy_side_light() {
+            // Strong mid, almost-zero side — drives intensity stereo &
+            // the qn==1 path in compute_theta.
+            let mut enc = CeltEncoder::new(48000, 2).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 12_000;
+            enc.complexity = 5;
+            let mut dec = CeltDecoder::new(48000, 2).unwrap();
+            let mut compressed = vec![0u8; 1275];
+            let mut pcm_out = vec![0i16; 960 * 2];
+            for f in 0..3 {
+                let mut pcm = vec![0i16; 960 * 2];
+                for i in 0..960 {
+                    let s = (((i as i32 + f as i32 * 97) % 20000) - 10000) as i16;
+                    pcm[2 * i] = s;
+                    pcm[2 * i + 1] = s; // perfect mid
+                }
+                let buf_len = compressed.len() as i32;
+                let n = celt_encode_with_ec(
+                    &mut enc, &pcm, 960, &mut compressed, buf_len, None,
+                );
+                assert!(n > 0);
+                let res = dec.decode_with_ec(
+                    Some(&compressed[..n as usize]),
+                    &mut pcm_out,
+                    960,
+                    None,
+                    false,
+                    plc_arg(),
+                );
+                assert!(res.is_ok());
+            }
+        }
+
+        #[test]
+        fn roundtrip_stereo_anti_phase() {
+            // L == -R: anti-phase maximizes side energy -> intensity_stereo
+            // with itheta near 16384.
+            let mut enc = CeltEncoder::new(48000, 2).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 48_000;
+            enc.complexity = 8;
+            let mut dec = CeltDecoder::new(48000, 2).unwrap();
+            let mut compressed = vec![0u8; 1275];
+            let mut pcm_out = vec![0i16; 960 * 2];
+            for f in 0..2 {
+                let mut pcm = vec![0i16; 960 * 2];
+                for i in 0..960 {
+                    let s = (((i as i32 + f as i32 * 13) * 7919 % 20000) - 10000) as i16;
+                    pcm[2 * i] = s;
+                    pcm[2 * i + 1] = -s;
+                }
+                let buf_len = compressed.len() as i32;
+                let n = celt_encode_with_ec(
+                    &mut enc, &pcm, 960, &mut compressed, buf_len, None,
+                );
+                assert!(n > 0);
+                let res = dec.decode_with_ec(
+                    Some(&compressed[..n as usize]),
+                    &mut pcm_out,
+                    960,
+                    None,
+                    false,
+                    plc_arg(),
+                );
+                assert!(res.is_ok());
+            }
+        }
+
+        #[test]
+        fn roundtrip_mono_wide_transient_sequence() {
+            // Mix silence/impulse/tone sequences to diversify collapse masks.
+            let mut frames: Vec<Vec<i16>> = Vec::new();
+            // Frame 0: silence
+            frames.push(vec![0i16; 960]);
+            // Frame 1: impulse
+            let mut p1 = vec![0i16; 960];
+            for i in 100..115 {
+                p1[i] = 30000;
+            }
+            frames.push(p1);
+            // Frame 2: mid-frame DC step
+            let mut p2 = vec![0i16; 960];
+            for v in p2.iter_mut().skip(450) {
+                *v = 5000;
+            }
+            frames.push(p2);
+            // Frame 3: tone
+            frames.push(gen_sine(960, 1, 1000.0));
+            // Frame 4: noise
+            frames.push(gen_pcm(960, 1, 777));
+            roundtrip_signal(&frames, 960, 1, 32_000, 10, 1);
+        }
+
+        #[test]
+        fn roundtrip_stereo_many_bitrate_steps() {
+            // Sweep stereo bitrates to drive the intensity-stereo hysteresis
+            for br in [10_000, 18_000, 32_000, 56_000, 80_000, 128_000] {
+                let mut frames: Vec<Vec<i16>> = Vec::new();
+                for i in 0..2 {
+                    frames.push(gen_pcm(960, 2, br / 1000 + i));
+                }
+                roundtrip_signal(&frames, 960, 2, br, 5, 1);
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // Direct tests exercising specific helper branches
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn denormalise_bands_start_nonzero_range_narrow() {
+            // start != 0 exercises the "zero bins before start" branch (L227-231).
+            let mode = mode_create(48000, 960).unwrap();
+            let n = mode.short_mdct_size as usize;
+            let x = vec![1 << NORM_SHIFT; n];
+            let mut freq = vec![42i32; n];
+            let band_log_e = vec![0i32; mode.nb_ebands as usize];
+            denormalise_bands(mode, &x, &mut freq, &band_log_e, 3, 5, 1, 1, false);
+            // Verify bins before start are zero
+            let start_idx = mode.ebands[3] as usize;
+            assert!(freq[..start_idx].iter().all(|&v| v == 0));
+        }
+
+        #[test]
+        fn compute_qn_boundary_conditions() {
+            // qb below threshold returns 1
+            for b in [1, 2, 3, 4, 8, 16] {
+                let qn = compute_qn(4, b, 20, 30, false);
+                assert!(qn >= 1);
+            }
+            // Very large b: clamped to 8 << BITRES
+            let qn = compute_qn(4, 10000, 0, 0, false);
+            assert!(qn >= 1 && qn <= 256);
+            // Stereo with n==2 and large b
+            let qn = compute_qn(2, 1000, 20, 30, true);
+            assert!(qn >= 1 && qn <= 256);
+        }
+
+        #[test]
+        fn haar1_larger_stride_higher_lm() {
+            // stride > 1 with n0 > 2
+            let mut x = vec![0i32; 128];
+            for (i, v) in x.iter_mut().enumerate() {
+                *v = ((i as i32 & 0xF) << 20) - (1 << 23);
+            }
+            haar1(&mut x, 32, 4);
+            // Apply again to exercise iterative inner loop
+            haar1(&mut x, 16, 8);
+        }
+
+        #[test]
+        fn spreading_decision_on_all_lm_values() {
+            // Loop over LM/big_m values to hit hf_sum!=0 and update_hf false
+            let mode = mode_create(48000, 960).unwrap();
+            for big_m in [1, 2, 4, 8] {
+                let n = (big_m * mode.short_mdct_size) as usize;
+                let mut x = vec![0i32; n];
+                for (i, v) in x.iter_mut().enumerate() {
+                    *v = if i & 1 == 0 { 1 << 18 } else { 0 };
+                }
+                let mut average = 100;
+                let mut hf_average = 20;
+                let mut tapset = 1;
+                let spread_weight = vec![1i32; mode.nb_ebands as usize];
+                // update_hf=false branch
+                let _ = spreading_decision(
+                    mode,
+                    &x,
+                    &mut average,
+                    SPREAD_LIGHT,
+                    &mut hf_average,
+                    &mut tapset,
+                    false,
+                    mode.nb_ebands,
+                    1,
+                    big_m,
+                    &spread_weight,
+                );
+                // update_hf=true with hf_sum==0 (sparse content)
+                let x2 = vec![0i32; n];
+                let _ = spreading_decision(
+                    mode,
+                    &x2,
+                    &mut average,
+                    SPREAD_LIGHT,
+                    &mut hf_average,
+                    &mut tapset,
+                    true,
+                    mode.nb_ebands,
+                    1,
+                    big_m,
+                    &spread_weight,
+                );
+            }
+        }
+
+        #[test]
+        fn compute_band_energies_stereo_lm_sweep() {
+            let mode = mode_create(48000, 960).unwrap();
+            for lm in 0..=3 {
+                let n_per_channel = (mode.short_mdct_size << lm) as usize;
+                let mut freq = vec![0i32; n_per_channel * 2];
+                for i in 0..n_per_channel {
+                    freq[i] = 1 << 18;
+                    freq[n_per_channel + i] = 1 << 17;
+                }
+                let mut band_e = vec![0i32; mode.nb_ebands as usize * 2];
+                compute_band_energies(
+                    mode,
+                    &freq,
+                    &mut band_e,
+                    mode.nb_ebands - 1,
+                    2,
+                    lm,
+                );
+                assert!(band_e.iter().any(|&e| e > 0));
+            }
+        }
+
+        #[test]
+        fn anti_collapse_with_partial_collapse_mask() {
+            // Some k's collapsed, others not — hits the per-k conditional
+            let mode = mode_create(48000, 960).unwrap();
+            let nb_ebands = mode.nb_ebands as usize;
+            let lm = 2;
+            let size = (mode.short_mdct_size << lm) as usize;
+            let mut x_dec = vec![1i32 << 18; size];
+            let log_e = vec![1 << DB_SHIFT; nb_ebands * 2];
+            let prev1 = vec![0; nb_ebands * 2];
+            let prev2 = vec![0; nb_ebands * 2];
+            let pulses = vec![2; nb_ebands];
+            // Partial collapse: alternating bits set/unset
+            let mut masks = vec![0b0101u8; nb_ebands];
+            anti_collapse(
+                mode,
+                &mut x_dec,
+                &mut masks,
+                lm,
+                1,
+                size as i32,
+                0,
+                nb_ebands as i32 - 1,
+                &log_e,
+                &prev1,
+                &prev2,
+                &pulses,
+                999,
+                false,
+            );
+        }
+
+        #[test]
+        fn anti_collapse_stereo_encode_variant() {
+            // Encode path with stereo. Use 0xFF mask so collapse code body
+            // doesn't run (matches existing test_anti_collapse_stereo), but
+            // still exercises the encode=true branch guard.
+            let mode = mode_create(48000, 960).unwrap();
+            let nb_ebands = mode.nb_ebands as usize;
+            let n = mode.short_mdct_size as usize;
+            let mut x_dec = vec![0i32; n * 2];
+            let log_e = vec![3 << DB_SHIFT; nb_ebands * 2];
+            let prev1 = vec![0; nb_ebands * 2];
+            let prev2 = vec![0; nb_ebands * 2];
+            let pulses = vec![1; nb_ebands];
+            let mut masks = vec![0xFFu8; nb_ebands * 2];
+            anti_collapse(
+                mode,
+                &mut x_dec,
+                &mut masks,
+                1,
+                2,
+                (n * 2) as i32,
+                0,
+                nb_ebands as i32 - 1,
+                &log_e,
+                &prev1,
+                &prev2,
+                &pulses,
+                54321,
+                true, // encode path
+            );
+        }
+
+        // ---------------------------------------------------------------
+        // More roundtrip variants to push residual branches
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn roundtrip_mono_complexity_sweep() {
+            for cpx in [0, 3, 5, 8, 10] {
+                let mut enc = CeltEncoder::new(48000, 1).unwrap();
+                enc.vbr = 1;
+                enc.bitrate = 32_000;
+                enc.complexity = cpx;
+                let mut dec = CeltDecoder::new(48000, 1).unwrap();
+                let mut compressed = vec![0u8; 1275];
+                let mut pcm_out = vec![0i16; 960];
+                for i in 0..2 {
+                    let pcm = gen_pcm(960, 1, i + cpx);
+                    let buf_len = compressed.len() as i32;
+                    let n = celt_encode_with_ec(
+                        &mut enc, &pcm, 960, &mut compressed, buf_len, None,
+                    );
+                    assert!(n > 0);
+                    let res = dec.decode_with_ec(
+                        Some(&compressed[..n as usize]),
+                        &mut pcm_out,
+                        960,
+                        None,
+                        false,
+                        plc_arg(),
+                    );
+                    assert!(res.is_ok());
+                }
+            }
+        }
+
+        #[test]
+        fn roundtrip_stereo_with_different_complexities() {
+            for cpx in [0, 5, 10] {
+                let mut enc = CeltEncoder::new(48000, 2).unwrap();
+                enc.vbr = 1;
+                enc.bitrate = 48_000;
+                enc.complexity = cpx;
+                let mut dec = CeltDecoder::new(48000, 2).unwrap();
+                let mut compressed = vec![0u8; 1275];
+                let mut pcm_out = vec![0i16; 960 * 2];
+                for i in 0..2 {
+                    let pcm = gen_pcm(960, 2, i + cpx);
+                    let buf_len = compressed.len() as i32;
+                    let n = celt_encode_with_ec(
+                        &mut enc, &pcm, 960, &mut compressed, buf_len, None,
+                    );
+                    assert!(n > 0);
+                    let res = dec.decode_with_ec(
+                        Some(&compressed[..n as usize]),
+                        &mut pcm_out,
+                        960,
+                        None,
+                        false,
+                        plc_arg(),
+                    );
+                    assert!(res.is_ok());
+                }
+            }
+        }
+
+        #[test]
+        fn roundtrip_mono_lm0_tiny_frame() {
+            // 2.5ms frame (LM=0): smallest unit — all code paths on minimal N
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 32_000;
+            enc.complexity = 5;
+            let mut dec = CeltDecoder::new(48000, 1).unwrap();
+            let mut compressed = vec![0u8; 1275];
+            let mut pcm_out = vec![0i16; 120];
+            for f in 0..4 {
+                let pcm = gen_pcm(120, 1, f);
+                let buf_len = compressed.len() as i32;
+                let n = celt_encode_with_ec(
+                    &mut enc, &pcm, 120, &mut compressed, buf_len, None,
+                );
+                assert!(n > 0);
+                let res = dec.decode_with_ec(
+                    Some(&compressed[..n as usize]),
+                    &mut pcm_out,
+                    120,
+                    None,
+                    false,
+                    plc_arg(),
+                );
+                assert!(res.is_ok());
+            }
+        }
+
+        #[test]
+        fn roundtrip_stereo_antiphase_high_bitrate() {
+            // Anti-phase at high bitrate preserves stereo; drives dual stereo + theta rdo
+            let mut enc = CeltEncoder::new(48000, 2).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 256_000;
+            enc.complexity = 10;
+            let mut dec = CeltDecoder::new(48000, 2).unwrap();
+            let mut compressed = vec![0u8; 1275];
+            let mut pcm_out = vec![0i16; 960 * 2];
+            for f in 0..2 {
+                let mut pcm = vec![0i16; 960 * 2];
+                for i in 0..960 {
+                    let s = (8000.0
+                        * (2.0 * std::f64::consts::PI * 500.0 * i as f64 / 48000.0)
+                            .sin()) as i16;
+                    pcm[2 * i] = s;
+                    pcm[2 * i + 1] = -s;
+                    let _ = f; // unused
+                }
+                let buf_len = compressed.len() as i32;
+                let n = celt_encode_with_ec(
+                    &mut enc, &pcm, 960, &mut compressed, buf_len, None,
+                );
+                assert!(n > 0);
+                let res = dec.decode_with_ec(
+                    Some(&compressed[..n as usize]),
+                    &mut pcm_out,
+                    960,
+                    None,
+                    false,
+                    plc_arg(),
+                );
+                assert!(res.is_ok());
+            }
+        }
+    }
 }

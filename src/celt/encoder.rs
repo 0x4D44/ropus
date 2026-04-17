@@ -4234,4 +4234,806 @@ mod tests {
         assert_eq!(lpc3[0], 487471184);
         assert_eq!(lpc3[1], -536870452);
     }
+
+    // -----------------------------------------------------------------------
+    // Stage 3 branch-coverage additions
+    // -----------------------------------------------------------------------
+    mod branch_coverage_stage3 {
+        use super::*;
+
+        /// Helper to generate a sinusoidal signal that exercises tonal paths.
+        fn gen_sine(frame_size: usize, channels: usize, freq_hz: f64) -> Vec<i16> {
+            let mut out = vec![0i16; frame_size * channels];
+            let sr = 48000.0;
+            for i in 0..frame_size {
+                let s = (8000.0 * (2.0 * std::f64::consts::PI * freq_hz * i as f64 / sr).sin())
+                    as i16;
+                for c in 0..channels {
+                    out[i * channels + c] = s;
+                }
+            }
+            out
+        }
+
+        /// gen_pcm variant matching the outer helper (copied since we can't
+        /// access the parent fn from a nested mod).
+        fn gen_pcm(frame_size: usize, channels: usize, seed: i32) -> Vec<i16> {
+            (0..frame_size * channels)
+                .map(|i| (((i as i32 * 7919 + seed * 911) % 28000) - 14000) as i16)
+                .collect()
+        }
+
+        fn encode_frame(
+            enc: &mut CeltEncoder,
+            pcm: &[i16],
+            frame_size: i32,
+            max_bytes: i32,
+        ) -> i32 {
+            let mut compressed = vec![0u8; max_bytes as usize];
+            celt_encode_with_ec(enc, pcm, frame_size, &mut compressed, max_bytes, None)
+        }
+
+        // ---------------------------------------------------------------
+        // CTL setters — explicit coverage of valid / invalid branches
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn ctl_set_prediction_all_values() {
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            // prediction=0: disable_pf=1, force_intra=1
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetPrediction(0)), OPUS_OK);
+            assert_eq!(enc.disable_pf, 1);
+            assert_eq!(enc.force_intra, 1);
+            // prediction=1: disable_pf=1, force_intra=0
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetPrediction(1)), OPUS_OK);
+            assert_eq!(enc.disable_pf, 1);
+            assert_eq!(enc.force_intra, 0);
+            // prediction=2: disable_pf=0, force_intra=0
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetPrediction(2)), OPUS_OK);
+            assert_eq!(enc.disable_pf, 0);
+            assert_eq!(enc.force_intra, 0);
+            // Out-of-range values
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetPrediction(-1)), OPUS_BAD_ARG);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetPrediction(3)), OPUS_BAD_ARG);
+        }
+
+        #[test]
+        fn ctl_set_complexity_edges() {
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetComplexity(0)), OPUS_OK);
+            assert_eq!(enc.complexity, 0);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetComplexity(10)), OPUS_OK);
+            assert_eq!(enc.complexity, 10);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetComplexity(-1)), OPUS_BAD_ARG);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetComplexity(11)), OPUS_BAD_ARG);
+        }
+
+        #[test]
+        fn ctl_set_packet_loss_edges() {
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetPacketLossPerc(0)), OPUS_OK);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetPacketLossPerc(100)), OPUS_OK);
+            assert_eq!(enc.loss_rate, 100);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetPacketLossPerc(101)), OPUS_BAD_ARG);
+        }
+
+        #[test]
+        fn ctl_vbr_toggles_and_constraint() {
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetVbr(1)), OPUS_OK);
+            assert_eq!(enc.vbr, 1);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetVbr(0)), OPUS_OK);
+            assert_eq!(enc.vbr, 0);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetVbrConstraint(1)), OPUS_OK);
+            assert_eq!(enc.constrained_vbr, 1);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetVbrConstraint(0)), OPUS_OK);
+            assert_eq!(enc.constrained_vbr, 0);
+        }
+
+        #[test]
+        fn ctl_bitrate_bounds_and_channel_cap() {
+            let mut enc = CeltEncoder::new(48000, 2).unwrap();
+            // v <= 500 and != OPUS_BITRATE_MAX is invalid
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetBitrate(500)), OPUS_BAD_ARG);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetBitrate(0)), OPUS_BAD_ARG);
+            // Valid value capped to 750000 * channels (here 2)
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetBitrate(10_000_000)), OPUS_OK);
+            assert_eq!(enc.bitrate, 1_500_000);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetBitrate(64000)), OPUS_OK);
+            assert_eq!(enc.bitrate, 64000);
+        }
+
+        #[test]
+        fn ctl_signalling_and_lfe_input_clipping() {
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetSignalling(1)), OPUS_OK);
+            assert_eq!(enc.signalling, 1);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetSignalling(0)), OPUS_OK);
+            assert_eq!(enc.signalling, 0);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetLfe(1)), OPUS_OK);
+            assert_eq!(enc.lfe, 1);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetLfe(0)), OPUS_OK);
+            assert_eq!(enc.lfe, 0);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetInputClipping(1)), OPUS_OK);
+            assert_eq!(enc.clip, 1);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetInputClipping(0)), OPUS_OK);
+            assert_eq!(enc.clip, 0);
+        }
+
+        #[test]
+        fn ctl_set_channels_branches() {
+            let mut enc = CeltEncoder::new(48000, 2).unwrap();
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetChannels(1)), OPUS_OK);
+            assert_eq!(enc.stream_channels, 1);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetChannels(2)), OPUS_OK);
+            assert_eq!(enc.stream_channels, 2);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetChannels(3)), OPUS_BAD_ARG);
+        }
+
+        #[test]
+        fn ctl_lsb_depth_and_phase_inv_edges() {
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetLsbDepth(8)), OPUS_OK);
+            assert_eq!(enc.lsb_depth, 8);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetLsbDepth(24)), OPUS_OK);
+            assert_eq!(enc.lsb_depth, 24);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetLsbDepth(0)), OPUS_BAD_ARG);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetPhaseInversionDisabled(0)), OPUS_OK);
+            assert_eq!(enc.disable_inv, 0);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetPhaseInversionDisabled(-1)), OPUS_BAD_ARG);
+        }
+
+        #[test]
+        fn ctl_start_end_band_boundaries() {
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            // Start band out of range
+            assert_eq!(
+                enc.ctl(CeltEncoderCtl::SetStartBand(enc.mode.nb_ebands)),
+                OPUS_BAD_ARG
+            );
+            // End band out of range
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetEndBand(0)), OPUS_BAD_ARG);
+            assert_eq!(
+                enc.ctl(CeltEncoderCtl::SetEndBand(enc.mode.nb_ebands + 1)),
+                OPUS_BAD_ARG
+            );
+            // Valid: 0, 1 (narrow)
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetStartBand(0)), OPUS_OK);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetEndBand(1)), OPUS_OK);
+        }
+
+        #[test]
+        fn ctl_reset_and_get_endpoints() {
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr_count = 42;
+            assert_eq!(enc.ctl(CeltEncoderCtl::ResetState), OPUS_OK);
+            assert_eq!(enc.vbr_count, 0);
+            assert_eq!(enc.ctl(CeltEncoderCtl::GetLsbDepth), OPUS_OK);
+            assert_eq!(enc.ctl(CeltEncoderCtl::GetPhaseInversionDisabled), OPUS_OK);
+            assert_eq!(enc.ctl(CeltEncoderCtl::GetFinalRange), OPUS_OK);
+            assert_eq!(enc.ctl(CeltEncoderCtl::SetEnergyMask), OPUS_OK);
+        }
+
+        // ---------------------------------------------------------------
+        // transient_analysis direct branches (weak transient, tone protect)
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn transient_analysis_weak_transient_flag() {
+            // Medium impulse: mask_metric between 200 and 600 -> weak transient
+            // when allow_weak_transients is true.
+            let mut input = vec![0i32; 960];
+            for i in 100..108 {
+                input[i] = 1 << (SIG_SHIFT - 1);
+            }
+            let mut tf_estimate = 0;
+            let mut tf_chan = 0;
+            let mut weak = false;
+            let _ = transient_analysis(
+                &input, 960, 1,
+                &mut tf_estimate, &mut tf_chan,
+                true, // allow weak
+                &mut weak,
+                0, 0,
+            );
+            // Just make sure no panic and branch gets exercised
+            let _ = weak;
+        }
+
+        #[test]
+        fn transient_analysis_tone_protection() {
+            // Strong toneishness + very low tone_freq triggers tone protection path
+            let mut input = vec![0i32; 960];
+            for i in 0..48 {
+                input[i] = 1 << SIG_SHIFT;
+            }
+            let mut tf_estimate = 0;
+            let mut tf_chan = 0;
+            let mut weak = false;
+            let is_trans = transient_analysis(
+                &input, 960, 1,
+                &mut tf_estimate, &mut tf_chan,
+                false, &mut weak,
+                qconst16(0.001, 13), // very low tone_freq
+                qconst32(0.999, 29), // strong toneishness
+            );
+            // Tone protection forces is_transient=false regardless of mask
+            assert!(!is_trans);
+        }
+
+        // ---------------------------------------------------------------
+        // Encode with narrowed start/end bands, lfe, various complexities
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn encode_narrow_end_band() {
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 0;
+            enc.bitrate = 32000;
+            enc.end = 10; // truncate upper bands
+            let pcm = gen_pcm(960, 1, 3);
+            let ret = encode_frame(&mut enc, &pcm, 960, 128);
+            assert!(ret > 0);
+        }
+
+        #[test]
+        fn encode_hybrid_start_end_narrow() {
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 48000;
+            enc.start = 17;
+            enc.end = 19;
+            let pcm = gen_pcm(960, 1, 13);
+            let ret = encode_frame(&mut enc, &pcm, 960, 128);
+            assert!(ret > 0);
+        }
+
+        #[test]
+        fn encode_lfe_complexity0_impulse() {
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 0;
+            enc.bitrate = 16000;
+            enc.lfe = 1;
+            enc.complexity = 0;
+            enc.end = 2;
+            let mut pcm = vec![0i16; 960];
+            for i in 0..20 {
+                pcm[i] = 25000;
+            }
+            let ret = encode_frame(&mut enc, &pcm, 960, 64);
+            assert!(ret > 0);
+        }
+
+        #[test]
+        fn encode_dc_step_input() {
+            // DC step: half silence, half constant -> interesting transient analysis
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 64000;
+            enc.complexity = 10;
+            let mut pcm = vec![0i16; 960];
+            for v in pcm.iter_mut().skip(480) {
+                *v = 8000;
+            }
+            let ret = encode_frame(&mut enc, &pcm, 960, 128);
+            assert!(ret > 0);
+        }
+
+        #[test]
+        fn encode_sine_tonal_input() {
+            // Pure sine exercises tone_detect path and toneishness-based branches
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 48000;
+            enc.complexity = 10;
+            let pcm = gen_sine(960, 1, 440.0);
+            for _ in 0..3 {
+                let ret = encode_frame(&mut enc, &pcm, 960, 128);
+                assert!(ret > 0);
+            }
+        }
+
+        #[test]
+        fn encode_stereo_sine_intensity_sweep() {
+            // Stereo tonal signal at varied low bitrates drives intensity stereo
+            for br in [16_000, 20_000, 24_000, 32_000] {
+                let mut enc = CeltEncoder::new(48000, 2).unwrap();
+                enc.vbr = 1;
+                enc.bitrate = br;
+                enc.complexity = 5;
+                let pcm = gen_sine(960, 2, 880.0);
+                let ret = encode_frame(&mut enc, &pcm, 960, 128);
+                assert!(ret > 0, "bitrate {} failed: {}", br, ret);
+            }
+        }
+
+        #[test]
+        fn encode_cbr_various_rates_no_signalling() {
+            for br in [8_000, 16_000, 32_000, 64_000, 128_000] {
+                let mut enc = CeltEncoder::new(48000, 1).unwrap();
+                enc.vbr = 0;
+                enc.signalling = 0;
+                enc.bitrate = br;
+                let pcm = gen_pcm(960, 1, br / 1000);
+                let ret = encode_frame(&mut enc, &pcm, 960, 256);
+                assert!(ret > 0);
+            }
+        }
+
+        #[test]
+        fn encode_weak_transient_hybrid_path() {
+            // Hybrid + very low effective_bytes and silk_info.signal_type != 2
+            // enables allow_weak_transients path in transient_analysis.
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 0;
+            enc.bitrate = 12000;
+            enc.start = 17;
+            enc.silk_info.signal_type = 1;
+            let mut pcm = vec![0i16; 960];
+            // Medium impulse
+            for i in 200..210 {
+                pcm[i] = 15000;
+            }
+            let ret = encode_frame(&mut enc, &pcm, 960, 14);
+            assert!(ret > 0);
+        }
+
+        #[test]
+        fn encode_multiple_frame_sizes() {
+            // LM=0,1,2,3 sweep for mono at 48kHz
+            for &(fs, bytes) in &[(120, 16), (240, 32), (480, 64), (960, 128)] {
+                let mut enc = CeltEncoder::new(48000, 1).unwrap();
+                enc.vbr = 1;
+                enc.bitrate = 64000;
+                enc.complexity = 10;
+                let pcm = gen_pcm(fs as usize, 1, fs);
+                let ret = encode_frame(&mut enc, &pcm, fs, bytes);
+                assert!(ret > 0, "LM for frame_size={} failed: {}", fs, ret);
+            }
+        }
+
+        #[test]
+        fn encode_min_complexity_path() {
+            // Complexity < 5 skips the standard pitch search (path 2) entirely
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 48000;
+            enc.complexity = 3;
+            let pcm = gen_pcm(960, 1, 42);
+            let ret = encode_frame(&mut enc, &pcm, 960, 128);
+            assert!(ret > 0);
+        }
+
+        #[test]
+        fn encode_complexity_lt2_skips_tf_analysis() {
+            // enable_tf_analysis requires complexity >= 2. complexity=1 disables it.
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 64000;
+            enc.complexity = 1;
+            let pcm = gen_pcm(960, 1, 77);
+            let ret = encode_frame(&mut enc, &pcm, 960, 128);
+            assert!(ret > 0);
+        }
+
+        #[test]
+        fn encode_force_intra_repeated() {
+            // force_intra=1 exercises the coarse-energy intra path
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 64000;
+            enc.force_intra = 1;
+            for i in 0..3 {
+                let pcm = gen_pcm(960, 1, i);
+                let ret = encode_frame(&mut enc, &pcm, 960, 128);
+                assert!(ret > 0);
+            }
+        }
+
+        #[test]
+        fn encode_stereo_varied_complexity() {
+            for cpx in [0, 3, 5, 8, 10] {
+                let mut enc = CeltEncoder::new(48000, 2).unwrap();
+                enc.vbr = 1;
+                enc.bitrate = 96_000;
+                enc.complexity = cpx;
+                let pcm = gen_pcm(960, 2, cpx);
+                let ret = encode_frame(&mut enc, &pcm, 960, 256);
+                assert!(ret > 0, "complexity {} failed: {}", cpx, ret);
+            }
+        }
+
+        #[test]
+        fn encode_high_loss_rate_kills_prefilter_gain() {
+            // loss_rate > 8 zeroes gain1 in run_prefilter
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 64000;
+            enc.loss_rate = 20;
+            let pcm = gen_sine(960, 1, 300.0);
+            for _ in 0..2 {
+                let ret = encode_frame(&mut enc, &pcm, 960, 128);
+                assert!(ret > 0);
+            }
+        }
+
+        #[test]
+        fn encode_with_analysis_valid() {
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 64000;
+            enc.analysis = AnalysisInfo {
+                valid: 1,
+                tonality: 0.8,
+                tonality_slope: 0.1,
+                ..AnalysisInfo::default()
+            };
+            let pcm = gen_sine(960, 1, 220.0);
+            let ret = encode_frame(&mut enc, &pcm, 960, 128);
+            assert!(ret > 0);
+        }
+
+        #[test]
+        fn encode_silk_info_signal_type_variants() {
+            for sig in [0, 1, 2, 3] {
+                let mut enc = CeltEncoder::new(48000, 1).unwrap();
+                enc.vbr = 0;
+                enc.bitrate = 12000;
+                enc.start = 17;
+                enc.silk_info.signal_type = sig;
+                let pcm = gen_pcm(960, 1, sig);
+                let ret = encode_frame(&mut enc, &pcm, 960, 20);
+                assert!(ret > 0);
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // Added targeted tests for uncovered encoder branches
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn encode_lfe_narrow_band_loop() {
+            // LFE with end == 3 still has the "for i in 2..end" loop running
+            // (one iter) and avoids other asserts triggered by wide-band LFE.
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 16_000;
+            enc.lfe = 1;
+            enc.end = 3;
+            let pcm = gen_sine(960, 1, 80.0);
+            let ret = encode_frame(&mut enc, &pcm, 960, 64);
+            assert!(ret > 0);
+        }
+
+        #[test]
+        fn encode_pure_tone_strong_toneishness() {
+            // Pure sine at low frequency hits the pre-filter Path 1
+            // (toneishness > 0.99) and tone-compensation branches in dynalloc.
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 96_000;
+            enc.complexity = 10;
+            // Large-amplitude, repeatable tone — drives toneishness high
+            let mut pcm = vec![0i16; 960];
+            for i in 0..960 {
+                let angle = 2.0 * std::f64::consts::PI * 440.0 * i as f64 / 48000.0;
+                pcm[i] = (20000.0 * angle.sin()) as i16;
+            }
+            // Encode multiple frames so the LPC converges on the sine model
+            for _ in 0..4 {
+                let ret = encode_frame(&mut enc, &pcm, 960, 256);
+                assert!(ret > 0);
+            }
+        }
+
+        #[test]
+        fn encode_very_high_freq_tone() {
+            // High frequency tone near Nyquist: exercises frequency aliasing
+            // correction in run_prefilter (tf >= pi branch at L1760).
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 96_000;
+            enc.complexity = 10;
+            let mut pcm = vec![0i16; 960];
+            for i in 0..960 {
+                let angle = 2.0 * std::f64::consts::PI * 14000.0 * i as f64 / 48000.0;
+                pcm[i] = (18000.0 * angle.sin()) as i16;
+            }
+            for _ in 0..4 {
+                let ret = encode_frame(&mut enc, &pcm, 960, 256);
+                assert!(ret > 0);
+            }
+        }
+
+        #[test]
+        fn encode_cbr_heavy_dynalloc_budget_cap() {
+            // CBR with very tight budget + high-energy impulse bands
+            // triggers the budget-cap break at L1538-1544.
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 0;
+            enc.bitrate = 10_000;
+            enc.complexity = 5;
+            let mut pcm = vec![0i16; 960];
+            // Load high-energy content across the band
+            for (i, v) in pcm.iter_mut().enumerate() {
+                *v = if i % 7 < 4 { 18000 } else { -18000 };
+            }
+            for _ in 0..3 {
+                let ret = encode_frame(&mut enc, &pcm, 960, 20);
+                assert!(ret > 0);
+            }
+        }
+
+        #[test]
+        fn encode_large_transient_jump() {
+            // Large energy jump between consecutive frames forces
+            // patch_transient_decision to return true (L2520 inner path).
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 64_000;
+            enc.complexity = 8;
+            // Frame 1: silence-ish; Frame 2: loud
+            let pcm_quiet = vec![100i16; 960];
+            let mut pcm_loud = vec![0i16; 960];
+            for (i, v) in pcm_loud.iter_mut().enumerate() {
+                *v = if i % 2 == 0 { 25000 } else { -25000 };
+            }
+            let _ = encode_frame(&mut enc, &pcm_quiet, 960, 128);
+            let _ = encode_frame(&mut enc, &pcm_quiet, 960, 128);
+            let ret = encode_frame(&mut enc, &pcm_loud, 960, 128);
+            assert!(ret > 0);
+        }
+
+        #[test]
+        fn tone_lpc_clamp_branches() {
+            // Craft signals that force lpc clamping (lines 1642, 1644, 1650, 1653)
+            let mut lpc = [0i32; 2];
+            // A pure cosine at a sharp resonance forces lpc[0] clamp
+            let mut s: Vec<i16> = Vec::with_capacity(400);
+            for i in 0..400 {
+                let v = (25000.0 * (i as f64 * 0.02).cos()) as i16;
+                s.push(v);
+            }
+            for delay in [2, 4, 8, 16] {
+                let _ = tone_lpc(&s, 400, delay, &mut lpc);
+            }
+            // Negative cosine — flips sign direction
+            let mut s2: Vec<i16> = (0..400).map(|i| -((25000.0 * (i as f64 * 0.04).cos()) as i16)).collect();
+            for delay in [3, 6, 12] {
+                let _ = tone_lpc(&s2, 400, delay, &mut lpc);
+            }
+        }
+
+        #[test]
+        fn encode_hybrid_eff_end_less_than_end() {
+            // Push end beyond eff_ebands with start=17 (hybrid) to hit the
+            // eff_end..end tail copy loop (L2613).
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 64_000;
+            enc.complexity = 5;
+            enc.start = 17;
+            enc.end = enc.mode.nb_ebands;
+            let pcm = gen_pcm(960, 1, 17);
+            let ret = encode_frame(&mut enc, &pcm, 960, 128);
+            assert!(ret > 0);
+        }
+
+        #[test]
+        fn encode_low_complexity_short_block() {
+            // complexity < 3 forces spread decision to SPREAD_NORMAL (no
+            // spreading_decision call) and skips some analysis paths.
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 32_000;
+            enc.complexity = 2;
+            let mut pcm = vec![0i16; 960];
+            // Short sharp impulse in middle
+            for i in 480..520 {
+                pcm[i] = 20000;
+            }
+            let ret = encode_frame(&mut enc, &pcm, 960, 128);
+            assert!(ret > 0);
+        }
+
+        #[test]
+        fn encode_16k_complex_signal() {
+            // 16k upsampled, stereo, low complexity, low bitrate — narrow paths
+            let mut enc = CeltEncoder::new(16000, 2).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 16_000;
+            enc.complexity = 3;
+            let mut pcm = vec![0i16; 320 * 2];
+            for (i, v) in pcm.iter_mut().enumerate() {
+                *v = (((i as i32 * 31) % 20000) - 10000) as i16;
+            }
+            let ret = encode_frame(&mut enc, &pcm, 320, 64);
+            assert!(ret > 0);
+        }
+
+        #[test]
+        fn encode_stereo_with_high_complexity_second_mdct() {
+            // complexity >= 8 enables the "second_mdct" code path inside
+            // celt_encode_core when short_blocks is set (after transient).
+            let mut enc = CeltEncoder::new(48000, 2).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 128_000;
+            enc.complexity = 9;
+            let mut pcm = vec![0i16; 960 * 2];
+            for i in 0..40 {
+                pcm[2 * i] = 28000;
+                pcm[2 * i + 1] = -28000;
+            }
+            let ret = encode_frame(&mut enc, &pcm, 960, 256);
+            assert!(ret > 0);
+        }
+
+        #[test]
+        fn encode_stereo_cbr_low_bitrate_many_frames() {
+            // Multi-frame stereo CBR at low bitrate drives intensity stereo
+            // transitions and hysteresis paths.
+            let mut enc = CeltEncoder::new(48000, 2).unwrap();
+            enc.vbr = 0;
+            enc.bitrate = 16_000;
+            enc.complexity = 5;
+            for f in 0..6 {
+                let pcm = gen_pcm(960, 2, f * 3);
+                let ret = encode_frame(&mut enc, &pcm, 960, 40);
+                assert!(ret > 0, "frame {} failed: {}", f, ret);
+            }
+        }
+
+        #[test]
+        fn encode_narrow_end_complexity_range() {
+            // Narrow-band encode at various complexities covers spreading path
+            // variants.
+            for cpx in [0, 1, 2, 3, 4] {
+                let mut enc = CeltEncoder::new(48000, 1).unwrap();
+                enc.vbr = 1;
+                enc.bitrate = 16_000;
+                enc.complexity = cpx;
+                enc.end = 8;
+                let pcm = gen_pcm(960, 1, cpx);
+                let ret = encode_frame(&mut enc, &pcm, 960, 64);
+                assert!(ret > 0);
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // Additional targeted tests — misc paths
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn encode_extreme_silence_between_loud_frames() {
+            // Wake up / sleep transient triggers patch_transient_decision true.
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 96_000;
+            enc.complexity = 10;
+            // First 3 frames: silence to establish baseline
+            for _ in 0..3 {
+                let silent = vec![0i16; 960];
+                let _ = encode_frame(&mut enc, &silent, 960, 128);
+            }
+            // Loud square wave — big energy jump
+            let loud: Vec<i16> = (0..960)
+                .map(|i| if i % 8 < 4 { 30000 } else { -30000 })
+                .collect();
+            let ret = encode_frame(&mut enc, &loud, 960, 256);
+            assert!(ret > 0);
+        }
+
+        #[test]
+        fn encode_many_bitrate_hysteresis() {
+            // Drive stereo intensity hysteresis via bitrate steps
+            let mut enc = CeltEncoder::new(48000, 2).unwrap();
+            enc.vbr = 1;
+            enc.complexity = 8;
+            let rates = [160_000i32, 96_000, 48_000, 24_000, 16_000, 24_000, 96_000];
+            for (i, &br) in rates.iter().enumerate() {
+                enc.bitrate = br;
+                let pcm = gen_pcm(960, 2, i as i32);
+                let ret = encode_frame(&mut enc, &pcm, 960, 256);
+                assert!(ret > 0);
+            }
+        }
+
+        #[test]
+        fn encode_cvbr_many_frames_drain_reservoir() {
+            // Stream of frames forces vbr_reservoir to go negative then positive
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.constrained_vbr = 1;
+            enc.bitrate = 20_000;
+            enc.complexity = 5;
+            for i in 0..40 {
+                let pcm = if i % 4 == 0 {
+                    gen_sine(960, 1, 440.0)
+                } else {
+                    gen_pcm(960, 1, i)
+                };
+                let ret = encode_frame(&mut enc, &pcm, 960, 64);
+                assert!(ret > 0);
+            }
+        }
+
+        #[test]
+        fn encode_forced_intra_cvbr() {
+            // Combine force_intra=1 with CVBR to cover the intra + reservoir path
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.constrained_vbr = 1;
+            enc.bitrate = 32_000;
+            enc.force_intra = 1;
+            for i in 0..3 {
+                let pcm = gen_pcm(960, 1, i);
+                let ret = encode_frame(&mut enc, &pcm, 960, 128);
+                assert!(ret > 0);
+            }
+        }
+
+        #[test]
+        fn encode_240_lm1_stereo_cvbr() {
+            // LM=1 (5ms) stereo with CVBR exercises narrow frame code paths
+            let mut enc = CeltEncoder::new(48000, 2).unwrap();
+            enc.vbr = 1;
+            enc.constrained_vbr = 1;
+            enc.bitrate = 48_000;
+            enc.complexity = 8;
+            for i in 0..3 {
+                let pcm = gen_pcm(240, 2, i);
+                let ret = encode_frame(&mut enc, &pcm, 240, 64);
+                assert!(ret > 0);
+            }
+        }
+
+        #[test]
+        fn encode_120_lm0_smallest_frame() {
+            // LM=0 (2.5ms) — smallest CELT frame
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 48_000;
+            enc.complexity = 5;
+            for i in 0..4 {
+                let pcm = gen_pcm(120, 1, i);
+                let ret = encode_frame(&mut enc, &pcm, 120, 64);
+                assert!(ret > 0);
+            }
+        }
+
+        #[test]
+        fn encode_clip_enabled_loud_input() {
+            // input_clipping=1 with loud input exercises clip path in preemphasis
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 64_000;
+            enc.clip = 1;
+            // Clip-inducing input (values near i16 limits)
+            let pcm: Vec<i16> = (0..960).map(|i| if i & 1 == 0 { 32767 } else { -32768 }).collect();
+            let ret = encode_frame(&mut enc, &pcm, 960, 128);
+            assert!(ret > 0);
+        }
+
+        #[test]
+        fn encode_clip_disabled_loud_input() {
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 64_000;
+            enc.clip = 0;
+            let pcm: Vec<i16> = (0..960).map(|i| if i & 1 == 0 { 32767 } else { -32768 }).collect();
+            let ret = encode_frame(&mut enc, &pcm, 960, 128);
+            assert!(ret > 0);
+        }
+
+        #[test]
+        fn encode_stereo_clip_loud() {
+            let mut enc = CeltEncoder::new(48000, 2).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 128_000;
+            enc.clip = 1;
+            let pcm: Vec<i16> = (0..960 * 2).map(|i| if i % 5 < 3 { 32767 } else { -30000 }).collect();
+            let ret = encode_frame(&mut enc, &pcm, 960, 256);
+            assert!(ret > 0);
+        }
+    }
 }

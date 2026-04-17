@@ -3027,4 +3027,254 @@ mod tests {
             &[8, -128, 136, -189, -718, 2675, -4443, -13, 529, -2337]
         );
     }
+
+    // =======================================================================
+    // Stage 3 branch coverage — target decoder L1609, L1706, L1733, L2057,
+    // L2554, L2603. Uses the encoder to produce real valid packets so the
+    // decoder's postfilter/dynalloc/anti-collapse branches are actually taken.
+    // =======================================================================
+    mod branch_coverage_stage3 {
+        use super::*;
+        use crate::celt::encoder::{CeltEncoder, celt_encode_with_ec};
+
+        fn gen_sine(frame_size: usize, channels: usize, cycles: f64) -> Vec<i16> {
+            (0..frame_size * channels)
+                .map(|i| {
+                    let t = (i / channels) as f64 / frame_size as f64;
+                    (20000.0 * (t * cycles * std::f64::consts::TAU).sin()) as i16
+                })
+                .collect()
+        }
+
+        fn gen_noise(frame_size: usize, channels: usize, seed: i32) -> Vec<i16> {
+            (0..frame_size * channels)
+                .map(|i| (((i as i32 * 8191 + seed * 1777) % 26000) - 13000) as i16)
+                .collect()
+        }
+
+        /// Run encode/decode roundtrip at the chosen bitrate & frame_size.
+        /// Exercises L1609 (postfilter tapset), L1706 (dynalloc boost loop)
+        /// and L1733 (anti-collapse rsv) whenever the encoder picks them.
+        fn roundtrip(bitrate: i32, frame_size: i32, channels: i32, frames: usize) {
+            let mut enc = CeltEncoder::new(48000, channels).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = bitrate;
+            enc.complexity = 10;
+            let mut dec = CeltDecoder::new(48000, channels).unwrap();
+            let mut compressed = vec![0u8; 1275];
+            let mut pcm_out = vec![0i16; frame_size as usize * channels as usize];
+
+            let buf_len = compressed.len() as i32;
+            for f in 0..frames {
+                let pcm = gen_noise(frame_size as usize, channels as usize, f as i32);
+                let n = celt_encode_with_ec(
+                    &mut enc,
+                    &pcm,
+                    frame_size,
+                    &mut compressed,
+                    buf_len,
+                    None,
+                );
+                assert!(n > 0, "encode returned {n}");
+                let res = dec.decode_with_ec(
+                    Some(&compressed[..n as usize]),
+                    &mut pcm_out,
+                    frame_size,
+                    None,
+                    false,
+                    plc_arg(),
+                );
+                assert!(res.is_ok(), "decode failed: {:?}", res);
+            }
+        }
+
+        #[test]
+        fn roundtrip_mono_high_bitrate_hits_postfilter_and_dynalloc() {
+            // 128 kbps, 20 ms frames: encoder reliably enables postfilter
+            // (tapset branch L1610) and emits dynalloc boosts (L1706 loop).
+            roundtrip(128_000, 960, 1, 3);
+        }
+
+        #[test]
+        fn roundtrip_mono_medium_tone_exercises_transient() {
+            // Tonal signal with impulse to trigger transient + anti-collapse
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 96_000;
+            enc.complexity = 10;
+            let mut dec = CeltDecoder::new(48000, 1).unwrap();
+            let mut compressed = vec![0u8; 1275];
+            let mut pcm_out = vec![0i16; 960];
+
+            // First a tonal frame, then an impulse to induce transient mode
+            let mut pcm = gen_sine(960, 1, 42.0);
+            for f in 0..3 {
+                if f == 1 {
+                    for sample in pcm.iter_mut().take(60) {
+                        *sample = 30000;
+                    }
+                }
+                let buf_len = compressed.len() as i32;
+                let n = celt_encode_with_ec(
+                    &mut enc, &pcm, 960, &mut compressed, buf_len, None,
+                );
+                assert!(n > 0);
+                let res = dec.decode_with_ec(
+                    Some(&compressed[..n as usize]),
+                    &mut pcm_out,
+                    960,
+                    None,
+                    false,
+                    plc_arg(),
+                );
+                assert!(res.is_ok());
+            }
+        }
+
+        #[test]
+        fn roundtrip_stereo_varied_signal_hits_decode_paths() {
+            // Stereo roundtrip at moderate bitrate exercises stereo decode
+            // branches including intensity-stereo and dual-stereo variants.
+            roundtrip(96_000, 960, 2, 2);
+        }
+
+        #[test]
+        fn roundtrip_short_frame_covers_lm0() {
+            // 2.5 ms frame (LM=0): skips transient/tf paths, exercises
+            // the short-path branches of decode_with_ec.
+            roundtrip(64_000, 120, 1, 2);
+        }
+
+        #[test]
+        fn roundtrip_20ms_lm3_transient_burst() {
+            // LM=3 (40 ms is not supported; 20 ms frame = LM=3 at 48 kHz).
+            // Encode a transient burst so is_transient && lm >= 2 kicks in
+            // and anti-collapse reservation branch (L1733) is taken.
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 128_000;
+            enc.complexity = 10;
+            let mut dec = CeltDecoder::new(48000, 1).unwrap();
+            let mut compressed = vec![0u8; 1275];
+            let mut pcm_out = vec![0i16; 960];
+
+            let mut pcm = vec![0i16; 960];
+            for i in 0..80 {
+                pcm[i] = if i % 2 == 0 { 31000 } else { -31000 };
+            }
+
+            let buf_len = compressed.len() as i32;
+            let n = celt_encode_with_ec(
+                &mut enc, &pcm, 960, &mut compressed, buf_len, None,
+            );
+            assert!(n > 0);
+            let res = dec.decode_with_ec(
+                Some(&compressed[..n as usize]),
+                &mut pcm_out,
+                960,
+                None,
+                false,
+                plc_arg(),
+            );
+            assert!(res.is_ok());
+        }
+
+        #[test]
+        fn decode_short_plc_single_frame_loss() {
+            // PLC with loss_duration=1 (single missed frame) — hits the
+            // loss_duration-specific safety branches inside decode_lost.
+            let mut dec = CeltDecoder::new(48000, 1).unwrap();
+            let mut pcm = vec![0i16; 960];
+            let res = dec.decode_with_ec(None, &mut pcm, 960, None, false, plc_arg());
+            assert!(res.is_ok());
+            assert!(dec.loss_duration > 0);
+        }
+
+        #[test]
+        fn decode_extended_plc_five_frames() {
+            // Five consecutive losses — crosses the decay-branch thresholds.
+            let mut dec = CeltDecoder::new(48000, 1).unwrap();
+            let mut pcm = vec![0i16; 960];
+            for _ in 0..5 {
+                let _ = dec.decode_with_ec(None, &mut pcm, 960, None, false, plc_arg());
+            }
+            assert!(dec.loss_duration > 0);
+        }
+
+        #[test]
+        fn decode_ten_frame_plc_burst_stereo() {
+            // Ten consecutive losses in stereo — should not panic and the
+            // loss_duration keeps growing through the noise-path ladder.
+            let mut dec = CeltDecoder::new(48000, 2).unwrap();
+            let mut pcm = vec![0i16; 960 * 2];
+            for _ in 0..10 {
+                let _ = dec.decode_with_ec(None, &mut pcm, 960, None, false, plc_arg());
+            }
+            assert!(dec.loss_duration > 0);
+        }
+
+        #[test]
+        fn roundtrip_with_phase_inversion_disabled() {
+            // disable_inv stereo path — covers the !phase-inv branch inside
+            // decode's residual / intensity stereo code.
+            let mut enc = CeltEncoder::new(48000, 2).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 96_000;
+            enc.disable_inv = 1;
+            let mut dec = CeltDecoder::new(48000, 2).unwrap();
+            dec.set_phase_inversion_disabled(true);
+
+            let mut compressed = vec![0u8; 1275];
+            let mut pcm_out = vec![0i16; 960 * 2];
+
+            for f in 0..2 {
+                let pcm = gen_noise(960, 2, f);
+                let buf_len = compressed.len() as i32;
+                let n = celt_encode_with_ec(
+                    &mut enc, &pcm, 960, &mut compressed, buf_len, None,
+                );
+                assert!(n > 0);
+                let res = dec.decode_with_ec(
+                    Some(&compressed[..n as usize]),
+                    &mut pcm_out,
+                    960,
+                    None,
+                    false,
+                    plc_arg(),
+                );
+                assert!(res.is_ok());
+            }
+        }
+
+        #[test]
+        fn roundtrip_hybrid_mode_start_band() {
+            // Hybrid-ish decode: start band != 0. Tests the start>0 skip at
+            // L1601 and prevents postfilter decode.
+            let mut enc = CeltEncoder::new(48000, 1).unwrap();
+            enc.vbr = 1;
+            enc.bitrate = 64_000;
+            enc.start = 17;
+            let mut dec = CeltDecoder::new(48000, 1).unwrap();
+            dec.set_start_band(17).unwrap();
+
+            let mut compressed = vec![0u8; 1275];
+            let mut pcm_out = vec![0i16; 960];
+            let pcm = gen_noise(960, 1, 1);
+
+            let buf_len = compressed.len() as i32;
+            let n = celt_encode_with_ec(
+                &mut enc, &pcm, 960, &mut compressed, buf_len, None,
+            );
+            assert!(n > 0);
+            let res = dec.decode_with_ec(
+                Some(&compressed[..n as usize]),
+                &mut pcm_out,
+                960,
+                None,
+                false,
+                plc_arg(),
+            );
+            assert!(res.is_ok());
+        }
+    }
 }
