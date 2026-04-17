@@ -893,10 +893,10 @@ pub fn silk_rshift_round(a: i32, shift: i32) -> i32 {
 }
 
 /// Signed multiply-accumulate: `a + (b * c) >> 16`.
-/// Matches C: `silk_SMLAWB`.
+/// Matches C: `silk_SMLAWB` (C relies on signed-overflow wrap).
 #[inline(always)]
 pub fn silk_smlawb(a: i32, b: i32, c: i16) -> i32 {
-    a + ((b as i64 * c as i64) >> 16) as i32
+    a.wrapping_add(((b as i64 * c as i64) >> 16) as i32)
 }
 
 /// Signed multiply word-by-byte: `(a * b) >> 16`.
@@ -920,10 +920,10 @@ pub fn silk_smlawb_i32(a: i32, b: i32, c: i32) -> i32 {
 }
 
 /// `silk_SMLAWT(a32, b32, c32)` = `a + (b * (c >> 16)) >> 16`.
-/// Matches C: `silk_SMLAWT`.
+/// Matches C: `silk_SMLAWT` (C relies on signed-overflow wrap).
 #[inline(always)]
 pub fn silk_smlawt(a: i32, b: i32, c: i32) -> i32 {
-    a + ((b as i64 * ((c >> 16) as i64)) >> 16) as i32
+    a.wrapping_add(((b as i64 * ((c >> 16) as i64)) >> 16) as i32)
 }
 
 /// Signed multiply word-by-word: `(a * b) >> 16`.
@@ -947,10 +947,10 @@ pub fn silk_smultt(a: i32, b: i32) -> i32 {
 }
 
 /// Signed multiply-add bottom-by-bottom: `a + (i16)b * (i16)c`.
-/// Matches C: `silk_SMLABB`.
+/// Matches C: `silk_SMLABB` (C relies on signed-overflow wrap).
 #[inline(always)]
 pub fn silk_smlabb(a: i32, b: i32, c: i32) -> i32 {
-    a + (b as i16 as i32) * (c as i16 as i32)
+    a.wrapping_add((b as i16 as i32).wrapping_mul(c as i16 as i32))
 }
 
 /// Multiply-add: `a + b * c` with wrapping.
@@ -996,9 +996,10 @@ pub fn silk_smmul(a: i32, b: i32) -> i32 {
 }
 
 /// `silk_SMLAWW(a, b, c)`: `a + ((b * c) >> 16)` (32×32 MAC >> 16).
+/// Matches C: `silk_SMLAWW` (C relies on signed-overflow wrap).
 #[inline(always)]
 pub fn silk_smlaww(a: i32, b: i32, c: i32) -> i32 {
-    a + ((b as i64 * c as i64) >> 16) as i32
+    a.wrapping_add(((b as i64 * c as i64) >> 16) as i32)
 }
 
 /// `silk_SMLABB_ovflw(a, b, c)`: wrapping `a + (i16)b * (i16)c`.
