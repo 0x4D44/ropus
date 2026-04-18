@@ -12,6 +12,22 @@
 //! Rename note: the reference `.c` sources remain strictly unmodified. The
 //! `-Dmain=<name>` define substitutes the `main` token at the preprocessor
 //! level, satisfying the HLD's "zero modifications" constraint.
+//!
+//! For `test_opus_encode.c`, the reference source does
+//! `#include "../src/opus_private.h"` — which, resolved relative to the file
+//! in `reference/tests/`, would pull in the real upstream `opus_private.h`
+//! and its transitive closure (arch.h, celt.h, ...). We intercept that by
+//! force-including our stubbed `opus_private.h` (`/FI` on MSVC, `-include`
+//! elsewhere) before any other header, claiming the header guard so the
+//! real include becomes a no-op.
+//!
+//! `test_opus_encode.c` also calls `regression_test()`, defined upstream in
+//! `opus_encode_regressions.c`. That file exercises surround and projection
+//! encoding — both out of scope (see the `publish-as-crate` HLD's non-goals).
+//! We substitute our own no-op stub (`src/regression_test_stub.c`) so the
+//! link resolves without dragging in surround/ambisonics paths. This is a
+//! deviation: we lose coverage of the specific historical regressions, but
+//! the main test body still runs.
 
 use std::path::PathBuf;
 
@@ -25,8 +41,9 @@ fn main() {
     let ref_tests = repo_root.join("reference").join("tests");
 
     let include_dir = manifest_dir.join("include");
+    let private_h = include_dir.join("opus_private.h");
 
-    // (source file, library name / main symbol).
+    // (source file, library name / main symbol, extra_c_files).
     //
     // One entry per reference test. Each produces its own static lib; the
     // matching Rust file in `tests/` links exactly that one lib into its
@@ -35,13 +52,23 @@ fn main() {
     //   2. a new `tests/<name>.rs` that declares the renamed `main` and
     //      wraps it in a `#[test]`,
     //   3. any needed header vendored into `include/`.
-    let tests: &[(&str, &str)] = &[
-        ("test_opus_padding.c", "test_opus_padding"),
-        ("test_opus_decode.c", "test_opus_decode"),
-        ("test_opus_api.c", "test_opus_api"),
+    //
+    // `extra` files are compiled into the same static lib as the reference
+    // test — used for `test_opus_encode.c` to bring in our
+    // `regression_test()` stub.
+    let tests: &[(&str, &str, &[&str])] = &[
+        ("test_opus_padding.c", "test_opus_padding", &[]),
+        ("test_opus_decode.c", "test_opus_decode", &[]),
+        ("test_opus_api.c", "test_opus_api", &[]),
+        (
+            "test_opus_encode.c",
+            "test_opus_encode",
+            &["src/regression_test_stub.c"],
+        ),
+        ("test_opus_extensions.c", "test_opus_extensions", &[]),
     ];
 
-    for (src_name, stem) in tests {
+    for (src_name, stem, extras) in tests {
         let src_path = ref_tests.join(src_name);
         if !src_path.exists() {
             panic!(
@@ -59,15 +86,40 @@ fn main() {
             .define("main", &*format!("{stem}_main"))
             .warnings(false);
 
+        // test_opus_encode.c and test_opus_extensions.c both do
+        // `#include "../src/opus_private.h"` which resolves to the real
+        // upstream header; force-include our stub first so its header
+        // guard wins.
+        if *stem == "test_opus_encode" || *stem == "test_opus_extensions" {
+            let compiler = build.get_compiler();
+            let flag = if compiler.is_like_msvc() {
+                format!("/FI{}", private_h.display())
+            } else {
+                format!("-include{}", private_h.display())
+            };
+            build.flag(&flag);
+        }
+
+        for extra in *extras {
+            build.file(manifest_dir.join(extra));
+        }
+
         build.compile(stem);
         println!("cargo:rerun-if-changed={}", src_path.display());
+        for extra in *extras {
+            println!(
+                "cargo:rerun-if-changed={}",
+                manifest_dir.join(extra).display()
+            );
+        }
     }
-
 
     // Rebuild if any vendored header changes.
     println!("cargo:rerun-if-changed=include/opus.h");
     println!("cargo:rerun-if-changed=include/opus_defines.h");
     println!("cargo:rerun-if-changed=include/opus_types.h");
     println!("cargo:rerun-if-changed=include/opus_multistream.h");
+    println!("cargo:rerun-if-changed=include/opus_private.h");
+    println!("cargo:rerun-if-changed=include/arch.h");
     println!("cargo:rerun-if-changed=build.rs");
 }

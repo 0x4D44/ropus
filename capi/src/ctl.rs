@@ -57,6 +57,11 @@ const OPUS_GET_PREDICTION_DISABLED_REQUEST: c_int = 4043;
 const OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST: c_int = 4046;
 const OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST: c_int = 4047;
 
+// From `reference/src/opus_private.h:172` — private CTL the conformance
+// test_opus_encode.c exercises directly. Routed into `OpusEncoder::set_force_mode`
+// (validation lives there; maps `OPUS_AUTO | MODE_SILK_ONLY | MODE_HYBRID | MODE_CELT_ONLY`).
+const OPUS_SET_FORCE_MODE_REQUEST: c_int = 11002;
+
 const OPUS_AUTO: c_int = -1000;
 
 // OPUS_APPLICATION_* constants (mirror `opus_defines.h`). Used by the MS
@@ -113,6 +118,10 @@ pub unsafe extern "C" fn mdopus_encoder_ctl_set_int(
                 }
                 enc.set_phase_inversion_disabled(value)
             }
+            // Private CTL from `opus_private.h` — validation happens inside
+            // ropus's `set_force_mode` (returns `OPUS_BAD_ARG` for anything
+            // outside `OPUS_AUTO | MODE_SILK_ONLY | MODE_HYBRID | MODE_CELT_ONLY`).
+            OPUS_SET_FORCE_MODE_REQUEST => enc.set_force_mode(value),
             _ => OPUS_UNIMPLEMENTED,
         }
     })
@@ -347,6 +356,18 @@ pub unsafe extern "C" fn mdopus_ms_encoder_ctl_set_int(
             }
             OPUS_SET_PREDICTION_DISABLED_REQUEST => ms.set_prediction_disabled(value),
             OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST => ms.set_phase_inversion_disabled(value),
+            // `OpusMSEncoder::set_force_mode` fans out to every sub-encoder's
+            // `ms_set_force_mode` (which skips validation — it only stores the
+            // value). Validate up-front here so an invalid mode can't silently
+            // stick; mirror the validation in `OpusEncoder::set_force_mode`.
+            OPUS_SET_FORCE_MODE_REQUEST => {
+                const MODE_SILK_ONLY: c_int = 1000;
+                const MODE_CELT_ONLY: c_int = 1002;
+                if value != OPUS_AUTO && !(MODE_SILK_ONLY..=MODE_CELT_ONLY).contains(&value) {
+                    return OPUS_BAD_ARG;
+                }
+                ms.set_force_mode(value)
+            }
             _ => OPUS_UNIMPLEMENTED,
         }
     })

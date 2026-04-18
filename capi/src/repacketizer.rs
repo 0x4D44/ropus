@@ -55,10 +55,20 @@ struct OpusRepacketizerHandle {
     magic: u64,
     inner: *mut OpusRepacketizer<'static>,
     generation: u64,
-    _pad: [u8; REPACKETIZER_STORAGE_SIZE - 24],
+    /// Mirror of `inner.get_nb_frames()`. Kept in sync with `cat` / `init` /
+    /// `out*` so `test_opus_extensions.c` can read `rp.nb_frames` directly
+    /// off the struct (matches the C reference layout exposed via
+    /// `opus_private.h`).
+    nb_frames: i32,
+    _pad: [u8; REPACKETIZER_STORAGE_SIZE - 28],
 }
 
 const _: () = assert!(std::mem::size_of::<OpusRepacketizerHandle>() == REPACKETIZER_STORAGE_SIZE);
+/// `nb_frames` must live at byte offset 24 so the C-visible struct layout in
+/// `opus_private.h` (`unsigned char _prefix[24]; int nb_frames; ...`) aligns
+/// with our handle's mirror. `test_opus_extensions.c` reads `rp.nb_frames`
+/// directly; if this offset drifts the test fails.
+const _: () = assert!(std::mem::offset_of!(OpusRepacketizerHandle, nb_frames) == 24);
 
 fn alloc_handle_storage() -> *mut OpusRepacketizerHandle {
     let layout = std::alloc::Layout::new::<OpusRepacketizerHandle>();
@@ -118,6 +128,23 @@ unsafe fn install_handle(
         (*dst).magic = REPACKETIZER_HANDLE_MAGIC;
         (*dst).inner = inner;
         (*dst).generation = crate::next_handle_generation();
+        (*dst).nb_frames = 0;
+    }
+}
+
+/// Refresh the `nb_frames` mirror from `inner.get_nb_frames()`. Call after any
+/// mutation on `inner` so C-side reads of `rp.nb_frames` stay accurate.
+unsafe fn sync_nb_frames(st: *mut OpusRepacketizerC) {
+    if st.is_null() {
+        return;
+    }
+    let h = st as *mut OpusRepacketizerHandle;
+    let inner = unsafe { (*h).inner };
+    if inner.is_null() {
+        return;
+    }
+    unsafe {
+        (*h).nb_frames = (*inner).get_nb_frames();
     }
 }
 
@@ -191,7 +218,9 @@ pub unsafe extern "C" fn opus_repacketizer_cat(
         // Reborrow with an unbounded lifetime; the caller's documented contract
         // is that `data` outlives the repacketizer (as long as it holds the frame).
         let static_slice: &'static [u8] = unsafe { std::mem::transmute(slice) };
-        inner.cat(static_slice, len)
+        let ret = inner.cat(static_slice, len);
+        unsafe { sync_nb_frames(rp) };
+        ret
     })
 }
 
@@ -230,6 +259,83 @@ pub unsafe extern "C" fn opus_repacketizer_out_range(
         };
         let out = unsafe { std::slice::from_raw_parts_mut(data, maxlen as usize) };
         inner.out_range(begin as usize, end as usize, out, maxlen)
+    })
+}
+
+/// `opus_repacketizer_out_range_impl` — full control over the emit pipeline
+/// with self-delimited framing, padding-to-max, and caller-supplied extension
+/// injection. Backs `test_opus_extensions.c`'s
+/// `test_opus_repacketizer_out_range_impl`.
+///
+/// Matches the C signature in `reference/src/opus_private.h:214-216`.
+///
+/// Note: this wrapper does NOT call `sync_nb_frames` because the underlying
+/// ropus method takes `&self` and is non-mutating — emitting a packet does
+/// not change `nb_frames`. If a future mutating out variant is added, it
+/// must call `sync_nb_frames(rp)` after the inner call to keep the
+/// C-visible `rp.nb_frames` mirror in step with the inner state (see
+/// `opus_repacketizer_cat` for the pattern).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn opus_repacketizer_out_range_impl(
+    rp: *mut OpusRepacketizerC,
+    begin: c_int,
+    end: c_int,
+    data: *mut c_uchar,
+    maxlen: i32,
+    self_delimited: c_int,
+    pad: c_int,
+    extensions: *const crate::extensions::OpusExtensionDataC,
+    nb_extensions: c_int,
+) -> i32 {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if data.is_null() || maxlen < 0 || begin < 0 || end < 0 {
+            return OPUS_BAD_ARG;
+        }
+        if nb_extensions < 0 {
+            return OPUS_BAD_ARG;
+        }
+        if nb_extensions > 0 && extensions.is_null() {
+            return OPUS_BAD_ARG;
+        }
+        let Some(inner) = (unsafe { resolve_handle_ref(rp) }) else {
+            return OPUS_BAD_ARG;
+        };
+        let out = unsafe { std::slice::from_raw_parts_mut(data, maxlen as usize) };
+
+        // Translate C extensions into borrowed Rust slices. The caller
+        // guarantees the payload memory outlives this call (stack-allocated
+        // in the test).
+        use ropus::opus::extensions::OpusExtensionData as RExt;
+        let mut owned: Vec<RExt<'static>> = Vec::with_capacity(nb_extensions as usize);
+        for i in 0..nb_extensions as usize {
+            let raw = unsafe { &*extensions.add(i) };
+            let slice: &'static [u8] = if raw.len > 0 && !raw.data.is_null() {
+                unsafe {
+                    std::mem::transmute::<&[u8], &'static [u8]>(std::slice::from_raw_parts(
+                        raw.data,
+                        raw.len as usize,
+                    ))
+                }
+            } else {
+                &[]
+            };
+            owned.push(RExt {
+                id: raw.id,
+                frame: raw.frame,
+                data: slice,
+                len: raw.len,
+            });
+        }
+
+        inner.out_range_impl(
+            begin as usize,
+            end as usize,
+            out,
+            maxlen,
+            self_delimited != 0,
+            pad != 0,
+            &owned,
+        )
     })
 }
 

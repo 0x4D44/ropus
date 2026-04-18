@@ -165,6 +165,17 @@ pub fn opus_packet_get_nb_samples(packet: &[u8], fs: i32) -> Result<i32, i32> {
     }
 }
 
+/// Padding extraction output for `opus_packet_parse_impl_with_padding`.
+///
+/// `offset` is the byte index into the input `data` slice where the padding
+/// region (after the final frame) begins; `len` is the padding length. When
+/// `len == 0` the offset is meaningless and typically set to 0.
+#[derive(Clone, Copy, Debug)]
+pub struct PaddingInfo {
+    pub offset: usize,
+    pub len: i32,
+}
+
 /// Packet parse implementation. Returns frame count (positive) or negative
 /// error code. On success, `out_toc` is set, `sizes[0..count]` are the frame
 /// sizes, and `payload_offset` points to the first frame byte within `data`
@@ -180,6 +191,41 @@ pub fn opus_packet_parse_impl(
     payload_offset: &mut i32,
     packet_offset: Option<&mut i32>,
 ) -> i32 {
+    opus_packet_parse_impl_with_padding(
+        data,
+        len,
+        self_delimited,
+        out_toc,
+        sizes,
+        payload_offset,
+        packet_offset,
+        None,
+    )
+}
+
+/// As `opus_packet_parse_impl` but also emits the padding region offset/length
+/// when `padding` is `Some`. Matches the full C signature documented in
+/// `reference/src/opus_private.h:208-212`.
+pub fn opus_packet_parse_impl_with_padding(
+    data: &[u8],
+    len: i32,
+    self_delimited: bool,
+    out_toc: &mut u8,
+    sizes: &mut [i16; MAX_FRAMES],
+    payload_offset: &mut i32,
+    packet_offset: Option<&mut i32>,
+    padding: Option<&mut PaddingInfo>,
+) -> i32 {
+    // Mirror C: zero padding output up-front so error paths see cleared values
+    // (reference/src/opus.c:240-244).
+    let padding = if let Some(p) = padding {
+        p.offset = 0;
+        p.len = 0;
+        Some(p)
+    } else {
+        None
+    };
+
     if len < 0 {
         return OPUS_BAD_ARG;
     }
@@ -340,6 +386,11 @@ pub fn opus_packet_parse_impl(
     let mut frame_end = pos;
     for i in 0..count as usize {
         frame_end += sizes[i] as usize;
+    }
+
+    if let Some(pad_info) = padding {
+        pad_info.offset = frame_end;
+        pad_info.len = pad;
     }
 
     if let Some(pkt_off) = packet_offset {

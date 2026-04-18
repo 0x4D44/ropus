@@ -63,6 +63,10 @@
 #define OPUS_MULTISTREAM_GET_ENCODER_STATE_REQUEST 5120
 #define OPUS_MULTISTREAM_GET_DECODER_STATE_REQUEST 5122
 
+/* From opus_private.h:172 — private encoder CTL used by test_opus_encode.c
+ * (MODE_SILK_ONLY | MODE_HYBRID | MODE_CELT_ONLY | OPUS_AUTO). */
+#define OPUS_SET_FORCE_MODE_REQUEST                11002
+
 typedef uint32_t opus_uint32;
 
 typedef struct OpusEncoder OpusEncoder;
@@ -124,6 +128,7 @@ int opus_encoder_ctl(OpusEncoder *st, int request, ...)
         case OPUS_SET_EXPERT_FRAME_DURATION_REQUEST:
         case OPUS_SET_PREDICTION_DISABLED_REQUEST:
         case OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST:
+        case OPUS_SET_FORCE_MODE_REQUEST:
             ret = mdopus_encoder_ctl_set_int(st, request, va_arg(ap, int));
             break;
 
@@ -256,6 +261,7 @@ int opus_multistream_encoder_ctl(OpusMSEncoder *st, int request, ...)
         case OPUS_SET_EXPERT_FRAME_DURATION_REQUEST:
         case OPUS_SET_PREDICTION_DISABLED_REQUEST:
         case OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST:
+        case OPUS_SET_FORCE_MODE_REQUEST:
             ret = mdopus_ms_encoder_ctl_set_int(st, request, va_arg(ap, int));
             break;
 

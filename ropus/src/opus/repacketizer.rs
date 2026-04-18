@@ -631,7 +631,7 @@ impl<'a> OpusExtensionIterator<'a> {
 
 /// Count extensions in padding data.
 /// Matches C `opus_packet_extensions_count`.
-pub(crate) fn opus_packet_extensions_count(data: &[u8], len: i32, nb_frames: i32) -> i32 {
+pub fn opus_packet_extensions_count(data: &[u8], len: i32, nb_frames: i32) -> i32 {
     if len <= 0 {
         return 0;
     }
@@ -649,7 +649,7 @@ pub(crate) fn opus_packet_extensions_count(data: &[u8], len: i32, nb_frames: i32
 
 /// Parse all extensions from padding into an array in bitstream order.
 /// Matches C `opus_packet_extensions_parse`.
-pub(crate) fn opus_packet_extensions_parse<'a>(
+pub fn opus_packet_extensions_parse<'a>(
     data: &'a [u8],
     len: i32,
     extensions: &mut [OpusExtensionData<'a>],
@@ -773,7 +773,7 @@ fn write_extension(
 /// Serialize extensions into bytes. `data` may be `None` for dry-run (size query).
 /// Returns total byte count or negative error code.
 /// Matches C `opus_packet_extensions_generate`.
-pub(crate) fn opus_packet_extensions_generate(
+pub fn opus_packet_extensions_generate(
     data: Option<&mut [u8]>,
     len: i32,
     extensions: &[OpusExtensionData],
@@ -1076,7 +1076,7 @@ impl<'a> OpusRepacketizer<'a> {
     /// Full-featured packet output: selects compact code, optional self-delimited
     /// framing, padding, and extension injection.
     /// Matches C `opus_repacketizer_out_range_impl`.
-    pub(crate) fn out_range_impl(
+    pub fn out_range_impl(
         &self,
         begin: usize,
         end: usize,

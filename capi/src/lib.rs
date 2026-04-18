@@ -18,6 +18,7 @@
 pub mod ctl;
 pub mod decoder;
 pub mod encoder;
+pub mod extensions;
 pub mod ms_decoder;
 pub mod ms_encoder;
 pub mod packet_parse;
