@@ -113,6 +113,16 @@ pub struct OpusMSDecoder {
     _opaque: [u8; 0],
 }
 
+#[repr(C)]
+pub struct OpusProjectionEncoder {
+    _opaque: [u8; 0],
+}
+
+#[repr(C)]
+pub struct OpusProjectionDecoder {
+    _opaque: [u8; 0],
+}
+
 // ---------------------------------------------------------------------------
 // Range coder context (matches struct ec_ctx in entcode.h)
 // ---------------------------------------------------------------------------
@@ -268,6 +278,50 @@ unsafe extern "C" {
         decode_fec: c_int,
     ) -> c_int;
     pub fn opus_multistream_decoder_destroy(st: *mut OpusMSDecoder);
+
+    // Projection encoder (mapping family 3, ambisonics)
+    pub fn opus_projection_ambisonics_encoder_create(
+        Fs: opus_int32,
+        channels: c_int,
+        mapping_family: c_int,
+        streams: *mut c_int,
+        coupled_streams: *mut c_int,
+        application: c_int,
+        error: *mut c_int,
+    ) -> *mut OpusProjectionEncoder;
+    pub fn opus_projection_encode(
+        st: *mut OpusProjectionEncoder,
+        pcm: *const opus_int16,
+        frame_size: c_int,
+        data: *mut c_uchar,
+        max_data_bytes: opus_int32,
+    ) -> opus_int32;
+    pub fn opus_projection_encoder_destroy(st: *mut OpusProjectionEncoder);
+    pub fn opus_projection_encoder_ctl(
+        st: *mut OpusProjectionEncoder,
+        request: c_int,
+        ...
+    ) -> c_int;
+
+    // Projection decoder
+    pub fn opus_projection_decoder_create(
+        Fs: opus_int32,
+        channels: c_int,
+        streams: c_int,
+        coupled_streams: c_int,
+        demixing_matrix: *const c_uchar,
+        demixing_matrix_size: opus_int32,
+        error: *mut c_int,
+    ) -> *mut OpusProjectionDecoder;
+    pub fn opus_projection_decode(
+        st: *mut OpusProjectionDecoder,
+        data: *const c_uchar,
+        len: opus_int32,
+        pcm: *mut opus_int16,
+        frame_size: c_int,
+        decode_fec: c_int,
+    ) -> c_int;
+    pub fn opus_projection_decoder_destroy(st: *mut OpusProjectionDecoder);
 
     // Debug math comparison helpers
     pub fn debug_c_celt_sqrt32(x: opus_int32) -> opus_int32;

@@ -46,3 +46,7 @@ path = "src/bin/repro_bug_d2.rs"
 [[bin]]
 name = "repro_bug_k"
 path = "src/bin/repro_bug_k.rs"
+
+[[bin]]
+name = "projection_roundtrip"
+path = "src/bin/projection_roundtrip.rs"
