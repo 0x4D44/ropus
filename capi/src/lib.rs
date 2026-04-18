@@ -18,6 +18,22 @@
 pub mod ctl;
 pub mod decoder;
 pub mod encoder;
+pub mod ms_decoder;
+pub mod ms_encoder;
+pub mod packet_parse;
+pub mod repacketizer;
+
+/// Monotonically increasing counter used to stamp each freshly-created state
+/// handle. Together with the per-handle `generation` field this guarantees
+/// that `memcmp` between two independently-created handles sees a difference,
+/// and that a handle post-`OPUS_RESET_STATE` differs from any pre-reset byte
+/// snapshot. `Relaxed` is sufficient — we don't synchronise any other memory,
+/// we just need a unique-enough token per handle.
+pub(crate) fn next_handle_generation() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
+}
 
 // --- Allocator used for heap state -------------------------------------------
 //

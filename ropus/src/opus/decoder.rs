@@ -41,7 +41,7 @@ pub const OPUS_INVALID_PACKET: i32 = -4;
 pub const OPUS_UNIMPLEMENTED: i32 = -5;
 
 /// Maximum frames per packet (48 × 2.5ms = 120ms).
-const MAX_FRAMES: usize = 48;
+pub const MAX_FRAMES: usize = 48;
 
 /// Gain conversion factor: ln(10)/(20*256*ln(2)) in Q25.
 const GAIN_SCALE_Q25: i32 = qconst16(6.48814081e-4, 25);
@@ -165,10 +165,13 @@ pub fn opus_packet_get_nb_samples(packet: &[u8], fs: i32) -> Result<i32, i32> {
     }
 }
 
-/// Internal packet parse implementation.
-/// Returns frame count (positive) or negative error code.
+/// Packet parse implementation. Returns frame count (positive) or negative
+/// error code. On success, `out_toc` is set, `sizes[0..count]` are the frame
+/// sizes, and `payload_offset` points to the first frame byte within `data`
+/// (each subsequent frame follows at `payload_offset + sum(sizes[0..i])`).
+///
 /// Matches C `opus_packet_parse_impl`.
-fn opus_packet_parse_impl(
+pub fn opus_packet_parse_impl(
     data: &[u8],
     len: i32,
     self_delimited: bool,

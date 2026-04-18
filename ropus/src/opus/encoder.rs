@@ -2963,6 +2963,19 @@ impl OpusEncoder {
         self.application
     }
 
+    /// Validate and set encoder application. Mirrors
+    /// `OPUS_SET_APPLICATION` from the C reference.
+    pub fn set_application(&mut self, application: i32) -> i32 {
+        if application != OPUS_APPLICATION_VOIP
+            && application != OPUS_APPLICATION_AUDIO
+            && application != OPUS_APPLICATION_RESTRICTED_LOWDELAY
+        {
+            return OPUS_BAD_ARG;
+        }
+        self.application = application;
+        OPUS_OK
+    }
+
     pub fn get_channels(&self) -> i32 {
         self.channels
     }

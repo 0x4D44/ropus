@@ -5,28 +5,65 @@
 //! fully-typed scalar argument. Each function does its own panic-guarding so
 //! the shim can stay a trivial switch statement.
 //!
-//! Phase 2 scope: decoder `OPUS_GET_FINAL_RANGE`, `OPUS_GET_LAST_PACKET_DURATION`,
-//! plus `OPUS_RESET_STATE` carried over from phase 1. Unknown CTLs still fall
-//! through the default arm in `ctl_shim.c` and return `OPUS_UNIMPLEMENTED`,
-//! which keeps drift visible in test failures.
+//! Unknown CTLs fall through the default arm in `ctl_shim.c` and return
+//! `OPUS_UNIMPLEMENTED`, which keeps drift visible in test failures.
 
 use std::os::raw::c_int;
 
 use ropus::opus::decoder::OpusDecoder;
 use ropus::opus::encoder::OpusEncoder;
+use ropus::opus::multistream::{OpusMSDecoder, OpusMSEncoder};
 
 use crate::{OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, OPUS_OK, OPUS_UNIMPLEMENTED, ffi_guard};
 
 // CTL request codes we route inside Rust (mirror `opus_defines.h`).
+const OPUS_SET_APPLICATION_REQUEST: c_int = 4000;
+const OPUS_GET_APPLICATION_REQUEST: c_int = 4001;
+const OPUS_SET_BITRATE_REQUEST: c_int = 4002;
+const OPUS_GET_BITRATE_REQUEST: c_int = 4003;
+const OPUS_SET_MAX_BANDWIDTH_REQUEST: c_int = 4004;
+const OPUS_GET_MAX_BANDWIDTH_REQUEST: c_int = 4005;
+const OPUS_SET_VBR_REQUEST: c_int = 4006;
+const OPUS_GET_VBR_REQUEST: c_int = 4007;
+const OPUS_SET_BANDWIDTH_REQUEST: c_int = 4008;
 const OPUS_GET_BANDWIDTH_REQUEST: c_int = 4009;
+const OPUS_SET_COMPLEXITY_REQUEST: c_int = 4010;
+const OPUS_GET_COMPLEXITY_REQUEST: c_int = 4011;
+const OPUS_SET_INBAND_FEC_REQUEST: c_int = 4012;
+const OPUS_GET_INBAND_FEC_REQUEST: c_int = 4013;
+const OPUS_SET_PACKET_LOSS_PERC_REQUEST: c_int = 4014;
+const OPUS_GET_PACKET_LOSS_PERC_REQUEST: c_int = 4015;
+const OPUS_SET_DTX_REQUEST: c_int = 4016;
+const OPUS_GET_DTX_REQUEST: c_int = 4017;
+const OPUS_SET_VBR_CONSTRAINT_REQUEST: c_int = 4020;
+const OPUS_GET_VBR_CONSTRAINT_REQUEST: c_int = 4021;
+const OPUS_SET_FORCE_CHANNELS_REQUEST: c_int = 4022;
+const OPUS_GET_FORCE_CHANNELS_REQUEST: c_int = 4023;
+const OPUS_SET_SIGNAL_REQUEST: c_int = 4024;
+const OPUS_GET_SIGNAL_REQUEST: c_int = 4025;
+const OPUS_GET_LOOKAHEAD_REQUEST: c_int = 4027;
 const OPUS_GET_SAMPLE_RATE_REQUEST: c_int = 4029;
 const OPUS_GET_FINAL_RANGE_REQUEST: c_int = 4031;
 const OPUS_GET_PITCH_REQUEST: c_int = 4033;
 const OPUS_SET_GAIN_REQUEST: c_int = 4034;
 const OPUS_GET_GAIN_REQUEST: c_int = 4045; // intentional — see opus_defines.h
+const OPUS_SET_LSB_DEPTH_REQUEST: c_int = 4036;
+const OPUS_GET_LSB_DEPTH_REQUEST: c_int = 4037;
 const OPUS_GET_LAST_PACKET_DURATION_REQUEST: c_int = 4039;
-const OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST: c_int = 4047;
+const OPUS_SET_EXPERT_FRAME_DURATION_REQUEST: c_int = 4040;
+const OPUS_GET_EXPERT_FRAME_DURATION_REQUEST: c_int = 4041;
+const OPUS_SET_PREDICTION_DISABLED_REQUEST: c_int = 4042;
+const OPUS_GET_PREDICTION_DISABLED_REQUEST: c_int = 4043;
 const OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST: c_int = 4046;
+const OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST: c_int = 4047;
+
+const OPUS_AUTO: c_int = -1000;
+
+// OPUS_APPLICATION_* constants (mirror `opus_defines.h`). Used by the MS
+// encoder dispatcher to validate up-front before delegating to ropus.
+const OPUS_APPLICATION_VOIP: c_int = 2048;
+const OPUS_APPLICATION_AUDIO: c_int = 2049;
+const OPUS_APPLICATION_RESTRICTED_LOWDELAY: c_int = 2051;
 
 // ---------------------------------------------------------------------------
 // Encoder CTLs
@@ -35,11 +72,111 @@ const OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST: c_int = 4046;
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mdopus_encoder_ctl_reset(st: *mut OpusEncoder) -> c_int {
     ffi_guard!(OPUS_INTERNAL_ERROR, {
-        if st.is_null() {
+        let Some(enc) = (unsafe { crate::encoder::handle_to_encoder(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        enc.reset();
+        unsafe { crate::encoder::bump_generation(st) };
+        OPUS_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_encoder_ctl_set_int(
+    st: *mut OpusEncoder,
+    request: c_int,
+    value: c_int,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        let Some(enc) = (unsafe { crate::encoder::handle_to_encoder(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        match request {
+            OPUS_SET_APPLICATION_REQUEST => enc.set_application(value),
+            OPUS_SET_BITRATE_REQUEST => enc.set_bitrate(value),
+            OPUS_SET_MAX_BANDWIDTH_REQUEST => enc.set_max_bandwidth(value),
+            OPUS_SET_VBR_REQUEST => enc.set_vbr(value),
+            OPUS_SET_BANDWIDTH_REQUEST => enc.set_bandwidth(value),
+            OPUS_SET_COMPLEXITY_REQUEST => enc.set_complexity(value),
+            OPUS_SET_INBAND_FEC_REQUEST => enc.set_inband_fec(value),
+            OPUS_SET_PACKET_LOSS_PERC_REQUEST => enc.set_packet_loss_perc(value),
+            OPUS_SET_DTX_REQUEST => enc.set_dtx(value),
+            OPUS_SET_VBR_CONSTRAINT_REQUEST => enc.set_vbr_constraint(value),
+            OPUS_SET_FORCE_CHANNELS_REQUEST => enc.set_force_channels(value),
+            OPUS_SET_SIGNAL_REQUEST => enc.set_signal(value),
+            OPUS_SET_LSB_DEPTH_REQUEST => enc.set_lsb_depth(value),
+            OPUS_SET_EXPERT_FRAME_DURATION_REQUEST => enc.set_expert_frame_duration(value),
+            OPUS_SET_PREDICTION_DISABLED_REQUEST => enc.set_prediction_disabled(value),
+            OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST => {
+                if !(0..=1).contains(&value) {
+                    return OPUS_BAD_ARG;
+                }
+                enc.set_phase_inversion_disabled(value)
+            }
+            _ => OPUS_UNIMPLEMENTED,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_encoder_ctl_get_int(
+    st: *mut OpusEncoder,
+    request: c_int,
+    out: *mut c_int,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if out.is_null() {
             return OPUS_BAD_ARG;
         }
-        unsafe { (*st).reset() };
+        let Some(enc) = (unsafe { crate::encoder::handle_to_encoder_ref(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        let value: c_int = match request {
+            OPUS_GET_APPLICATION_REQUEST => enc.get_application(),
+            OPUS_GET_BITRATE_REQUEST => enc.get_bitrate(),
+            OPUS_GET_MAX_BANDWIDTH_REQUEST => enc.get_max_bandwidth(),
+            OPUS_GET_VBR_REQUEST => enc.get_vbr(),
+            OPUS_GET_BANDWIDTH_REQUEST => enc.get_bandwidth(),
+            OPUS_GET_COMPLEXITY_REQUEST => enc.get_complexity(),
+            OPUS_GET_INBAND_FEC_REQUEST => enc.get_inband_fec(),
+            OPUS_GET_PACKET_LOSS_PERC_REQUEST => enc.get_packet_loss_perc(),
+            OPUS_GET_DTX_REQUEST => enc.get_dtx(),
+            OPUS_GET_VBR_CONSTRAINT_REQUEST => enc.get_vbr_constraint(),
+            OPUS_GET_FORCE_CHANNELS_REQUEST => enc.get_force_channels(),
+            OPUS_GET_SIGNAL_REQUEST => enc.get_signal(),
+            OPUS_GET_LOOKAHEAD_REQUEST => enc.get_lookahead(),
+            OPUS_GET_SAMPLE_RATE_REQUEST => enc.get_sample_rate(),
+            OPUS_GET_LSB_DEPTH_REQUEST => enc.get_lsb_depth(),
+            OPUS_GET_EXPERT_FRAME_DURATION_REQUEST => enc.get_expert_frame_duration(),
+            OPUS_GET_PREDICTION_DISABLED_REQUEST => enc.get_prediction_disabled(),
+            OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST => enc.get_phase_inversion_disabled(),
+            _ => return OPUS_UNIMPLEMENTED,
+        };
+        unsafe { *out = value };
         OPUS_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_encoder_ctl_get_uint32(
+    st: *mut OpusEncoder,
+    request: c_int,
+    out: *mut u32,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if out.is_null() {
+            return OPUS_BAD_ARG;
+        }
+        let Some(enc) = (unsafe { crate::encoder::handle_to_encoder_ref(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        match request {
+            OPUS_GET_FINAL_RANGE_REQUEST => {
+                unsafe { *out = enc.get_final_range() };
+                OPUS_OK
+            }
+            _ => OPUS_UNIMPLEMENTED,
+        }
     })
 }
 
@@ -54,12 +191,11 @@ pub unsafe extern "C" fn mdopus_decoder_ctl_reset(st: *mut OpusDecoder) -> c_int
             return OPUS_BAD_ARG;
         };
         dec.reset();
+        unsafe { crate::decoder::bump_generation(st) };
         OPUS_OK
     })
 }
 
-/// Decoder set-int CTL dispatcher.  Dispatches by request code; unknown
-/// codes return `OPUS_UNIMPLEMENTED` (same contract as the shim default arm).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mdopus_decoder_ctl_set_int(
     st: *mut OpusDecoder,
@@ -87,7 +223,6 @@ pub unsafe extern "C" fn mdopus_decoder_ctl_set_int(
     })
 }
 
-/// Decoder get-int CTL dispatcher. Writes the result through `out`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mdopus_decoder_ctl_get_int(
     st: *mut OpusDecoder,
@@ -117,7 +252,6 @@ pub unsafe extern "C" fn mdopus_decoder_ctl_get_int(
     })
 }
 
-/// Decoder get-uint32 CTL dispatcher (only `OPUS_GET_FINAL_RANGE` for now).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mdopus_decoder_ctl_get_uint32(
     st: *mut OpusDecoder,
@@ -138,5 +272,305 @@ pub unsafe extern "C" fn mdopus_decoder_ctl_get_uint32(
             }
             _ => OPUS_UNIMPLEMENTED,
         }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Multistream encoder CTLs
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_ms_encoder_ctl_reset(st: *mut OpusMSEncoder) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        let Some(ms) = (unsafe { crate::ms_encoder::handle_to_ms_encoder(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        // `OpusMSEncoder::reset` already iterates sub-encoders (and clears
+        // surround-mode preemph/window buffers); doing it again here would be
+        // redundant and drop the surround-specific cleanup.
+        ms.reset();
+        unsafe { crate::ms_encoder::bump_generation(st) };
+        OPUS_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_ms_encoder_ctl_set_int(
+    st: *mut OpusMSEncoder,
+    request: c_int,
+    value: c_int,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        let Some(ms) = (unsafe { crate::ms_encoder::handle_to_ms_encoder(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        match request {
+            OPUS_SET_APPLICATION_REQUEST => {
+                // Validate up-front so an invalid value never mutates any
+                // sub-encoder; ropus `ms.set_application` fans out
+                // atomically (and `ms_set_application` silently ignores
+                // invalid values, so a bad value would otherwise leak into
+                // `ms.application` without taking effect per stream).
+                if value != OPUS_APPLICATION_VOIP
+                    && value != OPUS_APPLICATION_AUDIO
+                    && value != OPUS_APPLICATION_RESTRICTED_LOWDELAY
+                {
+                    return OPUS_BAD_ARG;
+                }
+                ms.set_application(value)
+            }
+            OPUS_SET_BITRATE_REQUEST => ms.set_bitrate(value),
+            OPUS_SET_MAX_BANDWIDTH_REQUEST => ms.set_max_bandwidth(value),
+            OPUS_SET_VBR_REQUEST => ms.set_vbr(value),
+            OPUS_SET_BANDWIDTH_REQUEST => ms.set_bandwidth(value),
+            OPUS_SET_COMPLEXITY_REQUEST => ms.set_complexity(value),
+            OPUS_SET_INBAND_FEC_REQUEST => ms.set_inband_fec(value),
+            OPUS_SET_PACKET_LOSS_PERC_REQUEST => ms.set_packet_loss_perc(value),
+            OPUS_SET_DTX_REQUEST => ms.set_dtx(value),
+            OPUS_SET_VBR_CONSTRAINT_REQUEST => ms.set_vbr_constraint(value),
+            OPUS_SET_FORCE_CHANNELS_REQUEST => {
+                // Validate up-front before delegating; ropus
+                // `ms.set_force_channels` does no validation (it just
+                // stores the value into each sub-encoder), so without
+                // this guard an out-of-range value would partially
+                // apply. Valid values: OPUS_AUTO or 1..=2.
+                if value != OPUS_AUTO && !(1..=2).contains(&value) {
+                    return OPUS_BAD_ARG;
+                }
+                ms.set_force_channels(value)
+            }
+            OPUS_SET_SIGNAL_REQUEST => ms.set_signal(value),
+            OPUS_SET_LSB_DEPTH_REQUEST => ms.set_lsb_depth(value),
+            OPUS_SET_EXPERT_FRAME_DURATION_REQUEST => {
+                ms.set_expert_frame_duration(value);
+                OPUS_OK
+            }
+            OPUS_SET_PREDICTION_DISABLED_REQUEST => ms.set_prediction_disabled(value),
+            OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST => ms.set_phase_inversion_disabled(value),
+            _ => OPUS_UNIMPLEMENTED,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_ms_encoder_ctl_get_int(
+    st: *mut OpusMSEncoder,
+    request: c_int,
+    out: *mut c_int,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if out.is_null() {
+            return OPUS_BAD_ARG;
+        }
+        let Some(ms) = (unsafe { crate::ms_encoder::handle_to_ms_encoder_ref(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        let value: c_int = match request {
+            OPUS_GET_APPLICATION_REQUEST => ms.get_application(),
+            OPUS_GET_BITRATE_REQUEST => ms.get_bitrate(),
+            OPUS_GET_SAMPLE_RATE_REQUEST => ms.get_sample_rate(),
+            OPUS_GET_LOOKAHEAD_REQUEST => ms.get_lookahead(),
+            OPUS_GET_EXPERT_FRAME_DURATION_REQUEST => ms.get_expert_frame_duration(),
+            OPUS_GET_COMPLEXITY_REQUEST => ms
+                .get_encoder(0)
+                .map(|e| e.get_complexity())
+                .unwrap_or(OPUS_AUTO),
+            OPUS_GET_VBR_REQUEST => ms.get_encoder(0).map(|e| e.get_vbr()).unwrap_or(0),
+            OPUS_GET_VBR_CONSTRAINT_REQUEST => ms
+                .get_encoder(0)
+                .map(|e| e.get_vbr_constraint())
+                .unwrap_or(0),
+            OPUS_GET_BANDWIDTH_REQUEST => {
+                ms.get_encoder(0).map(|e| e.get_bandwidth()).unwrap_or(0)
+            }
+            OPUS_GET_MAX_BANDWIDTH_REQUEST => ms
+                .get_encoder(0)
+                .map(|e| e.get_max_bandwidth())
+                .unwrap_or(0),
+            OPUS_GET_INBAND_FEC_REQUEST => ms.get_encoder(0).map(|e| e.get_inband_fec()).unwrap_or(0),
+            OPUS_GET_PACKET_LOSS_PERC_REQUEST => ms
+                .get_encoder(0)
+                .map(|e| e.get_packet_loss_perc())
+                .unwrap_or(0),
+            OPUS_GET_DTX_REQUEST => ms.get_encoder(0).map(|e| e.get_dtx()).unwrap_or(0),
+            OPUS_GET_FORCE_CHANNELS_REQUEST => ms
+                .get_encoder(0)
+                .map(|e| e.get_force_channels())
+                .unwrap_or(OPUS_AUTO),
+            OPUS_GET_SIGNAL_REQUEST => ms.get_encoder(0).map(|e| e.get_signal()).unwrap_or(0),
+            OPUS_GET_LSB_DEPTH_REQUEST => ms.get_encoder(0).map(|e| e.get_lsb_depth()).unwrap_or(0),
+            OPUS_GET_PREDICTION_DISABLED_REQUEST => ms
+                .get_encoder(0)
+                .map(|e| e.get_prediction_disabled())
+                .unwrap_or(0),
+            OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST => ms
+                .get_encoder(0)
+                .map(|e| e.get_phase_inversion_disabled())
+                .unwrap_or(0),
+            _ => return OPUS_UNIMPLEMENTED,
+        };
+        unsafe { *out = value };
+        OPUS_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_ms_encoder_ctl_get_uint32(
+    st: *mut OpusMSEncoder,
+    request: c_int,
+    out: *mut u32,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if out.is_null() {
+            return OPUS_BAD_ARG;
+        }
+        let Some(ms) = (unsafe { crate::ms_encoder::handle_to_ms_encoder_ref(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        match request {
+            OPUS_GET_FINAL_RANGE_REQUEST => {
+                unsafe { *out = ms.get_final_range() };
+                OPUS_OK
+            }
+            _ => OPUS_UNIMPLEMENTED,
+        }
+    })
+}
+
+/// `OPUS_MULTISTREAM_GET_ENCODER_STATE(stream_id, OpusEncoder **state)`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_ms_encoder_ctl_get_encoder_state(
+    st: *mut OpusMSEncoder,
+    stream_id: c_int,
+    out: *mut *mut OpusEncoder,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if out.is_null() {
+            return OPUS_BAD_ARG;
+        }
+        // Route through a single `&mut Inner` path — `sub_encoder_handle_ptr`
+        // validates the handle, `stream_id`, and the slot internally. Do NOT
+        // also call `handle_to_ms_encoder_ref` here: the resulting `&` would
+        // alias the `&mut Inner` synthesised inside the helper (noalias UB).
+        let h = unsafe { crate::ms_encoder::sub_encoder_handle_ptr(st, stream_id) };
+        if h.is_null() {
+            return OPUS_BAD_ARG;
+        }
+        unsafe { *out = h };
+        OPUS_OK
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Multistream decoder CTLs
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_ms_decoder_ctl_reset(st: *mut OpusMSDecoder) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        let Some(ms) = (unsafe { crate::ms_decoder::handle_to_ms_decoder(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        ms.reset();
+        unsafe { crate::ms_decoder::bump_generation(st) };
+        OPUS_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_ms_decoder_ctl_set_int(
+    st: *mut OpusMSDecoder,
+    request: c_int,
+    value: c_int,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        let Some(ms) = (unsafe { crate::ms_decoder::handle_to_ms_decoder(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        match request {
+            OPUS_SET_GAIN_REQUEST => {
+                if !(-32768..=32767).contains(&value) {
+                    return OPUS_BAD_ARG;
+                }
+                ms.set_gain(value)
+            }
+            OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST => {
+                if !(0..=1).contains(&value) {
+                    return OPUS_BAD_ARG;
+                }
+                ms.set_phase_inversion_disabled(value)
+            }
+            _ => OPUS_UNIMPLEMENTED,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_ms_decoder_ctl_get_int(
+    st: *mut OpusMSDecoder,
+    request: c_int,
+    out: *mut c_int,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if out.is_null() {
+            return OPUS_BAD_ARG;
+        }
+        let Some(ms) = (unsafe { crate::ms_decoder::handle_to_ms_decoder_ref(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        let value: c_int = match request {
+            OPUS_GET_SAMPLE_RATE_REQUEST => ms.get_sample_rate(),
+            OPUS_GET_BANDWIDTH_REQUEST => ms.get_bandwidth(),
+            OPUS_GET_LAST_PACKET_DURATION_REQUEST => ms.get_last_packet_duration(),
+            OPUS_GET_GAIN_REQUEST => ms.get_gain(),
+            OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST => ms.get_phase_inversion_disabled(),
+            _ => return OPUS_UNIMPLEMENTED,
+        };
+        unsafe { *out = value };
+        OPUS_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_ms_decoder_ctl_get_uint32(
+    st: *mut OpusMSDecoder,
+    request: c_int,
+    out: *mut u32,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if out.is_null() {
+            return OPUS_BAD_ARG;
+        }
+        let Some(ms) = (unsafe { crate::ms_decoder::handle_to_ms_decoder_ref(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        match request {
+            OPUS_GET_FINAL_RANGE_REQUEST => {
+                unsafe { *out = ms.get_final_range() };
+                OPUS_OK
+            }
+            _ => OPUS_UNIMPLEMENTED,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_ms_decoder_ctl_get_decoder_state(
+    st: *mut OpusMSDecoder,
+    stream_id: c_int,
+    out: *mut *mut OpusDecoder,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if out.is_null() {
+            return OPUS_BAD_ARG;
+        }
+        // Single `&mut Inner` path — see the encoder counterpart for the
+        // aliasing rationale.
+        let h = unsafe { crate::ms_decoder::sub_decoder_handle_ptr(st, stream_id) };
+        if h.is_null() {
+            return OPUS_BAD_ARG;
+        }
+        unsafe { *out = h };
+        OPUS_OK
     })
 }

@@ -45,14 +45,22 @@ use crate::{OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, ffi_guard, state_free};
 
 const DECODER_HANDLE_MAGIC: u64 = 0x4D44_4F50_5553_4443; // "MDOPUSDC"
 
-/// Opaque POD wrapper that `opus_decoder_*` entry points see. The first 16
-/// bytes carry a magic tag and a pointer to the real Rust-heap decoder; the
-/// rest is dead padding sized to match `OpusDecoder` so the C reference tests
-/// can memcpy the whole block. The padding contents are never read.
+/// Opaque POD wrapper that `opus_decoder_*` entry points see. The first 24
+/// bytes carry a magic tag, pointer to the real Rust-heap decoder, and a
+/// generation counter; the rest is dead padding sized to match `OpusDecoder`
+/// so the C reference tests can memcpy the whole block. The padding contents
+/// are never read.
+///
+/// `generation` is stamped globally-unique on create/init and bumped on
+/// `OPUS_RESET_STATE`. `test_opus_api.c` line 247 asserts
+/// `memcmp(dec2_snapshot, dec, size) != 0` after a reset — without the
+/// generation bump that memcmp would return 0 because both handles alias
+/// the same `inner`.
 #[repr(C)]
 struct OpusDecoderHandle {
     magic: u64,
     inner: *mut OpusDecoder,
+    generation: u64,
     _pad: [u8; 0], // trailing padding added dynamically via allocation size
 }
 
@@ -130,6 +138,22 @@ unsafe fn install_handle(dst: *mut OpusDecoderHandle, inner: *mut OpusDecoder) {
     unsafe {
         (*dst).magic = DECODER_HANDLE_MAGIC;
         (*dst).inner = inner;
+        (*dst).generation = crate::next_handle_generation();
+    }
+}
+
+/// Bump the handle's generation counter. Called on `OPUS_RESET_STATE`.
+pub(crate) unsafe fn bump_generation(st: *mut OpusDecoder) {
+    if st.is_null() {
+        return;
+    }
+    let h = st as *mut OpusDecoderHandle;
+    // SAFETY: caller holds a valid handle pointer.
+    unsafe {
+        if (*h).magic != DECODER_HANDLE_MAGIC {
+            return;
+        }
+        (*h).generation = (*h).generation.wrapping_add(1);
     }
 }
 
@@ -484,6 +508,16 @@ pub(crate) unsafe fn handle_to_decoder<'a>(st: *mut OpusDecoder) -> Option<&'a m
 
 pub(crate) unsafe fn handle_to_decoder_ref<'a>(st: *const OpusDecoder) -> Option<&'a OpusDecoder> {
     unsafe { resolve_handle_ref(st) }
+}
+
+/// Build a per-stream decoder handle block whose `inner` points at an existing
+/// `OpusDecoder` (typically one inside `OpusMSDecoder`'s `Vec<OpusDecoder>`).
+/// Returned pointer is leaked; lifetime is managed by the MS decoder handle.
+pub(crate) fn alloc_sub_handle_for(target: *mut OpusDecoder) -> *mut OpusDecoder {
+    let handle = alloc_handle_storage();
+    // SAFETY: `handle` points to zero-initialised storage of size_of<OpusDecoder>.
+    unsafe { install_handle(handle, target) };
+    handle as *mut OpusDecoder
 }
 
 // ---------------------------------------------------------------------------

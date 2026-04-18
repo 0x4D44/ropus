@@ -38,6 +38,7 @@ fn main() {
     let tests: &[(&str, &str)] = &[
         ("test_opus_padding.c", "test_opus_padding"),
         ("test_opus_decode.c", "test_opus_decode"),
+        ("test_opus_api.c", "test_opus_api"),
     ];
 
     for (src_name, stem) in tests {
