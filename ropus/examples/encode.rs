@@ -41,9 +41,6 @@ const MAX_PACKET: usize = 4000;
 /// Granule positions are in 48 kHz samples regardless of encoder rate
 /// (RFC 7845 §4). 20 ms = 960 samples at 48 kHz.
 const FRAME_SAMPLES_AT_48K: u64 = 960;
-/// Pre-skip in 48 kHz samples; 312 covers the encoder lookahead for our
-/// 20 ms framing and matches the value used by `opusenc` and `ropus-cli`.
-const PRE_SKIP_SAMPLES: u16 = 312;
 /// Arbitrary unique logical-stream serial. Any non-zero u32 works for a
 /// single-stream file.
 const STREAM_SERIAL: u32 = 0xC0DE_C0DE;
@@ -79,10 +76,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         .complexity(COMPLEXITY)
         .build()?;
 
+    // Pre-skip in 48 kHz samples per RFC 7845 §5.1 — query the encoder rather
+    // than hardcoding (typically 312; 120 in OPUS_APPLICATION_RESTRICTED_LOWDELAY).
+    let pre_skip = u16::try_from(encoder.lookahead()).expect("lookahead fits u16");
+
     let mut writer = PacketWriter::new(BufWriter::new(File::create(out_path)?));
 
     // Header page 1: OpusHead (RFC 7845 §5.1, 19 bytes for mapping family 0).
-    let head = build_opus_head(channels.count() as u8, input.sample_rate, PRE_SKIP_SAMPLES);
+    let head = build_opus_head(channels.count() as u8, input.sample_rate, pre_skip);
     writer.write_packet(head, STREAM_SERIAL, PacketWriteEndInfo::EndPage, 0)?;
 
     // Header page 2: OpusTags (RFC 7845 §5.2).

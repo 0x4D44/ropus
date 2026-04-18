@@ -15,17 +15,18 @@
 //! Encode 20 ms of silence at 48 kHz mono in VOIP mode and decode it back:
 //!
 //! ```
-//! use ropus::{OpusEncoder, OpusDecoder, OPUS_APPLICATION_VOIP};
+//! use ropus::{Application, Channels, DecodeMode, Decoder, Encoder};
 //!
-//! let mut encoder = OpusEncoder::new(48_000, 1, OPUS_APPLICATION_VOIP).unwrap();
+//! let mut encoder = Encoder::builder(48_000, Channels::Mono, Application::Voip)
+//!     .build()
+//!     .unwrap();
 //! let pcm_in = [0i16; 960]; // 20 ms at 48 kHz mono
 //! let mut packet = [0u8; 4000];
-//! let max_bytes = packet.len() as i32;
-//! let len = encoder.encode(&pcm_in, 960, &mut packet, max_bytes).unwrap();
+//! let len = encoder.encode(&pcm_in, &mut packet).unwrap();
 //!
-//! let mut decoder = OpusDecoder::new(48_000, 1).unwrap();
+//! let mut decoder = Decoder::new(48_000, Channels::Mono).unwrap();
 //! let mut pcm_out = [0i16; 960];
-//! let samples = decoder.decode(Some(&packet[..len as usize]), &mut pcm_out, 960, false).unwrap();
+//! let samples = decoder.decode(&packet[..len], &mut pcm_out, DecodeMode::Normal).unwrap();
 //! assert_eq!(samples, 960);
 //! ```
 
