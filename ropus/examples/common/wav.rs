@@ -4,6 +4,12 @@
 //! subset Opus actually accepts: 16-bit PCM, mono or stereo, sample rate one
 //! of 8/12/16/24/48 kHz. Anything else is rejected with a clear error.
 //!
+//! Supported `fmt` chunk formats:
+//! - `WAVE_FORMAT_PCM` (tag `0x0001`) — standard 16-bit PCM.
+//! - `WAVE_FORMAT_EXTENSIBLE` (tag `0xFFFE`) with `SubFormat` GUID
+//!   `KSDATAFORMAT_SUBTYPE_PCM` (`00000001-0000-0010-8000-00aa00389b71`) and
+//!   `wValidBitsPerSample == 16`. Audacity exports in this format by default.
+//!
 //! Pulled in from each example via `#[path = "common/wav.rs"] mod wav;` so it
 //! is not itself auto-discovered as an example binary. Each example uses only
 //! a subset (encode/roundtrip read; decode/roundtrip write), so silence the
@@ -83,6 +89,58 @@ pub fn read<P: AsRef<Path>>(path: P) -> Result<Wav, Box<dyn Error>> {
                 sample_rate =
                     u32::from_le_bytes([fmt[4], fmt[5], fmt[6], fmt[7]]);
                 bits_per_sample = u16::from_le_bytes([fmt[14], fmt[15]]);
+
+                // WAVE_FORMAT_EXTENSIBLE: parse the extension and validate the
+                // SubFormat GUID. We accept it as PCM-equivalent when the GUID
+                // is KSDATAFORMAT_SUBTYPE_PCM and the valid bits is 16.
+                if format_tag == 0xFFFE {
+                    if size < 18 {
+                        return Err(
+                            "WAVE_FORMAT_EXTENSIBLE fmt chunk missing cbSize".into(),
+                        );
+                    }
+                    let cb_size = u16::from_le_bytes([fmt[16], fmt[17]]);
+                    if cb_size < 22 {
+                        return Err(format!(
+                            "WAVE_FORMAT_EXTENSIBLE cbSize {cb_size} too small (need >= 22)"
+                        )
+                        .into());
+                    }
+                    if size < 40 {
+                        return Err(
+                            "WAVE_FORMAT_EXTENSIBLE fmt chunk truncated".into(),
+                        );
+                    }
+                    let valid_bits = u16::from_le_bytes([fmt[18], fmt[19]]);
+                    // dwChannelMask at fmt[20..24] — acknowledged but not enforced.
+                    let sub_format: &[u8] = &fmt[24..40];
+                    // KSDATAFORMAT_SUBTYPE_PCM
+                    // = 00000001-0000-0010-8000-00aa00389b71
+                    // On disk (little-endian for the first three fields):
+                    const PCM_GUID: [u8; 16] = [
+                        0x01, 0x00, 0x00, 0x00, // Data1 = 0x00000001 LE
+                        0x00, 0x00, // Data2  = 0x0000 LE
+                        0x10, 0x00, // Data3  = 0x0010 LE
+                        0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71, // Data4
+                    ];
+                    if sub_format != PCM_GUID {
+                        return Err(format!(
+                            "WAVE_FORMAT_EXTENSIBLE SubFormat GUID is not PCM \
+                             (KSDATAFORMAT_SUBTYPE_PCM); found {sub_format:02x?}"
+                        )
+                        .into());
+                    }
+                    if valid_bits != 16 {
+                        return Err(format!(
+                            "WAVE_FORMAT_EXTENSIBLE wValidBitsPerSample \
+                             {valid_bits} unsupported (need 16)"
+                        )
+                        .into());
+                    }
+                    // Treat the rest of the parser as if this were plain PCM.
+                    bits_per_sample = valid_bits;
+                    format_tag = 1;
+                }
             }
             b"data" => {
                 data = vec![0u8; size];
@@ -105,9 +163,13 @@ pub fn read<P: AsRef<Path>>(path: P) -> Result<Wav, Box<dyn Error>> {
         }
     }
 
+    // At this point format_tag is either 1 (plain PCM) or has been normalised
+    // to 1 above by the WAVE_FORMAT_EXTENSIBLE PCM branch. Verify by exporting
+    // a 16-bit WAV from Audacity (defaults to EXTENSIBLE) and feeding it to
+    // any of the examples.
     if format_tag != 1 {
         return Err(format!(
-            "unsupported WAV format tag {format_tag} (need 1 = PCM)"
+            "unsupported WAV format tag {format_tag} (need 1 = PCM or 0xFFFE = EXTENSIBLE PCM)"
         )
         .into());
     }

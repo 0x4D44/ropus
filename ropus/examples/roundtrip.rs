@@ -1,6 +1,9 @@
 //! WAV in → encode → decode → WAV out, in a single process.
 //!
-//! Usage: `cargo run --example roundtrip -- input.wav output.wav --bitrate 64000`
+//! Usage: `cargo run --example roundtrip -- input.wav output.wav [--bitrate 64000]`
+//!
+//! `--bitrate` is optional and defaults to 64000 bps — a middling
+//! speech/music rate that gives reasonable SNR on most inputs.
 //!
 //! Reports SNR of the centre region of the decoded output vs the original
 //! PCM. Opus is lossy and has algorithmic latency, so SNR will be finite and
@@ -118,19 +121,24 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn parse_args() -> Result<(String, String, u32), Box<dyn Error>> {
+    /// Default bitrate when `--bitrate` is omitted. Middling rate that gives
+    /// reasonable SNR on both speech and music inputs.
+    const DEFAULT_BITRATE: u32 = 64_000;
+
     let args: Vec<String> = env::args().collect();
     let usage = || {
         format!(
-            "usage: {} <input.wav> <output.wav> --bitrate <bps>",
+            "usage: {} <input.wav> <output.wav> [--bitrate <bps>] (default {DEFAULT_BITRATE})",
             args.first().map(String::as_str).unwrap_or("roundtrip")
         )
     };
-    if args.len() != 5 || args[3] != "--bitrate" {
-        return Err(usage().into());
-    }
-    let bitrate: u32 = args[4]
-        .parse()
-        .map_err(|e| format!("invalid --bitrate {:?}: {e}", args[4]))?;
+    let bitrate = match args.len() {
+        3 => DEFAULT_BITRATE,
+        5 if args[3] == "--bitrate" => args[4]
+            .parse()
+            .map_err(|e| format!("invalid --bitrate {:?}: {e}", args[4]))?,
+        _ => return Err(usage().into()),
+    };
     Ok((args[1].clone(), args[2].clone(), bitrate))
 }
 

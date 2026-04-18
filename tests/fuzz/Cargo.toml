@@ -3,6 +3,7 @@ name = "ropus-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2021"
+license = "BSD-3-Clause"
 
 [package.metadata]
 cargo-fuzz = true
