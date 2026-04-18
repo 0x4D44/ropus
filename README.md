@@ -2,12 +2,14 @@
 
 A Rust port of [xiph/opus](https://github.com/xiph/opus) with a bit-exact comparison workflow against the C reference codec.
 
+For library usage and the crates.io quickstart, see [`ropus/README.md`](ropus/README.md) or the crates.io page.
+
 ## What this project is
 
-mdopus contains a single Cargo crate with codec implementation in safe Rust, backed by a C comparison harness for parity testing.
+mdopus is a Cargo workspace: the published library crate lives in `ropus/`, with a C comparison harness alongside for parity testing.
 
-- `src/` contains codec modules (`celt`, `silk`, `opus`, `dnn`) and shared types in `types.rs`.
-- `tests/harness/` builds C Opus as `opus_ref` and runs `mdopus-compare`.
+- `ropus/src/` contains codec modules (`celt`, `silk`, `opus`, `dnn`) and shared types in `types.rs`.
+- `harness/` builds C Opus as `opus_ref` and runs `ropus-compare`.
 - `tests/vectors/` stores deterministic WAV fixtures used by CLI checks.
 - `tools/` hosts the coordination script for multi-step implementation workflows.
 
@@ -32,16 +34,16 @@ Required:
 
 ```bash
 cargo build
-cargo run --bin mdopus-compare -- encode tests/vectors/48k_sine1k_loud.wav
-cargo run --bin mdopus-compare -- decode tests/vectors/48k_impulse.wav
-cargo run --bin mdopus-compare -- roundtrip tests/vectors/48k_sine1k_loud.wav --bitrate 64000
-cargo run --bin mdopus-compare -- unit range_coder
-cargo run --bin mdopus-compare -- bench tests/vectors/48k_sine1k_loud.wav --iters 10
+cargo run --bin ropus-compare -- encode tests/vectors/48k_sine1k_loud.wav
+cargo run --bin ropus-compare -- decode tests/vectors/48k_impulse.wav
+cargo run --bin ropus-compare -- roundtrip tests/vectors/48k_sine1k_loud.wav --bitrate 64000
+cargo run --bin ropus-compare -- unit range_coder
+cargo run --bin ropus-compare -- bench tests/vectors/48k_sine1k_loud.wav --iters 10
 cargo test
 cargo llvm-cov
 ```
 
-`mdopus-compare` also supports:
+`ropus-compare` also supports:
 - `encode`, `decode`, `roundtrip`
 - `framecompare`, `decodecompare`, `mathcompare`, `rngtest`, `bench`
 - `unit <module>` for module checks
@@ -50,15 +52,16 @@ cargo llvm-cov
 
 ```text
 mdopus/
-├── src/
-│   ├── celt/
-│   ├── silk/
-│   ├── opus/
-│   ├── dnn/
-│   ├── lib.rs
-│   └── types.rs
+├── ropus/         # published library crate
+│   └── src/
+│       ├── celt/
+│       ├── silk/
+│       ├── opus/
+│       ├── dnn/
+│       ├── lib.rs
+│       └── types.rs
+├── harness/       # comparison binary + bindings
 ├── tests/
-│   ├── harness/   # comparison binary + bindings
 │   └── vectors/   # test media
 └── tools/
     └── coordinator.py

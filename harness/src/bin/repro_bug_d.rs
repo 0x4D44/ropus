@@ -23,12 +23,12 @@
     clippy::identity_op
 )]
 
-#[path = "../tests/harness/bindings.rs"]
+#[path = "../bindings.rs"]
 mod bindings;
 
 use std::os::raw::c_int;
 
-use mdopus::opus::encoder::{OpusEncoder as RustEncoder, OPUS_APPLICATION_VOIP};
+use ropus::opus::encoder::{OpusEncoder as RustEncoder, OPUS_APPLICATION_VOIP};
 
 const SAMPLE_RATE: i32 = 8000;
 const CHANNELS: i32 = 1;
@@ -179,8 +179,8 @@ fn parse_corpus(data: &[u8]) -> Option<(i32, i32, i32, i32, i32, usize, Vec<Vec<
     const SAMPLE_RATES: [i32; 5] = [8000, 12000, 16000, 24000, 48000];
     const APPLICATIONS: [i32; 3] = [
         OPUS_APPLICATION_VOIP,
-        mdopus::opus::encoder::OPUS_APPLICATION_AUDIO,
-        mdopus::opus::encoder::OPUS_APPLICATION_RESTRICTED_LOWDELAY,
+        ropus::opus::encoder::OPUS_APPLICATION_AUDIO,
+        ropus::opus::encoder::OPUS_APPLICATION_RESTRICTED_LOWDELAY,
     ];
 
     if data.len() < 7 + 5 * 320 {

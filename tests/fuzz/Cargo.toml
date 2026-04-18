@@ -9,8 +9,6 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-# Disable unchecked-indexing for fuzz builds so OOB accesses panic (caught by
-# libFuzzer) instead of being UB. Keep SIMD since it uses safe Rust (wide crate).
 ropus = { path = "../../ropus" }
 
 # Prevent this from interfering with workspaces
