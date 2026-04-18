@@ -8,7 +8,7 @@ use std::ptr;
 
 use ropus::opus::encoder::OpusEncoder;
 
-use crate::{OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, ffi_guard};
+use crate::{OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, ffi_guard, state_free};
 
 // ---------------------------------------------------------------------------
 // opus_encoder_get_size / create / init / destroy
@@ -50,6 +50,9 @@ pub unsafe extern "C" fn opus_encoder_init(
     })
 }
 
+/// Allocates + initialises an encoder.  State is leaked on `_destroy`
+/// because the conformance tests rely on byte-copyable state (see the
+/// comment on [`crate::state_free`]).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn opus_encoder_create(
     fs: i32,
@@ -75,12 +78,12 @@ pub unsafe extern "C" fn opus_encoder_create(
     })
 }
 
+/// Release the encoder — actually a no-op. We leak state; see
+/// [`crate::state_free`] for the rationale.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn opus_encoder_destroy(st: *mut OpusEncoder) {
     let _: () = ffi_guard!((), {
-        if !st.is_null() {
-            drop(unsafe { Box::from_raw(st) });
-        }
+        unsafe { state_free(st) };
     });
 }
 

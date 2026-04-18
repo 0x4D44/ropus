@@ -1,11 +1,14 @@
-//! Conformance test harness.
+//! Conformance test: `reference/tests/test_opus_padding.c`.
 //!
-//! Each `#[test]` calls the renamed `main` of a reference `.c` test file
-//! compiled by `build.rs`. Exit code 0 = pass; anything else is a failure.
+//! Cargo auto-discovers each `tests/<name>.rs` as its own integration-test
+//! binary. Keeping one reference test per file is load-bearing: the shared
+//! `test_opus_common.h` declares `void regression_test(void)`, which each
+//! `test_opus_*.c` file then defines — co-linking two of them produces
+//! LNK2005 (duplicate symbol).
 //!
 //! Tests **must** run single-threaded (`-- --test-threads=1`) because the
 //! reference tests share module-global RNG state (`Rz`/`Rw`/`iseed` in
-//! `test_opus_common.h`) and would race each other otherwise.
+//! `test_opus_common.h`) within their process image.
 //!
 //! Linker note: the `capi` crate exposes `#[unsafe(no_mangle)]` symbols the
 //! C tests link against. The Rust linker only pulls rlib symbols that are
@@ -25,14 +28,17 @@ unsafe extern "C" {
 /// call, so the linker pulls them out of the `capi` rlib. The lib crate name
 /// is `mdopus_capi` per its `Cargo.toml` `[lib] name`.
 fn force_link() {
+    // Library-level
     black_box(mdopus_capi::opus_strerror as *const ());
     black_box(mdopus_capi::opus_get_version_string as *const ());
+    // Encoder
     black_box(mdopus_capi::encoder::opus_encoder_get_size as *const ());
     black_box(mdopus_capi::encoder::opus_encoder_create as *const ());
     black_box(mdopus_capi::encoder::opus_encoder_init as *const ());
     black_box(mdopus_capi::encoder::opus_encoder_destroy as *const ());
     black_box(mdopus_capi::encoder::opus_encode as *const ());
     black_box(mdopus_capi::encoder::opus_encode_float as *const ());
+    // Decoder
     black_box(mdopus_capi::decoder::opus_decoder_get_size as *const ());
     black_box(mdopus_capi::decoder::opus_decoder_create as *const ());
     black_box(mdopus_capi::decoder::opus_decoder_init as *const ());
@@ -41,6 +47,7 @@ fn force_link() {
     black_box(mdopus_capi::decoder::opus_decode_float as *const ());
     black_box(mdopus_capi::decoder::opus_packet_pad as *const ());
     black_box(mdopus_capi::decoder::opus_packet_unpad as *const ());
+    // CTL
     black_box(mdopus_capi::ctl::mdopus_encoder_ctl_reset as *const ());
     black_box(mdopus_capi::ctl::mdopus_decoder_ctl_reset as *const ());
 }
