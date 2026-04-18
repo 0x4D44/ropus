@@ -8,6 +8,7 @@ use super::cwrs::{celt_pvq_v, cwrsi, icwrs};
 use super::ec_ctx::EcCoder;
 use super::math_ops::*;
 use crate::types::*;
+use crate::{uc, uc_set};
 
 // ===========================================================================
 // Constants
@@ -94,25 +95,25 @@ fn exp_rotation1(x: &mut [i32], len: usize, stride: usize, c: i32, s: i32) {
     let ms = neg16(s);
     norm_scaledown(x, len, NORM_SHIFT - 14);
 
-    // Forward sweep: left to right
+    // Forward sweep: left to right. i < len - stride ⇒ i + stride < len = x.len().
     if len > stride {
         for i in 0..len - stride {
-            let x1 = x[i];
-            let x2 = x[i + stride];
+            let x1 = uc!(x, i);
+            let x2 = uc!(x, i + stride);
             // new x2 = c*x2 + s*x1
-            x[i + stride] = extract16(pshr32(mac16_16(mult16_16(c, x2), s, x1), 15));
+            uc_set!(x, i + stride, extract16(pshr32(mac16_16(mult16_16(c, x2), s, x1), 15)));
             // new x1 = c*x1 - s*x2
-            x[i] = extract16(pshr32(mac16_16(mult16_16(c, x1), ms, x2), 15));
+            uc_set!(x, i,          extract16(pshr32(mac16_16(mult16_16(c, x1), ms, x2), 15)));
         }
     }
 
-    // Backward sweep: right to left
+    // Backward sweep: right to left. i < len - 2*stride ⇒ i + stride < len - stride < len.
     if len >= 2 * stride + 1 {
         for i in (0..len - 2 * stride).rev() {
-            let x1 = x[i];
-            let x2 = x[i + stride];
-            x[i + stride] = extract16(pshr32(mac16_16(mult16_16(c, x2), s, x1), 15));
-            x[i] = extract16(pshr32(mac16_16(mult16_16(c, x1), ms, x2), 15));
+            let x1 = uc!(x, i);
+            let x2 = uc!(x, i + stride);
+            uc_set!(x, i + stride, extract16(pshr32(mac16_16(mult16_16(c, x2), s, x1), 15)));
+            uc_set!(x, i,          extract16(pshr32(mac16_16(mult16_16(c, x1), ms, x2), 15)));
         }
     }
 
@@ -181,12 +182,13 @@ pub fn exp_rotation(x: &mut [i32], len: i32, dir: i32, stride: i32, k: i32, spre
 /// Uses 32-bit precision rsqrt (`celt_rsqrt_norm32`) for accuracy.
 /// Output is in Q(NORM_SHIFT) format.
 fn normalise_residual(iy: &[i32], x: &mut [i32], n: usize, ryy: i32, gain: i32) {
+    debug_assert!(iy.len() >= n && x.len() >= n);
     let k = celt_ilog2(ryy) >> 1;
     // Normalize Ryy to approximately [2^29, 2^31) for rsqrt_norm32
     let t = vshr32(ryy, 2 * (k - 7) - 15);
     let g = mult32_32_q31(celt_rsqrt_norm32(t), gain);
     for i in 0..n {
-        x[i] = vshr32(mult16_32_q15(iy[i], g), k + 15 - NORM_SHIFT);
+        uc_set!(x, i, vshr32(mult16_32_q15(uc!(iy, i), g), k + 15 - NORM_SHIFT));
     }
 }
 
@@ -202,11 +204,12 @@ fn extract_collapse_mask(iy: &[i32], n: i32, b: i32) -> u32 {
         return 1;
     }
     let n0 = celt_udiv(n as u32, b as u32) as usize;
+    debug_assert!(iy.len() >= (b as usize) * n0);
     let mut collapse_mask: u32 = 0;
     for i in 0..b as usize {
         let mut tmp: u32 = 0;
         for j in 0..n0 {
-            tmp |= iy[i * n0 + j] as u32;
+            tmp |= uc!(iy, i * n0 + j) as u32;
         }
         if tmp != 0 {
             collapse_mask |= 1 << i;
@@ -240,12 +243,15 @@ fn op_pvq_search(x: &mut [i32], iy: &mut [i32], k: i32, n: usize) -> i32 {
         norm_scaledown(x, n, shift);
     }
 
-    // Strip signs: store sign flags, replace X with absolute values
+    // Strip signs: store sign flags, replace X with absolute values.
+    // n is caller-asserted ≤ 176 (band-width cap) and matches x.len() & iy.len();
+    // y and signx are fixed 176-element arrays, so j < n is in-bounds across all four.
     for j in 0..n {
-        signx[j] = if x[j] < 0 { 1 } else { 0 };
-        x[j] = abs16(x[j]);
-        iy[j] = 0;
-        y[j] = 0;
+        let xj = uc!(x, j);
+        uc_set!(signx, j, if xj < 0 { 1 } else { 0 });
+        uc_set!(x, j, abs16(xj));
+        uc_set!(iy, j, 0);
+        uc_set!(y, j, 0);
     }
 
     let mut xy: i32 = 0;
@@ -258,14 +264,14 @@ fn op_pvq_search(x: &mut [i32], iy: &mut [i32], k: i32, n: usize) -> i32 {
     if k > (n as i32 >> 1) {
         let mut sum: i32 = 0;
         for j in 0..n {
-            sum += x[j];
+            sum += uc!(x, j);
         }
 
         // Degenerate input (near-zero or too small): replace with single pulse at [0]
         if sum <= k {
-            x[0] = qconst16(1.0, 14); // 16384
+            uc_set!(x, 0, qconst16(1.0, 14)); // 16384
             for j in 1..n {
-                x[j] = 0;
+                uc_set!(x, j, 0);
             }
             sum = qconst16(1.0, 14);
         }
@@ -275,14 +281,16 @@ fn op_pvq_search(x: &mut [i32], iy: &mut [i32], k: i32, n: usize) -> i32 {
 
         for j in 0..n {
             // Round toward zero -- critical to not exceed K total pulses
-            iy[j] = mult16_16_q15(x[j], rcp);
-            y[j] = iy[j] as i16 as i32;
-            yy = mac16_16(yy, y[j], y[j]);
-            xy = mac16_16(xy, x[j], y[j]);
+            let iy_j = mult16_16_q15(uc!(x, j), rcp);
+            uc_set!(iy, j, iy_j);
+            let y_j = iy_j as i16 as i32;
+            uc_set!(y, j, y_j);
+            yy = mac16_16(yy, y_j, y_j);
+            xy = mac16_16(xy, uc!(x, j), y_j);
             // Store 2*iy[j] to avoid multiply by 2 in the greedy inner loop
-            y[j] *= 2;
-            y[j] = y[j] as i16 as i32;
-            pulses_left -= iy[j];
+            let y_j2 = (y_j * 2) as i16 as i32;
+            uc_set!(y, j, y_j2);
+            pulses_left -= iy_j;
         }
     }
     debug_assert!(pulses_left >= 0);
@@ -292,14 +300,17 @@ fn op_pvq_search(x: &mut [i32], iy: &mut [i32], k: i32, n: usize) -> i32 {
     if pulses_left > n as i32 + 3 {
         let tmp = pulses_left;
         yy = mac16_16(yy, tmp, tmp);
-        yy = mac16_16(yy, tmp, y[0]);
-        iy[0] += pulses_left;
+        yy = mac16_16(yy, tmp, uc!(y, 0));
+        uc_set!(iy, 0, uc!(iy, 0) + pulses_left);
         pulses_left = 0;
     }
 
     // Greedy refinement: place remaining pulses one at a time.
     // For each pulse, find the dimension where adding it maximizes Rxy/sqrt(Ryy).
     // Uses division-free comparison: best_den * Rxy^2 > Ryy * best_num.
+    //
+    // Hot inner loop: runs O(n * pulses_left) per call, called per band per
+    // frame. All x/y/iy accesses are under j < n ≤ 176 (band-width cap).
     for i in 0..pulses_left {
         // Right-shift to keep Rxy in 16-bit range after accumulation
         let rshift = 1 + celt_ilog2(k - pulses_left + i + 1);
@@ -310,8 +321,8 @@ fn op_pvq_search(x: &mut [i32], iy: &mut [i32], k: i32, n: usize) -> i32 {
         yy = add16(yy, 1);
 
         // Score position 0 (outside loop to reduce branch mispredictions)
-        let rxy_0 = extract16(shr32(add32(xy, extend32(x[0])), rshift));
-        let ryy_0 = add16(yy, y[0]);
+        let rxy_0 = extract16(shr32(add32(xy, extend32(uc!(x, 0))), rshift));
+        let ryy_0 = add16(yy, uc!(y, 0));
         // Approximate score: Rxy^2 (we maximize Rxy^2 / Ryy)
         let rxy_0_sq = mult16_16_q15(rxy_0, rxy_0);
         let mut best_den = ryy_0;
@@ -319,9 +330,9 @@ fn op_pvq_search(x: &mut [i32], iy: &mut [i32], k: i32, n: usize) -> i32 {
 
         // Score positions 1..N-1
         for j in 1..n {
-            let rxy = extract16(shr32(add32(xy, extend32(x[j])), rshift));
+            let rxy = extract16(shr32(add32(xy, extend32(uc!(x, j))), rshift));
             // y[j] stores 2*iy[j], so this adds the cross-term without multiply
-            let ryy = add16(yy, y[j]);
+            let ryy = add16(yy, uc!(y, j));
             let rxy_sq = mult16_16_q15(rxy, rxy);
 
             // Division-free comparison: best_den * Rxy^2 > Ryy * best_num
@@ -333,20 +344,21 @@ fn op_pvq_search(x: &mut [i32], iy: &mut [i32], k: i32, n: usize) -> i32 {
         }
 
         // Commit the pulse to the best position
-        xy = add32(xy, extend32(x[best_id]));
-        yy = add16(yy, y[best_id]);
+        xy = add32(xy, extend32(uc!(x, best_id)));
+        yy = add16(yy, uc!(y, best_id));
 
         // y stores 2*iy, so increment by 2
-        y[best_id] += 2;
-        y[best_id] = y[best_id] as i16 as i32;
-        iy[best_id] += 1;
+        let y_best = (uc!(y, best_id) + 2) as i16 as i32;
+        uc_set!(y, best_id, y_best);
+        uc_set!(iy, best_id, uc!(iy, best_id) + 1);
     }
 
     // Restore original signs using branchless flip:
     // signx=0 -> (iy ^ 0) + 0 = iy  (unchanged)
     // signx=1 -> (iy ^ -1) + 1 = -iy (negated)
     for j in 0..n {
-        iy[j] = (iy[j] ^ (-signx[j])) + signx[j];
+        let sj = uc!(signx, j);
+        uc_set!(iy, j, (uc!(iy, j) ^ (-sj)) + sj);
     }
 
     yy

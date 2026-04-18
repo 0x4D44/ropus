@@ -8,6 +8,7 @@
 //! replicates the scalar `mac16_16` semantics (i16 truncation of both operands
 //! before multiply, wrapping accumulate).
 
+use crate::{uc, uc_set};
 use wide::i32x4;
 
 // ===========================================================================
@@ -51,12 +52,17 @@ fn mac16_16_x4(acc: i32x4, a: i32x4, b: i32x4) -> i32x4 {
 #[inline(always)]
 pub fn xcorr_kernel_simd(x: &[i32], y: &[i32], sum: &mut [i32; 4], len: usize) {
     debug_assert!(len >= 3);
+    debug_assert!(x.len() >= len);
+    debug_assert!(y.len() >= len + 3);
 
     let mut acc = i32x4::new(*sum);
 
+    // Hot inner loop of pitch analysis — runs O(len) per call and is called
+    // O(max_pitch/4) per frame. Preconditions above give provably-safe bounds
+    // for x[j], y[j], y[j+1], y[j+2], y[j+3] across j < len.
     for j in 0..len {
-        let xv = i32x4::splat(x[j]);
-        let yv = i32x4::new([y[j], y[j + 1], y[j + 2], y[j + 3]]);
+        let xv = i32x4::splat(uc!(x, j));
+        let yv = i32x4::new([uc!(y, j), uc!(y, j + 1), uc!(y, j + 2), uc!(y, j + 3)]);
         acc = mac16_16_x4(acc, xv, yv);
     }
 
@@ -84,9 +90,15 @@ pub fn celt_maxabs32_simd(x: &[i32]) -> i32 {
     let mut maxv = i32x4::splat(0);
     let mut minv = i32x4::splat(0);
 
+    // base = c * 4 with c < chunks = x.len() / 4 ⇒ base + 3 < x.len().
     for c in 0..chunks {
         let base = c * 4;
-        let v = i32x4::new([x[base], x[base + 1], x[base + 2], x[base + 3]]);
+        let v = i32x4::new([
+            uc!(x, base),
+            uc!(x, base + 1),
+            uc!(x, base + 2),
+            uc!(x, base + 3),
+        ]);
         maxv = maxv.max(v);
         minv = minv.min(v);
     }
@@ -105,10 +117,10 @@ pub fn celt_maxabs32_simd(x: &[i32]) -> i32 {
         }
     }
 
-    // Handle remainder elements
+    // Handle remainder elements: tail_start + i < chunks*4 + remainder = x.len().
     let tail_start = chunks * 4;
     for i in 0..remainder {
-        let v = x[tail_start + i];
+        let v = uc!(x, tail_start + i);
         if v > maxval {
             maxval = v;
         }
@@ -139,20 +151,21 @@ pub fn denormalise_band_simd(x: &[i32], out: &mut [i32], len: usize, g: i32, shi
     let remainder = len % 4;
     let pre_shift = 30 - NORM_SHIFT;
 
+    // base = c * 4 with c < chunks = len / 4 ⇒ base + 3 < len ≤ x.len() & out.len().
     for c in 0..chunks {
         let base = c * 4;
         // Scalar path using i64 intermediates — the `wide` crate's i32x4 can't
         // do the 64-bit multiply-shift we need, so we unroll 4 scalar ops which
         // the compiler can still auto-vectorize with the right instruction mix.
-        out[base] = pshr32(mult32_32_q31(shl32(x[base], pre_shift), g), shift);
-        out[base + 1] = pshr32(mult32_32_q31(shl32(x[base + 1], pre_shift), g), shift);
-        out[base + 2] = pshr32(mult32_32_q31(shl32(x[base + 2], pre_shift), g), shift);
-        out[base + 3] = pshr32(mult32_32_q31(shl32(x[base + 3], pre_shift), g), shift);
+        uc_set!(out, base,     pshr32(mult32_32_q31(shl32(uc!(x, base),     pre_shift), g), shift));
+        uc_set!(out, base + 1, pshr32(mult32_32_q31(shl32(uc!(x, base + 1), pre_shift), g), shift));
+        uc_set!(out, base + 2, pshr32(mult32_32_q31(shl32(uc!(x, base + 2), pre_shift), g), shift));
+        uc_set!(out, base + 3, pshr32(mult32_32_q31(shl32(uc!(x, base + 3), pre_shift), g), shift));
     }
 
     let tail = chunks * 4;
     for i in 0..remainder {
-        out[tail + i] = pshr32(mult32_32_q31(shl32(x[tail + i], pre_shift), g), shift);
+        uc_set!(out, tail + i, pshr32(mult32_32_q31(shl32(uc!(x, tail + i), pre_shift), g), shift));
     }
 }
 
@@ -176,25 +189,31 @@ pub fn mdct_window_simd(output: &mut [i32], window: &[i16], overlap: usize) {
     let chunks = half / 4;
     let remainder = half % 4;
 
-    // Forward: yp1 walks 0..half, xp1 walks (overlap-1) down
-    // Window: wp1 walks 0..half (ascending), wp2 walks (overlap-1) down (descending)
+    // Forward: yp walks 0..half, xp walks (overlap-1) down. yp < half ≤ overlap/2,
+    // xp ∈ [overlap/2, overlap-1]. Both < output.len() & window.len() = overlap.
     for c in 0..chunks {
         let base = c * 4;
         for k in 0..4 {
             let yp = base + k;
             let xp = overlap - 1 - base - k;
-            let wp_asc = base + k;
-            let wp_desc = overlap - 1 - base - k;
 
-            let x_fwd = output[xp];
-            let x_rev = output[yp];
-            let w_asc = window[wp_asc] as i32;
-            let w_desc = window[wp_desc] as i32;
+            let x_fwd = uc!(output, xp);
+            let x_rev = uc!(output, yp);
+            let w_asc = uc!(window, yp) as i32;
+            let w_desc = uc!(window, xp) as i32;
 
             // C relies on signed i32 wrap-around here (the sum of two Q15 products
             // can exceed i32 range with extreme signal values from garbage input).
-            output[yp] = s_mul_inline(x_rev, w_desc).wrapping_sub(s_mul_inline(x_fwd, w_asc));
-            output[xp] = s_mul_inline(x_rev, w_asc).wrapping_add(s_mul_inline(x_fwd, w_desc));
+            uc_set!(
+                output,
+                yp,
+                s_mul_inline(x_rev, w_desc).wrapping_sub(s_mul_inline(x_fwd, w_asc))
+            );
+            uc_set!(
+                output,
+                xp,
+                s_mul_inline(x_rev, w_asc).wrapping_add(s_mul_inline(x_fwd, w_desc))
+            );
         }
     }
 
@@ -202,14 +221,22 @@ pub fn mdct_window_simd(output: &mut [i32], window: &[i16], overlap: usize) {
     for i in 0..remainder {
         let yp = tail + i;
         let xp = overlap - 1 - tail - i;
-        let w_asc = window[tail + i] as i32;
-        let w_desc = window[overlap - 1 - tail - i] as i32;
+        let w_asc = uc!(window, yp) as i32;
+        let w_desc = uc!(window, xp) as i32;
 
-        let x_fwd = output[xp];
-        let x_rev = output[yp];
+        let x_fwd = uc!(output, xp);
+        let x_rev = uc!(output, yp);
 
-        output[yp] = s_mul_inline(x_rev, w_desc).wrapping_sub(s_mul_inline(x_fwd, w_asc));
-        output[xp] = s_mul_inline(x_rev, w_asc).wrapping_add(s_mul_inline(x_fwd, w_desc));
+        uc_set!(
+            output,
+            yp,
+            s_mul_inline(x_rev, w_desc).wrapping_sub(s_mul_inline(x_fwd, w_asc))
+        );
+        uc_set!(
+            output,
+            xp,
+            s_mul_inline(x_rev, w_asc).wrapping_add(s_mul_inline(x_fwd, w_desc))
+        );
     }
 }
 
