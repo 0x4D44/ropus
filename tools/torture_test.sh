@@ -2,7 +2,7 @@
 # Torture test suite for mdopus
 # Usage: bash tools/torture_test.sh [--duration MINUTES]
 #
-# Runs a battery of stress tests against the mdopus-compare binary:
+# Runs a battery of stress tests against the ropus-compare binary:
 #   1. Torture soak (random configs for N minutes)
 #   2. Mode transitions (SILK<->CELT switching)
 #   3. Full parameter sweep
@@ -70,9 +70,9 @@ fi
 # ---------------------------------------------------------------------------
 
 if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]] || [[ "$(uname -s)" == CYGWIN* ]] || [[ -n "${OS:-}" && "${OS:-}" == "Windows_NT" ]]; then
-    COMPARE_BIN="$ROOT/target/release/mdopus-compare.exe"
+    COMPARE_BIN="$ROOT/target/release/ropus-compare.exe"
 else
-    COMPARE_BIN="$ROOT/target/release/mdopus-compare"
+    COMPARE_BIN="$ROOT/target/release/ropus-compare"
 fi
 
 if [[ ! -x "$COMPARE_BIN" ]]; then

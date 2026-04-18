@@ -1,7 +1,7 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use mdopus::opus::decoder::{opus_packet_get_nb_frames, opus_packet_get_nb_samples};
-use mdopus::opus::encoder::{
+use ropus::opus::decoder::{opus_packet_get_nb_frames, opus_packet_get_nb_samples};
+use ropus::opus::encoder::{
     OpusEncoder, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
     OPUS_APPLICATION_VOIP,
 };

@@ -1,5 +1,5 @@
 [package]
-name = "mdopus-fuzz"
+name = "ropus-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2021"
@@ -11,7 +11,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 # Disable unchecked-indexing for fuzz builds so OOB accesses panic (caught by
 # libFuzzer) instead of being UB. Keep SIMD since it uses safe Rust (wide crate).
-mdopus = { path = "../..", default-features = false, features = ["simd"] }
+ropus = { path = "../../ropus" }
 
 # Prevent this from interfering with workspaces
 [workspace]

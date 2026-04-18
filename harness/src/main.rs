@@ -1,4 +1,4 @@
-//! mdopus-compare: CLI tool that compares C reference opus output against
+//! ropus-compare: CLI tool that compares C reference opus output against
 //! the Rust implementation, byte-for-byte / sample-for-sample.
 
 #![allow(
@@ -534,7 +534,7 @@ fn c_decode(encoded: &[u8], sample_rate: i32, channels: i32) -> Vec<i16> {
 // ---------------------------------------------------------------------------
 
 fn rust_encode_cfg(pcm: &[i16], cfg: &EncodeConfig) -> Vec<u8> {
-    use mdopus::opus::encoder::OpusEncoder;
+    use ropus::opus::encoder::OpusEncoder;
 
     let mut enc = match OpusEncoder::new(cfg.sample_rate, cfg.channels, cfg.application) {
         Ok(e) => e,
@@ -632,7 +632,7 @@ fn rust_encode(
 }
 
 fn rust_decode_cfg(encoded: &[u8], cfg: &EncodeConfig) -> Vec<i16> {
-    use mdopus::opus::decoder::OpusDecoder;
+    use ropus::opus::decoder::OpusDecoder;
 
     let mut dec = match OpusDecoder::new(cfg.sample_rate, cfg.channels) {
         Ok(d) => d,
@@ -916,7 +916,7 @@ fn cmd_encode_framecompare(
     };
 
     // Rust encoder
-    use mdopus::opus::encoder::OpusEncoder;
+    use ropus::opus::encoder::OpusEncoder;
     let mut r_enc = OpusEncoder::new(sr, ch, application).unwrap();
     r_enc.set_bitrate(bitrate);
     r_enc.set_complexity(complexity);
@@ -1120,8 +1120,8 @@ fn cmd_roundtrip(wav_path: &str, bitrate: i32) {
 // ---------------------------------------------------------------------------
 
 fn cmd_mathcompare() {
-    use mdopus::celt::math_ops;
-    use mdopus::celt::vq;
+    use ropus::celt::math_ops;
+    use ropus::celt::vq;
 
     // First: check OPUS_FAST_INT64 setting
     let fast_int64 = unsafe { bindings::debug_c_opus_fast_int64() };
@@ -1352,7 +1352,7 @@ fn cmd_mathcompare() {
 
     // Test normalise_residual gain computation
     println!("--- normalise_residual gain comparison ---");
-    use mdopus::types::{mult32_32_q31, vshr32};
+    use ropus::types::{mult32_32_q31, vshr32};
     let gain_tests: Vec<(i32, i32)> = vec![
         (1, 2_147_483_647), // typical ryy, Q31ONE gain
         (4, 2_147_483_647),
@@ -1825,7 +1825,7 @@ fn cmd_mathcompare() {
 // ---------------------------------------------------------------------------
 
 fn cmd_rng_test() {
-    use mdopus::celt::range_coder::RangeDecoder;
+    use ropus::celt::range_coder::RangeDecoder;
 
     // Extract the frame 4 payload from the 48k square wave at 128kbps
     // First, encode it with C
@@ -1941,8 +1941,8 @@ fn cmd_rng_test() {
 
     // Coarse energy decode with Rust
     {
-        use mdopus::celt::modes::MODE_48000_960_120;
-        use mdopus::celt::quant_bands::unquant_coarse_energy;
+        use ropus::celt::modes::MODE_48000_960_120;
+        use ropus::celt::quant_bands::unquant_coarse_energy;
         let mode = &MODE_48000_960_120;
         let mut old_e = vec![0i32; 42]; // 2*21
         // Set old_e to the known state from frame 3
@@ -2061,7 +2061,7 @@ fn cmd_decode_framecompare(wav_path: &str, bitrate: i32, application: i32) {
     }
 
     // Rust decoder
-    use mdopus::opus::decoder::OpusDecoder;
+    use ropus::opus::decoder::OpusDecoder;
     let mut rust_dec = OpusDecoder::new(sr, ch).expect("Rust decoder init");
 
     let mut c_pcm = vec![0i16; frame_samples];
@@ -2625,7 +2625,7 @@ fn bench_encode_rust(
     complexity: i32,
     iters: u32,
 ) -> BenchResult {
-    use mdopus::opus::encoder::{OPUS_APPLICATION_AUDIO, OpusEncoder};
+    use ropus::opus::encoder::{OPUS_APPLICATION_AUDIO, OpusEncoder};
 
     let frame_size = (sample_rate / 50) as usize;
     let samples_per_frame = frame_size * channels as usize;
@@ -2713,7 +2713,7 @@ fn bench_decode_c(encoded: &[u8], sample_rate: i32, channels: i32, iters: u32) -
 }
 
 fn bench_decode_rust(encoded: &[u8], sample_rate: i32, channels: i32, iters: u32) -> BenchResult {
-    use mdopus::opus::decoder::OpusDecoder;
+    use ropus::opus::decoder::OpusDecoder;
 
     let frame_size = (sample_rate / 50) as usize;
     let mut pcm = vec![0i16; frame_size * channels as usize];
@@ -2874,7 +2874,7 @@ fn plc_decode_rust(
     packets: &[Vec<u8>],
     drops: &[usize],
 ) -> Vec<i16> {
-    use mdopus::opus::decoder::OpusDecoder;
+    use ropus::opus::decoder::OpusDecoder;
 
     let mut dec = match OpusDecoder::new(sr, ch) {
         Ok(d) => d,
@@ -3073,7 +3073,7 @@ fn fec_decode_rust(
     packets: &[Vec<u8>],
     drops: &[usize],
 ) -> Vec<i16> {
-    use mdopus::opus::decoder::OpusDecoder;
+    use ropus::opus::decoder::OpusDecoder;
 
     let mut dec = match OpusDecoder::new(sr, ch) {
         Ok(d) => d,
@@ -3206,7 +3206,7 @@ fn cmd_bench(wav_path: &str, bitrate: i32, complexity: i32, iters: u32) {
     let num_frames = wav.samples.len() / samples_per_frame;
     let duration_sec = wav.samples.len() as f64 / (sr as f64 * ch as f64);
 
-    println!("=== mdopus benchmark ===");
+    println!("=== ropus benchmark ===");
     println!(
         "Input : {} ({} Hz, {} ch, {:.2}s, {} frames @ 20ms)",
         wav_path, sr, ch, duration_sec, num_frames,
@@ -4223,7 +4223,7 @@ fn cmd_api() {
                 }
                 err
             };
-            let r_result = match mdopus::opus::encoder::OpusEncoder::new($sr, $ch, $app) {
+            let r_result = match ropus::opus::encoder::OpusEncoder::new($sr, $ch, $app) {
                 Ok(_) => 0i32,
                 Err(e) => e,
             };
@@ -4287,7 +4287,7 @@ fn cmd_api() {
                 }
                 err
             };
-            let r_result = match mdopus::opus::decoder::OpusDecoder::new($sr, $ch) {
+            let r_result = match ropus::opus::decoder::OpusDecoder::new($sr, $ch) {
                 Ok(_) => 0i32,
                 Err(e) => e,
             };
@@ -4340,7 +4340,7 @@ fn cmd_api() {
         );
         enc
     };
-    let mut r_enc = mdopus::opus::encoder::OpusEncoder::new(48000, 2, audio)
+    let mut r_enc = ropus::opus::encoder::OpusEncoder::new(48000, 2, audio)
         .expect("Rust encoder creation failed for CTL tests");
 
     macro_rules! test_ctl {
@@ -4515,7 +4515,7 @@ fn cmd_api() {
     test_ctl!(
         bindings::OPUS_SET_SIGNAL_REQUEST,
         bindings::OPUS_SIGNAL_VOICE,
-        r_enc.set_signal(mdopus::opus::encoder::OPUS_SIGNAL_VOICE),
+        r_enc.set_signal(ropus::opus::encoder::OPUS_SIGNAL_VOICE),
         "set_signal(VOICE) [valid]"
     );
 
@@ -4661,7 +4661,7 @@ fn cmd_api() {
 
         // Rust decoder -- fresh each time
         let mut r_dec =
-            mdopus::opus::decoder::OpusDecoder::new(48000, 1).expect("Rust decoder failed");
+            ropus::opus::decoder::OpusDecoder::new(48000, 1).expect("Rust decoder failed");
         let mut r_pcm = vec![0i16; 5760];
         let r_data: Option<&[u8]> = if c_data_len > 0 {
             Some(&data[..c_data_len as usize])
@@ -4707,7 +4707,7 @@ fn cmd_api() {
         }
 
         let mut r_dec =
-            mdopus::opus::decoder::OpusDecoder::new(48000, 1).expect("Rust decoder failed");
+            ropus::opus::decoder::OpusDecoder::new(48000, 1).expect("Rust decoder failed");
         let mut r_pcm = vec![0i16; 5760];
         let r_ret = match r_dec.decode(None, &mut r_pcm, frame_size, false) {
             Ok(n) => n,
@@ -4810,7 +4810,7 @@ fn cmd_api() {
 // ---------------------------------------------------------------------------
 
 fn cmd_packets(wav_path: &str) {
-    use mdopus::opus::decoder::{
+    use ropus::opus::decoder::{
         opus_packet_get_bandwidth, opus_packet_get_nb_channels, opus_packet_get_nb_frames,
         opus_packet_get_nb_samples, opus_packet_get_samples_per_frame,
     };
@@ -5024,7 +5024,7 @@ fn compare_i32_samples(a: &[i32], b: &[i32]) -> (usize, usize, Option<usize>, i3
 }
 
 fn cmd_decode_formats(wav_path: &str) {
-    use mdopus::opus::decoder::OpusDecoder as RustDecoder;
+    use ropus::opus::decoder::OpusDecoder as RustDecoder;
 
     println!("Decode format comparison: C vs Rust (i16, f32, i32/24-bit)");
     println!();
@@ -5360,7 +5360,7 @@ fn cmd_longsoak(duration_secs: i32, sample_rate: i32) {
 
     // Create Rust decoder
     let mut rust_dec =
-        mdopus::opus::decoder::OpusDecoder::new(sample_rate, ch).unwrap_or_else(|e| {
+        ropus::opus::decoder::OpusDecoder::new(sample_rate, ch).unwrap_or_else(|e| {
             eprintln!("ERROR: Rust OpusDecoder::new failed: {}", e);
             process::exit(1);
         });
@@ -5666,7 +5666,7 @@ unsafe fn apply_config_to_c_encoder(enc: *mut bindings::OpusEncoder, cfg: &Encod
 }
 
 /// Apply an EncodeConfig to a live Rust encoder.
-fn apply_config_to_rust_encoder(enc: &mut mdopus::opus::encoder::OpusEncoder, cfg: &EncodeConfig) {
+fn apply_config_to_rust_encoder(enc: &mut ropus::opus::encoder::OpusEncoder, cfg: &EncodeConfig) {
     enc.set_bitrate(cfg.bitrate);
     enc.set_complexity(cfg.complexity);
     enc.set_vbr(cfg.vbr);
@@ -5769,9 +5769,9 @@ unsafe fn c_dec_get_u32(dec: *mut bindings::OpusDecoder, req: i32) -> u32 {
 /// human-readable diff lines.
 fn state_checkpoint_diffs(
     c_enc: *mut bindings::OpusEncoder,
-    r_enc: &mdopus::opus::encoder::OpusEncoder,
+    r_enc: &ropus::opus::encoder::OpusEncoder,
     c_dec: *mut bindings::OpusDecoder,
-    r_dec: &mdopus::opus::decoder::OpusDecoder,
+    r_dec: &ropus::opus::decoder::OpusDecoder,
 ) -> Vec<String> {
     let mut diffs: Vec<String> = Vec::new();
 
@@ -6625,7 +6625,7 @@ unsafe fn c_decode_packet(
 
 /// Run a single packet through a Rust decoder and return (nsamples, range).
 fn rust_decode_packet(
-    dec: &mut mdopus::opus::decoder::OpusDecoder,
+    dec: &mut ropus::opus::decoder::OpusDecoder,
     pkt: &[u8],
     out: &mut [i16],
     max_per_ch: i32,
@@ -6701,7 +6701,7 @@ fn cmd_torture(
     };
 
     // --- Create Rust encoder + decoder ---
-    let mut rust_enc = mdopus::opus::encoder::OpusEncoder::new(
+    let mut rust_enc = ropus::opus::encoder::OpusEncoder::new(
         sample_rate,
         channels,
         bindings::OPUS_APPLICATION_AUDIO,
@@ -6710,7 +6710,7 @@ fn cmd_torture(
         eprintln!("ERROR: Rust encoder create failed: {}", e);
         process::exit(1);
     });
-    let mut rust_dec_cs = mdopus::opus::decoder::OpusDecoder::new(sample_rate, channels)
+    let mut rust_dec_cs = ropus::opus::decoder::OpusDecoder::new(sample_rate, channels)
         .unwrap_or_else(|e| {
             eprintln!("ERROR: Rust decoder (C stream) create failed: {}", e);
             process::exit(1);
@@ -6739,7 +6739,7 @@ fn cmd_torture(
     };
     let mut rust_dec_rs_opt = if cross_decode {
         Some(
-            mdopus::opus::decoder::OpusDecoder::new(sample_rate, channels).unwrap_or_else(|e| {
+            ropus::opus::decoder::OpusDecoder::new(sample_rate, channels).unwrap_or_else(|e| {
                 eprintln!("ERROR: Rust decoder (Rust stream) create failed: {}", e);
                 process::exit(1);
             }),
@@ -7469,7 +7469,7 @@ fn run_transition_sequence(
         }
         enc
     };
-    let mut rust_enc = match mdopus::opus::encoder::OpusEncoder::new(
+    let mut rust_enc = match ropus::opus::encoder::OpusEncoder::new(
         sample_rate,
         channels,
         bindings::OPUS_APPLICATION_AUDIO,
@@ -7493,7 +7493,7 @@ fn run_transition_sequence(
         }
         dec
     };
-    let mut rust_dec_cs = match mdopus::opus::decoder::OpusDecoder::new(sample_rate, channels) {
+    let mut rust_dec_cs = match ropus::opus::decoder::OpusDecoder::new(sample_rate, channels) {
         Ok(d) => d,
         Err(_) => {
             println!("SKIP (Rust decoder failed)");
@@ -7522,7 +7522,7 @@ fn run_transition_sequence(
         std::ptr::null_mut()
     };
     let mut rust_dec_rs_opt = if cross_decode {
-        match mdopus::opus::decoder::OpusDecoder::new(sample_rate, channels) {
+        match ropus::opus::decoder::OpusDecoder::new(sample_rate, channels) {
             Ok(d) => Some(d),
             Err(_) => {
                 println!("SKIP (Rust decoder for Rust stream failed)");
@@ -8213,7 +8213,7 @@ fn cmd_repacketizer(wav_path: &str) {
         };
 
         let rust_out = {
-            use mdopus::opus::repacketizer::OpusRepacketizer;
+            use ropus::opus::repacketizer::OpusRepacketizer;
             let mut rp = OpusRepacketizer::new();
             for i in 0..3 {
                 let ret = rp.cat(&packets[i], packets[i].len() as i32);
@@ -8260,7 +8260,7 @@ fn cmd_repacketizer(wav_path: &str) {
         };
 
         let rust_out = {
-            use mdopus::opus::repacketizer::OpusRepacketizer;
+            use ropus::opus::repacketizer::OpusRepacketizer;
             let mut rp = OpusRepacketizer::new();
             for i in 0..3 {
                 rp.cat(&packets[i], packets[i].len() as i32);
@@ -8311,7 +8311,7 @@ fn cmd_repacketizer(wav_path: &str) {
         };
 
         let rust_out = {
-            use mdopus::opus::repacketizer::OpusRepacketizer;
+            use ropus::opus::repacketizer::OpusRepacketizer;
             let mut rp = OpusRepacketizer::new();
             for i in 0..3 {
                 rp.cat(&packets[i], packets[i].len() as i32);
@@ -8362,7 +8362,7 @@ fn cmd_repacketizer(wav_path: &str) {
 
         // Rust pad
         let rust_padded = {
-            use mdopus::opus::repacketizer::opus_packet_pad;
+            use ropus::opus::repacketizer::opus_packet_pad;
             let mut buf = vec![0u8; padded_len as usize];
             buf[..orig.len()].copy_from_slice(orig);
             let ret = opus_packet_pad(&mut buf, orig_len, padded_len);
@@ -8389,7 +8389,7 @@ fn cmd_repacketizer(wav_path: &str) {
 
         // Rust unpad
         let rust_unpadded = {
-            use mdopus::opus::repacketizer::opus_packet_unpad;
+            use ropus::opus::repacketizer::opus_packet_unpad;
             let mut buf = rust_padded.clone();
             let ret = opus_packet_unpad(&mut buf, padded_len);
             assert!(ret > 0, "Rust opus_packet_unpad failed: {}", ret);
@@ -8440,7 +8440,7 @@ fn cmd_repacketizer(wav_path: &str) {
         };
 
         let rust_out = {
-            use mdopus::opus::repacketizer::OpusRepacketizer;
+            use ropus::opus::repacketizer::OpusRepacketizer;
             let mut rp = OpusRepacketizer::new();
             rp.cat(&packets[0], packets[0].len() as i32);
             rp.init();
@@ -8489,7 +8489,7 @@ fn cmd_repacketizer(wav_path: &str) {
             };
 
             let r_nb = {
-                use mdopus::opus::repacketizer::OpusRepacketizer;
+                use ropus::opus::repacketizer::OpusRepacketizer;
                 let mut rp = OpusRepacketizer::new();
                 for i in 0..count {
                     rp.cat(&packets[i], packets[i].len() as i32);
@@ -8602,7 +8602,7 @@ fn cmd_multistream() {
     };
 
     let rust_packets: Vec<Vec<u8>> = {
-        use mdopus::opus::multistream::OpusMSEncoder;
+        use ropus::opus::multistream::OpusMSEncoder;
         let mut enc = OpusMSEncoder::new(sr, channels, streams, coupled, &mapping, application)
             .expect("Rust OpusMSEncoder::new failed");
 
@@ -8707,7 +8707,7 @@ fn cmd_multistream() {
     };
 
     let rust_decoded: Vec<i16> = {
-        use mdopus::opus::multistream::OpusMSDecoder;
+        use ropus::opus::multistream::OpusMSDecoder;
         let mut dec = OpusMSDecoder::new(sr, channels, streams, coupled, &mapping)
             .expect("Rust OpusMSDecoder::new failed");
 
@@ -8781,7 +8781,7 @@ fn cmd_multistream() {
     };
 
     let rust_roundtrip: Vec<i16> = {
-        use mdopus::opus::multistream::OpusMSDecoder;
+        use ropus::opus::multistream::OpusMSDecoder;
         let mut dec = OpusMSDecoder::new(sr, channels, streams, coupled, &mapping)
             .expect("Rust OpusMSDecoder::new failed");
 
@@ -8839,7 +8839,7 @@ fn cmd_multistream() {
 // ---------------------------------------------------------------------------
 
 fn cmd_test_all() {
-    println!("=== mdopus full test suite ===");
+    println!("=== ropus full test suite ===");
     println!();
 
     // Each command calls process::exit(1) on failure, so if any fails
@@ -9007,30 +9007,30 @@ mod coverage_smoke_tests {
 // ---------------------------------------------------------------------------
 
 fn usage() {
-    eprintln!("mdopus-compare: compare C reference opus vs Rust implementation");
+    eprintln!("ropus-compare: compare C reference opus vs Rust implementation");
     eprintln!();
     eprintln!("USAGE:");
-    eprintln!("  mdopus-compare encode <input.wav> [--bitrate N] [--complexity N]");
-    eprintln!("  mdopus-compare decode <input.opus>");
-    eprintln!("  mdopus-compare roundtrip <input.wav> [--bitrate N]");
-    eprintln!("  mdopus-compare plc <input.wav> [--bitrate N]");
-    eprintln!("  mdopus-compare fec <input.wav> [--bitrate N] [--loss-pct N]");
-    eprintln!("  mdopus-compare dtx <input.wav|generate> [--bitrate N]");
-    eprintln!("  mdopus-compare sweep [filter] [--stop-on-fail]");
-    eprintln!("  mdopus-compare bench <input.wav> [--bitrate N] [--complexity N] [--iters N]");
-    eprintln!("  mdopus-compare longsoak [--duration N] [--sample-rate N]");
+    eprintln!("  ropus-compare encode <input.wav> [--bitrate N] [--complexity N]");
+    eprintln!("  ropus-compare decode <input.opus>");
+    eprintln!("  ropus-compare roundtrip <input.wav> [--bitrate N]");
+    eprintln!("  ropus-compare plc <input.wav> [--bitrate N]");
+    eprintln!("  ropus-compare fec <input.wav> [--bitrate N] [--loss-pct N]");
+    eprintln!("  ropus-compare dtx <input.wav|generate> [--bitrate N]");
+    eprintln!("  ropus-compare sweep [filter] [--stop-on-fail]");
+    eprintln!("  ropus-compare bench <input.wav> [--bitrate N] [--complexity N] [--iters N]");
+    eprintln!("  ropus-compare longsoak [--duration N] [--sample-rate N]");
     eprintln!(
-        "  mdopus-compare torture [--duration N] [--seed N] [--change-interval N] [--sample-rate N] [--channels N]"
+        "  ropus-compare torture [--duration N] [--seed N] [--change-interval N] [--sample-rate N] [--channels N]"
     );
-    eprintln!("  mdopus-compare transitions");
-    eprintln!("  mdopus-compare quality <input.wav>");
-    eprintln!("  mdopus-compare packets <input.wav>");
-    eprintln!("  mdopus-compare decode-formats <input.wav>");
-    eprintln!("  mdopus-compare repacketizer <input.wav>");
-    eprintln!("  mdopus-compare multistream");
-    eprintln!("  mdopus-compare unit <module_name>");
-    eprintln!("  mdopus-compare api");
-    eprintln!("  mdopus-compare test-all");
+    eprintln!("  ropus-compare transitions");
+    eprintln!("  ropus-compare quality <input.wav>");
+    eprintln!("  ropus-compare packets <input.wav>");
+    eprintln!("  ropus-compare decode-formats <input.wav>");
+    eprintln!("  ropus-compare repacketizer <input.wav>");
+    eprintln!("  ropus-compare multistream");
+    eprintln!("  ropus-compare unit <module_name>");
+    eprintln!("  ropus-compare api");
+    eprintln!("  ropus-compare test-all");
     eprintln!();
     eprintln!("MODULES for 'unit':");
     eprintln!("  range_coder   Range coder (entenc/entdec)");
@@ -9046,10 +9046,10 @@ fn usage() {
     eprintln!("  --stop-on-fail   (sweep) Stop after first failing configuration");
     eprintln!();
     eprintln!("SWEEP FILTER EXAMPLES:");
-    eprintln!("  mdopus-compare sweep CELT          Only CELT configurations");
-    eprintln!("  mdopus-compare sweep SILK          Only SILK configurations");
-    eprintln!("  mdopus-compare sweep stereo        Only stereo (2ch) configurations");
-    eprintln!("  mdopus-compare sweep VBR           Only VBR configurations");
+    eprintln!("  ropus-compare sweep CELT          Only CELT configurations");
+    eprintln!("  ropus-compare sweep SILK          Only SILK configurations");
+    eprintln!("  ropus-compare sweep stereo        Only stereo (2ch) configurations");
+    eprintln!("  ropus-compare sweep VBR           Only VBR configurations");
 }
 
 fn parse_option(args: &[String], flag: &str, default: i32) -> i32 {
@@ -9089,7 +9089,7 @@ fn cmd_hp_cutoff_compare() {
     }
 
     // Rust hp_cutoff
-    use mdopus::opus::encoder::hp_cutoff_debug;
+    use ropus::opus::encoder::hp_cutoff_debug;
     let mut r_out = vec![0i16; pcm.len()];
     let mut r_hp_mem = [0i32; 4];
     hp_cutoff_debug(
@@ -9147,7 +9147,7 @@ fn cmd_hp_cutoff_compare() {
 
 fn cmd_debug_decode_25ms() {
     // Debug: decode 2.5ms frames at 48k/1ch/64kbps AUDIO and compare per-frame
-    use mdopus::opus::decoder::OpusDecoder as RustDecoder;
+    use ropus::opus::decoder::OpusDecoder as RustDecoder;
 
     let sr = 48000;
     let ch = 1;
@@ -9381,8 +9381,8 @@ fn cmd_debug_decode_25ms() {
 }
 
 fn cmd_debug_mdct_compare() {
-    use mdopus::celt::mdct::{MDCT_48000_960, clt_mdct_backward};
-    use mdopus::celt::modes::MODE_48000_960_120;
+    use ropus::celt::mdct::{MDCT_48000_960, clt_mdct_backward};
+    use ropus::celt::modes::MODE_48000_960_120;
 
     let mode = &MODE_48000_960_120;
     let l = &MDCT_48000_960;
@@ -9597,7 +9597,7 @@ fn cmd_debug_mdct_compare() {
 }
 
 fn cmd_debug_stereo_voip() {
-    use mdopus::opus::encoder::{OpusEncoder as RustEncoder, hp_cutoff_debug};
+    use ropus::opus::encoder::{OpusEncoder as RustEncoder, hp_cutoff_debug};
 
     // First: test HP cutoff at 8kHz stereo
     {
@@ -9657,7 +9657,7 @@ fn cmd_debug_stereo_voip() {
 
     // Test LR_to_MS directly
     {
-        use mdopus::silk::encoder::{StereoEncState, silk_stereo_lr_to_ms};
+        use ropus::silk::encoder::{StereoEncState, silk_stereo_lr_to_ms};
         let fl = 80usize; // 8kHz * 10ms = 80 samples (internal frame)
         let fs_khz = 8;
         // Use some non-trivial input data
@@ -9900,7 +9900,7 @@ fn cmd_debug_stereo_voip() {
 // ---------------------------------------------------------------------------
 
 fn cmd_repro_bug_a() {
-    use mdopus::opus::decoder::OpusDecoder as RustDecoder;
+    use ropus::opus::decoder::OpusDecoder as RustDecoder;
 
     // Crash packet from fuzz_crashes/crash_67b601097a4dc027.bin
     // First 2 bytes are fuzz config (sr_idx=0 → 8kHz, ch_byte=0x04 → mono)
@@ -10012,7 +10012,7 @@ fn cmd_repro_bug_a() {
 }
 
 fn cmd_repro_bug_b() {
-    use mdopus::opus::encoder::{
+    use ropus::opus::encoder::{
         OpusEncoder as RustEncoder, OPUS_APPLICATION_VOIP,
     };
 

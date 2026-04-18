@@ -11,7 +11,7 @@ ropus = { path = "../ropus" }
 cc = "1"
 
 [[bin]]
-name = "mdopus-compare"
+name = "ropus-compare"
 path = "src/main.rs"
 
 [[bin]]
@@ -23,7 +23,7 @@ name = "diff_fuzz_decode"
 path = "src/bin/diff_fuzz_decode.rs"
 
 [[bin]]
-name = "mdopus-interframe"
+name = "ropus-interframe"
 path = "src/bin/interframe.rs"
 
 [[bin]]

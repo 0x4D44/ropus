@@ -77,26 +77,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "mdopus"
-version = "0.2.1"
-dependencies = [
- "cc",
- "wide",
-]
-
-[[package]]
-name = "mdopus-fuzz"
-version = "0.0.0"
-dependencies = [
- "libfuzzer-sys",
- "mdopus",
-]
-
-[[package]]
 name = "r-efi"
 version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
+
+[[package]]
+name = "ropus"
+version = "0.2.1"
+dependencies = [
+ "wide",
+]
+
+[[package]]
+name = "ropus-fuzz"
+version = "0.0.0"
+dependencies = [
+ "libfuzzer-sys",
+ "ropus",
+]
 
 [[package]]
 name = "safe_arch"

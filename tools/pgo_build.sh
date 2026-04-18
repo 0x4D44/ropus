@@ -53,7 +53,7 @@ if [[ "$BENCH_ONLY" == false ]]; then
         echo ""
         echo "── Baseline benchmark ──"
         cargo run --release --manifest-path "$ROOT/Cargo.toml" \
-            --bin mdopus-compare -- bench "$BENCH_WAV" --iters "$BENCH_ITERS"
+            --bin ropus-compare -- bench "$BENCH_WAV" --iters "$BENCH_ITERS"
     fi
 fi
 
@@ -70,9 +70,9 @@ if [[ "$BENCH_ONLY" == false ]]; then
     # ── Step 2: Training workload ─────────────────────────────────────
     echo ""
     echo "═══ Step 2: Training workload ═══"
-    INSTRUMENTED_BIN="$ROOT/target/release/mdopus-compare.exe"
+    INSTRUMENTED_BIN="$ROOT/target/release/ropus-compare.exe"
     if [[ ! -f "$INSTRUMENTED_BIN" ]]; then
-        INSTRUMENTED_BIN="$ROOT/target/release/mdopus-compare"
+        INSTRUMENTED_BIN="$ROOT/target/release/ropus-compare"
     fi
 
     BITRATES=(16000 32000 64000 128000)
@@ -120,8 +120,8 @@ if [[ -f "$BENCH_WAV" ]]; then
     echo ""
     echo "═══ Step 5: PGO benchmark ═══"
     cargo run --release --manifest-path "$ROOT/Cargo.toml" \
-        --bin mdopus-compare -- bench "$BENCH_WAV" --iters "$BENCH_ITERS"
+        --bin ropus-compare -- bench "$BENCH_WAV" --iters "$BENCH_ITERS"
 fi
 
 echo ""
-echo "Done. PGO binary at: $ROOT/target/release/mdopus-compare"
+echo "Done. PGO binary at: $ROOT/target/release/ropus-compare"

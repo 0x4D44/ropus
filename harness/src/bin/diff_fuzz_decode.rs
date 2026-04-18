@@ -1,7 +1,7 @@
 //! Differential PCM decode tool for fuzz crash files.
 //!
 //! Reads a single fuzz_decode crash file (2-byte header + Opus packet),
-//! decodes with both the Rust mdopus decoder and the C reference (via FFI),
+//! decodes with both the Rust ropus decoder and the C reference (via FFI),
 //! and prints the first divergence index plus a context window.
 //!
 //! Usage:
@@ -12,10 +12,10 @@
 //!   data[1]&1 → channels (0→mono, 1→stereo)
 //!   data[2..] → Opus packet bytes
 
-#[path = "../tests/harness/bindings.rs"]
+#[path = "../bindings.rs"]
 mod bindings;
 
-use mdopus::opus::decoder::{
+use ropus::opus::decoder::{
     opus_packet_get_nb_frames, opus_packet_get_samples_per_frame, OpusDecoder,
 };
 use std::fs;

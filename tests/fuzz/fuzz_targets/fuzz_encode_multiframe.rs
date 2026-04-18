@@ -1,7 +1,7 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use mdopus::opus::decoder::OpusDecoder;
-use mdopus::opus::encoder::{
+use ropus::opus::decoder::OpusDecoder;
+use ropus::opus::encoder::{
     OpusEncoder, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
     OPUS_APPLICATION_VOIP,
 };
@@ -188,7 +188,7 @@ fuzz_target!(|data: &[u8]| {
     // --- Semantic invariant: each encoded packet is parseable ---
     for (i, pkt) in rust_packets.iter().enumerate() {
         if !pkt.is_empty() {
-            let nb_frames = mdopus::opus::decoder::opus_packet_get_nb_frames(pkt);
+            let nb_frames = ropus::opus::decoder::opus_packet_get_nb_frames(pkt);
             assert!(
                 nb_frames.is_ok() && nb_frames.unwrap() > 0,
                 "Frame {i}: encoded packet not parseable, len={}",

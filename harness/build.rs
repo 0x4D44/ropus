@@ -7,8 +7,8 @@
 use std::path::PathBuf;
 
 fn main() {
-    let ref_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("reference");
-    let harness_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/harness");
+    let ref_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../reference");
+    let harness_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".");
 
     if !ref_dir.join("celt/bands.c").exists() {
         panic!(
@@ -264,11 +264,11 @@ fn main() {
 
     // Tell cargo to link the static library
     println!("cargo:rustc-link-lib=static=opus_ref");
-    println!("cargo:rerun-if-changed=tests/harness/config.h");
-    println!("cargo:rerun-if-changed=tests/harness/build.rs");
-    println!("cargo:rerun-if-changed=tests/harness/debug_helper.c");
-    println!("cargo:rerun-if-changed=tests/harness/debug_silk_trace.c");
-    println!("cargo:rerun-if-changed=reference/celt/celt_decoder.c");
+    println!("cargo:rerun-if-changed=config.h");
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=debug_helper.c");
+    println!("cargo:rerun-if-changed=debug_silk_trace.c");
+    println!("cargo:rerun-if-changed=../reference/celt/celt_decoder.c");
 }
 // force rebuild
 // force rebuild 2

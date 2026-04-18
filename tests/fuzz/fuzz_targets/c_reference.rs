@@ -62,9 +62,9 @@ pub struct OpusRepacketizer {
 // ---------------------------------------------------------------------------
 // Public Opus C API
 // ---------------------------------------------------------------------------
-// The C reference library (opus_ref) is compiled and linked by the main mdopus
+// The C reference library (opus_ref) is compiled and linked by the main ropus
 // crate's build.rs. No #[link] attribute needed here — the symbols are already
-// available through the mdopus dependency's link directives.
+// available through the ropus dependency's link directives.
 unsafe extern "C" {
     // Encoder
     pub fn opus_encoder_create(

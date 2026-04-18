@@ -7,10 +7,10 @@
 //! Usage:
 //!   cargo run --release --bin trace_silk_wb -- <crashfile>
 
-#[path = "../tests/harness/bindings.rs"]
+#[path = "../bindings.rs"]
 mod bindings;
 
-use mdopus::opus::decoder::{
+use ropus::opus::decoder::{
     opus_packet_get_nb_frames, opus_packet_get_samples_per_frame, OpusDecoder,
 };
 use std::fs;

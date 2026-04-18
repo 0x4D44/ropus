@@ -1,6 +1,6 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use mdopus::opus::decoder::{
+use ropus::opus::decoder::{
     opus_packet_get_nb_frames, opus_packet_get_samples_per_frame, OpusDecoder,
 };
 use std::cell::RefCell;

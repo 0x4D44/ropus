@@ -1,6 +1,6 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use mdopus::opus::repacketizer::OpusRepacketizer;
+use ropus::opus::repacketizer::OpusRepacketizer;
 use std::cell::RefCell;
 use std::sync::Once;
 

@@ -473,10 +473,10 @@ PROMPTS["test_harness"] = textwrap.dedent("""\
 
     ## CLI interface
     ```
-    mdopus-compare encode <input.wav> [--bitrate N] [--complexity N]
-    mdopus-compare decode <input.opus>
-    mdopus-compare roundtrip <input.wav> [--bitrate N]
-    mdopus-compare unit <module_name>
+    ropus-compare encode <input.wav> [--bitrate N] [--complexity N]
+    ropus-compare decode <input.opus>
+    ropus-compare roundtrip <input.wav> [--bitrate N]
+    ropus-compare unit <module_name>
     ```
 
     ## What it does

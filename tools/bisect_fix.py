@@ -29,7 +29,7 @@ from datetime import datetime
 ROOT = Path(__file__).resolve().parent.parent
 CORPUS_DIR = ROOT / "tests" / "vectors"
 LOGS = ROOT / "logs"
-COMPARE_BIN = ROOT / "target" / "debug" / "mdopus-compare"
+COMPARE_BIN = ROOT / "target" / "debug" / "ropus-compare"
 if sys.platform == "win32":
     COMPARE_BIN = COMPARE_BIN.with_suffix(".exe")
 

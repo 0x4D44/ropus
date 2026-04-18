@@ -12,10 +12,10 @@
 
 #![allow(clippy::too_many_arguments)]
 
-#[path = "../tests/harness/bindings.rs"]
+#[path = "../bindings.rs"]
 mod bindings;
 
-use mdopus::opus::decoder::OpusDecoder;
+use ropus::opus::decoder::OpusDecoder;
 use std::fs;
 use std::os::raw::c_int;
 use std::path::{Path, PathBuf};

@@ -7,12 +7,12 @@
 
 #![allow(clippy::needless_range_loop, clippy::identity_op)]
 
-#[path = "../tests/harness/bindings.rs"]
+#[path = "../bindings.rs"]
 mod bindings;
 
 use std::os::raw::c_int;
 
-use mdopus::opus::encoder::{
+use ropus::opus::encoder::{
     OpusEncoder as RustEncoder, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
     OPUS_APPLICATION_VOIP,
 };
