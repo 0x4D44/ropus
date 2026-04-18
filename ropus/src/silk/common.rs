@@ -6,6 +6,7 @@
 
 use crate::silk::tables::*;
 use crate::types::*;
+use crate::uc;
 
 // ===========================================================================
 // Constants from define.h / SigProc_FIX.h
@@ -430,12 +431,13 @@ pub fn silk_inner_prod_aligned(x: &[i32], y: &[i32], len: usize) -> i32 {
 /// Matches C: `silk_LPC_analysis_filter`.
 pub fn silk_lpc_analysis_filter(out: &mut [i16], s: &[i16], a_q12: &[i16], len: usize, d: usize) {
     for ix in d..len {
-        let mut out32_q12: u32 = (s[ix - 1] as i32 * a_q12[0] as i32) as u32;
+        let mut out32_q12: u32 = (uc!(s, ix - 1) as i32 * uc!(a_q12, 0) as i32) as u32;
         for j in 1..d {
-            out32_q12 = out32_q12.wrapping_add((s[ix - 1 - j] as i32 * a_q12[j] as i32) as u32);
+            out32_q12 = out32_q12
+                .wrapping_add((uc!(s, ix - 1 - j) as i32 * uc!(a_q12, j) as i32) as u32);
         }
         // Subtract prediction: s[ix]<<12 - accumulated, with wrapping
-        let out32_q12 = ((s[ix] as i32 as u32) << 12).wrapping_sub(out32_q12) as i32;
+        let out32_q12 = ((uc!(s, ix) as i32 as u32) << 12).wrapping_sub(out32_q12) as i32;
         // Scale to Q0 with rounding
         let out32 = silk_rshift_round(out32_q12, 12);
         out[ix] = sat16(out32);

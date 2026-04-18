@@ -14,6 +14,7 @@ use crate::silk::common::*;
 use crate::silk::decoder::{SideInfoIndices, SilkResamplerState};
 use crate::silk::tables::*;
 use crate::types::*;
+use crate::{uc, uc_set};
 
 // ===========================================================================
 // Encoder-specific constants
@@ -3620,7 +3621,11 @@ fn silk_noise_shape_quantizer(
         let ps_lpc_idx = ps_lpc_q14_base + i;
         let mut lpc_pred_q10 = (predict_lpc_order >> 1) as i32; // bias = order/2
         for j in 0..predict_lpc_order {
-            lpc_pred_q10 = silk_smlawb(lpc_pred_q10, nsq.s_lpc_q14[ps_lpc_idx - j], a_q12[j]);
+            lpc_pred_q10 = silk_smlawb(
+                lpc_pred_q10,
+                uc!(nsq.s_lpc_q14, ps_lpc_idx - j),
+                uc!(a_q12, j),
+            );
         }
 
         // Long-term prediction
@@ -3641,24 +3646,24 @@ fn silk_noise_shape_quantizer(
         let n_ar_q12 = {
             let data0 = nsq.s_diff_shp_q14;
             let mut tmp2 = data0;
-            let mut tmp1 = nsq.s_ar2_q14[0];
-            nsq.s_ar2_q14[0] = tmp2;
+            let mut tmp1 = uc!(nsq.s_ar2_q14, 0);
+            uc_set!(nsq.s_ar2_q14, 0, tmp2);
 
             let mut out = (shaping_lpc_order >> 1) as i32;
-            out = silk_smlawb(out, tmp2, ar_shp_q13[0]);
+            out = silk_smlawb(out, tmp2, uc!(ar_shp_q13, 0));
 
             let mut j = 2usize;
             while j < shaping_lpc_order {
-                tmp2 = nsq.s_ar2_q14[j - 1];
-                nsq.s_ar2_q14[j - 1] = tmp1;
-                out = silk_smlawb(out, tmp1, ar_shp_q13[j - 1]);
-                tmp1 = nsq.s_ar2_q14[j];
-                nsq.s_ar2_q14[j] = tmp2;
-                out = silk_smlawb(out, tmp2, ar_shp_q13[j]);
+                tmp2 = uc!(nsq.s_ar2_q14, j - 1);
+                uc_set!(nsq.s_ar2_q14, j - 1, tmp1);
+                out = silk_smlawb(out, tmp1, uc!(ar_shp_q13, j - 1));
+                tmp1 = uc!(nsq.s_ar2_q14, j);
+                uc_set!(nsq.s_ar2_q14, j, tmp2);
+                out = silk_smlawb(out, tmp2, uc!(ar_shp_q13, j));
                 j += 2;
             }
-            nsq.s_ar2_q14[shaping_lpc_order - 1] = tmp1;
-            out = silk_smlawb(out, tmp1, ar_shp_q13[shaping_lpc_order - 1]);
+            uc_set!(nsq.s_ar2_q14, shaping_lpc_order - 1, tmp1);
+            out = silk_smlawb(out, tmp1, uc!(ar_shp_q13, shaping_lpc_order - 1));
             // Q11 -> Q12
             shl32(out, 1)
         };
@@ -4843,25 +4848,28 @@ pub fn silk_warped_autocorrelation(
     let mut corr_qc = [0i64; MAX_SHAPE_LPC_ORDER + 1];
 
     for n in 0..length {
-        let mut tmp1_qs = shl32(input[n] as i32, QS);
+        let mut tmp1_qs = shl32(uc!(input, n) as i32, QS);
         for i in (0..order).step_by(2) {
+            // NOTE: state_qs[0] is mutated inside this loop (via state_qs[i] = ...
+            // when i == 0), and subsequent iterations read that updated value.
+            // Do not hoist state_qs[0] outside the loop.
             let tmp2_qs = silk_smlawb(
-                state_qs[i],
-                (state_qs[i + 1] - tmp1_qs) as i32,
+                uc!(state_qs, i),
+                (uc!(state_qs, i + 1) - tmp1_qs) as i32,
                 warping_q16 as i16,
             );
-            state_qs[i] = tmp1_qs;
-            corr_qc[i] += silk_rshift64(silk_smull(tmp1_qs, state_qs[0]), 2 * QS - QC);
+            uc_set!(state_qs, i, tmp1_qs);
+            corr_qc[i] += silk_rshift64(silk_smull(tmp1_qs, uc!(state_qs, 0)), 2 * QS - QC);
             tmp1_qs = silk_smlawb(
-                state_qs[i + 1],
-                (state_qs[i + 2] - tmp2_qs) as i32,
+                uc!(state_qs, i + 1),
+                (uc!(state_qs, i + 2) - tmp2_qs) as i32,
                 warping_q16 as i16,
             );
-            state_qs[i + 1] = tmp2_qs;
-            corr_qc[i + 1] += silk_rshift64(silk_smull(tmp2_qs, state_qs[0]), 2 * QS - QC);
+            uc_set!(state_qs, i + 1, tmp2_qs);
+            corr_qc[i + 1] += silk_rshift64(silk_smull(tmp2_qs, uc!(state_qs, 0)), 2 * QS - QC);
         }
-        state_qs[order] = tmp1_qs;
-        corr_qc[order] += silk_rshift64(silk_smull(tmp1_qs, state_qs[0]), 2 * QS - QC);
+        uc_set!(state_qs, order, tmp1_qs);
+        corr_qc[order] += silk_rshift64(silk_smull(tmp1_qs, uc!(state_qs, 0)), 2 * QS - QC);
     }
 
     let lsh = silk_clz64_fn(corr_qc[0]) - 35;
@@ -5057,15 +5065,18 @@ pub fn silk_corr_matrix(
     // Calculate energy of column 0 (X[:,0] = x[order-1..order-1+L])
     // Remove contribution of first order-1 samples from total energy
     for i in 0..order - 1 {
-        energy -= (x[i] as i32 * x[i] as i32) >> *rshift;
+        let xi = uc!(x, i) as i32;
+        energy -= (xi * xi) >> *rshift;
     }
 
     // Fill diagonal using running energy
     xx[0] = energy; // XX[0,0]
     let ptr1_base = order - 1; // ptr1 = &x[order-1]
     for j in 1..order {
-        energy -= (x[ptr1_base + l - j] as i32 * x[ptr1_base + l - j] as i32) >> *rshift;
-        energy += (x[ptr1_base - j] as i32 * x[ptr1_base - j] as i32) >> *rshift;
+        let xhi = uc!(x, ptr1_base + l - j) as i32;
+        let xlo = uc!(x, ptr1_base - j) as i32;
+        energy -= (xhi * xhi) >> *rshift;
+        energy += (xlo * xlo) >> *rshift;
         xx[j * order + j] = energy; // XX[j,j]
     }
 
@@ -5077,7 +5088,7 @@ pub fn silk_corr_matrix(
                 let col_i = order - 1 - i; // start of column i
                 let mut sum = 0i32;
                 for n in 0..l {
-                    sum += (x[col_j + n] as i32 * x[col_i + n] as i32) >> *rshift;
+                    sum += (uc!(x, col_j + n) as i32 * uc!(x, col_i + n) as i32) >> *rshift;
                 }
                 xx[j * order + i] = sum;
                 xx[i * order + j] = sum;
@@ -5090,7 +5101,7 @@ pub fn silk_corr_matrix(
                 let col_i = order - 1 - i;
                 let mut sum = 0i64;
                 for n in 0..l {
-                    sum += x[col_j + n] as i64 * x[col_i + n] as i64;
+                    sum += uc!(x, col_j + n) as i64 * uc!(x, col_i + n) as i64;
                 }
                 xx[j * order + i] = sum as i32;
                 xx[i * order + j] = sum as i32;
@@ -5113,13 +5124,13 @@ pub fn silk_corr_vector(x: &[i16], t: &[i16], l: usize, order: usize, xt: &mut [
         if rshift > 0 {
             let mut inner_prod = 0i32;
             for i in 0..l {
-                inner_prod += (x[ptr1_start + i] as i32 * t[i] as i32) >> rshift;
+                inner_prod += (uc!(x, ptr1_start + i) as i32 * uc!(t, i) as i32) >> rshift;
             }
             xt[lag] = inner_prod;
         } else {
             let mut sum = 0i64;
             for i in 0..l {
-                sum += x[ptr1_start + i] as i64 * t[i] as i64;
+                sum += uc!(x, ptr1_start + i) as i64 * uc!(t, i) as i64;
             }
             xt[lag] = sum as i32;
         }
@@ -7428,7 +7439,8 @@ pub fn silk_burg_modified(
     let total_len = subfr_length * nb_subfr;
     let mut c0_64: i64 = 0;
     for i in 0..total_len {
-        c0_64 += x[i] as i64 * x[i] as i64;
+        let xi = uc!(x, i) as i64;
+        c0_64 += xi * xi;
     }
 
     let lz = silk_clz64_fn(c0_64);
@@ -7454,7 +7466,7 @@ pub fn silk_burg_modified(
             for n in 1..=d {
                 let mut sum = 0i64;
                 for i in 0..(subfr_length - n) {
-                    sum += x[x_ptr + i] as i64 * x[x_ptr + i + n] as i64;
+                    sum += uc!(x, x_ptr + i) as i64 * uc!(x, x_ptr + i + n) as i64;
                 }
                 c_first_row[n - 1] = c_first_row[n - 1].wrapping_add((sum >> rshifts) as i32);
             }
@@ -7465,7 +7477,7 @@ pub fn silk_burg_modified(
             for n in 1..=d {
                 let mut sum = 0i64;
                 for i in 0..(subfr_length - n) {
-                    sum += x[x_ptr + i] as i64 * x[x_ptr + i + n] as i64;
+                    sum += uc!(x, x_ptr + i) as i64 * uc!(x, x_ptr + i + n) as i64;
                 }
                 c_first_row[n - 1] = c_first_row[n - 1].wrapping_add(shl32(sum as i32, -rshifts));
             }
@@ -7485,48 +7497,51 @@ pub fn silk_burg_modified(
         if rshifts > -2 {
             for s in 0..nb_subfr {
                 let xp = s * subfr_length;
-                let x1 = -shl32(x[xp + n] as i32, 16 - rshifts);
-                let x2 = -shl32(x[xp + subfr_length - n - 1] as i32, 16 - rshifts);
-                let mut tmp1 = shl32(x[xp + n] as i32, QA - 16);
-                let mut tmp2 = shl32(x[xp + subfr_length - n - 1] as i32, QA - 16);
+                let x1 = -shl32(uc!(x, xp + n) as i32, 16 - rshifts);
+                let x2 = -shl32(uc!(x, xp + subfr_length - n - 1) as i32, 16 - rshifts);
+                let mut tmp1 = shl32(uc!(x, xp + n) as i32, QA - 16);
+                let mut tmp2 = shl32(uc!(x, xp + subfr_length - n - 1) as i32, QA - 16);
                 for k in 0..n {
-                    c_first_row[k] = silk_smlawb(c_first_row[k], x1, x[xp + n - k - 1] as i16);
+                    c_first_row[k] =
+                        silk_smlawb(c_first_row[k], x1, uc!(x, xp + n - k - 1) as i16);
                     c_last_row[k] =
-                        silk_smlawb(c_last_row[k], x2, x[xp + subfr_length - n + k] as i16);
+                        silk_smlawb(c_last_row[k], x2, uc!(x, xp + subfr_length - n + k) as i16);
                     let atmp_qa = af_qa[k];
-                    tmp1 = silk_smlawb(tmp1, atmp_qa, x[xp + n - k - 1] as i16);
-                    tmp2 = silk_smlawb(tmp2, atmp_qa, x[xp + subfr_length - n + k] as i16);
+                    tmp1 = silk_smlawb(tmp1, atmp_qa, uc!(x, xp + n - k - 1) as i16);
+                    tmp2 = silk_smlawb(tmp2, atmp_qa, uc!(x, xp + subfr_length - n + k) as i16);
                 }
                 tmp1 = shl32(-tmp1, 32 - QA - rshifts);
                 tmp2 = shl32(-tmp2, 32 - QA - rshifts);
                 for k in 0..=n {
-                    caf[k] = silk_smlawb(caf[k], tmp1, x[xp + n - k] as i16);
-                    cab[k] = silk_smlawb(cab[k], tmp2, x[xp + subfr_length - n + k - 1] as i16);
+                    caf[k] = silk_smlawb(caf[k], tmp1, uc!(x, xp + n - k) as i16);
+                    cab[k] =
+                        silk_smlawb(cab[k], tmp2, uc!(x, xp + subfr_length - n + k - 1) as i16);
                 }
             }
         } else {
             for s in 0..nb_subfr {
                 let xp = s * subfr_length;
-                let x1 = -shl32(x[xp + n] as i32, -rshifts);
-                let x2 = -shl32(x[xp + subfr_length - n - 1] as i32, -rshifts);
-                let mut tmp1 = shl32(x[xp + n] as i32, 17);
-                let mut tmp2 = shl32(x[xp + subfr_length - n - 1] as i32, 17);
+                let x1 = -shl32(uc!(x, xp + n) as i32, -rshifts);
+                let x2 = -shl32(uc!(x, xp + subfr_length - n - 1) as i32, -rshifts);
+                let mut tmp1 = shl32(uc!(x, xp + n) as i32, 17);
+                let mut tmp2 = shl32(uc!(x, xp + subfr_length - n - 1) as i32, 17);
                 for k in 0..n {
-                    c_first_row[k] = silk_mla(c_first_row[k], x1, x[xp + n - k - 1] as i32);
+                    c_first_row[k] = silk_mla(c_first_row[k], x1, uc!(x, xp + n - k - 1) as i32);
                     c_last_row[k] =
-                        silk_mla(c_last_row[k], x2, x[xp + subfr_length - n + k] as i32);
+                        silk_mla(c_last_row[k], x2, uc!(x, xp + subfr_length - n + k) as i32);
                     let atmp1 = silk_rshift_round(af_qa[k], QA - 17);
-                    tmp1 = silk_mla(tmp1, x[xp + n - k - 1] as i32, atmp1);
-                    tmp2 = silk_mla(tmp2, x[xp + subfr_length - n + k] as i32, atmp1);
+                    tmp1 = silk_mla(tmp1, uc!(x, xp + n - k - 1) as i32, atmp1);
+                    tmp2 = silk_mla(tmp2, uc!(x, xp + subfr_length - n + k) as i32, atmp1);
                 }
                 tmp1 = -tmp1;
                 tmp2 = -tmp2;
                 for k in 0..=n {
-                    caf[k] = silk_smlaww(caf[k], tmp1, shl32(x[xp + n - k] as i32, -rshifts - 1));
+                    caf[k] =
+                        silk_smlaww(caf[k], tmp1, shl32(uc!(x, xp + n - k) as i32, -rshifts - 1));
                     cab[k] = silk_smlaww(
                         cab[k],
                         tmp2,
-                        shl32(x[xp + subfr_length - n + k - 1] as i32, -rshifts - 1),
+                        shl32(uc!(x, xp + subfr_length - n + k - 1) as i32, -rshifts - 1),
                     );
                 }
             }
