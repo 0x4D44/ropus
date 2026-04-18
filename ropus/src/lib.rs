@@ -29,6 +29,23 @@
 //! let samples = decoder.decode(&packet[..len], &mut pcm_out, DecodeMode::Normal).unwrap();
 //! assert_eq!(samples, 960);
 //! ```
+//!
+//! # API layering
+//!
+//! `ropus` exposes two API tiers:
+//!
+//! - **High-level** ([`Encoder`], [`Decoder`]): typed enums ([`DecodeMode`],
+//!   [`Channels`], [`Bitrate`], ...), `Result<_, …Error>` error types, hidden
+//!   `i32` codes. Use this for new Rust code.
+//! - **Low-level** (`ropus::opus::*`, `ropus::celt::*`, `ropus::silk::*`,
+//!   including [`OpusDecoder`], [`OpusMSDecoder`]): mirrors the libopus C ABI
+//!   verbatim — `bool decode_fec`, `Result<i32, i32>`, raw `i32` channel
+//!   counts. Stable so the `capi/` crate can present a byte-identical FFI.
+//!
+//! The low-level layer intentionally retains `bool` for `decode_fec` and bare
+//! `i32` errors. There is no high-level multistream facade today; if one is
+//! added later it will live alongside [`Encoder`] / [`Decoder`] and use
+//! [`DecodeMode`] like [`Decoder`] does.
 
 // Clippy allows for C-to-Rust codec port patterns.
 // This is a bit-exact port of xiph/opus; these patterns are intentional.
