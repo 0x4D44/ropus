@@ -55,7 +55,17 @@ const fn gconst(x: f64) -> i32 {
 pub const OPUS_OK: i32 = 0;
 pub const OPUS_BAD_ARG: i32 = -1;
 pub const OPUS_INTERNAL_ERROR: i32 = -3;
-pub const OPUS_BITRATE_MAX: i32 = -1000;
+/// Sentinel "use the maximum bitrate" for `SetBitrate`. Matches C
+/// `OPUS_BITRATE_MAX` in `opus_defines.h`. Numerically coincides with
+/// `OPUS_BAD_ARG` because both live in disjoint value spaces in the C
+/// reference: `OPUS_BITRATE_MAX` is a parameter value (compared against
+/// `bitrate`), `OPUS_BAD_ARG` is a return code. A previous definition of
+/// `-1000` silently rejected `SetBitrate(OPUS_BITRATE_MAX)` from
+/// `OpusEncoder`, leaving a stale bitrate on the CELT encoder during the
+/// 5 ms SILK→CELT redundancy encode and causing `nb_compressed_bytes` to
+/// be CBR-shrunk from `redundancy_bytes` down to a much smaller value,
+/// which diverged `redundant_rng` from the decoder.
+pub const OPUS_BITRATE_MAX: i32 = -1;
 
 /// Comb filter tapset gains: `gains[tapset][tap]` in Q15.
 /// Matches C `gains[3][3]` in `comb_filter()`.
