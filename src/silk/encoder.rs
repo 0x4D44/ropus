@@ -6582,14 +6582,19 @@ pub fn silk_pitch_analysis_core(
             lag_counter += 1;
         }
 
-        // Output pitch lags
+        // Output pitch lags. Clamp to per-sample-rate max lag (PE_MAX_LAG_MS * fs_khz),
+        // matching C: `silk_LIMIT(pitch_out[k], min_lag, PE_MAX_LAG_MS * Fs_kHz)`
+        // (pitch_analysis_core_FIX.c:540). Using the global `PE_MAX_LAG` constant
+        // (PE_MAX_LAG_MS * PE_MAX_FS_KHZ = 288) lets 12/16 kHz lags escape the
+        // range C enforces, which drifts NSQ state on the next frame.
+        let max_lag_limit = (PE_MAX_LAG_MS as i32) * fs_khz;
         for k in 0..nb_subfr {
             let cb_val = if use_20ms_3 {
                 SILK_CB_LAGS_STAGE3[k][cb_imax_3 as usize] as i32
             } else {
                 SILK_CB_LAGS_STAGE3_10_MS[k][cb_imax_3 as usize] as i32
             };
-            pitch_out[k] = (lag_new + cb_val).max(min_lag).min(PE_MAX_LAG as i32);
+            pitch_out[k] = (lag_new + cb_val).max(min_lag).min(max_lag_limit);
         }
         *lag_index = (lag_new - min_lag) as i16;
         *contour_index = cb_imax_3 as i8;

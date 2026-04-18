@@ -58,3 +58,7 @@ path = "tools/trace_silk_wb.rs"
 [[bin]]
 name = "repro_bug_d2"
 path = "tools/repro_bug_d2.rs"
+
+[[bin]]
+name = "repro_bug_k"
+path = "tools/repro_bug_k.rs"
