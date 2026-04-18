@@ -3254,8 +3254,13 @@ struct SweepCase {
 }
 
 fn resolve_wav_path(sample_rate: i32, channels: i32) -> String {
+    // Resolve relative to this crate's manifest dir so the path is valid both
+    // when `cargo run` executes from the workspace root and when `cargo test`
+    // sets cwd to `harness/`. The workspace-root `tests/vectors/` directory
+    // lives at `../tests/vectors/` relative to `harness/`.
     format!(
-        "tests/vectors/{}hz_{}_noise.wav",
+        "{}/../tests/vectors/{}hz_{}_noise.wav",
+        env!("CARGO_MANIFEST_DIR"),
         sample_rate,
         if channels == 1 { "mono" } else { "stereo" }
     )
@@ -8911,21 +8916,32 @@ mod coverage_smoke_tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    /// Resolve a fixture path under `tests/vectors/`. `cargo test` runs with
+    /// `CARGO_MANIFEST_DIR` set to `harness/`, so the workspace-root
+    /// `tests/vectors/` directory lives at `../tests/vectors/` from here.
+    fn vector_path(name: &str) -> String {
+        format!(
+            "{}/../tests/vectors/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            name
+        )
+    }
+
     #[test]
     fn smoke_core_harness_commands() {
         let _guard = harness_lock().lock().unwrap();
 
         cmd_api();
-        cmd_packets("tests/vectors/48000hz_mono_noise.wav");
-        cmd_decode_formats("tests/vectors/48000hz_mono_noise.wav");
-        cmd_repacketizer("tests/vectors/48000hz_mono_noise.wav");
+        cmd_packets(&vector_path("48000hz_mono_noise.wav"));
+        cmd_decode_formats(&vector_path("48000hz_mono_noise.wav"));
+        cmd_repacketizer(&vector_path("48000hz_mono_noise.wav"));
     }
 
     #[test]
     fn smoke_resilience_and_multistream_commands() {
         let _guard = harness_lock().lock().unwrap();
 
-        let wav = read_wav(Path::new("tests/vectors/48000hz_mono_noise.wav"));
+        let wav = read_wav(Path::new(&vector_path("48000hz_mono_noise.wav")));
         let sr = wav.sample_rate as i32;
         let ch = wav.channels as i32;
         let frame_size = (sr / 50) as usize;
@@ -8967,7 +8983,7 @@ mod coverage_smoke_tests {
         );
 
         cmd_multistream();
-        cmd_quality("tests/vectors/48000hz_mono_sine440.wav");
+        cmd_quality(&vector_path("48000hz_mono_sine440.wav"));
     }
 
     #[test]
