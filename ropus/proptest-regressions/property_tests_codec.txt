@@ -1,0 +1,1 @@
+cc 8a60ba37d42edca62c4c146578329727137ba1bbc4549785c846c1a60cec0dd3 # shrinks to config = (48000, 1, 2049, 120, Some(1002)), bitrate = 54400, seed = 8969
