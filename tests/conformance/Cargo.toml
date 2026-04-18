@@ -1,0 +1,14 @@
+[package]
+name = "conformance"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# Bring in the capi shim as an rlib so it's present in the test binary
+# (and drags in every #[no_mangle] symbol). The staticlib output from capi
+# isn't needed for in-process linking because we pull it in via rlib.
+capi = { path = "../../capi" }
+
+[build-dependencies]
+cc = "1"

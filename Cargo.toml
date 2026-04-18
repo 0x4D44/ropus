@@ -1,11 +1,16 @@
 [workspace]
 resolver = "3"
-members = ["ropus", "harness"]
+members = ["ropus", "harness", "capi", "tests/conformance"]
 exclude = ["tests/fuzz", "reference"]
 
 [profile.dev]
 overflow-checks = false
+panic = "unwind"
+
+[profile.test]
+panic = "unwind"
 
 [profile.release]
 lto = "fat"
 codegen-units = 1
+panic = "unwind"

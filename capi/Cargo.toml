@@ -1,0 +1,15 @@
+[package]
+name = "capi"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "mdopus_capi"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+ropus = { path = "../ropus" }
+
+[build-dependencies]
+cc = "1"
