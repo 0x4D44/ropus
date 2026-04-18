@@ -1,0 +1,14 @@
+[package]
+name = "ropus-fb2k"
+version = "0.1.0"
+edition = "2024"
+license = "BSD-3-Clause"
+publish = false
+description = "foobar2000 input-component backend: Ogg Opus demux + ropus decoder behind a stable C ABI"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ropus = { path = "../ropus" }
+ogg = "0.9"

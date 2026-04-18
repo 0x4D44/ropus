@@ -1,0 +1,386 @@
+//! Rust backend for the `foo_input_ropus` foobar2000 component.
+//!
+//! This crate is the Rust half of the two-DLL design in the HLD: a `cdylib`
+//! exposing a small, stable C ABI (see `include/ropus_fb2k.h`). An `rlib`
+//! target is kept so `cargo test` can link integration tests against the
+//! same crate that ships as the cdylib; integration tests drive the C
+//! entry points directly (no Rust-only convenience surface).
+//!
+//! M1 surface:
+//!
+//! * `ropus_fb2k_open` — header + tags parse over a caller-supplied IO
+//!   callback struct, producing a `RopusFb2kReader` handle.
+//! * `ropus_fb2k_close` — destroy the handle.
+//! * `ropus_fb2k_get_info` — fill `RopusFb2kInfo` with what M1 can populate
+//!   (channels / pre_skip / input_sample_rate). Duration, bitrate, and
+//!   ReplayGain are populated as placeholder defaults and wired up in M2/M3.
+//! * `ropus_fb2k_read_tags` — invoke a caller callback for every parsed
+//!   vorbis_comment, plus a synthetic `VENDOR` entry so the caller sees the
+//!   encoder string for free. `METADATA_BLOCK_PICTURE` is filtered here.
+//! * `ropus_fb2k_decode_next`, `ropus_fb2k_seek` — stubs returning
+//!   `ROPUS_FB2K_UNSUPPORTED` with a "not implemented in M1" last-error.
+//! * `ropus_fb2k_last_error` / `ropus_fb2k_last_error_code` — thread-local
+//!   error slots, paired so the C++ shim can branch on the status code
+//!   (never on message text).
+//!
+//! All `#[unsafe(no_mangle)]` entry points are wrapped in the local
+//! `ffi_guard!` macro (mirrors `capi::ffi_guard!` but with the extra hook
+//! of writing a panic notice into the last-error slot — see the comment
+//! next to the macro definition below), so a panic deep in the parser
+//! surfaces as a typed negative status + human-readable last-error string
+//! rather than unwinding across the C boundary (UB on stable Rust).
+
+#![allow(clippy::missing_safety_doc)]
+
+use std::os::raw::{c_char, c_int, c_void};
+use std::ptr;
+
+mod error;
+mod io;
+mod reader;
+mod tags;
+
+use crate::error::{clear_last_error, last_error_ptr, set_last_error_with_code};
+use crate::io::CallbackReader;
+use crate::reader::{OggOpusReader, ReaderError};
+
+// ---------------------------------------------------------------------------
+// Error codes (kept in sync with `include/ropus_fb2k.h`)
+// ---------------------------------------------------------------------------
+
+pub const ROPUS_FB2K_OK: c_int = 0;
+pub const ROPUS_FB2K_BAD_ARG: c_int = -1;
+pub const ROPUS_FB2K_IO: c_int = -2;
+pub const ROPUS_FB2K_ABORTED: c_int = -3;
+pub const ROPUS_FB2K_INVALID_STREAM: c_int = -4;
+pub const ROPUS_FB2K_UNSUPPORTED: c_int = -5;
+
+/// Info-only open hint — read the header + tags (+ later the last granule)
+/// but skip full page-walk. M1 accepts this bit and silently treats it the
+/// same as a normal open; M2 wires in the fast path.
+pub const ROPUS_FB2K_OPEN_INFO_ONLY: u32 = 1 << 0;
+
+/// Tag keys that `ropus_fb2k_read_tags` silently drops before calling the
+/// caller's tag callback. The parser still surfaces them on the raw
+/// `ParsedTags::iter()` path — filtering happens at the reporting boundary
+/// (HLD sec. 2 non-goals: fb2k has its own cover-art pipeline).
+///
+/// Matched case-insensitively.
+const FILTERED_TAG_KEYS: &[&str] = &["METADATA_BLOCK_PICTURE"];
+
+// ---------------------------------------------------------------------------
+// C-visible structs
+// ---------------------------------------------------------------------------
+
+/// Function-pointer type aliases mirroring `ropus_fb2k.h`. Kept as type
+/// aliases (not wrapper structs) so the `#[repr(C)]` layout of
+/// `RopusFb2kIo` matches the header byte-for-byte.
+pub type RopusFb2kReadFn = extern "C" fn(ctx: *mut c_void, buf: *mut u8, n: usize) -> i64;
+pub type RopusFb2kSeekFn = extern "C" fn(ctx: *mut c_void, abs_offset: u64) -> c_int;
+pub type RopusFb2kSizeFn = extern "C" fn(ctx: *mut c_void, out_size: *mut u64) -> c_int;
+pub type RopusFb2kAbortFn = extern "C" fn(ctx: *mut c_void) -> c_int;
+
+/// IO callback struct — the only thing that crosses the C boundary on
+/// open. Copied by value into the reader on open, so the caller may drop
+/// this struct as soon as `ropus_fb2k_open` returns.
+///
+/// `read` is declared as `Option<RopusFb2kReadFn>` so a zero-initialised
+/// C struct (fn-pointer = NULL) decodes as `None` rather than triggering
+/// UB on dereference. `Option<extern "C" fn>` has the same layout as a
+/// bare function pointer thanks to the null-pointer optimization
+/// (documented in the Rustonomicon), so the `#[repr(C)]` wire format is
+/// unchanged — the header still declares the field as a bare
+/// `RopusFb2kReadFn`. A null `read` is rejected with `BAD_ARG` in
+/// `ropus_fb2k_open`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RopusFb2kIo {
+    pub ctx: *mut c_void,
+    pub read: Option<RopusFb2kReadFn>,
+    pub seek: Option<RopusFb2kSeekFn>,
+    pub size: Option<RopusFb2kSizeFn>,
+    pub abort: Option<RopusFb2kAbortFn>,
+}
+
+/// Output struct populated by `ropus_fb2k_get_info`. Layout matches the
+/// header; fields not populated by M1 get sentinel defaults.
+#[repr(C)]
+pub struct RopusFb2kInfo {
+    pub sample_rate: u32,
+    pub channels: u8,
+    pub pre_skip: u16,
+    pub total_samples: u64,
+    pub nominal_bitrate: i32,
+    pub rg_track_gain: f32,
+    pub rg_album_gain: f32,
+    pub rg_track_peak: f32,
+    pub rg_album_peak: f32,
+}
+
+/// Tag-iteration callback type.
+pub type TagCb = extern "C" fn(ctx: *mut c_void, key: *const c_char, value: *const c_char);
+
+// ---------------------------------------------------------------------------
+// Handle
+// ---------------------------------------------------------------------------
+
+/// Opaque handle returned by `ropus_fb2k_open`. Wraps the inner reader.
+/// The inner type is parametrised on `CallbackReader` because the C-facing
+/// API only ever sees a `RopusFb2kIo`; tests drive the same path by
+/// constructing an `RopusFb2kIo` over an in-memory buffer.
+pub struct RopusFb2kReader {
+    inner: OggOpusReader<CallbackReader>,
+}
+
+// ---------------------------------------------------------------------------
+// ffi_guard — mirrors capi/src/lib.rs
+// ---------------------------------------------------------------------------
+
+/// Wrap an FFI body so a panic becomes a typed status + a stored last-error
+/// message rather than UB.
+///
+/// Divergence from `capi/src/lib.rs::ffi_guard!`: the capi version only
+/// catches-and-returns the sentinel; it does not write the last-error slot
+/// (capi has no such slot). We deliberately *do* set the slot to
+/// "internal panic inside ropus-fb2k" so a C caller who sees an unexpected
+/// negative status can surface a message instead of a bare error code.
+/// The duplication is intentional: making `ropus-fb2k` depend on `capi`
+/// would couple two otherwise-independent adapters for the sake of ten
+/// lines of macro.
+macro_rules! ffi_guard {
+    ($on_panic:expr, $body:block) => {{
+        match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| $body)) {
+            Ok(v) => v,
+            Err(_) => {
+                $crate::error::set_last_error("internal panic inside ropus-fb2k");
+                $on_panic
+            }
+        }
+    }};
+}
+
+// ---------------------------------------------------------------------------
+// C entry points — M1 subset
+// ---------------------------------------------------------------------------
+
+/// Open an Ogg Opus stream via caller-supplied IO callbacks.
+///
+/// Returns a non-null handle on success. On failure returns NULL and stores
+/// a human-readable message in the thread-local slot retrievable via
+/// `ropus_fb2k_last_error`. The negative status is not returned through
+/// this entry point (since the return type is a pointer) — callers that
+/// want the code should wrap the failure case or call `get_info` on a
+/// handle that is guaranteed non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ropus_fb2k_open(
+    io: *const RopusFb2kIo,
+    flags: u32,
+) -> *mut RopusFb2kReader {
+    ffi_guard!(ptr::null_mut(), {
+        if io.is_null() {
+            set_last_error_with_code("io pointer is null", ROPUS_FB2K_BAD_ARG);
+            return ptr::null_mut();
+        }
+        // SAFETY: caller asserts non-null `io` points to a fully-initialised
+        // `RopusFb2kIo`. We copy it by value so subsequent mutations to the
+        // caller's struct don't affect the reader.
+        let io_copy = unsafe { *io };
+
+        let Some(reader) = CallbackReader::new(io_copy) else {
+            // `read` is the only non-optional callback; null here is a
+            // programmer error on the C side (the header says so).
+            set_last_error_with_code("io.read callback is null", ROPUS_FB2K_BAD_ARG);
+            return ptr::null_mut();
+        };
+        match OggOpusReader::open(reader, flags) {
+            Ok(inner) => {
+                clear_last_error();
+                Box::into_raw(Box::new(RopusFb2kReader { inner }))
+            }
+            Err(e) => {
+                let code = reader_error_code(&e);
+                set_last_error_with_code(e.to_string(), code);
+                ptr::null_mut()
+            }
+        }
+    })
+}
+
+/// Destroy a reader handle. Safe to call on NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ropus_fb2k_close(ptr: *mut RopusFb2kReader) {
+    let _: () = ffi_guard!((), {
+        if !ptr.is_null() {
+            // SAFETY: `ptr` was returned by `ropus_fb2k_open`, which boxes
+            // `RopusFb2kReader` and yields the raw pointer via
+            // `Box::into_raw`. Callers promise to pass it here exactly once.
+            let _ = unsafe { Box::from_raw(ptr) };
+        }
+    });
+}
+
+/// Retrieve the thread-local last-error string. Never NULL (always points
+/// to at least an empty C string).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ropus_fb2k_last_error() -> *const c_char {
+    ffi_guard!(ptr::null(), { last_error_ptr() })
+}
+
+/// Retrieve the negative status code associated with the most recent failed
+/// call on this thread. Returns 0 if the last relevant call succeeded (or
+/// had no code). Paired with `ropus_fb2k_last_error()` for message text —
+/// the C++ shim branches on the code to pick the correct fb2k exception.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ropus_fb2k_last_error_code() -> c_int {
+    ffi_guard!(0, { error::last_error_code() })
+}
+
+/// Populate `RopusFb2kInfo` from a successfully-opened reader.
+///
+/// M1 populates `channels`, `pre_skip`, and `sample_rate` (always 48000
+/// per HLD sec. 2). `total_samples`, `nominal_bitrate`, and the four
+/// ReplayGain fields are placeholder defaults (0 / -1 / NaN) until M2 / M3
+/// wire them up.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ropus_fb2k_get_info(
+    r: *mut RopusFb2kReader,
+    out: *mut RopusFb2kInfo,
+) -> c_int {
+    ffi_guard!(ROPUS_FB2K_BAD_ARG, {
+        if r.is_null() || out.is_null() {
+            set_last_error_with_code("get_info: null pointer", ROPUS_FB2K_BAD_ARG);
+            return ROPUS_FB2K_BAD_ARG;
+        }
+        // SAFETY: caller asserts `r` came from `ropus_fb2k_open` (non-null
+        // handles only) and `out` points to a writable `RopusFb2kInfo`.
+        let reader = unsafe { &*r };
+        let info = RopusFb2kInfo {
+            // We always decode at 48 kHz regardless of `input_sample_rate` —
+            // Opus runs internally at 48 kHz for family 0. The header's
+            // `input_sample_rate` field is informational only (RFC 7845).
+            sample_rate: 48_000,
+            channels: reader.inner.channels(),
+            pre_skip: reader.inner.pre_skip(),
+            total_samples: 0,          // populated in M2 via reverse-scan
+            nominal_bitrate: -1,       // populated in M2
+            rg_track_gain: f32::NAN,
+            rg_album_gain: f32::NAN,
+            rg_track_peak: f32::NAN,
+            rg_album_peak: f32::NAN,
+        };
+        unsafe { ptr::write(out, info) };
+        clear_last_error();
+        ROPUS_FB2K_OK
+    })
+}
+
+/// Invoke `cb` for every parsed vorbis_comment. Each `(key, value)` pair is
+/// passed as null-terminated UTF-8 strings whose lifetime ends when the
+/// callback returns — the callee must copy if it wants to keep them.
+///
+/// Also emits a synthetic `("VENDOR", vendor_string)` entry first so the
+/// caller doesn't need two separate APIs to learn who encoded the file.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ropus_fb2k_read_tags(
+    r: *mut RopusFb2kReader,
+    cb: Option<TagCb>,
+    ctx: *mut c_void,
+) -> c_int {
+    ffi_guard!(ROPUS_FB2K_BAD_ARG, {
+        if r.is_null() || cb.is_none() {
+            set_last_error_with_code("read_tags: null pointer", ROPUS_FB2K_BAD_ARG);
+            return ROPUS_FB2K_BAD_ARG;
+        }
+        let cb = cb.unwrap();
+        // SAFETY: `r` came from `ropus_fb2k_open`, still valid per caller.
+        let reader = unsafe { &*r };
+
+        // Emit the vendor string as a synthetic tag first.
+        if !emit_tag(cb, ctx, "VENDOR", reader.inner.vendor()) {
+            set_last_error_with_code(
+                "read_tags: tag contained interior NUL",
+                ROPUS_FB2K_INVALID_STREAM,
+            );
+            return ROPUS_FB2K_INVALID_STREAM;
+        }
+
+        for (k, v) in reader.inner.tags().iter() {
+            // Filter cover-art blobs at the reporting boundary (not in the
+            // parser), so the raw comment is still available to anyone
+            // pulling `ParsedTags::iter()` directly.
+            if FILTERED_TAG_KEYS
+                .iter()
+                .any(|f| k.eq_ignore_ascii_case(f))
+            {
+                continue;
+            }
+            if !emit_tag(cb, ctx, k, v) {
+                set_last_error_with_code(
+                    "read_tags: tag contained interior NUL",
+                    ROPUS_FB2K_INVALID_STREAM,
+                );
+                return ROPUS_FB2K_INVALID_STREAM;
+            }
+        }
+        clear_last_error();
+        ROPUS_FB2K_OK
+    })
+}
+
+/// Invoke a tag callback with key/value, converting to C strings. Returns
+/// false if either key or value contains an interior NUL (in which case the
+/// caller bails out with INVALID_STREAM rather than silently mangling).
+fn emit_tag(cb: TagCb, ctx: *mut c_void, key: &str, value: &str) -> bool {
+    let Ok(key_c) = std::ffi::CString::new(key) else {
+        return false;
+    };
+    let Ok(val_c) = std::ffi::CString::new(value) else {
+        return false;
+    };
+    cb(ctx, key_c.as_ptr(), val_c.as_ptr());
+    true
+}
+
+/// Stub for M2. Returns `UNSUPPORTED` so the fb2k shim can map this to
+/// `exception_io_unsupported_format` and let another input component pick up
+/// the file — `BAD_ARG` would be a misleading "programmer error" signal.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ropus_fb2k_decode_next(
+    _r: *mut RopusFb2kReader,
+    _out_interleaved: *mut f32,
+    _max_samples_per_ch: usize,
+) -> c_int {
+    ffi_guard!(ROPUS_FB2K_UNSUPPORTED, {
+        set_last_error_with_code(
+            "decode_next not implemented in M1",
+            ROPUS_FB2K_UNSUPPORTED,
+        );
+        ROPUS_FB2K_UNSUPPORTED
+    })
+}
+
+/// Stub for M3. Returns `UNSUPPORTED` for the same reason as
+/// `ropus_fb2k_decode_next` above.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ropus_fb2k_seek(_r: *mut RopusFb2kReader, _sample_pos: u64) -> c_int {
+    ffi_guard!(ROPUS_FB2K_UNSUPPORTED, {
+        set_last_error_with_code("seek not implemented in M1", ROPUS_FB2K_UNSUPPORTED);
+        ROPUS_FB2K_UNSUPPORTED
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Crate-private helpers
+// ---------------------------------------------------------------------------
+
+/// Map a `ReaderError` variant to its C status code. Used by the FFI entry
+/// points to populate `last_error_code` consistently with the variant.
+fn reader_error_code(e: &ReaderError) -> c_int {
+    match e {
+        ReaderError::Io(_) => ROPUS_FB2K_IO,
+        ReaderError::InvalidStream(_) => ROPUS_FB2K_INVALID_STREAM,
+        ReaderError::Unsupported(_) => ROPUS_FB2K_UNSUPPORTED,
+        ReaderError::Aborted => ROPUS_FB2K_ABORTED,
+    }
+}
+
