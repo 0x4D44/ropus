@@ -1,0 +1,16 @@
+[package]
+name = "ropus"
+version = "0.2.1"
+edition = "2024"
+
+[features]
+default = ["simd", "unchecked-indexing"]
+simd = ["wide"]
+unchecked-indexing = []
+dnn = []
+
+[dependencies]
+wide = { version = "0.7", optional = true }
+
+[dev-dependencies]
+proptest = "1"

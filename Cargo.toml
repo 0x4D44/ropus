@@ -1,64 +1,11 @@
-[package]
-name = "mdopus"
-version = "0.2.1"
-edition = "2024"
-build = "tests/harness/build.rs"
-autobins = false
-autobenches = false
-autotests = false
+[workspace]
+resolver = "3"
+members = ["ropus", "harness"]
+exclude = ["tests/fuzz", "reference"]
 
-[features]
-default = ["simd", "unchecked-indexing"]
-simd = ["wide"]
-unchecked-indexing = []
-dnn = []
-
-[dependencies]
-wide = { version = "0.7", optional = true }
-
-[dev-dependencies]
-proptest = "1"
-
-[build-dependencies]
-cc = "1"
-
-# Disable overflow checks in debug mode to match C wrapping semantics.
-# The C reference relies on integer overflow wrapping; Rust panics by default.
 [profile.dev]
 overflow-checks = false
 
 [profile.release]
 lto = "fat"
 codegen-units = 1
-
-[[bin]]
-name = "mdopus-compare"
-path = "tests/harness/main.rs"
-
-[[bin]]
-name = "replay_fuzz_decode"
-path = "tools/replay_fuzz_decode.rs"
-
-[[bin]]
-name = "diff_fuzz_decode"
-path = "tools/diff_fuzz_decode.rs"
-
-[[bin]]
-name = "mdopus-interframe"
-path = "tests/harness/interframe_compare.rs"
-
-[[bin]]
-name = "repro-fuzz-roundtrip"
-path = "tools/repro_fuzz_roundtrip.rs"
-
-[[bin]]
-name = "trace_silk_wb"
-path = "tools/trace_silk_wb.rs"
-
-[[bin]]
-name = "repro_bug_d2"
-path = "tools/repro_bug_d2.rs"
-
-[[bin]]
-name = "repro_bug_k"
-path = "tools/repro_bug_k.rs"

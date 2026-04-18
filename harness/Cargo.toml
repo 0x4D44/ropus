@@ -1,0 +1,43 @@
+[package]
+name = "ropus-harness"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+ropus = { path = "../ropus", default-features = false, features = ["simd"] }
+
+[build-dependencies]
+cc = "1"
+
+[[bin]]
+name = "mdopus-compare"
+path = "src/main.rs"
+
+[[bin]]
+name = "replay_fuzz_decode"
+path = "src/bin/replay_fuzz_decode.rs"
+
+[[bin]]
+name = "diff_fuzz_decode"
+path = "src/bin/diff_fuzz_decode.rs"
+
+[[bin]]
+name = "mdopus-interframe"
+path = "src/bin/interframe.rs"
+
+[[bin]]
+name = "repro-fuzz-roundtrip"
+path = "src/bin/repro_fuzz_roundtrip.rs"
+
+[[bin]]
+name = "trace_silk_wb"
+path = "src/bin/trace_silk_wb.rs"
+
+[[bin]]
+name = "repro_bug_d2"
+path = "src/bin/repro_bug_d2.rs"
+
+[[bin]]
+name = "repro_bug_k"
+path = "src/bin/repro_bug_k.rs"
