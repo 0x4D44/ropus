@@ -10,7 +10,7 @@ readme = "README.md"
 keywords = ["opus", "audio", "codec", "dsp"]
 categories = ["multimedia::audio", "multimedia::encoding"]
 authors = ["Martin Davidson <martingdavidson@gmail.com>"]
-include = ["src/**/*", "Cargo.toml", "README.md", "LICENSE"]
+include = ["src/**/*", "examples/**/*", "Cargo.toml", "README.md", "LICENSE"]
 
 [dependencies]
 wide = "0.7"
