@@ -105,22 +105,29 @@ pub use opus::decoder::{
 pub use opus::multistream::{OpusMSEncoder, OpusMSDecoder};
 pub use opus::repacketizer::OpusRepacketizer;
 
-// Safe-indexing hot-path macros (historical shorthand; plain `[]` / `&mut []`).
+// Unchecked-indexing hot-path macros for CELT FFT / MDCT inner loops.
+//
+// Every call site lives in `celt/fft.rs` or `celt/mdct.rs` and has been
+// fuzzed + differential-tested against the C reference with no OOB
+// findings. Bounds-checked indexing cost ~9% on real-content decode
+// (see "2026.04.18 - JRN - restore-unchecked-indexing.md").
 macro_rules! uc {
     ($slice:expr, $idx:expr) => {
-        $slice[$idx]
+        unsafe { *$slice.get_unchecked($idx) }
     };
 }
 
 macro_rules! uc_set {
-    ($slice:expr, $idx:expr, $val:expr) => {
-        $slice[$idx] = $val
-    };
+    ($slice:expr, $idx:expr, $val:expr) => {{
+        let uc_idx = $idx;
+        let uc_val = $val;
+        unsafe { *$slice.get_unchecked_mut(uc_idx) = uc_val }
+    }};
 }
 
 macro_rules! uc_mut {
     ($slice:expr, $idx:expr) => {
-        &mut $slice[$idx]
+        unsafe { $slice.get_unchecked_mut($idx) }
     };
 }
 
