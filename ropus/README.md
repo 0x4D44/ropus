@@ -1,14 +1,21 @@
-# ropus — Safe Rust port of the xiph Opus audio codec
+# ropus — Rust port of the xiph Opus audio codec
 
-Bit-exact against the C reference. Safe Rust throughout the codec path.
+Bit-exact against the C reference. Almost entirely safe Rust.
 
 ## What it is
 
 `ropus` is a Rust port of the [xiph/opus](https://github.com/xiph/opus)
 fixed-point audio codec. Encoded and decoded output is bit-exact against the
 upstream C reference implementation across the full parameter matrix we test.
-The codec path contains no `unsafe`; the crate builds as pure Rust with no
-external C toolchain and no build script.
+The crate builds as pure Rust with no external C toolchain and no build script.
+
+Safety-wise, the codec is almost entirely safe Rust. A small set of
+`unsafe { get_unchecked[_mut] }` macros remain in SILK and CELT hot loops
+(NSQ LPC, Burg, autocorrelation, LPC analysis, FFT butterflies, MDCT
+rotations) for parity with the reference's hand-tuned SSE intrinsics. Each
+call site operates under statically-known iteration bounds against a slice
+at least that long, and is covered by fuzzing and differential tests
+against the C reference with no out-of-bounds findings.
 
 ## Install
 

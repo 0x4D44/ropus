@@ -1839,11 +1839,14 @@ impl OpusEncoder {
 
         self.silk_mode.to_mono = bak_to_mono;
 
-        self.range_final = if let Some(ref celt) = self.celt_enc {
-            celt.rng
-        } else {
-            0
-        };
+        // Do NOT overwrite self.range_final here. The last sub-frame's
+        // encode_frame_native call has already stored the correct value
+        // (`main_rng XOR redundant_rng`, mirroring C opus_encoder.c:2553).
+        // Overwriting with a raw `celt.rng` would destroy both the XOR and
+        // capture the wrong rng (the redundancy encoder's rng rather than
+        // the main-encode rng) whenever frame_redundancy fires on the last
+        // sub-frame (C reference opus_encoder.c:1770-1838 has no such
+        // override).
 
         Ok(ret)
     }
