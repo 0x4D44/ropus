@@ -1,4 +1,4 @@
-# mdopus
+# ropus
 
 A Rust port of [xiph/opus](https://github.com/xiph/opus) with a bit-exact comparison workflow against the C reference codec.
 
@@ -6,18 +6,20 @@ For library usage and the crates.io quickstart, see [`ropus/README.md`](ropus/RE
 
 ## What this project is
 
-mdopus is a Cargo workspace: the published library crate lives in `ropus/`, with a C comparison harness alongside for parity testing.
+This repository is a Cargo workspace: the published library crate lives in `ropus/`, with a C comparison harness, end-user CLI, and C ABI shim alongside for parity testing and integration.
 
 - `ropus/src/` contains codec modules (`celt`, `silk`, `opus`, `dnn`) and shared types in `types.rs`.
+- `ropus-cli/` is the end-user CLI (encode/decode/transcode/play).
 - `harness/` builds C Opus as `opus_ref` and runs `ropus-compare`.
-- `tests/vectors/` stores deterministic WAV fixtures used by CLI checks.
+- `capi/` exposes the Rust codec through the libopus C ABI.
+- `tests/conformance/` is the workspace conformance suite; `tests/vectors/` stores deterministic WAV fixtures.
 - `tools/` hosts the coordination script for multi-step implementation workflows.
 
 ## Quick setup
 
 ```bash
-git clone <repo-url> mdopus
-cd mdopus
+git clone https://github.com/0x4D44/ropus.git
+cd ropus
 
 git clone https://github.com/xiph/opus.git reference
 
@@ -51,8 +53,8 @@ cargo llvm-cov
 ## Repository layout
 
 ```text
-mdopus/
-├── ropus/         # published library crate
+ropus/            # workspace root
+├── ropus/        # published library crate (name = "ropus")
 │   └── src/
 │       ├── celt/
 │       ├── silk/
@@ -60,9 +62,12 @@ mdopus/
 │       ├── dnn/
 │       ├── lib.rs
 │       └── types.rs
-├── harness/       # comparison binary + bindings
+├── ropus-cli/    # end-user CLI (encode/decode/transcode/play)
+├── harness/      # comparison binary + bindings (ropus-compare)
+├── capi/         # C ABI shim (libopus-compatible)
 ├── tests/
-│   └── vectors/   # test media
+│   ├── conformance/  # workspace conformance suite
+│   └── vectors/      # test media
 └── tools/
     └── coordinator.py
 ```

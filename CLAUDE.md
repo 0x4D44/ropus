@@ -1,9 +1,11 @@
-# mdopus - Opus Audio Codec in Rust
+# ropus - Opus Audio Codec in Rust
 
 Production-quality Rust port of the [xiph/opus](https://github.com/xiph/opus) C codec (fixed-point).
 ~36k lines of Rust across 36 source files covering all 26 modules: CELT, SILK, Opus, and DNN.
 
-Reference C source lives in `reference/` (git-ignored; clone from xiph/opus).
+Published at [github.com/0x4D44/ropus](https://github.com/0x4D44/ropus). Reference C source lives in `reference/` (git-ignored; clone from xiph/opus).
+
+Note: the workspace directory on disk is still named `mdopus/` — only the crate/repo identity was renamed to `ropus`.
 
 ## Project Status
 
@@ -13,21 +15,30 @@ Currently in the **integration** phase — full encode/decode round-trip validat
 ## Architecture
 
 ```
-mdopus/
-├── src/
-│   ├── lib.rs              # Crate root, module declarations
-│   ├── types.rs            # Fixed-point types, Q-format macros (arch.h, fixed_generic.h)
-│   ├── celt/               # CELT codec: range coder, FFT/MDCT, bands, pitch, VQ, encoder/decoder
-│   ├── silk/               # SILK codec: tables, common utils, encoder, decoder
-│   ├── opus/               # Opus top-level: encoder, decoder, multistream, repacketizer
-│   └── dnn/                # Neural enhancement: core inference, LPCNet, FARGAN, OSCE, DRED, etc.
-├── tests/harness/          # FFI comparison harness (builds C reference via cc crate)
+mdopus/                     # workspace root (disk name)
+├── Cargo.toml              # workspace manifest
+├── ropus/                  # published library crate (name = "ropus")
+│   └── src/
+│       ├── lib.rs          # Crate root, module declarations
+│       ├── types.rs        # Fixed-point types, Q-format macros (arch.h, fixed_generic.h)
+│       ├── celt/           # CELT codec: range coder, FFT/MDCT, bands, pitch, VQ, encoder/decoder
+│       ├── silk/           # SILK codec: tables, common utils, encoder, decoder
+│       ├── opus/           # Opus top-level: encoder, decoder, multistream, repacketizer
+│       └── dnn/            # Neural enhancement: core inference, LPCNet, FARGAN, OSCE, DRED, etc.
+├── ropus-cli/              # end-user CLI: encode/decode/transcode/play
+├── harness/                # FFI comparison harness (builds C reference via cc crate)
 │   ├── build.rs            # Compiles xiph/opus C source into libopus_ref
-│   ├── bindings.rs         # Raw FFI declarations for C reference API
-│   └── main.rs             # CLI: encode/decode with both impls, compare byte-for-byte
+│   ├── src/main.rs         # ropus-compare CLI: encode/decode/roundtrip, byte-for-byte compare
+│   └── src/bin/            # repro/trace/fuzz-replay binaries
+├── capi/                   # C ABI shim exposing the Rust codec through the libopus API
+├── tests/
+│   ├── conformance/        # workspace member: conformance suite
+│   ├── fuzz/               # cargo-fuzz targets (excluded from workspace)
+│   └── vectors/            # deterministic WAV fixtures
 ├── assets/                 # Architecture docs and code review notes per module
 ├── tools/                  # Coordinator, integration scripts, bisect/trace utilities
 ├── notes/                  # Working scratchpad and investigation logs
+├── wrk_docs/ wrk_journals/ # HLDs and investigation journals
 └── logs/                   # Coordinator run logs (git-ignored)
 ```
 
@@ -83,13 +94,13 @@ Modules ported bottom-up by dependency:
 
 ## Testing
 
-The comparison harness (`tests/harness/`) links the C reference via FFI and compares
+The comparison harness (`harness/`, crate `ropus-harness`) links the C reference via FFI and compares
 outputs directly in-process:
 
 ```
-mdopus-compare encode <input.wav> [--bitrate N] [--complexity N]
-mdopus-compare decode <input.opus>
-mdopus-compare roundtrip <input.wav> [--bitrate N]
+ropus-compare encode <input.wav> [--bitrate N] [--complexity N]
+ropus-compare decode <input.opus>
+ropus-compare roundtrip <input.wav> [--bitrate N]
 ```
 
 Test modes:
@@ -104,8 +115,8 @@ Test modes:
 cargo build
 
 # Run comparison harness
-cargo run --bin mdopus-compare -- encode assets/test.wav
-cargo run --bin mdopus-compare -- roundtrip assets/test.wav
+cargo run --bin ropus-compare -- encode tests/vectors/48k_sine1k_loud.wav
+cargo run --bin ropus-compare -- roundtrip tests/vectors/48k_sine1k_loud.wav
 
 # Coordinator
 python tools/coordinator.py run
