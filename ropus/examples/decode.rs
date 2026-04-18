@@ -21,7 +21,7 @@ use std::path::Path;
 
 use ogg::PacketReader;
 
-use ropus::{Channels, Decoder};
+use ropus::{Channels, DecodeMode, Decoder};
 
 // `#[path]` is needed because Cargo's example auto-discovery treats every
 // file under examples/ as a binary target unless it's in a subdirectory.
@@ -79,7 +79,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut packet_count: u64 = 0;
 
     while let Some(packet) = reader.read_packet()? {
-        let n = decoder.decode(&packet.data, &mut frame, false)?;
+        let n = decoder.decode(&packet.data, &mut frame, DecodeMode::Normal)?;
         decoded.extend_from_slice(&frame[..n * ch_count]);
         packet_count += 1;
     }

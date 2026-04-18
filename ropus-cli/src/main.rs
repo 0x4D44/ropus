@@ -25,7 +25,8 @@ use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use colored::*;
 
 use ropus::{
-    Application, Bitrate, Channels as RopusChannels, Decoder as RopusDecoder, Encoder, Signal,
+    Application, Bitrate, Channels as RopusChannels, DecodeMode, Decoder as RopusDecoder, Encoder,
+    Signal,
 };
 
 use rubato::{
@@ -450,7 +451,7 @@ fn cmd_decode(args: DecodeArgs) -> Result<()> {
     let mut packet_count: u64 = 0;
     while let Some(pkt) = reader.read_packet()? {
         let n = decoder
-            .decode(&pkt.data, &mut decoded, false)
+            .decode(&pkt.data, &mut decoded, DecodeMode::Normal)
             .map_err(|e| anyhow!("decode failed: {e}"))?;
         // n is samples per channel.
         let total = n * opus_channels.count();
@@ -530,7 +531,7 @@ fn cmd_info(args: InfoArgs) -> Result<()> {
         while let Some(pkt) = reader.read_packet()? {
             // We need to know how many samples the packet decodes to. The
             // simplest correct approach is to actually decode it and count.
-            match decoder.decode(&pkt.data, &mut decoded, false) {
+            match decoder.decode(&pkt.data, &mut decoded, DecodeMode::Normal) {
                 Ok(n) => sample_count += n as u64,
                 Err(e) => {
                     eprintln!("{} packet {}: {e}", "warning:".yellow(), packet_idx);
@@ -858,7 +859,7 @@ fn decode_to_f32(path: &Path) -> Result<DecodedAudio> {
                 if opus_scratch.len() != max_per_ch * *ch {
                     opus_scratch = vec![0f32; max_per_ch * *ch];
                 }
-                let n = match dec.decode_float(&packet.data, &mut opus_scratch, false) {
+                let n = match dec.decode_float(&packet.data, &mut opus_scratch, DecodeMode::Normal) {
                     Ok(n) => n,
                     Err(e) => {
                         // Match the native path: swallow per-packet decode

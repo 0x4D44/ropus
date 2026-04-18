@@ -81,7 +81,7 @@ pub mod types;
 
 mod api;
 pub use api::{
-    Application, Bandwidth, Bitrate, Channels, DecodeError, Decoder, DecoderInitError,
+    Application, Bandwidth, Bitrate, Channels, DecodeError, DecodeMode, Decoder, DecoderInitError,
     EncodeError, Encoder, EncoderBuildError, EncoderBuilder, ForceChannels, FrameDuration, Signal,
 };
 
@@ -105,12 +105,18 @@ pub use opus::decoder::{
 pub use opus::multistream::{OpusMSEncoder, OpusMSDecoder};
 pub use opus::repacketizer::OpusRepacketizer;
 
-// Unchecked-indexing hot-path macros for CELT FFT / MDCT inner loops.
+// Unchecked-indexing hot-path macros.
 //
-// Every call site lives in `celt/fft.rs` or `celt/mdct.rs` and has been
-// fuzzed + differential-tested against the C reference with no OOB
-// findings. Bounds-checked indexing cost ~9% on real-content decode
-// (see "2026.04.18 - JRN - restore-unchecked-indexing.md").
+// Used in provably-safe tight inner loops that the C reference has hand-tuned
+// with SSE intrinsics:
+//   - celt/fft.rs, celt/mdct.rs — FFT butterflies + MDCT rotations
+//   - silk/encoder.rs, silk/common.rs — SILK inner loops (NSQ LPC, Burg,
+//     autocorrelation, LPC analysis filter) for encoder performance
+// Every call site operates under statically-known iteration bounds against
+// a slice whose length is at least that bound, and has been fuzzed +
+// differential-tested against the C reference with no OOB findings.
+// See "2026.04.18 - JRN - restore-unchecked-indexing.md" and the
+// encoder-perf follow-up journal.
 macro_rules! uc {
     ($slice:expr, $idx:expr) => {
         unsafe { *$slice.get_unchecked($idx) }

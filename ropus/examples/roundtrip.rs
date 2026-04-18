@@ -12,7 +12,7 @@
 use std::env;
 use std::error::Error;
 
-use ropus::{Application, Bitrate, Channels, Decoder, Encoder};
+use ropus::{Application, Bitrate, Channels, DecodeMode, Decoder, Encoder};
 
 // `#[path]` is needed because Cargo's example auto-discovery treats every
 // file under examples/ as a binary target unless it's in a subdirectory.
@@ -77,7 +77,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         idx += take;
 
         let n = encoder.encode(&pcm_frame, &mut packet)?;
-        let samples_per_channel = decoder.decode(&packet[..n], &mut decoded_frame, false)?;
+        let samples_per_channel = decoder.decode(&packet[..n], &mut decoded_frame, DecodeMode::Normal)?;
         decoded.extend_from_slice(&decoded_frame[..samples_per_channel * ch]);
         packets += 1;
     }
