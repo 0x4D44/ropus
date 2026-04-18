@@ -79,7 +79,16 @@ pub mod opus;
 pub mod silk;
 pub mod types;
 
-// Stable public API. Everything else reachable via module paths is unstable pre-1.0.
+mod api;
+pub use api::{
+    Application, Bandwidth, Bitrate, Channels, DecodeError, Decoder, DecoderInitError,
+    EncodeError, Encoder, EncoderBuildError, EncoderBuilder, ForceChannels, FrameDuration, Signal,
+};
+
+// Low-level libopus types and integer constants. These mirror the C API and are
+// re-exported for advanced users who need finer control than the typed facade
+// (`Encoder` / `Decoder` / `Application` / `Bitrate` / `Bandwidth` / `Signal`)
+// at the crate root provides; for most callers, prefer those typed wrappers.
 pub use opus::encoder::{
     OpusEncoder,
     OPUS_APPLICATION_VOIP, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
