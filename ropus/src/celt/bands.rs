@@ -259,28 +259,15 @@ pub fn denormalise_bands(
         };
 
         let band_len = (band_end - j_start) as usize;
-        #[cfg(feature = "simd")]
-        {
-            super::simd::denormalise_band_simd(
-                &x[x_idx..x_idx + band_len],
-                &mut freq[f_idx..f_idx + band_len],
-                band_len,
-                g,
-                shift,
-            );
-            x_idx += band_len;
-            f_idx += band_len;
-        }
-        #[cfg(not(feature = "simd"))]
-        {
-            let mut j = j_start;
-            while j < band_end {
-                freq[f_idx] = pshr32(mult32_32_q31(shl32(x[x_idx], 30 - NORM_SHIFT), g), shift);
-                f_idx += 1;
-                x_idx += 1;
-                j += 1;
-            }
-        }
+        super::simd::denormalise_band_simd(
+            &x[x_idx..x_idx + band_len],
+            &mut freq[f_idx..f_idx + band_len],
+            band_len,
+            g,
+            shift,
+        );
+        x_idx += band_len;
+        f_idx += band_len;
     }
 
     // Zero out remaining bins
@@ -2913,11 +2900,6 @@ mod tests {
         use crate::celt::decoder::CeltDecoder;
         use crate::celt::encoder::{celt_encode_with_ec, CeltEncoder};
 
-        #[cfg(feature = "dnn")]
-        fn plc_arg<'a>() -> crate::celt::decoder::DnnPlcArg<'a> {
-            None
-        }
-        #[cfg(not(feature = "dnn"))]
         fn plc_arg<'a>() -> crate::celt::decoder::DnnPlcArg<'a> {
             ()
         }

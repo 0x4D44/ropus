@@ -26,7 +26,7 @@ const SECOND_CHECK: [i32; 16] = [0, 0, 3, 2, 3, 2, 5, 2, 3, 2, 3, 2, 5, 2, 3, 2]
 /// The inner loop is unrolled 4x, maintaining a sliding window of y values.
 /// Preconditions: `len >= 3`, `x` has >= `len` elements, `y` has >= `len + 3` elements.
 #[inline(always)]
-#[cfg(any(test, not(feature = "simd")))]
+#[cfg(test)]
 pub(crate) fn xcorr_kernel_scalar(x: &[i32], y: &[i32], sum: &mut [i32; 4], len: usize) {
     debug_assert!(len >= 3);
 
@@ -119,18 +119,10 @@ pub(crate) fn xcorr_kernel_scalar(x: &[i32], y: &[i32], sum: &mut [i32; 4], len:
 /// Compute 4 cross-correlations simultaneously:
 ///   sum[i] += Sigma_{j=0}^{len-1} x[j] * y[j+i]  for i = 0..3
 ///
-/// With the `simd` feature enabled, dispatches to a SIMD implementation
-/// using `wide::i32x4`. Without the feature, uses the scalar implementation.
+/// Dispatches to a SIMD implementation using `wide::i32x4`.
 #[inline(always)]
 pub fn xcorr_kernel(x: &[i32], y: &[i32], sum: &mut [i32; 4], len: usize) {
-    #[cfg(feature = "simd")]
-    {
-        super::simd::xcorr_kernel_simd(x, y, sum, len);
-    }
-    #[cfg(not(feature = "simd"))]
-    {
-        xcorr_kernel_scalar(x, y, sum, len);
-    }
+    super::simd::xcorr_kernel_simd(x, y, sum, len);
 }
 
 /// Compute two inner products in a single pass.

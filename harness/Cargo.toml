@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-ropus = { path = "../ropus", default-features = false, features = ["simd"] }
+ropus = { path = "../ropus" }
 
 [build-dependencies]
 cc = "1"

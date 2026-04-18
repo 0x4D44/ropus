@@ -12,15 +12,11 @@ use crate::silk::tables::*;
 use crate::types::*;
 
 // ===========================================================================
-// DNN PLC argument type (conditional on feature flag)
+// DNN PLC argument type
 // ===========================================================================
 
-/// When the `dnn` feature is enabled, PLC functions accept an optional
-/// `&mut LPCNetPLCState` for neural packet loss concealment.
-/// When disabled, this is a zero-size `()` that optimises away entirely.
-#[cfg(feature = "dnn")]
-pub type DnnPlcArg<'a> = Option<&'a mut crate::dnn::lpcnet::LPCNetPLCState>;
-#[cfg(not(feature = "dnn"))]
+/// DNN PLC is not wired into the pipeline; the argument is a zero-size `()`
+/// that optimises away entirely.
 pub type DnnPlcArg<'a> = ();
 
 // ===========================================================================
@@ -81,9 +77,6 @@ pub struct SilkPlcState {
     pub fs_khz: i32,
     pub nb_subfr: i32,
     pub subfr_length: i32,
-    /// Enable neural PLC when DNN model is loaded.
-    #[cfg(feature = "dnn")]
-    pub enable_deep_plc: bool,
 }
 
 impl Default for SilkPlcState {
@@ -102,8 +95,6 @@ impl Default for SilkPlcState {
             fs_khz: 0,
             nb_subfr: 0,
             subfr_length: 0,
-            #[cfg(feature = "dnn")]
-            enable_deep_plc: false,
         }
     }
 }
@@ -329,8 +320,6 @@ pub struct SilkDecControl {
     pub internal_sample_rate: i32,
     pub payload_size_ms: i32,
     pub prev_pitch_lag: i32,
-    #[cfg(feature = "dnn")]
-    pub enable_deep_plc: bool,
 }
 
 // ===========================================================================
@@ -2284,21 +2273,7 @@ pub fn silk_decode_frame(
         // PLC update (save state from good frame)
         silk_plc_update(dec, &dec_ctrl);
 
-        // Neural PLC: feed good-frame PCM to LPCNet for state tracking.
-        // Process in 10ms subframe pairs (matching LPCNet's 160-sample frame at 16kHz).
-        #[cfg(feature = "dnn")]
-        if let Some(lpcnet) = lpcnet {
-            if dec.s_plc.fs_khz == 16 {
-                let subfr_len = dec.subfr_length;
-                let pair_len = subfr_len * 2;
-                let mut k = 0;
-                while k + pair_len <= frame_length {
-                    lpcnet.update(&p_out[k..k + pair_len]);
-                    k += pair_len;
-                }
-            }
-        }
-        #[cfg(not(feature = "dnn"))]
+        // Neural PLC is not wired into the pipeline.
         #[allow(clippy::let_unit_value)]
         let _ = lpcnet;
 
@@ -2319,30 +2294,7 @@ pub fn silk_decode_frame(
         // for first-frame init) but BEFORE CNG/glue (which check loss_cnt > 0).
         dec.loss_cnt += 1;
 
-        // Neural PLC: replace classical concealment with neural output when available.
-        #[cfg(feature = "dnn")]
-        if let Some(lpcnet) = lpcnet {
-            if lpcnet.loaded && dec.s_plc.fs_khz == 16 {
-                let run_deep = dec.s_plc.enable_deep_plc || lpcnet.fec_fill_pos != 0;
-                let subfr_len = dec.subfr_length;
-                let pair_len = subfr_len * 2;
-                if run_deep {
-                    // Neural concealment: overwrite classical PLC output
-                    let mut k = 0;
-                    while k + pair_len <= frame_length {
-                        lpcnet.conceal(&mut p_out[k..k + pair_len]);
-                        k += pair_len;
-                    }
-                } else {
-                    // Not running deep PLC — still update LPCNet with the classical output
-                    let mut k = 0;
-                    while k + pair_len <= frame_length {
-                        lpcnet.update(&p_out[k..k + pair_len]);
-                        k += pair_len;
-                    }
-                }
-            }
-        }
+        // Neural PLC is not wired into the pipeline.
 
         // Update output buffer
         let mv_len = dec.ltp_mem_length - frame_length;
@@ -2563,11 +2515,7 @@ pub fn silk_decode(
     // Per-channel decoding
     let mut samples_out1_tmp = vec![vec![0i16; frame_length + 2]; n_channels_internal];
 
-    // Reborrow lpcnet for use in the per-channel loop. Neural PLC is mono
-    // only (channel 0); channel 1 always gets the no-op argument.
-    #[cfg(feature = "dnn")]
-    let mut lpcnet = lpcnet;
-    #[cfg(not(feature = "dnn"))]
+    // Neural PLC is not wired into the pipeline.
     #[allow(clippy::let_unit_value)]
     let _ = lpcnet;
 
@@ -2590,10 +2538,7 @@ pub fn silk_decode(
                 CODE_CONDITIONALLY
             };
 
-            // Neural PLC is only applied to channel 0 (mono).
-            #[cfg(feature = "dnn")]
-            let ch_lpcnet: DnnPlcArg<'_> = if n == 0 { lpcnet.as_deref_mut() } else { None };
-            #[cfg(not(feature = "dnn"))]
+            // Neural PLC is not wired into the pipeline.
             let ch_lpcnet: DnnPlcArg<'_> = ();
 
             let mut n_out = 0;
@@ -3225,13 +3170,8 @@ mod tests {
             internal_sample_rate: 16_384,
             payload_size_ms: 30,
             prev_pitch_lag: 0,
-            #[cfg(feature = "dnn")]
-            enable_deep_plc: false,
         };
         let mut rc = RangeDecoder::new(&rc_buf);
-        #[cfg(feature = "dnn")]
-        let lpcnet_arg: DnnPlcArg<'_> = None;
-        #[cfg(not(feature = "dnn"))]
         let lpcnet_arg: DnnPlcArg<'_> = ();
         assert_eq!(
             silk_decode(
@@ -3255,13 +3195,8 @@ mod tests {
             internal_sample_rate: 8_192,
             payload_size_ms: 20,
             prev_pitch_lag: 0,
-            #[cfg(feature = "dnn")]
-            enable_deep_plc: false,
         };
         let mut rc = RangeDecoder::new(&rc_buf);
-        #[cfg(feature = "dnn")]
-        let lpcnet_arg: DnnPlcArg<'_> = None;
-        #[cfg(not(feature = "dnn"))]
         let lpcnet_arg: DnnPlcArg<'_> = ();
         assert_eq!(
             silk_decode(
@@ -3315,16 +3250,11 @@ mod tests {
             internal_sample_rate: 7_168,
             payload_size_ms: 20,
             prev_pitch_lag: 0,
-            #[cfg(feature = "dnn")]
-            enable_deep_plc: false,
         };
         let rc_buf = [0x80u8];
         let mut rc = RangeDecoder::new(&rc_buf);
         let mut out = vec![0i16; 1920];
         let mut n = 0usize;
-        #[cfg(feature = "dnn")]
-        let lpcnet_arg: DnnPlcArg<'_> = None;
-        #[cfg(not(feature = "dnn"))]
         let lpcnet_arg: DnnPlcArg<'_> = ();
 
         assert_eq!(
@@ -3408,9 +3338,6 @@ mod tests {
         let mut out = vec![0i16; dec.frame_length];
         let mut n = 0usize;
 
-        #[cfg(feature = "dnn")]
-        let lpcnet_arg: DnnPlcArg<'_> = None;
-        #[cfg(not(feature = "dnn"))]
         let lpcnet_arg: DnnPlcArg<'_> = ();
         silk_decode_frame(
             &mut dec,
@@ -3698,8 +3625,6 @@ mod tests {
             internal_sample_rate: 7_168, // fs_khz=8
             payload_size_ms: 10,
             prev_pitch_lag: 0,
-            #[cfg(feature = "dnn")]
-            enable_deep_plc: false,
         };
 
         // Use packet loss to avoid needing a valid encoded bitstream
@@ -3708,9 +3633,6 @@ mod tests {
         let mut out = vec![0i16; 1920];
         let mut n = 0usize;
 
-        #[cfg(feature = "dnn")]
-        let lpcnet_arg: DnnPlcArg<'_> = None;
-        #[cfg(not(feature = "dnn"))]
         let lpcnet_arg: DnnPlcArg<'_> = ();
 
         let ret = silk_decode(
@@ -3741,8 +3663,6 @@ mod tests {
             internal_sample_rate: 7_168,
             payload_size_ms: 40,
             prev_pitch_lag: 0,
-            #[cfg(feature = "dnn")]
-            enable_deep_plc: false,
         };
 
         let rc_buf = [0x80u8];
@@ -3750,9 +3670,6 @@ mod tests {
         let mut out = vec![0i16; 1920];
         let mut n = 0usize;
 
-        #[cfg(feature = "dnn")]
-        let lpcnet_arg: DnnPlcArg<'_> = None;
-        #[cfg(not(feature = "dnn"))]
         let lpcnet_arg: DnnPlcArg<'_> = ();
 
         let ret = silk_decode(
@@ -3781,8 +3698,6 @@ mod tests {
             internal_sample_rate: 7_168,
             payload_size_ms: 60,
             prev_pitch_lag: 0,
-            #[cfg(feature = "dnn")]
-            enable_deep_plc: false,
         };
 
         let rc_buf = [0x80u8];
@@ -3790,9 +3705,6 @@ mod tests {
         let mut out = vec![0i16; 1920];
         let mut n = 0usize;
 
-        #[cfg(feature = "dnn")]
-        let lpcnet_arg: DnnPlcArg<'_> = None;
-        #[cfg(not(feature = "dnn"))]
         let lpcnet_arg: DnnPlcArg<'_> = ();
 
         let ret = silk_decode(
@@ -3840,8 +3752,6 @@ mod tests {
             internal_sample_rate: 7_168,
             payload_size_ms: 20,
             prev_pitch_lag: 0,
-            #[cfg(feature = "dnn")]
-            enable_deep_plc: false,
         };
 
         let rc_buf = [0x80u8];
@@ -3849,9 +3759,6 @@ mod tests {
         let mut out = vec![0i16; 1920];
         let mut n = 0usize;
 
-        #[cfg(feature = "dnn")]
-        let lpcnet_arg: DnnPlcArg<'_> = None;
-        #[cfg(not(feature = "dnn"))]
         let lpcnet_arg: DnnPlcArg<'_> = ();
 
         // Packet lost triggers PLC for both channels
@@ -3899,8 +3806,6 @@ mod tests {
             internal_sample_rate: 7_168,
             payload_size_ms: 20,
             prev_pitch_lag: 0,
-            #[cfg(feature = "dnn")]
-            enable_deep_plc: false,
         };
 
         let rc_buf = [0x80u8];
@@ -3908,9 +3813,6 @@ mod tests {
         let mut out = vec![0i16; 3840];
         let mut n = 0usize;
 
-        #[cfg(feature = "dnn")]
-        let lpcnet_arg: DnnPlcArg<'_> = None;
-        #[cfg(not(feature = "dnn"))]
         let lpcnet_arg: DnnPlcArg<'_> = ();
 
         let ret = silk_decode(
@@ -4056,8 +3958,6 @@ mod tests {
             internal_sample_rate: 7_168,
             payload_size_ms: 20,
             prev_pitch_lag: 0,
-            #[cfg(feature = "dnn")]
-            enable_deep_plc: false,
         };
 
         decoder.channel_state[0].n_frames_decoded = 1;
@@ -4073,9 +3973,6 @@ mod tests {
         let mut out = vec![0i16; 1920];
         let mut n = 0usize;
 
-        #[cfg(feature = "dnn")]
-        let lpcnet_arg: DnnPlcArg<'_> = None;
-        #[cfg(not(feature = "dnn"))]
         let lpcnet_arg: DnnPlcArg<'_> = ();
 
         silk_decode(
@@ -4146,8 +4043,6 @@ mod tests {
             internal_sample_rate: 7_168,
             payload_size_ms: 20,
             prev_pitch_lag: 0,
-            #[cfg(feature = "dnn")]
-            enable_deep_plc: false,
         };
 
         let rc_buf = [0x80u8];
@@ -4155,9 +4050,6 @@ mod tests {
         let mut out = vec![0i16; 3840]; // 2 * 960
         let mut n = 0usize;
 
-        #[cfg(feature = "dnn")]
-        let lpcnet_arg: DnnPlcArg<'_> = None;
-        #[cfg(not(feature = "dnn"))]
         let lpcnet_arg: DnnPlcArg<'_> = ();
 
         let ret = silk_decode(
@@ -4882,16 +4774,11 @@ mod tests {
                 internal_sample_rate: fs_khz * 1000,
                 payload_size_ms,
                 prev_pitch_lag: 0,
-                #[cfg(feature = "dnn")]
-                enable_deep_plc: false,
             }
         }
 
         fn lpc_arg() -> DnnPlcArg<'static> {
-            #[cfg(feature = "dnn")]
-            { None }
-            #[cfg(not(feature = "dnn"))]
-            { () }
+            ()
         }
 
         /// Drive silk_decode with `n` consecutive packet losses.

@@ -7,24 +7,13 @@
 use std::path::PathBuf;
 
 fn main() {
-    println!("cargo:rerun-if-env-changed=MDOPUS_SKIP_REFERENCE");
-
     let ref_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("reference");
     let harness_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/harness");
-    let skip_reference = std::env::var_os("MDOPUS_SKIP_REFERENCE").is_some();
-
-    if skip_reference {
-        println!(
-            "cargo:warning=Skipping C reference harness build because MDOPUS_SKIP_REFERENCE is set"
-        );
-        return;
-    }
 
     if !ref_dir.join("celt/bands.c").exists() {
         panic!(
             "Reference opus source not found under {}. \
-             Clone https://github.com/xiph/opus into reference/ or set MDOPUS_SKIP_REFERENCE=1 \
-             for library-only test/coverage runs.",
+             Clone https://github.com/xiph/opus into reference/.",
             ref_dir.display()
         );
     }

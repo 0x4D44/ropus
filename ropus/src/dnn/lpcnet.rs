@@ -1147,47 +1147,12 @@ pub struct PLCNetState {
 // External module interfaces (PitchDNN, FARGAN)
 // ===========================================================================
 
-/// PitchDNN state — delegates to real `pitchdnn::PitchDnnState` when the
-/// `dnn` feature is enabled; returns 0.0 (no-op) otherwise.
-#[cfg(feature = "dnn")]
-#[derive(Clone, Debug)]
-pub struct PitchDNNState {
-    inner: super::pitchdnn::PitchDnnState,
-}
-
-#[cfg(feature = "dnn")]
-impl Default for PitchDNNState {
-    fn default() -> Self {
-        Self {
-            inner: super::pitchdnn::PitchDnnState::new_empty(),
-        }
-    }
-}
-
-#[cfg(feature = "dnn")]
-impl PitchDNNState {
-    pub fn init(&mut self) {
-        // inner is already initialized via new_empty()
-    }
-    pub fn load_model(&mut self, data: &[u8]) -> i32 {
-        match self.inner.load_model(data) {
-            Ok(()) => 0,
-            Err(e) => e,
-        }
-    }
-    pub fn compute(&mut self, if_features: &[f32], xcorr_features: &[f32]) -> f32 {
-        self.inner.compute(if_features, xcorr_features)
-    }
-}
-
-/// PitchDNN stub — always returns 0.0 when the `dnn` feature is disabled.
-#[cfg(not(feature = "dnn"))]
+/// PitchDNN stub — always returns 0.0 (DNN not wired into the pipeline).
 #[derive(Clone, Debug, Default)]
 pub struct PitchDNNState {
     _initialized: bool,
 }
 
-#[cfg(not(feature = "dnn"))]
 impl PitchDNNState {
     pub fn init(&mut self) {
         self._initialized = true;
@@ -2215,8 +2180,6 @@ impl LPCNetPLCState {
 mod tests {
     use super::*;
     use crate::dnn::core;
-    #[cfg(feature = "dnn")]
-    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     fn patterned_pcm(seed: i32) -> [i16; FRAME_SIZE] {
         let mut pcm = [0i16; FRAME_SIZE];
@@ -3101,21 +3064,6 @@ mod tests {
         let mut blended = [0i16; FRAME_SIZE];
         st.synthesize_blend(&pcm_in, &mut blended, FRAME_SIZE);
         assert_eq!(blended, pcm_in);
-    }
-
-    #[cfg(feature = "dnn")]
-    #[test]
-    fn test_compute_frame_features_updates_state_before_pitchdnn_panic() {
-        let mut enc = LPCNetEncState::new();
-        let input = patterned_frame(7);
-
-        let result = catch_unwind(AssertUnwindSafe(|| enc.compute_frame_features(&input)));
-        assert!(result.is_err());
-        assert!(enc.analysis_mem.iter().any(|&v| v != 0.0));
-        assert!(enc.pitch_mem.iter().any(|&v| v != 0.0));
-        assert!(enc.prev_if.iter().any(|c| c.r != 0.0 || c.i != 0.0));
-        assert!(enc.features[..NB_BANDS].iter().any(|&v| v != 0.0));
-        assert!(enc.lpc.iter().any(|&v| v != 0.0));
     }
 
     #[test]

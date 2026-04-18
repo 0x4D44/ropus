@@ -15,5 +15,4 @@ pub mod rate;
 pub mod tables;
 pub mod vq;
 
-#[cfg(feature = "simd")]
 pub mod simd;

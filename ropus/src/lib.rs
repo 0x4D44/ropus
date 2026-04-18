@@ -48,56 +48,19 @@ pub mod opus;
 pub mod silk;
 pub mod types;
 
-// ---------------------------------------------------------------------------
-// Unchecked indexing macros for hot-path performance.
-//
-// When the `unchecked-indexing` feature is enabled, these bypass bounds checks
-// in provably-safe inner loops (FFT butterflies, MDCT rotations). The 572 unit
-// tests + 280 integration comparisons give high confidence that all indices are
-// in-bounds. When disabled, these fall back to normal checked indexing.
-// ---------------------------------------------------------------------------
-
-/// Read `$slice[$idx]` without bounds check (when feature enabled).
-#[cfg(feature = "unchecked-indexing")]
-macro_rules! uc {
-    ($slice:expr, $idx:expr) => {
-        unsafe { *$slice.get_unchecked($idx) }
-    };
-}
-
-#[cfg(not(feature = "unchecked-indexing"))]
+// Safe-indexing hot-path macros (historical shorthand; plain `[]` / `&mut []`).
 macro_rules! uc {
     ($slice:expr, $idx:expr) => {
         $slice[$idx]
     };
 }
 
-/// Write `$slice[$idx] = $val` without bounds check (when feature enabled).
-#[cfg(feature = "unchecked-indexing")]
-macro_rules! uc_set {
-    ($slice:expr, $idx:expr, $val:expr) => {{
-        let uc_idx = $idx;
-        let uc_val = $val;
-        unsafe { *$slice.get_unchecked_mut(uc_idx) = uc_val }
-    }};
-}
-
-#[cfg(not(feature = "unchecked-indexing"))]
 macro_rules! uc_set {
     ($slice:expr, $idx:expr, $val:expr) => {
         $slice[$idx] = $val
     };
 }
 
-/// Mutable reference to `$slice[$idx]` without bounds check (when feature enabled).
-#[cfg(feature = "unchecked-indexing")]
-macro_rules! uc_mut {
-    ($slice:expr, $idx:expr) => {
-        unsafe { $slice.get_unchecked_mut($idx) }
-    };
-}
-
-#[cfg(not(feature = "unchecked-indexing"))]
 macro_rules! uc_mut {
     ($slice:expr, $idx:expr) => {
         &mut $slice[$idx]

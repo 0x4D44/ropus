@@ -514,8 +514,8 @@ pub fn celt_maxabs16(x: &[i32]) -> i32 {
     max32(extend32(maxval), -extend32(minval))
 }
 
-/// Scalar implementation of celt_maxabs32 (used in the non-SIMD path and tests).
-#[cfg(any(test, not(feature = "simd")))]
+/// Scalar implementation of celt_maxabs32 (used in tests for SIMD parity checks).
+#[cfg(test)]
 pub(crate) fn celt_maxabs32_scalar(x: &[i32]) -> i32 {
     let mut maxval: i32 = 0;
     let mut minval: i32 = 0;
@@ -528,14 +528,7 @@ pub(crate) fn celt_maxabs32_scalar(x: &[i32]) -> i32 {
 
 /// Find maximum absolute value in a slice of 32-bit values.
 pub fn celt_maxabs32(x: &[i32]) -> i32 {
-    #[cfg(feature = "simd")]
-    {
-        super::simd::celt_maxabs32_simd(x)
-    }
-    #[cfg(not(feature = "simd"))]
-    {
-        celt_maxabs32_scalar(x)
-    }
+    super::simd::celt_maxabs32_simd(x)
 }
 
 // ===========================================================================
