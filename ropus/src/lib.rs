@@ -1,3 +1,34 @@
+//! A Rust port of the xiph Opus audio codec (fixed-point), bit-exact against the
+//! reference implementation.
+//!
+//! # Stability
+//!
+//! The stable public API consists of the items re-exported at the crate root
+//! (e.g. [`OpusEncoder`], [`OpusDecoder`], [`OpusMSEncoder`], [`OpusMSDecoder`],
+//! [`OpusRepacketizer`], and the `OPUS_*` constants). Items reachable via module
+//! paths (`ropus::opus::*`, `ropus::celt::*`, `ropus::silk::*`, `ropus::dnn::*`)
+//! are accessible but are **not** subject to semver stability guarantees pre-1.0;
+//! a future 1.0 release will tighten this surface.
+//!
+//! # Example
+//!
+//! Encode 20 ms of silence at 48 kHz mono in VOIP mode and decode it back:
+//!
+//! ```
+//! use ropus::{OpusEncoder, OpusDecoder, OPUS_APPLICATION_VOIP};
+//!
+//! let mut encoder = OpusEncoder::new(48_000, 1, OPUS_APPLICATION_VOIP).unwrap();
+//! let pcm_in = [0i16; 960]; // 20 ms at 48 kHz mono
+//! let mut packet = [0u8; 4000];
+//! let max_bytes = packet.len() as i32;
+//! let len = encoder.encode(&pcm_in, 960, &mut packet, max_bytes).unwrap();
+//!
+//! let mut decoder = OpusDecoder::new(48_000, 1).unwrap();
+//! let mut pcm_out = [0i16; 960];
+//! let samples = decoder.decode(Some(&packet[..len as usize]), &mut pcm_out, 960, false).unwrap();
+//! assert_eq!(samples, 960);
+//! ```
+
 // Clippy allows for C-to-Rust codec port patterns.
 // This is a bit-exact port of xiph/opus; these patterns are intentional.
 #![allow(
@@ -47,6 +78,23 @@ pub mod dnn;
 pub mod opus;
 pub mod silk;
 pub mod types;
+
+// Stable public API. Everything else reachable via module paths is unstable pre-1.0.
+pub use opus::encoder::{
+    OpusEncoder,
+    OPUS_APPLICATION_VOIP, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
+    OPUS_SIGNAL_VOICE, OPUS_SIGNAL_MUSIC,
+    OPUS_AUTO, OPUS_BITRATE_MAX,
+};
+pub use opus::decoder::{
+    OpusDecoder,
+    OPUS_OK, OPUS_BAD_ARG, OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR,
+    OPUS_INVALID_PACKET, OPUS_UNIMPLEMENTED,
+    OPUS_BANDWIDTH_NARROWBAND, OPUS_BANDWIDTH_MEDIUMBAND, OPUS_BANDWIDTH_WIDEBAND,
+    OPUS_BANDWIDTH_SUPERWIDEBAND, OPUS_BANDWIDTH_FULLBAND,
+};
+pub use opus::multistream::{OpusMSEncoder, OpusMSDecoder};
+pub use opus::repacketizer::OpusRepacketizer;
 
 // Safe-indexing hot-path macros (historical shorthand; plain `[]` / `&mut []`).
 macro_rules! uc {
