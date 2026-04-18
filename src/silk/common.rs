@@ -880,15 +880,19 @@ pub fn silk_add_sat16(a: i16, b: i16) -> i16 {
     a.saturating_add(b)
 }
 
-/// Round shift: `(a + (1 << (shift-1))) >> shift`. Wrapping addition matches C.
+/// Round shift. Matches C: `silk_RSHIFT_ROUND` from SigProc_FIX.h:
+/// `((shift) == 1 ? ((a) >> 1) + ((a) & 1) : (((a) >> ((shift) - 1)) + 1) >> 1)`.
+/// Shifting before adding 1 avoids i32 overflow when `a` is near i32::MAX.
 #[inline(always)]
 pub fn silk_rshift_round(a: i32, shift: i32) -> i32 {
     if shift <= 0 {
         a
+    } else if shift == 1 {
+        (a >> 1) + (a & 1)
     } else if shift >= 32 {
         0
     } else {
-        a.wrapping_add(1 << (shift - 1)) >> shift
+        ((a >> (shift - 1)) + 1) >> 1
     }
 }
 
@@ -1126,23 +1130,27 @@ pub fn silk_div32_16(a: i32, b: i32) -> i32 {
     a / b
 }
 
-/// `silk_RSHIFT_ROUND(a, shift)`.
+/// `silk_RSHIFT_ROUND(a, shift)`. See `silk_rshift_round` for rationale.
 #[inline(always)]
 pub fn silk_rshift_round_fn(a: i32, shift: i32) -> i32 {
     if shift <= 0 {
         a
+    } else if shift == 1 {
+        (a >> 1) + (a & 1)
     } else {
-        (a + (1 << (shift - 1))) >> shift
+        ((a >> (shift - 1)) + 1) >> 1
     }
 }
 
-/// `silk_RSHIFT_ROUND64(a, shift)`.
+/// `silk_RSHIFT_ROUND64(a, shift)`. See `silk_rshift_round` for rationale.
 #[inline(always)]
 pub fn silk_rshift_round64(a: i64, shift: i32) -> i64 {
     if shift <= 0 {
         a
+    } else if shift == 1 {
+        (a >> 1) + (a & 1)
     } else {
-        (a + (1i64 << (shift - 1))) >> shift
+        ((a >> (shift - 1)) + 1) >> 1
     }
 }
 
