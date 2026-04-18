@@ -880,3 +880,168 @@ fn test_encoder_final_range_matches_decoder_on_silk_to_celt_redundancy() {
     unsafe { opus_decoder_destroy(c_dec) };
 }
 
+// -----------------------------------------------------------------------------
+// Encoder `get_final_range` matches decoder on HYBRID-mode SILK→CELT redundancy
+// -----------------------------------------------------------------------------
+//
+// Surfaced by `test_opus_encode.c:501` after bugs K (SILK pitch) and M
+// (CELT→SILK rng capture) were fixed. Same bug class as the prior
+// SILK→CELT redundancy test, but exercised in HYBRID mode rather than
+// SILK_ONLY. The distinction matters because only the HYBRID branch
+// requires the `nb_compr_bytes = ret` shrink from C opus_encoder.c:2532.
+//
+// Trigger: prev_mode=HYBRID, user requests CELT_ONLY with bandwidth>WB
+// (so HYBRID isn't downgraded) at a short frame. The mode-transition
+// logic undoes this back to HYBRID with redundancy=true, celt_to_silk=false,
+// to_celt=true — writing a SILK→CELT redundancy tail in HYBRID mode.
+#[test]
+fn test_encoder_final_range_matches_decoder_on_hybrid_silk_to_celt_redundancy() {
+    use ropus::opus::decoder::{
+        MODE_CELT_ONLY, MODE_HYBRID, OPUS_BANDWIDTH_FULLBAND,
+    };
+
+    let sr: i32 = 48000;
+    let ch: i32 = 2;
+    let max_packet: i32 = 1500;
+
+    let mut enc = OpusEncoder::new(sr, ch, OPUS_APPLICATION_VOIP).unwrap();
+    // VBR Hybrid so CELT actually shrinks nb_compr_bytes below the max.
+    // At 24 kbps the CELT portion of a 20 ms Hybrid frame uses only a
+    // fraction of the available bytes, so `ret < nb_compr_bytes` reliably,
+    // which is the condition that exposes the SILK→CELT redundancy offset
+    // bug (pre-fix ropus writes redundancy at the stale `nb_compr_bytes`
+    // offset instead of the actual CELT end `ret`).
+    let bitrate: i32 = 24_000;
+    enc.set_bitrate(bitrate);
+
+    let mut rust_dec = OpusDecoder::new(sr, ch).unwrap();
+    let c_dec = unsafe {
+        let mut err: c_int = 0;
+        let d = opus_decoder_create(sr, ch, &mut err);
+        assert!(!d.is_null() && err == 0);
+        d
+    };
+
+    let total_frames = 8usize;
+    let total_samples = (sr as usize / 50) * total_frames + 2880 * 2;
+    let mut music = vec![0i16; total_samples * ch as usize];
+    {
+        let (mut a1, mut b1) = (0i32, 0i32);
+        let (mut c1, mut d1) = (0i32, 0i32);
+        let mut j: i32 = 0;
+        let mut rng: u64 = 0xcafe_f00d_dead_beef;
+        for (i, s) in music.iter_mut().enumerate() {
+            let v_base = ((j.wrapping_mul(
+                (j >> 12) ^ ((j >> 10 | j >> 12) & 26 & (j >> 7)),
+            )) & 128)
+                + 128;
+            let mut v: i32 = v_base << 15;
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let r = (rng >> 32) as u32 as i32;
+            v = v.wrapping_add(r & 65535);
+            v = v.wrapping_sub(r >> 16);
+            b1 = v.wrapping_sub(a1).wrapping_add((b1 * 61 + 32) >> 6);
+            a1 = v;
+            c1 = (30 * (c1 + b1 + d1) + 32) >> 6;
+            d1 = b1;
+            let out = (c1 + 128) >> 8;
+            *s = out.clamp(-32768, 32767) as i16;
+            if i % 6 == 0 {
+                j = j.wrapping_add(1);
+            }
+        }
+    }
+
+    let mut cursor: usize = 0;
+
+    let encode_and_compare = |enc: &mut OpusEncoder,
+                              rust_dec: &mut OpusDecoder,
+                              c_dec: *mut std::ffi::c_void,
+                              tag: &str,
+                              frame_size: i32,
+                              pcm: &[i16]| {
+        let mut out = vec![0u8; max_packet as usize];
+        let len = enc
+            .encode(pcm, frame_size, &mut out, max_packet)
+            .unwrap_or_else(|e| panic!("{tag}: encode failed: {e}"))
+            as usize;
+        let pkt = &out[..len];
+        let enc_rng = enc.get_final_range();
+
+        let mut rust_pcm = vec![0i16; frame_size as usize * ch as usize];
+        rust_dec
+            .decode(Some(pkt), &mut rust_pcm, frame_size, false)
+            .unwrap_or_else(|e| panic!("{tag}: rust decode failed: {e}"));
+        let rust_dec_rng = rust_dec.get_final_range();
+
+        let mut c_pcm = vec![0i16; frame_size as usize * ch as usize];
+        let c_ret = unsafe {
+            opus_decode(
+                c_dec,
+                pkt.as_ptr(),
+                pkt.len() as i32,
+                c_pcm.as_mut_ptr(),
+                frame_size,
+                0,
+            )
+        };
+        assert!(c_ret > 0, "{tag}: C decode failed: {c_ret}");
+        let mut c_dec_rng: u32 = 0;
+        let rc = unsafe {
+            const OPUS_GET_FINAL_RANGE_REQUEST: c_int = 4031;
+            opus_decoder_ctl(
+                c_dec,
+                OPUS_GET_FINAL_RANGE_REQUEST,
+                &mut c_dec_rng as *mut u32,
+            )
+        };
+        assert_eq!(rc, 0, "{tag}: C ctl failed");
+
+        assert_eq!(
+            enc_rng, rust_dec_rng,
+            "{tag}: encoder.get_final_range={:#010x} disagrees with \
+             ropus decoder={:#010x}",
+            enc_rng, rust_dec_rng,
+        );
+        assert_eq!(
+            enc_rng, c_dec_rng,
+            "{tag}: encoder.get_final_range={:#010x} disagrees with \
+             C-ref decoder={:#010x}",
+            enc_rng, c_dec_rng,
+        );
+    };
+
+    // Warmup: 3× Hybrid FB 20 ms frames to set prev_mode=HYBRID and let
+    // SILK settle.
+    for i in 0..3 {
+        let frame_size: i32 = 960;
+        enc.set_force_mode(MODE_HYBRID);
+        enc.set_bandwidth(OPUS_BANDWIDTH_FULLBAND);
+        let start = cursor;
+        let end = start + (frame_size as usize) * (ch as usize);
+        let pcm = &music[start..end];
+        cursor = end;
+        let tag = format!("warmup[{i}]");
+        encode_and_compare(&mut enc, &mut rust_dec, c_dec, &tag, frame_size, pcm);
+    }
+
+    // Trigger: force CELT_ONLY at FULLBAND, 20 ms. Mode-transition-undo
+    // logic resurrects HYBRID as the actual encode mode with
+    // redundancy=true, celt_to_silk=false, to_celt=true — producing a
+    // SILK→CELT redundancy tail in HYBRID mode. The SILK→CELT branch in
+    // ropus then needs the `nb_compr_bytes = ret` shrink to write the
+    // redundancy at the correct offset.
+    enc.set_force_mode(MODE_CELT_ONLY);
+    enc.set_bandwidth(OPUS_BANDWIDTH_FULLBAND);
+
+    let frame_size: i32 = 960; // 20 ms — single-frame HYBRID path
+    let start = cursor;
+    let end = start + (frame_size as usize) * (ch as usize);
+    let pcm = &music[start..end];
+    encode_and_compare(&mut enc, &mut rust_dec, c_dec, "trigger", frame_size, pcm);
+
+    unsafe { opus_decoder_destroy(c_dec) };
+}
+

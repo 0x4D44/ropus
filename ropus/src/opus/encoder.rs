@@ -1989,7 +1989,7 @@ impl OpusEncoder {
 
         let mut range_final: u32;
         let mut ret: i32 = 0;
-        let nb_compr_bytes: i32;
+        let mut nb_compr_bytes: i32;
         let mut redundant_rng: u32 = 0;
         // Bit count of the range encoder captured just before `enc` is dropped
         // so the outer budget-bust check (C: opus_encoder.c:2580) has access to
@@ -2531,6 +2531,18 @@ impl OpusEncoder {
 
         // --- SILK→CELT redundancy frame ---
         if redundancy && !celt_to_silk {
+            // C reference (opus_encoder.c:2529-2534): in HYBRID mode, shrink
+            // `nb_compr_bytes` to the actual CELT size so the redundancy
+            // bytes are written immediately after the main CELT data — the
+            // position the decoder will extract them from (last
+            // `redundancy_bytes` of the packet). The matching
+            // `ec_enc_shrink(&enc, ret)` on the main range coder is a no-op
+            // in ropus because CELT already shrunk `enc_ref` to `ret`
+            // during its internal VBR encode, and the main `enc` has been
+            // dropped by this point.
+            if self.mode == MODE_HYBRID {
+                nb_compr_bytes = ret;
+            }
             if let Some(ref mut celt) = self.celt_enc {
                 celt.ctl(CeltEncoderCtl::ResetState);
                 celt.ctl(CeltEncoderCtl::SetStartBand(0));
