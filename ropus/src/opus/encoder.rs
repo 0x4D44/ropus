@@ -2404,6 +2404,15 @@ impl OpusEncoder {
                         redundancy_bytes,
                         None,
                     );
+                    // Capture the CELT rng BEFORE ResetState wipes it. The
+                    // final `range_final ^= redundant_rng` at the end of
+                    // `encode_frame_native` XORs this value in, mirroring the
+                    // decoder's matching capture after its CELT→SILK
+                    // redundancy decode. Without this line the encoder's
+                    // `get_final_range` diverges from the bitstream whenever
+                    // `redundancy && celt_to_silk` fires (C reference:
+                    // opus_encoder.c:2440).
+                    redundant_rng = celt.rng;
                     celt.ctl(CeltEncoderCtl::ResetState);
                 }
             }

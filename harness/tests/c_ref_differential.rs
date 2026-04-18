@@ -53,6 +53,7 @@ unsafe extern "C" {
     ) -> i32;
     fn opus_encoder_destroy(st: *mut u8);
     fn opus_encoder_ctl(st: *mut u8, request: c_int, ...) -> c_int;
+    fn opus_decoder_ctl(st: *mut std::ffi::c_void, request: c_int, ...) -> c_int;
 }
 
 const OPUS_SET_BITRATE_REQUEST: c_int = 4002;
@@ -559,4 +560,163 @@ fn test_fuzz_decode_scan_all_configs() {
             mismatches.len()
         );
     }
+}
+
+// -----------------------------------------------------------------------------
+// Encoder `get_final_range` matches the bitstream on CELT→SILK redundancy
+// -----------------------------------------------------------------------------
+//
+// Regression for the bug surfaced by xiph/opus test_opus_encode.c:501 (surfaced
+// via the capi FFI shim). In SILK force-mode, cycling bandwidths NB→MB→WB
+// triggers the SILK-initiated bandwidth switch that makes
+// `redundancy && celt_to_silk` fire on the MB→WB transition. Before the fix,
+// the encoder encoded a 5ms CELT→SILK redundancy frame but failed to capture
+// the CELT rng into `redundant_rng` before `OPUS_RESET_STATE` wiped it, so
+// the XOR at the end of `encode_frame_native` XOR'd with 0 and the encoder's
+// `get_final_range` diverged from what both the ropus decoder and the C
+// reference decoder reported after decoding the produced bytes.
+#[test]
+fn test_encoder_final_range_matches_decoder_on_celt_to_silk_redundancy() {
+    use ropus::opus::decoder::{
+        MODE_SILK_ONLY, OPUS_BANDWIDTH_MEDIUMBAND, OPUS_BANDWIDTH_NARROWBAND,
+        OPUS_BANDWIDTH_WIDEBAND,
+    };
+
+    // Exact reproducer from the phase-4 debug agent:
+    // 48 kHz mono, SILK force-mode, 6809 bps, 1920-sample frames,
+    // bandwidths cycling NB → MB → WB. Iter 2 (first WB) previously diverged.
+    let sr: i32 = 48000;
+    let ch: i32 = 1;
+    let frame_size: i32 = 1920;
+    let bitrate: i32 = 6809;
+    let max_packet: i32 = 1500;
+
+    let mut enc = OpusEncoder::new(sr, ch, OPUS_APPLICATION_VOIP).unwrap();
+    assert_eq!(enc.set_force_mode(MODE_SILK_ONLY), 0);
+    enc.set_bitrate(bitrate);
+
+    let mut rust_dec = OpusDecoder::new(sr, ch).unwrap();
+
+    let c_dec = unsafe {
+        let mut err: c_int = 0;
+        let d = opus_decoder_create(sr, ch, &mut err);
+        assert!(!d.is_null() && err == 0);
+        d
+    };
+
+    let bw_cycle = [
+        OPUS_BANDWIDTH_NARROWBAND,
+        OPUS_BANDWIDTH_MEDIUMBAND,
+        OPUS_BANDWIDTH_WIDEBAND,
+    ];
+
+    // Realistic audio-like signal: a port of `generate_music()` from
+    // `reference/tests/test_opus_encode.c:57-84` — a simple algorithmic tune
+    // plus shaped noise that actually drives SILK's analysis into the
+    // "warrants a bandwidth switch" state. The patterned PCM used by other
+    // tests in this file is too sparse to trigger SILK's `switchReady`.
+    let total_samples = (frame_size as usize) * (ch as usize) * 20;
+    let mut music = vec![0i16; total_samples];
+    {
+        let (mut a1, mut b1) = (0i32, 0i32);
+        let (mut c1, mut d1) = (0i32, 0i32);
+        let mut j: i32 = 0;
+        let mut rng: u64 = 0x1234_5678_9ABC_DEF0;
+        // 60ms silence prefix so the encoder has time to settle, mirroring
+        // `generate_music()`'s own silence prefix.
+        let silence_samples = (sr as usize / 1000) * 60;
+        for (i, s) in music.iter_mut().enumerate().skip(silence_samples) {
+            // Pseudo-melody bitfield from test_opus_encode.c:71
+            let v_base = ((j.wrapping_mul(
+                (j >> 12) ^ ((j >> 10 | j >> 12) & 26 & (j >> 7)),
+            )) & 128)
+                + 128;
+            let mut v: i32 = v_base << 15;
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let r = (rng >> 32) as u32 as i32;
+            v = v.wrapping_add(r & 65535);
+            v = v.wrapping_sub(r >> 16);
+            // IIR smoothing exactly as in generate_music()
+            b1 = v.wrapping_sub(a1).wrapping_add((b1 * 61 + 32) >> 6);
+            a1 = v;
+            c1 = (30 * (c1 + b1 + d1) + 32) >> 6;
+            d1 = b1;
+            let out = (c1 + 128) >> 8;
+            *s = out.clamp(-32768, 32767) as i16;
+            // C: `if (i % 6 == 0) j++;` — drive the melody from the sample
+            // counter, NOT from `j` itself.
+            if i % 6 == 0 {
+                j = j.wrapping_add(1);
+            }
+        }
+    }
+
+    for iter in 0..15i32 {
+        let bw = bw_cycle[(iter as usize) % bw_cycle.len()];
+        assert_eq!(enc.set_bandwidth(bw), 0);
+
+        let start = (iter as usize) * (frame_size as usize) * (ch as usize);
+        let end = start + (frame_size as usize) * (ch as usize);
+        let pcm = &music[start..end];
+
+        let mut out = vec![0u8; max_packet as usize];
+        let len = enc
+            .encode(pcm, frame_size, &mut out, max_packet)
+            .unwrap_or_else(|e| panic!("iter {iter}: encode failed: {e}"));
+        assert!(len > 0, "iter {iter}: empty encoded packet");
+        let packet = &out[..len as usize];
+
+        let enc_rng = enc.get_final_range();
+
+        // Rust decode
+        let mut rust_pcm = vec![0i16; frame_size as usize * ch as usize];
+        rust_dec
+            .decode(Some(packet), &mut rust_pcm, frame_size, false)
+            .unwrap_or_else(|e| panic!("iter {iter}: rust decode failed: {e}"));
+        let rust_dec_rng = rust_dec.get_final_range();
+
+        // C reference decode (separate fresh decoder not required — we reuse
+        // one to mirror the stateful invariants on the wire, just like the
+        // conformance suite does).
+        let mut c_pcm = vec![0i16; frame_size as usize * ch as usize];
+        let c_ret = unsafe {
+            opus_decode(
+                c_dec,
+                packet.as_ptr(),
+                packet.len() as i32,
+                c_pcm.as_mut_ptr(),
+                frame_size,
+                0,
+            )
+        };
+        assert!(c_ret > 0, "iter {iter}: C decode failed: {c_ret}");
+        // Read C decoder's final range via the same ctl used by the test suite.
+        let mut c_dec_rng: u32 = 0;
+        let rc = unsafe {
+            const OPUS_GET_FINAL_RANGE_REQUEST: c_int = 4031;
+            opus_decoder_ctl(
+                c_dec,
+                OPUS_GET_FINAL_RANGE_REQUEST,
+                &mut c_dec_rng as *mut u32,
+            )
+        };
+        assert_eq!(rc, 0, "iter {iter}: C OPUS_GET_FINAL_RANGE ctl failed: {rc}");
+
+        assert_eq!(
+            enc_rng, rust_dec_rng,
+            "iter {iter} (bw={bw}): encoder get_final_range={:#010x} disagrees \
+             with ropus decoder get_final_range={:#010x}",
+            enc_rng, rust_dec_rng
+        );
+        assert_eq!(
+            enc_rng, c_dec_rng,
+            "iter {iter} (bw={bw}): encoder get_final_range={:#010x} disagrees \
+             with C-ref decoder OPUS_GET_FINAL_RANGE={:#010x}",
+            enc_rng, c_dec_rng
+        );
+    }
+
+    unsafe { opus_decoder_destroy(c_dec) };
 }
