@@ -429,6 +429,15 @@ impl Encoder {
     pub fn channels(&self) -> Channels {
         channels_from_c_int(self.inner.get_channels())
     }
+
+    /// Encoder lookahead in 48 kHz samples.
+    ///
+    /// This is the value to write into OpusHead's `pre_skip` field
+    /// per RFC 7845. For typical encoders this is 312; in
+    /// `OPUS_APPLICATION_RESTRICTED_LOWDELAY` it is 120.
+    pub fn lookahead(&self) -> u32 {
+        self.inner.get_lookahead().max(0) as u32
+    }
 }
 
 /// Builder for [`Encoder`].
@@ -740,6 +749,18 @@ mod tests {
         let decoder = Decoder::new(24_000, Channels::Stereo).expect("decoder builds");
         assert_eq!(decoder.sample_rate(), 24_000);
         assert_eq!(decoder.channels(), Channels::Stereo);
+    }
+
+    // ---- Encoder::lookahead matches the RFC 7845 pre_skip default ----
+
+    #[test]
+    fn encoder_lookahead_default_is_312() {
+        // Audio application at 48 kHz: lookahead = fs/400 (120) + delay_compensation
+        // (typically 192) = 312, matching the long-standing OpusHead pre_skip default.
+        let encoder = Encoder::builder(48_000, Channels::Mono, Application::Audio)
+            .build()
+            .expect("encoder builds");
+        assert_eq!(encoder.lookahead(), 312);
     }
 
     // ---- Bitrate::try_bits validates overflow ----

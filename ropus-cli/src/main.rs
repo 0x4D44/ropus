@@ -16,7 +16,7 @@
 
 use std::env;
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -33,7 +33,7 @@ use rubato::{
 };
 
 use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
+use symphonia::core::codecs::{CODEC_TYPE_NULL, CODEC_TYPE_OPUS, Decoder as SymphoniaDecoder, DecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
@@ -51,12 +51,10 @@ use ogg::writing::{PacketWriteEndInfo, PacketWriter};
 const OPUS_SR: u32 = 48_000;
 /// 20 ms frame at 48 kHz = 960 samples per channel.
 const FRAME_SAMPLES_PER_CH: usize = 960;
-/// Logical Ogg stream serial. Any non-zero value works for a single stream.
+/// Logical Ogg stream serial. Any non-zero value works for a single stream we
+/// write ourselves. NEVER use this for matching against an arbitrary input
+/// stream; capture the input's serial from its first OggS page instead.
 const OGG_STREAM_SERIAL: u32 = 0xC0DE_C0DE;
-/// Encoder pre-skip in 48 kHz samples (matches `opusenc` default of 312 +
-/// codec lookahead of 312 samples for 20 ms framing — RFC 7845 only requires
-/// it to cover the encoder lookahead, so this 312-sample value is safe).
-const PRE_SKIP_SAMPLES: u16 = 312;
 /// Maximum bytes for a single Opus frame, per RFC 6716 §3.2.1.
 const MAX_OPUS_FRAME_BYTES: usize = 1275;
 /// Number of Opus frames per packet for our current encoder config (20 ms = 1 frame).
@@ -312,13 +310,27 @@ fn cmd_encode(args: EncodeArgs) -> Result<()> {
         .build()
         .map_err(|e| anyhow!("encoder build failed: {e}"))?;
 
+    // Query the encoder for its actual lookahead in 48 kHz samples; that is
+    // exactly the value RFC 7845 requires in OpusHead.pre_skip (typically
+    // 312; 120 in OPUS_APPLICATION_RESTRICTED_LOWDELAY). Real libopus values
+    // are always well under 65 535; a value that doesn't fit in u16 means the
+    // encoder is in a broken state, so we bail loudly rather than silently
+    // capping at u16::MAX and producing an OpusHead with a wrong pre_skip.
+    let lookahead = encoder.lookahead();
+    let pre_skip = u16::try_from(lookahead).map_err(|_| {
+        anyhow!(
+            "encoder lookahead {} does not fit in u16 — likely corrupt encoder state",
+            lookahead
+        )
+    })?;
+
     // 4. Open Ogg writer.
     let file = File::create(&output)
         .with_context(|| format!("creating output file {}", output.display()))?;
     let mut writer = PacketWriter::new(BufWriter::new(file));
 
     // 5. Emit OpusHead and OpusTags headers (each on its own page per RFC 7845).
-    let head = build_opus_head(channels as u8, sample_rate, PRE_SKIP_SAMPLES);
+    let head = build_opus_head(channels as u8, sample_rate, pre_skip);
     writer
         .write_packet(head, OGG_STREAM_SERIAL, PacketWriteEndInfo::EndPage, 0)
         .context("writing OpusHead page")?;
@@ -485,27 +497,51 @@ fn cmd_info(args: InfoArgs) -> Result<()> {
         .read_packet()?
         .ok_or_else(|| anyhow!("empty file"))?;
     let head = parse_opus_head(&head_pkt.data)?;
+    // Capture the OpusHead's stream serial — this identifies the logical Opus
+    // bitstream we care about in a multiplexed Ogg file. We need it to filter
+    // the reverse-scan in `read_last_granule` to the right stream.
+    let target_serial = head_pkt.stream_serial();
     read_opus_tags(&mut reader).context("reading OpusTags packet")?;
 
-    let mut packet_count: u64 = 0;
-    let mut sample_count: u64 = 0;
     let opus_channels = channel_count_to_ropus(head.channels as usize)?;
-    let mut decoder = RopusDecoder::new(OPUS_SR, opus_channels)
-        .map_err(|e| anyhow!("decoder init failed: {e}"))?;
-    let max_per_ch = (OPUS_SR / 1000 * 120) as usize;
-    let mut decoded = vec![0i16; max_per_ch * opus_channels.count()];
 
-    while let Some(pkt) = reader.read_packet()? {
-        // We need to know how many samples the packet decodes to. The
-        // simplest correct approach is to actually decode it and count.
-        match decoder.decode(&pkt.data, &mut decoded, false) {
-            Ok(n) => sample_count += n as u64,
-            Err(e) => {
-                eprintln!("{} packet {}: {e}", "warning:".yellow(), packet_count);
+    // Fast path: locate the last Ogg page belonging to our serial and read
+    // its absolute granule position. Per RFC 7845 §4 that is the total stream
+    // length in 48 kHz samples, including pre_skip warm-up.
+    let mut fast_file = File::open(&args.input)
+        .with_context(|| format!("opening {} for granule scan", args.input.display()))?;
+    let absgp_opt =
+        read_last_granule(&mut fast_file, target_serial).context("scanning for last Ogg page")?;
+
+    let sample_count = if let Some(absgp) = absgp_opt {
+        // absgp is the cumulative per-channel sample count at end-of-stream
+        // (48 kHz). Subtract pre_skip to get the real decoded duration.
+        absgp.saturating_sub(head.pre_skip as u64)
+    } else {
+        // Truncated or unknown end (absgp == 0xFFFF_FFFF_FFFF_FFFF). Fall back
+        // to the slow path: decode every packet to recover the sample count.
+        let mut decoder = RopusDecoder::new(OPUS_SR, opus_channels)
+            .map_err(|e| anyhow!("decoder init failed: {e}"))?;
+        let max_per_ch = (OPUS_SR / 1000 * 120) as usize;
+        let mut decoded = vec![0i16; max_per_ch * opus_channels.count()];
+
+        let mut packet_idx: u64 = 0;
+        let mut sample_count: u64 = 0;
+        while let Some(pkt) = reader.read_packet()? {
+            // We need to know how many samples the packet decodes to. The
+            // simplest correct approach is to actually decode it and count.
+            match decoder.decode(&pkt.data, &mut decoded, false) {
+                Ok(n) => sample_count += n as u64,
+                Err(e) => {
+                    eprintln!("{} packet {}: {e}", "warning:".yellow(), packet_idx);
+                }
             }
+            packet_idx += 1;
         }
-        packet_count += 1;
-    }
+        // Subtract pre_skip from the total so the reported duration matches the
+        // fast path (which subtracts pre_skip from absgp).
+        sample_count.saturating_sub(head.pre_skip as u64)
+    };
 
     let duration_s = sample_count as f64 / OPUS_SR as f64;
     let avg_kbps = if duration_s > 0.0 {
@@ -530,7 +566,6 @@ fn cmd_info(args: InfoArgs) -> Result<()> {
         "channel_mapping {}",
         head.channel_mapping.to_string().bright_white()
     );
-    println!("packets         {}", format_num(packet_count).bright_white());
     println!(
         "total_samples   {} ({} per ch)",
         format_num(sample_count * opus_channels.count() as u64).bright_white(),
@@ -549,6 +584,76 @@ fn cmd_info(args: InfoArgs) -> Result<()> {
     Ok(())
 }
 
+/// Scan backwards from EOF for the last Ogg `OggS` page belonging to
+/// `target_serial`, and return its absolute granule position. Returns
+/// `Ok(None)` if the last matching page has the unknown-granule sentinel
+/// (`0xFFFF_FFFF_FFFF_FFFF`) or if no matching page can be found in the
+/// search window — both of which leave the caller responsible for falling
+/// back to the slow whole-stream decode.
+///
+/// Reads at most the trailing 128 KiB of the file. RFC 3533 caps a single
+/// Ogg page at 65,307 bytes (27-byte header + 255 lacing entries × 255
+/// bytes payload); 128 KiB therefore reliably covers a max-size last page
+/// even with a small amount of trailing junk after the OggS frame.
+fn read_last_granule<R: Read + Seek>(
+    src: &mut R,
+    target_serial: u32,
+) -> std::io::Result<Option<u64>> {
+    const SCAN_WINDOW: u64 = 128 * 1024;
+    const HEADER_LEN: usize = 27;
+    const UNKNOWN_GRANULE: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+
+    // Use Seek to obtain the source's length without depending on filesystem
+    // metadata, so this helper can drive any Read+Seek (including Cursor in
+    // unit tests).
+    let file_len = src.seek(SeekFrom::End(0))?;
+    if file_len < HEADER_LEN as u64 {
+        return Ok(None);
+    }
+
+    let read_len = SCAN_WINDOW.min(file_len);
+    let start = file_len - read_len;
+    src.seek(SeekFrom::Start(start))?;
+
+    let mut buf = vec![0u8; read_len as usize];
+    src.read_exact(&mut buf)?;
+
+    // Reverse-scan for the b"OggS" capture pattern. For each candidate, validate
+    // the fixed-layout header and that the serial number matches. Walk back to
+    // the previous candidate if any check fails (e.g. wrong stream in a
+    // multiplexed file, or coincidental "OggS" bytes inside packet data).
+    let mut i = buf.len().saturating_sub(4);
+    loop {
+        if i + HEADER_LEN <= buf.len()
+            && &buf[i..i + 4] == b"OggS"
+            // stream_structure_version must be 0 per RFC 3533 §6
+            && buf[i + 4] == 0
+        {
+            let absgp = u64::from_le_bytes([
+                buf[i + 6],
+                buf[i + 7],
+                buf[i + 8],
+                buf[i + 9],
+                buf[i + 10],
+                buf[i + 11],
+                buf[i + 12],
+                buf[i + 13],
+            ]);
+            let serial = u32::from_le_bytes([buf[i + 14], buf[i + 15], buf[i + 16], buf[i + 17]]);
+            if serial == target_serial {
+                if absgp == UNKNOWN_GRANULE {
+                    return Ok(None);
+                }
+                return Ok(Some(absgp));
+            }
+        }
+        if i == 0 {
+            return Ok(None);
+        }
+        i -= 1;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // play
 // ---------------------------------------------------------------------------
@@ -557,17 +662,14 @@ fn cmd_play(args: PlayArgs) -> Result<()> {
     heading("play");
     println!("file     {}", args.input.display().to_string().cyan());
 
-    // Decode to interleaved f32. For .opus we route through ropus; for any
-    // other format symphonia handles the decode.
+    // Decode to interleaved f32 through one unified pipeline: symphonia demuxes
+    // every container, and `decode_to_f32` routes Opus tracks through ropus
+    // while everything else uses symphonia's native decoders.
     let DecodedAudio {
         samples,
         sample_rate,
         channels,
-    } = if is_opus_path(&args.input) {
-        decode_opus_to_f32(&args.input)?
-    } else {
-        decode_to_f32(&args.input)?
-    };
+    } = decode_to_f32(&args.input)?;
 
     let channels_u16 = u16::try_from(channels).map_err(|_| anyhow!("channel count overflow"))?;
     println!(
@@ -609,6 +711,22 @@ struct DecodedAudio {
     channels: usize,
 }
 
+/// Internal codec pipeline: either symphonia's native decoder for the track,
+/// or ropus driven by symphonia's Ogg demuxer for Opus tracks. Centralising
+/// the routing here means `cmd_play`, `cmd_encode` and any future caller goes
+/// through the same demuxer/decoder for every supported input format.
+enum CodecPipeline {
+    Native(Box<dyn SymphoniaDecoder>),
+    Opus {
+        dec: RopusDecoder,
+        pre_skip: usize,
+        channels: usize,
+        /// Samples already trimmed off the head. cmd_play does not seek, so
+        /// this only ever monotonically increases until pre_skip is consumed.
+        skipped: usize,
+    },
+}
+
 fn decode_to_f32(path: &Path) -> Result<DecodedAudio> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -646,12 +764,54 @@ fn decode_to_f32(path: &Path) -> Result<DecodedAudio> {
         .map(|c| c.count())
         .ok_or_else(|| anyhow!("track has no channel info"))?;
 
-    let mut decoder = symphonia::default::get_codecs()
-        .make(&codec_params, &DecoderOptions::default())
-        .context("creating decoder for track")?;
+    // Branch on codec: Opus goes through ropus (we deliberately don't enable
+    // symphonia's stub Opus decoder). Everything else uses the native
+    // symphonia decoder for that codec.
+    let mut pipeline = if codec_params.codec == CODEC_TYPE_OPUS {
+        let opus_channels = channel_count_to_ropus(channels)?;
+        let dec = RopusDecoder::new(OPUS_SR, opus_channels)
+            .map_err(|e| anyhow!("decoder init failed: {e}"))?;
+        // Resolve OpusHead.pre_skip without falling back to a magic constant.
+        // Symphonia's Ogg demuxer surfaces it as `codec_params.delay`; failing
+        // that, we parse it directly out of the OpusHead bytes that the
+        // demuxer hands us in `codec_params.extra_data`. If neither is
+        // present the file is malformed (every valid Ogg Opus stream begins
+        // with an OpusHead packet), so we bail rather than silently inserting
+        // a guess that would shift playback.
+        let pre_skip = if let Some(d) = codec_params.delay {
+            d as usize
+        } else if let Some(buf) = codec_params.extra_data.as_deref() {
+            if buf.len() >= 19 && &buf[..8] == b"OpusHead" {
+                u16::from_le_bytes([buf[10], buf[11]]) as usize
+            } else {
+                bail!(
+                    "opus track has no pre_skip metadata (no codec delay and \
+                     no OpusHead extra_data)"
+                );
+            }
+        } else {
+            bail!(
+                "opus track has no pre_skip metadata (no codec delay and \
+                 no OpusHead extra_data)"
+            );
+        };
+        CodecPipeline::Opus {
+            dec,
+            pre_skip,
+            channels,
+            skipped: 0,
+        }
+    } else {
+        let dec = symphonia::default::get_codecs()
+            .make(&codec_params, &DecoderOptions::default())
+            .context("creating decoder for track")?;
+        CodecPipeline::Native(dec)
+    };
 
     let mut interleaved: Vec<f32> = Vec::with_capacity(1 << 20);
     let mut sample_buf: Option<SampleBuffer<f32>> = None;
+    let max_per_ch = (OPUS_SR / 1000 * 120) as usize;
+    let mut opus_scratch: Vec<f32> = Vec::new();
 
     loop {
         let packet = match format.next_packet() {
@@ -669,23 +829,56 @@ fn decode_to_f32(path: &Path) -> Result<DecodedAudio> {
         if packet.track_id() != track_id {
             continue;
         }
-        match decoder.decode(&packet) {
-            Ok(decoded) => {
-                if sample_buf.is_none() {
-                    let spec = *decoded.spec();
-                    let dur = decoded.capacity() as u64;
-                    sample_buf = Some(SampleBuffer::<f32>::new(dur, spec));
+
+        match &mut pipeline {
+            CodecPipeline::Native(decoder) => match decoder.decode(&packet) {
+                Ok(decoded) => {
+                    if sample_buf.is_none() {
+                        let spec = *decoded.spec();
+                        let dur = decoded.capacity() as u64;
+                        sample_buf = Some(SampleBuffer::<f32>::new(dur, spec));
+                    }
+                    if let Some(buf) = sample_buf.as_mut() {
+                        buf.copy_interleaved_ref(decoded);
+                        interleaved.extend_from_slice(buf.samples());
+                    }
                 }
-                if let Some(buf) = sample_buf.as_mut() {
-                    buf.copy_interleaved_ref(decoded);
-                    interleaved.extend_from_slice(buf.samples());
+                Err(SymphoniaError::DecodeError(_)) => {
+                    // Skip corrupt packets.
+                    continue;
+                }
+                Err(e) => return Err(e).context("decoding packet"),
+            },
+            CodecPipeline::Opus {
+                dec,
+                pre_skip,
+                channels: ch,
+                skipped,
+            } => {
+                if opus_scratch.len() != max_per_ch * *ch {
+                    opus_scratch = vec![0f32; max_per_ch * *ch];
+                }
+                let n = match dec.decode_float(&packet.data, &mut opus_scratch, false) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        // Match the native path: swallow per-packet decode
+                        // failures rather than aborting the whole file.
+                        eprintln!("{} opus packet: {e}", "warning:".yellow());
+                        continue;
+                    }
+                };
+                let total = n * *ch;
+                let frame = &opus_scratch[..total];
+                // Trim the leading pre_skip samples (in interleaved units)
+                // before they reach the output buffer.
+                let want_trim = pre_skip.saturating_mul(*ch).saturating_sub(*skipped);
+                if want_trim >= total {
+                    *skipped += total;
+                } else {
+                    interleaved.extend_from_slice(&frame[want_trim..]);
+                    *skipped += want_trim;
                 }
             }
-            Err(SymphoniaError::DecodeError(_)) => {
-                // Skip corrupt packets.
-                continue;
-            }
-            Err(e) => return Err(e).context("decoding packet"),
         }
     }
 
@@ -693,52 +886,6 @@ fn decode_to_f32(path: &Path) -> Result<DecodedAudio> {
         samples: interleaved,
         sample_rate,
         channels,
-    })
-}
-
-fn is_opus_path(p: &Path) -> bool {
-    matches!(
-        p.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()),
-        Some(ref e) if e == "opus" || e == "opusf"
-    )
-}
-
-/// Decode a .opus file to interleaved f32 PCM via ropus directly. Used by
-/// `play` so we go through the local codec rather than symphonia's vorbis.
-fn decode_opus_to_f32(path: &Path) -> Result<DecodedAudio> {
-    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let mut reader = PacketReader::new(BufReader::new(file));
-
-    let head_pkt = reader
-        .read_packet()?
-        .ok_or_else(|| anyhow!("no packets in {}", path.display()))?;
-    let head = parse_opus_head(&head_pkt.data)?;
-    read_opus_tags(&mut reader).context("reading OpusTags packet")?;
-
-    let opus_channels = channel_count_to_ropus(head.channels as usize)?;
-    let mut decoder = RopusDecoder::new(OPUS_SR, opus_channels)
-        .map_err(|e| anyhow!("decoder init failed: {e}"))?;
-
-    let max_per_ch = (OPUS_SR / 1000 * 120) as usize;
-    let mut decoded = vec![0f32; max_per_ch * opus_channels.count()];
-    let mut all: Vec<f32> = Vec::with_capacity(1 << 20);
-
-    while let Some(pkt) = reader.read_packet()? {
-        let n = decoder
-            .decode_float(&pkt.data, &mut decoded, false)
-            .map_err(|e| anyhow!("decode failed: {e}"))?;
-        let total = n * opus_channels.count();
-        all.extend_from_slice(&decoded[..total]);
-    }
-
-    let pre_skip = (head.pre_skip as usize) * opus_channels.count();
-    let pre_skip = pre_skip.min(all.len());
-    let trimmed = all.split_off(pre_skip);
-
-    Ok(DecodedAudio {
-        samples: trimmed,
-        sample_rate: OPUS_SR,
-        channels: opus_channels.count(),
     })
 }
 
@@ -978,4 +1125,64 @@ fn format_num(n: u64) -> String {
         out.push(*b as char);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    /// Build a minimal valid 27-byte Ogg page (zero-segment payload) with the
+    /// supplied absolute granule position and stream serial. Tests only care
+    /// about the fields `read_last_granule` inspects (capture pattern,
+    /// version, absgp, serial, segment count).
+    fn build_minimal_ogg_page(absgp: u64, serial: u32) -> Vec<u8> {
+        let mut page = Vec::with_capacity(27);
+        page.extend_from_slice(b"OggS"); // capture pattern
+        page.push(0); // stream_structure_version
+        page.push(0x04); // header_type_flag (end-of-stream — irrelevant here)
+        page.extend_from_slice(&absgp.to_le_bytes());
+        page.extend_from_slice(&serial.to_le_bytes());
+        page.extend_from_slice(&0u32.to_le_bytes()); // page sequence
+        page.extend_from_slice(&0u32.to_le_bytes()); // CRC (read_last_granule does not verify)
+        page.push(0); // page_segments = 0 → no lacing bytes follow
+        debug_assert_eq!(page.len(), 27);
+        page
+    }
+
+    #[test]
+    fn read_last_granule_empty_file_returns_none() {
+        let mut cursor = Cursor::new(Vec::<u8>::new());
+        let got = read_last_granule(&mut cursor, 0xC0DE_C0DE).expect("ok");
+        assert!(got.is_none(), "empty input must yield None");
+    }
+
+    #[test]
+    fn read_last_granule_minimal_valid_page() {
+        let page = build_minimal_ogg_page(12_345, 0xC0DE_C0DE);
+        let mut cursor = Cursor::new(page);
+        let got = read_last_granule(&mut cursor, 0xC0DE_C0DE).expect("ok");
+        assert_eq!(got, Some(12_345));
+    }
+
+    #[test]
+    fn read_last_granule_unknown_granule_sentinel() {
+        let page = build_minimal_ogg_page(0xFFFF_FFFF_FFFF_FFFF, 0xC0DE_C0DE);
+        let mut cursor = Cursor::new(page);
+        let got = read_last_granule(&mut cursor, 0xC0DE_C0DE).expect("ok");
+        assert!(got.is_none(), "sentinel granule must yield None");
+    }
+
+    #[test]
+    fn read_last_granule_skips_wrong_serial() {
+        // Layout: [target page absgp=42] [other-serial page absgp=999]
+        // Reverse scan should walk past the trailing wrong-serial page and
+        // pick up the target page's granule.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&build_minimal_ogg_page(42, 0xC0DE_C0DE));
+        buf.extend_from_slice(&build_minimal_ogg_page(999, 0xDEAD_BEEF));
+        let mut cursor = Cursor::new(buf);
+        let got = read_last_granule(&mut cursor, 0xC0DE_C0DE).expect("ok");
+        assert_eq!(got, Some(42));
+    }
 }
