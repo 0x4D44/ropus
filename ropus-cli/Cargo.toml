@@ -1,0 +1,25 @@
+[package]
+name = "ropus-cli"
+version = "0.2.0"
+edition = "2024"
+authors = ["0x4D44 <martingdavidson@gmail.com>"]
+description = "Command-line tool for encode/decode/transcode/play with the ropus Opus codec"
+license = "BSD-3-Clause"
+
+[dependencies]
+ropus = { path = "../ropus", version = "0.4" }
+clap = { version = "4.6", features = ["derive"] }
+colored = "2.2"
+symphonia = { version = "0.5", default-features = false, features = ["wav", "pcm", "adpcm", "mp3", "flac", "ogg", "aac", "vorbis"] }    # WAV/MP3/FLAC/OGG/AAC input
+rubato = "0.16"                                          # resample to 48 kHz
+ogg = "0.9"                                              # Ogg container R/W
+rodio = "0.20"                                           # playback (cpal under the hood)
+anyhow = "1.0"                                           # error ergonomics for a CLI
+
+[build-dependencies]
+chrono = "0.4"  # for build timestamp
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

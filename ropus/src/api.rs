@@ -32,6 +32,18 @@ use crate::opus::decoder::{
     OPUS_BANDWIDTH_SUPERWIDEBAND, OPUS_BANDWIDTH_WIDEBAND, OPUS_BUFFER_TOO_SMALL,
     OPUS_INTERNAL_ERROR, OPUS_INVALID_PACKET, OpusDecoder,
 };
+
+/// Map a libopus channel-count `i32` (always 1 or 2 here) back to [`Channels`].
+///
+/// Inverse of [`Channels::as_c_int`]. Treats any unexpected value as `Mono` —
+/// the inner Opus types only ever store 1 or 2, so the fallback exists purely
+/// to avoid panicking on a corrupted state.
+fn channels_from_c_int(n: i32) -> Channels {
+    match n {
+        2 => Channels::Stereo,
+        _ => Channels::Mono,
+    }
+}
 use crate::opus::encoder::{
     OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY, OPUS_APPLICATION_VOIP, OPUS_AUTO,
     OPUS_BITRATE_MAX, OPUS_FRAMESIZE_2_5_MS, OPUS_FRAMESIZE_5_MS, OPUS_FRAMESIZE_10_MS,
@@ -94,10 +106,28 @@ pub enum Bitrate {
     /// Use the maximum bitrate the channel/format allow.
     Max,
     /// Explicit bitrate in bits per second.
+    ///
+    /// Advanced/unchecked: values above `i32::MAX` are silently clamped to
+    /// `i32::MAX` when forwarded to libopus. Use [`Bitrate::try_bits`] to get
+    /// a validated `Result` instead of the silent clamp.
     Bits(u32),
 }
 
 impl Bitrate {
+    /// Construct [`Bitrate::Bits`] with overflow validation.
+    ///
+    /// Returns [`BitrateRangeError`] if `b` exceeds `i32::MAX` (the limit
+    /// imposed by libopus's signed `int` API). Prefer this constructor when
+    /// the bitrate value originates from untrusted input or a wider integer
+    /// type than `u32` you've already narrowed.
+    pub fn try_bits(b: u32) -> Result<Self, BitrateRangeError> {
+        if b > i32::MAX as u32 {
+            Err(BitrateRangeError(b))
+        } else {
+            Ok(Bitrate::Bits(b))
+        }
+    }
+
     fn as_c_int(self) -> i32 {
         match self {
             Bitrate::Auto => OPUS_AUTO,
@@ -106,6 +136,23 @@ impl Bitrate {
         }
     }
 }
+
+/// Returned by [`Bitrate::try_bits`] when the requested bitrate exceeds the
+/// `i32::MAX` bps limit imposed by libopus's signed integer API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BitrateRangeError(pub u32);
+
+impl fmt::Display for BitrateRangeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "bitrate {} bps exceeds the libopus i32::MAX limit",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for BitrateRangeError {}
 
 /// Signal-content hint passed to the encoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -370,6 +417,18 @@ impl Encoder {
         }
         i32::try_from(per_channel).map_err(|_| EncodeError::BadArg)
     }
+
+    /// Configured sample rate in Hz (the rate passed to [`Encoder::builder`]).
+    pub fn sample_rate(&self) -> u32 {
+        // get_sample_rate() returns i32 but is always one of 8000/12000/16000/
+        // 24000/48000, so the cast to u32 is lossless.
+        self.inner.get_sample_rate() as u32
+    }
+
+    /// Configured channel layout.
+    pub fn channels(&self) -> Channels {
+        channels_from_c_int(self.inner.get_channels())
+    }
 }
 
 /// Builder for [`Encoder`].
@@ -544,6 +603,18 @@ impl Decoder {
         }
         i32::try_from(per_channel).map_err(|_| DecodeError::BadArg)
     }
+
+    /// Configured sample rate in Hz (the rate passed to [`Decoder::new`]).
+    pub fn sample_rate(&self) -> u32 {
+        // get_sample_rate() returns i32 but is always one of 8000/12000/16000/
+        // 24000/48000, so the cast to u32 is lossless.
+        self.inner.get_sample_rate() as u32
+    }
+
+    /// Configured channel layout.
+    pub fn channels(&self) -> Channels {
+        channels_from_c_int(self.inner.get_channels())
+    }
 }
 
 fn packet_arg(packet: &[u8]) -> Option<&[u8]> {
@@ -654,6 +725,40 @@ mod tests {
         let mut decoder = Decoder::new(48_000, Channels::Mono).expect("decoder builds");
         let dec_err = decoder.decode(&[1u8], &mut [], false);
         assert!(dec_err.is_err(), "decode(.., &mut [], ..) must err, got {dec_err:?}");
+    }
+
+    // ---- Accessors round-trip the configuration ----
+
+    #[test]
+    fn encoder_decoder_accessors_round_trip() {
+        let encoder = Encoder::builder(24_000, Channels::Stereo, Application::Audio)
+            .build()
+            .expect("encoder builds");
+        assert_eq!(encoder.sample_rate(), 24_000);
+        assert_eq!(encoder.channels(), Channels::Stereo);
+
+        let decoder = Decoder::new(24_000, Channels::Stereo).expect("decoder builds");
+        assert_eq!(decoder.sample_rate(), 24_000);
+        assert_eq!(decoder.channels(), Channels::Stereo);
+    }
+
+    // ---- Bitrate::try_bits validates overflow ----
+
+    #[test]
+    fn bitrate_try_bits_validates_overflow() {
+        // i32::MAX is exactly the boundary — must succeed.
+        let ok = Bitrate::try_bits(i32::MAX as u32).expect("i32::MAX bps is accepted");
+        assert_eq!(ok, Bitrate::Bits(i32::MAX as u32));
+
+        // One past the boundary must fail with the typed error.
+        let too_big = (i32::MAX as u32).checked_add(1).expect("u32 has headroom");
+        let err = Bitrate::try_bits(too_big).expect_err("over-i32::MAX bps must error");
+        assert_eq!(err, BitrateRangeError(too_big));
+        // Display message check (locked-in copy from the doc-comment).
+        assert_eq!(
+            err.to_string(),
+            format!("bitrate {too_big} bps exceeds the libopus i32::MAX limit")
+        );
     }
 
     // ---- Builder -> encode -> decode round-trip (lossy; we only check shape) ----
