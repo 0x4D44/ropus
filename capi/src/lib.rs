@@ -74,9 +74,17 @@ pub const OPUS_UNIMPLEMENTED: i32 = -5;
 pub const OPUS_INVALID_STATE: i32 = -6;
 pub const OPUS_ALLOC_FAIL: i32 = -7;
 
-// --- CTL request codes we dispatch on from the C shim -------------------------
-// Phase 1 only needs OPUS_RESET_STATE; everything else lands on the
-// unimplemented default arm in ctl_shim.c.
+// --- CTL request codes surfaced at crate scope -------------------------------
+// The CTL surface exercised by the xiph conformance tests (encoder, decoder,
+// and multistream variants) is dispatched by `ctl_shim.c` into typed Rust
+// entry points in `ctl.rs`. Unknown requests land on the default arm and
+// return `OPUS_UNIMPLEMENTED`; that includes the DNN/DRED/OSCE/QEXT and
+// `IGNORE_EXTENSIONS` families (which track deferred DNN/OSCE work) plus a
+// handful of niche requests the conformance suite doesn't touch
+// (`VOICE_RATIO`, `IN_DTX`, `LFE`, `ENERGY_MASK`, decoder-side `COMPLEXITY`).
+// `OPUS_RESET_STATE` is the only code re-exported at crate scope because
+// other modules refer to it by name (see the generation-bump docs in
+// encoder.rs / decoder.rs).
 pub const OPUS_RESET_STATE: i32 = 4028;
 
 /// Wrap an FFI body so a panic becomes an error code rather than UB.
