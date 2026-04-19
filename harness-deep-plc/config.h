@@ -31,6 +31,13 @@
  * transitively but their top-level features are NOT enabled — Stage 8 scope. */
 #define ENABLE_DEEP_PLC 1
 
+/* Stage 8.8: enable the encoder-side DRED wiring in `opus_encoder.c` so the
+ * `OPUS_SET_DRED_DURATION` CTL and the `dred_compute_latents` /
+ * `dred_encode_silk_frame` path become live on the C side. Lets the Stage 8.8
+ * integration test drive a full C encoder with DRED on and feed its packets
+ * to the Rust decoder (and vice versa). */
+#define ENABLE_DRED 1
+
 /* Use the built-in compile-time weights from `reference/dnn/*_data.c` —
  * NOT a runtime weights file. This matches xiph's default configure path
  * and means `opus_decoder_create` auto-initialises DEEP_PLC without any

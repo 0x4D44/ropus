@@ -195,7 +195,41 @@ unsafe extern "C" {
     ) -> c_int;
     pub fn peek_silk_ltpmem(opus_st: *const OpusDecoder) -> c_int;
     pub fn peek_silk_framelen(opus_st: *const OpusDecoder) -> c_int;
+
+    // --- Stage 8.8 full C encoder + C DRED parser shim ---
+    // Defined in `harness-deep-plc/dred_encode_shim.c`. Drives the xiph C
+    // encoder end-to-end with DRED enabled and exposes a one-shot
+    // `opus_dred_parse` helper so the Rust integration test can assert
+    // format-level cross-compatibility in both directions.
+    pub fn ropus_test_c_encoder_new(
+        fs: c_int,
+        channels: c_int,
+        application: c_int,
+        dred_duration: c_int,
+    ) -> *mut c_void;
+    pub fn ropus_test_c_encoder_free(enc: *mut c_void);
+    pub fn ropus_test_c_encoder_encode(
+        enc: *mut c_void,
+        pcm: *const opus_int16,
+        frame_size: c_int,
+        data: *mut c_uchar,
+        max_data_bytes: c_int,
+    ) -> c_int;
+    pub fn ropus_test_c_dred_parse(
+        data: *const c_uchar,
+        len: c_int,
+        max_dred_samples: c_int,
+        sampling_rate: c_int,
+        out_nb_latents: *mut c_int,
+        out_process_stage: *mut c_int,
+        out_dred_offset: *mut c_int,
+    ) -> c_int;
 }
+
+/// Opus application modes (mirrored from `opus_defines.h`). Only the ones
+/// Stage 8.8 actually uses — matches ropus's own `opus/encoder.rs` constants.
+pub const OPUS_APPLICATION_VOIP: c_int = 2048;
+pub const OPUS_APPLICATION_AUDIO: c_int = 2049;
 
 /// Thin RAII wrapper around the C float-mode decoder — used by the tier-2
 /// tests so we can just `?` our way through errors and get `Drop` cleanup.

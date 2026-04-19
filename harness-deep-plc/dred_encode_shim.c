@@ -216,3 +216,94 @@ int ropus_test_dred_ec_decode(
     if (out_dred_offset) *out_dred_offset = dred.dred_offset;
     return ret;
 }
+
+/* ========================================================================
+ * Stage 8.8: full C encoder shim.
+ * ========================================================================
+ * Drives a complete `opus_encoder_create + opus_encoder_ctl(OPUS_SET_DRED_
+ * DURATION) + opus_encode` flow so the Rust integration test can feed the
+ * resulting packets to the Rust `OpusDREDDecoder::parse` and assert format-
+ * level compatibility. Compile-time weights are used (`!USE_WEIGHTS_FILE` in
+ * our `config.h`), so no explicit `OPUS_SET_DNN_BLOB` call is needed.
+ */
+
+#include "opus.h"
+
+void *ropus_test_c_encoder_new(int fs, int channels, int application, int dred_duration) {
+    int err = 0;
+    OpusEncoder *enc = opus_encoder_create(fs, channels, application, &err);
+    if (err != OPUS_OK || !enc) return NULL;
+    /* Bump bitrate so there's room for DRED + audio. */
+    opus_encoder_ctl(enc, OPUS_SET_BITRATE(32000));
+    opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY(5));
+    /* Default (!USE_WEIGHTS_FILE) doesn't auto-load the FEC blob, but
+     * `dred_encoder_init` wired into `opus_encoder_init` does the compile-
+     * time load for us. Enable DRED + loss perc so the encoder allocates
+     * a non-trivial redundancy budget. */
+    opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC(20));
+    opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC(1));
+    if (dred_duration > 0) {
+        int r = opus_encoder_ctl(enc, OPUS_SET_DRED_DURATION(dred_duration));
+        if (r != OPUS_OK) {
+            opus_encoder_destroy(enc);
+            return NULL;
+        }
+        /* Verify the CTL took. */
+        int check_dur = -1;
+        opus_encoder_ctl(enc, OPUS_GET_DRED_DURATION(&check_dur));
+        if (check_dur != dred_duration) {
+            opus_encoder_destroy(enc);
+            return NULL;
+        }
+    }
+    return enc;
+}
+
+void ropus_test_c_encoder_free(void *enc) {
+    if (enc) opus_encoder_destroy((OpusEncoder *)enc);
+}
+
+int ropus_test_c_encoder_encode(
+    void *enc,
+    const opus_int16 *pcm,
+    int frame_size,
+    unsigned char *data,
+    int max_data_bytes
+) {
+    return opus_encode((OpusEncoder *)enc, pcm, frame_size, data, max_data_bytes);
+}
+
+/* Parse a Rust-emitted packet with the C `opus_dred_parse` path and report
+ * whether a DRED extension was found + populated. `*out_nb_latents` and
+ * `*out_process_stage` mirror the `OpusDRED` fields after parse. Returns
+ * the number of samples available to be decoded via DRED (C's
+ * `opus_dred_parse` return value), or a negative error code. */
+int ropus_test_c_dred_parse(
+    const unsigned char *data,
+    int len,
+    int max_dred_samples,
+    int sampling_rate,
+    int *out_nb_latents,
+    int *out_process_stage,
+    int *out_dred_offset
+) {
+    OpusDREDDecoder *dec = opus_dred_decoder_create(NULL);
+    if (!dec) return OPUS_ALLOC_FAIL;
+    OpusDRED *dred = opus_dred_alloc(NULL);
+    if (!dred) {
+        opus_dred_decoder_destroy(dec);
+        return OPUS_ALLOC_FAIL;
+    }
+    /* `opus_dred_alloc` returns uninitialised memory — zero it so the
+     * `nb_latents`/`dred_offset` fields report zero on "no extension"
+     * rather than stack garbage. `opus_dred_parse` sets `process_stage`
+     * to -1 unconditionally so that one field is fine either way. */
+    memset(dred, 0, opus_dred_get_size());
+    int ret = opus_dred_parse(dec, dred, data, len, max_dred_samples, sampling_rate, NULL, 0);
+    if (out_nb_latents) *out_nb_latents = dred->nb_latents;
+    if (out_process_stage) *out_process_stage = dred->process_stage;
+    if (out_dred_offset) *out_dred_offset = dred->dred_offset;
+    opus_dred_free(dred);
+    opus_dred_decoder_destroy(dec);
+    return ret;
+}

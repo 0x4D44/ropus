@@ -15,6 +15,10 @@ use crate::celt::encoder::{
 };
 use crate::celt::math_ops::{celt_exp2, celt_ilog2, celt_sqrt, frac_div32};
 use crate::celt::range_coder::RangeEncoder;
+use crate::dnn::dred::{
+    DREDEnc, DRED_EXPERIMENTAL_BYTES, DRED_EXPERIMENTAL_VERSION, DRED_EXTENSION_ID,
+    DRED_MAX_DATA_SIZE, DRED_MAX_FRAMES, DRED_MIN_BYTES, DRED_NUM_REDUNDANCY_FRAMES,
+};
 use crate::silk::common::{silk_lin2log, silk_log2lin};
 use crate::silk::encoder::{SilkEncControlStruct, SilkEncoder, silk_encode, silk_init_encoder_top};
 use crate::types::*;
@@ -28,7 +32,9 @@ use super::decoder::{
     OPUS_BANDWIDTH_MEDIUMBAND, OPUS_BANDWIDTH_NARROWBAND, OPUS_BANDWIDTH_SUPERWIDEBAND,
     OPUS_BANDWIDTH_WIDEBAND, OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR, OPUS_OK,
 };
-use super::repacketizer::{OpusRepacketizer, opus_packet_pad};
+use super::repacketizer::{
+    OpusExtensionData, OpusRepacketizer, opus_packet_pad, opus_packet_pad_impl,
+};
 
 // ===========================================================================
 // Constants
@@ -341,6 +347,31 @@ pub struct OpusEncoder {
     /// not set. Driven by `run_analysis` on every frame where complexity
     /// is high enough and the sample rate is supported.
     analysis: Box<TonalityAnalysisState>,
+
+    // --- DRED (Stage 8.8) ---
+    //
+    // Deep REDundancy encoder state. `None` on a fresh encoder (we don't pay
+    // the ~MB allocation cost unless DRED is explicitly requested). The first
+    // non-zero `set_dred_duration` call lazily allocates and attempts an
+    // embedded-blob load via `DREDEnc::new`. Matches the C
+    // `ENABLE_DRED` gate on `st->dred_encoder`.
+    dred_encoder: Option<Box<DREDEnc>>,
+    /// DRED payload duration in 2.5 ms units (0..=`DRED_MAX_FRAMES`). Zero
+    /// disables DRED emission. Matches C `st->dred_duration`.
+    dred_duration: i32,
+    dred_q0: i32,
+    dred_d_q: i32,
+    dred_qmax: i32,
+    dred_target_chunks: i32,
+    /// 2.5 ms-resolution voice-activity ring buffer fed from the SILK VAD,
+    /// consumed by `DREDEnc::encode_silk_frame`. Matches C
+    /// `st->activity_mem[DRED_MAX_FRAMES*4]` (416 bytes).
+    activity_mem: Vec<u8>,
+    /// Latched `first_frame` flag for the current `encode_frame_native`
+    /// call. Default `true` (single-frame encodes always see this set).
+    /// The multi-frame loop flips this per sub-frame. Matches C's stack-
+    /// local `first_frame` in opus_encoder.c:1777.
+    first_frame_flag: bool,
 }
 
 // ===========================================================================
@@ -1279,6 +1310,14 @@ impl OpusEncoder {
             delay_buffer: vec![0i16; (encoder_buffer * channels) as usize],
             tmp_prefill: vec![0i16; (channels * fs / 400) as usize],
             analysis: TonalityAnalysisState::new_boxed(),
+            dred_encoder: None,
+            dred_duration: 0,
+            dred_q0: 0,
+            dred_d_q: 0,
+            dred_qmax: 0,
+            dred_target_chunks: 0,
+            activity_mem: vec![0u8; 4 * DRED_MAX_FRAMES],
+            first_frame_flag: true,
         };
 
         // Initialise the tonality analyzer. Matches C
@@ -1456,6 +1495,12 @@ impl OpusEncoder {
         if let Some(ref mut celt) = self.celt_enc {
             celt.reset();
         }
+        // C: opus_encoder.c:3261-3262 — dred_encoder_reset.
+        if let Some(ref mut dred) = self.dred_encoder {
+            dred.reset();
+        }
+        self.activity_mem.fill(0);
+        self.first_frame_flag = true;
     }
 
     /// Encode PCM audio (16-bit input).
@@ -2302,6 +2347,11 @@ impl OpusEncoder {
 
             let mut frame_buf = vec![0u8; curr_max as usize];
 
+            // TODO(stage-8.x): mirror C (reference/src/opus_encoder.c:1777):
+            // first_frame = (i == 0) || (i == dtx_count). When sub-frame 0 is DTX-
+            // dropped, Rust attaches DRED to a doomed buffer; C shifts it to the
+            // first non-DTX frame. No DTX-with-multi-frame-packet test case in 8.8.
+            self.first_frame_flag = i == 0;
             let ret = self.encode_frame_native(
                 pcm_frame,
                 enc_frame_size,
@@ -2326,6 +2376,7 @@ impl OpusEncoder {
             sub_packets.push(frame_buf);
         }
         self.nonfinal_frame = 0;
+        self.first_frame_flag = true;
 
         // Repacketize — C uses out_range_impl with CBR pad flag
         let mut rp = OpusRepacketizer::new();
@@ -2384,6 +2435,11 @@ impl OpusEncoder {
         to_celt: bool,
         analysis_info: &AnalysisInfo,
     ) -> Result<i32, i32> {
+        // `first_frame_flag` drives DRED emission. Default: `true` for
+        // single-frame encodes (the only frame is the first). The multi-
+        // frame loop sets it per sub-frame before each call and swaps back
+        // after. Matches C `first_frame` in opus_encoder.c:2604.
+        let first_frame = self.first_frame_flag;
         let max_data_bytes = imin(max_data_bytes, 1276);
         let mut curr_bandwidth = self.bandwidth;
         let delay_compensation = if self.application == OPUS_APPLICATION_RESTRICTED_LOWDELAY {
@@ -2520,6 +2576,48 @@ impl OpusEncoder {
                 self.channels,
                 self.fs,
             );
+        }
+
+        // --- DRED compute_latents ---
+        //
+        // Matches C opus_encoder.c:2027-2041. Must run before SILK because of
+        // the DTX decision which reuses `activity_mem`. `DREDEnc` wants f32
+        // PCM scaled to [-1,1]; ropus's `pcm_buf` is i16 (fixed-point). We
+        // convert on the fly via `s as f32 / 32768.0` (the same convention
+        // the harness tests use — see `harness-deep-plc/tests/dred_encode_payload_diff.rs`).
+        if self.dred_duration > 0 && self.dred_encoder.as_ref().is_some_and(|d| d.loaded) {
+            // Feed the post-HP/DC-reject "new" PCM (the range matching C's
+            // `&pcm_buf[total_buffer*channels]`). Convert i16 → f32 in [-1,1].
+            let new_off = (total_buffer * self.channels) as usize;
+            let new_len = (frame_size * self.channels) as usize;
+            let pcm_f32: Vec<f32> = pcm_buf[new_off..new_off + new_len]
+                .iter()
+                .map(|&s| s as f32 * (1.0 / 32768.0))
+                .collect();
+            let dred = self.dred_encoder.as_mut().unwrap();
+            dred.compute_latents(&pcm_f32, frame_size, total_buffer);
+
+            // Shift activity_mem and write the current frame's activity flag
+            // into the low end. Matches C opus_encoder.c:2034-2036.
+            // `activity` may still be VAD_NO_DECISION (-1) in SILK/HYBRID
+            // mode; we store it as-cast here (like C does — `unsigned char`
+            // truncation of `int`) and overwrite it after SILK resolves the
+            // value (see the back-patch after the SILK block).
+            let frame_size_400hz = (frame_size * 400 / self.fs) as usize;
+            let amlen = self.activity_mem.len();
+            if frame_size_400hz > 0 && frame_size_400hz < amlen {
+                self.activity_mem.copy_within(0..amlen - frame_size_400hz, frame_size_400hz);
+            }
+            let act_byte = activity as u8;
+            for i in 0..frame_size_400hz.min(amlen) {
+                self.activity_mem[i] = act_byte;
+            }
+        } else {
+            // C: opus_encoder.c:2037-2040 — clear when DRED disabled/unloaded.
+            if let Some(ref mut dred) = self.dred_encoder {
+                dred.latents_buffer_fill = 0;
+            }
+            self.activity_mem.fill(0);
         }
 
         // --- Initialize range encoder ---
@@ -2763,6 +2861,20 @@ impl OpusEncoder {
                     } else {
                         0
                     };
+                    // C: opus_encoder.c:2237-2240 — overwrite the activity_mem
+                    // entries we just stamped with VAD_NO_DECISION now that
+                    // SILK has given us a real VAD flag. DRED's
+                    // `dred_voice_active` only counts `== 1` as voiced, so
+                    // this is what lets active frames make DRED emit.
+                    if self.dred_duration > 0
+                        && self.dred_encoder.as_ref().is_some_and(|d| d.loaded)
+                    {
+                        let frame_size_400hz = (frame_size * 400 / self.fs) as usize;
+                        let act_byte = activity as u8;
+                        for i in 0..frame_size_400hz.min(self.activity_mem.len()) {
+                            self.activity_mem[i] = act_byte;
+                        }
+                    }
                 }
 
                 // DTX: if SILK produced 0 bytes
@@ -2936,6 +3048,11 @@ impl OpusEncoder {
                 nb_compr_bytes = ret;
                 range_final = enc.get_rng();
             } else {
+                // TODO(stage-8.x): port C's DRED-aware CELT-budget steal (reference/src/
+                // opus_encoder.c:2399-2411). C reduces nb_compr_bytes by up to 75% of
+                // the DRED bitrate allocation when dred_duration > 0, so DRED payload
+                // fits. Without this, DRED silently fails the dred_bytes_left check at
+                // tight bitrates (<= ~20 kbps). Integration test uses 32 kbps and clears.
                 nb_compr_bytes = (max_data_bytes - 1) - redundancy_bytes;
                 enc.shrink(nb_compr_bytes as u32);
                 range_final = 0; // Will be set after CELT
@@ -3195,8 +3312,85 @@ impl OpusEncoder {
             ret += redundancy_bytes;
         }
 
+        // --- DRED extension emission ---
+        //
+        // Matches C opus_encoder.c:2603-2642. Only runs on the first frame
+        // in a packet, when DRED is enabled, weights are loaded, and there's
+        // budget for at least one chunk after accounting for the repacketizer
+        // overhead.
+        let mut apply_padding = self.use_vbr == 0;
+        if first_frame
+            && self.dred_duration > 0
+            && self.dred_encoder.as_ref().is_some_and(|d| d.loaded)
+        {
+            // Cap chunk count at the configured duration (2.5 ms units).
+            let mut dred_chunks = imin(
+                (self.dred_duration + 5) / 4,
+                (DRED_NUM_REDUNDANCY_FRAMES / 2) as i32,
+            );
+            if self.use_vbr != 0 {
+                dred_chunks = imin(dred_chunks, self.dred_target_chunks);
+            }
+            // Remaining space after accounting for the 3-byte code 3 header,
+            // padding length byte, and extension ID byte.
+            let mut dred_bytes_left = imin(DRED_MAX_DATA_SIZE as i32, orig_max_data_bytes - ret - 3);
+            // Account for multi-byte padding-length overhead — one extra byte
+            // per 255 bytes of padding-plus-prefix.
+            dred_bytes_left -= (dred_bytes_left + 1 + DRED_EXPERIMENTAL_BYTES as i32) / 255;
+            if dred_chunks >= 1
+                && dred_bytes_left >= (DRED_MIN_BYTES + DRED_EXPERIMENTAL_BYTES) as i32
+            {
+                let mut buf = [0u8; DRED_MAX_DATA_SIZE];
+                buf[0] = b'D';
+                buf[1] = DRED_EXPERIMENTAL_VERSION as u8;
+                let payload_max =
+                    (dred_bytes_left - DRED_EXPERIMENTAL_BYTES as i32) as usize;
+                let dred = self.dred_encoder.as_mut().unwrap();
+                let dred_bytes = dred.encode_silk_frame(
+                    &mut buf[DRED_EXPERIMENTAL_BYTES..],
+                    dred_chunks,
+                    payload_max,
+                    self.dred_q0,
+                    self.dred_d_q,
+                    self.dred_qmax,
+                    &self.activity_mem,
+                );
+                if dred_bytes > 0 {
+                    let total_bytes = dred_bytes + DRED_EXPERIMENTAL_BYTES as i32;
+                    debug_assert!(total_bytes <= dred_bytes_left);
+                    let ext = OpusExtensionData {
+                        id: DRED_EXTENSION_ID as i32,
+                        frame: 0,
+                        data: &buf[..total_bytes as usize],
+                        len: total_bytes,
+                    };
+                    // `pad` flag controls whether `out_range_impl` pads the
+                    // tail up to `orig_max_data_bytes`. C passes `!use_vbr`.
+                    let pad_flag = self.use_vbr == 0;
+                    let pad_ret = opus_packet_pad_impl(
+                        data,
+                        ret,
+                        orig_max_data_bytes,
+                        pad_flag,
+                        &[ext],
+                    );
+                    // Guard rail: match C behaviour of returning
+                    // OPUS_INTERNAL_ERROR on failure.
+                    if pad_ret < 0 {
+                        return Err(OPUS_INTERNAL_ERROR);
+                    }
+                    // On success the impl returns the new packet length. For
+                    // CBR `pad_flag=true`, that equals `orig_max_data_bytes`;
+                    // for VBR it is the original `ret` plus the extension-
+                    // carrying padding sliver.
+                    ret = pad_ret;
+                    apply_padding = false;
+                }
+            }
+        }
+
         // --- CBR padding ---
-        if self.use_vbr == 0 && ret < orig_max_data_bytes {
+        if apply_padding && ret < orig_max_data_bytes {
             let pad_ret = opus_packet_pad(data, ret, orig_max_data_bytes);
             if pad_ret == OPUS_OK {
                 ret = orig_max_data_bytes;
@@ -3439,6 +3633,64 @@ impl OpusEncoder {
 
     pub fn get_dtx(&self) -> i32 {
         self.use_dtx
+    }
+
+    // --- DRED (Stage 8.8) ---
+    //
+    // Matches C `OPUS_SET_DRED_DURATION_REQUEST` / `OPUS_GET_DRED_DURATION_REQUEST`
+    // in `opus_encoder.c:3198-3219`. Duration is in 2.5 ms units
+    // (0..=`DRED_MAX_FRAMES` = 104). Zero disables DRED; non-zero lazily
+    // allocates a `DREDEnc` via `DREDEnc::new` (which auto-loads the
+    // embedded weight blob when present).
+
+    /// Set the DRED payload duration in 2.5 ms units.
+    /// Returns `OPUS_OK` on success, `OPUS_BAD_ARG` if out of range.
+    pub fn set_dred_duration(&mut self, duration: i32) -> i32 {
+        if duration < 0 || duration > DRED_MAX_FRAMES as i32 {
+            return OPUS_BAD_ARG;
+        }
+        self.dred_duration = duration;
+        self.silk_mode.use_dred = if duration != 0 { 1 } else { 0 };
+        // Lazy-allocate: only pay the DRED state cost when a non-zero
+        // duration is first requested.
+        if duration != 0 && self.dred_encoder.is_none() {
+            self.dred_encoder = Some(Box::new(DREDEnc::new(self.fs, self.channels)));
+            // Stage 8.8: we don't port the full C `compute_dred_bitrate`
+            // heuristic (which tunes q0/dQ/qmax per-frame from `bitrate_bps`
+            // and `packetLossPercentage`). Use constant defaults — they're
+            // the tightest tier-1-compatible values and cover every frame
+            // rate without re-tuning. Matches the `qmax = 15` ceiling in C
+            // and the experimental fallback in `dred_encoder.c`.
+            self.dred_q0 = 9;
+            self.dred_d_q = 3;
+            self.dred_qmax = 15;
+            self.dred_target_chunks =
+                (duration + 5) / 4;
+        }
+        OPUS_OK
+    }
+
+    /// Get the configured DRED payload duration in 2.5 ms units.
+    pub fn get_dred_duration(&self) -> i32 {
+        self.dred_duration
+    }
+
+    /// Load the DNN weight blob into the DRED encoder. Matches C
+    /// `OPUS_SET_DNN_BLOB_REQUEST` → `dred_encoder_load_model` at
+    /// `opus_encoder.c:3333-3335`. Called by CTL dispatch in Stage 7.
+    /// Allocates `DREDEnc` lazily if not already present.
+    /// Returns `OPUS_OK` on success or a negative error code.
+    pub fn load_dnn_blob(&mut self, blob: &[u8]) -> i32 {
+        if blob.is_empty() {
+            return OPUS_BAD_ARG;
+        }
+        if self.dred_encoder.is_none() {
+            self.dred_encoder = Some(Box::new(DREDEnc::new_unloaded(self.fs, self.channels)));
+        }
+        match self.dred_encoder.as_mut().unwrap().load_model(blob) {
+            Ok(()) => OPUS_OK,
+            Err(_) => OPUS_BAD_ARG,
+        }
     }
 
     pub fn set_lsb_depth(&mut self, depth: i32) -> i32 {
