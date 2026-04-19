@@ -184,6 +184,14 @@ unsafe extern "C" {
         frame_size: c_int,
         decode_fec: c_int,
     ) -> c_int;
+    pub fn opus_decode24(
+        st: *mut OpusDecoder,
+        data: *const c_uchar,
+        len: opus_int32,
+        pcm: *mut opus_int32,
+        frame_size: c_int,
+        decode_fec: c_int,
+    ) -> c_int;
     pub fn opus_decoder_destroy(st: *mut OpusDecoder);
     pub fn opus_decoder_ctl(st: *mut OpusDecoder, request: c_int, ...) -> c_int;
 
@@ -274,6 +282,14 @@ unsafe extern "C" {
         data: *const c_uchar,
         len: opus_int32,
         pcm: *mut opus_int16,
+        frame_size: c_int,
+        decode_fec: c_int,
+    ) -> c_int;
+    pub fn opus_multistream_decode24(
+        st: *mut OpusMSDecoder,
+        data: *const c_uchar,
+        len: opus_int32,
+        pcm: *mut opus_int32,
         frame_size: c_int,
         decode_fec: c_int,
     ) -> c_int;

@@ -1,3 +1,5 @@
+#[doc(hidden)]
+pub mod analysis;
 pub mod decoder;
 pub mod encoder;
 pub mod extensions;
