@@ -27,3 +27,9 @@ notes/*.log
 
 # Transient fuzz panic-capture dir (crash artifacts saved by Windows hook)
 /fuzz_crashes/
+
+# Real-world corpus binaries (size + redistribution ambiguity).
+# README.md stays committable; fetch script pulls into this directory.
+/tests/vectors/real_world/*.opus
+/tests/vectors/real_world/*.ogg
+/tests/vectors/real_world/*.webm
