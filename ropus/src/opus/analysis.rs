@@ -1244,7 +1244,14 @@ fn tonality_analysis(
         );
         frame_tonality += band_tonality[b];
         if b >= NB_TBANDS - NB_TONAL_SKIP_BANDS {
-            frame_tonality -= band_tonality[b - NB_TBANDS + NB_TONAL_SKIP_BANDS];
+            // C: `band_tonality[b-NB_TBANDS+NB_TONAL_SKIP_BANDS]` — in C
+            // this is signed int arithmetic and evaluates to `b - 9`
+            // (range 0..=8 under the `b >= 9` guard). In Rust `usize`
+            // left-to-right evaluation the `b - NB_TBANDS` subtraction
+            // underflows because `b < NB_TBANDS` inside the loop. Reorder
+            // so each partial sum stays non-negative: the guard ensures
+            // `b + NB_TONAL_SKIP_BANDS >= NB_TBANDS`.
+            frame_tonality -= band_tonality[b + NB_TONAL_SKIP_BANDS - NB_TBANDS];
         }
         max_frame_tonality = fmax16(
             max_frame_tonality,
