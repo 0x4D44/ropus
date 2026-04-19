@@ -46,7 +46,7 @@ pub fn parse(args: &[String]) -> ParseOutcome {
 }
 
 pub fn print_help() {
-    println!("full-test — ropus validation runner (Phase 1)");
+    println!("full-test — ropus validation runner (Phase 2)");
     println!();
     println!("USAGE:");
     println!("    cargo run --release -p full-test -- [FLAGS]");
@@ -54,13 +54,13 @@ pub fn print_help() {
     println!("FLAGS:");
     println!("    --quick             Skip stages 1 (quality) and 4 (benchmarks).");
     println!("    --skip-quality      Skip stage 1 (cargo fmt + clippy).");
-    println!("    --skip-coverage     Downgrade stage 2 to plain `cargo test` (Phase 2+).");
+    println!("    --skip-coverage     Downgrade stage 2 to plain `cargo test`.");
     println!("    --skip-benchmarks   Skip stage 4 (Phase 4+).");
     println!("    --skip-ambisonics   Skip stage 3 (Phase 3+).");
     println!("    -h, --help          Show this help and exit.");
     println!();
-    println!("Phase 1 only exercises stage 0 (setup capture) and stage 1 (quality).");
-    println!("Other --skip-* flags are recorded for later phases.");
+    println!("Phase 2 exercises stages 0 (setup), 1 (quality), and 2 (tests+coverage).");
+    println!("Stages 3 (ambisonics), 4 (benchmarks), and 5 (HTML report) are Phase 3+.");
 }
 
 #[cfg(test)]

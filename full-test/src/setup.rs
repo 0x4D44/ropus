@@ -93,14 +93,20 @@ fn workspace_version() -> Option<String> {
 }
 
 fn ietf_vectors_present() -> bool {
-    // The conformance suite probes testvector01.bit; if it is missing the whole
-    // ietf_vectors test binary short-circuits. See HLD § Stage 0.
-    workspace_root()
-        .join("tests")
-        .join("vectors")
-        .join("ietf")
-        .join("testvector01.bit")
-        .is_file()
+    // The conformance suite runs `testvector01`..`testvector12` (each in mono
+    // and stereo variants, so 24 tests from 12 `.bit` files). A partial fetch
+    // that delivered only a subset would pass a single-file probe and then
+    // blow up on the missing ones mid-Stage-2. Require all 12 present.
+    // See HLD § Stage 0.
+    let root = workspace_root().join("tests").join("vectors").join("ietf");
+    all_ietf_bitstreams_present(&root)
+}
+
+/// True when every `testvectorNN.bit` (NN=01..=12) exists under `root`.
+/// Factored out for unit testing against a temp dir. Pure — no I/O on `root`
+/// beyond `is_file()` on each candidate.
+fn all_ietf_bitstreams_present(root: &Path) -> bool {
+    (1..=12).all(|n| root.join(format!("testvector{n:02}.bit")).is_file())
 }
 
 fn workspace_root() -> PathBuf {
@@ -189,5 +195,26 @@ mod tests {
     #[test]
     fn format_branch_falls_back_to_unknown_outside_repo() {
         assert_eq!(format_branch(None, "abc1234"), "unknown");
+    }
+
+    #[test]
+    fn ietf_preflight_requires_all_twelve_bitstreams() {
+        // Empty dir → false.
+        let tmp = tempfile::TempDir::new().expect("temp dir");
+        assert!(!all_ietf_bitstreams_present(tmp.path()));
+
+        // Only testvectors 01..06 → still false (partial fetch scenario).
+        for n in 1..=6 {
+            let p = tmp.path().join(format!("testvector{n:02}.bit"));
+            std::fs::write(&p, b"").expect("write stub");
+        }
+        assert!(!all_ietf_bitstreams_present(tmp.path()));
+
+        // Fill in 07..12 → true.
+        for n in 7..=12 {
+            let p = tmp.path().join(format!("testvector{n:02}.bit"));
+            std::fs::write(&p, b"").expect("write stub");
+        }
+        assert!(all_ietf_bitstreams_present(tmp.path()));
     }
 }

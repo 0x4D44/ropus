@@ -1,20 +1,22 @@
 //! full-test — local validation runner for the ropus workspace.
 //!
-//! Phase 1 scaffold: CLI parsing, stage 0 setup capture, and stage 1 quality
-//! checks (`cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`).
-//! Later phases add tests+coverage, ambisonics roundtrip, benchmarks, and an
-//! HTML report. See `wrk_docs/2026.04.19 - HLD - full-test-runner.md`.
+//! Phase 2 scope: Stage 0 setup, Stage 1 quality, Stage 2 tests (+ optional
+//! coverage). Stages 3 (ambisonics), 4 (benchmarks), and 5 (HTML report) are
+//! later phases. See `wrk_docs/2026.04.19 - HLD - full-test-runner.md`.
 //!
-//! Phase 1 output is a single JSON blob on stdout; the HTML report belongs to
-//! Phase 4.
+//! Phase 2 output is a structured JSON blob on stdout; the HTML report belongs
+//! to Phase 4.
 
 use std::process::ExitCode;
 
+mod cargo_parse;
 mod cli;
 mod issues;
+mod llvm_cov_parse;
 mod quality;
 mod report;
 mod setup;
+mod tests;
 
 fn main() -> ExitCode {
     // Parse CLI first; --help / unknown flags must exit before we touch the
@@ -49,11 +51,31 @@ fn main() -> ExitCode {
         quality::run()
     };
 
-    // Phase 1 envelope: setup + quality only. Later stages are stubs.
-    let exit_code: u8 = if quality_outcome.all_passed() { 0 } else { 1 };
+    // Stage 2 — tests (+ optional coverage).
+    //
+    // HLD § Flags: `--quick` skips stages 1 and 4 only; stage 2 still runs.
+    // When `--quick` is combined with `--skip-coverage`, stage 2 downgrades
+    // to plain `cargo test` — which is already what happens here, since the
+    // `run()` call sees `skip_coverage=true`.
+    let tests_outcome = tests::run(options.skip_coverage, setup_info.ietf_vectors_present);
+
+    // Stages 3 (ambisonics), 4 (benchmarks), 5 (HTML report) land in later
+    // phases. Their dispatch TODOs live here so the structure stays visible.
+    // TODO(phase 3): if !options.skip_ambisonics && !options.quick { stage 3 }
+    // TODO(phase 4): if !options.skip_benchmarks && !options.quick { stage 4 }
+    // TODO(phase 4): Stage 5 HTML report generation.
+
+    // Phase 2 envelope: setup + quality + tests. Overall pass means every
+    // enabled stage passed; skipped stages are treated as green.
+    let exit_code: u8 = if quality_outcome.all_passed() && tests_outcome.all_passed() {
+        0
+    } else {
+        1
+    };
     let envelope = report::Envelope {
         setup: &setup_info,
         quality: &quality_outcome,
+        tests: &tests_outcome,
         exit_code,
     };
     match serde_json::to_string_pretty(&envelope.to_json()) {
