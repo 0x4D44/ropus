@@ -2115,7 +2115,10 @@ fn compute_vbr(
     //      target -= (opus_int32)((coded_bins<<BITRES)*(.4f-analysis->activity));
     // The f32 product casts to i32 with truncation toward zero, then the
     // `target -= …` is an integer subtraction.
-    if analysis.valid != 0 && analysis.activity < 0.4_f32 {
+    // Note: `.4` in C is a bare double literal; `float < double` promotes
+    // to f64 for the comparison. The inner `(.4f-analysis->activity)` uses
+    // a single-precision `.4f` literal — kept in f32 for that arithmetic.
+    if analysis.valid != 0 && (analysis.activity as f64) < 0.4_f64 {
         let reduction = ((coded_bins << BITRES) as f32 * (0.4_f32 - analysis.activity)) as i32;
         target -= reduction;
     }
@@ -2458,8 +2461,12 @@ fn celt_encode_core(
     //               && (pitch_index > 1.26*prev || pitch_index < .79*prev);
     // The analysis gate prevents spurious pitch-change decisions when the
     // tonality analyzer says the current frame isn't actually tonal.
+    // Note: `.3` in C is a bare double literal, so `tonality > .3` promotes
+    // the f32 to f64 before comparison. Replicate that precisely — an f32
+    // comparison against `0.3_f32` uses a slightly higher threshold (since
+    // `0.3` rounds up in f32) and can flip the branch on borderline values.
     pitch_change = if (gain1 > qconst16(0.4, 15) || st.prefilter_gain > qconst16(0.4, 15))
-        && (st.analysis.valid == 0 || st.analysis.tonality > 0.3_f32)
+        && (st.analysis.valid == 0 || (st.analysis.tonality as f64) > 0.3_f64)
         && (pitch_index as f64 > 1.26 * st.prefilter_period as f64
             || (pitch_index as f64) < 0.79 * st.prefilter_period as f64)
     {

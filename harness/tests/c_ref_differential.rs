@@ -1842,6 +1842,15 @@ unsafe extern "C" {
         c2: c_int,
         c: c_int,
     );
+    fn downmix_int(
+        x: *const std::ffi::c_void,
+        y: *mut i32,
+        subframe: c_int,
+        offset: c_int,
+        c1: c_int,
+        c2: c_int,
+        c: c_int,
+    );
     // CELTMode * opus_custom_mode_create(Fs, frame_size, &err) returns the
     // static `mode48000_960_120` in `reference/celt/static_modes_fixed.h:1547`
     // when CUSTOM_MODES is not defined (our harness build).
@@ -1850,6 +1859,45 @@ unsafe extern "C" {
         frame_size: c_int,
         error: *mut c_int,
     ) -> *mut std::ffi::c_void;
+}
+
+/// Matching Rust-side DownmixFunc that interprets the PCM buffer as i16.
+/// Matches `reference/src/opus_encoder.c:781-802`. Under FIXED_POINT,
+/// `INT16TOSIG(x) = x << SIG_SHIFT` — no clamp, no rounding.
+fn rust_downmix_int(
+    input: &[u8],
+    output: &mut [i32],
+    subframe: i32,
+    offset: i32,
+    c1: i32,
+    c2: i32,
+    c: i32,
+) {
+    const SIG_SHIFT: u32 = 12;
+    let samples: &[i16] = unsafe {
+        std::slice::from_raw_parts(
+            input.as_ptr() as *const i16,
+            input.len() / std::mem::size_of::<i16>(),
+        )
+    };
+    #[inline(always)]
+    fn int16_to_sig(x: i16) -> i32 {
+        (x as i32) << SIG_SHIFT
+    }
+    for j in 0..subframe as usize {
+        output[j] = int16_to_sig(samples[((j as i32 + offset) * c + c1) as usize]);
+    }
+    if c2 > -1 {
+        for j in 0..subframe as usize {
+            output[j] += int16_to_sig(samples[((j as i32 + offset) * c + c2) as usize]);
+        }
+    } else if c2 == -2 {
+        for ch in 1..c {
+            for j in 0..subframe as usize {
+                output[j] += int16_to_sig(samples[((j as i32 + offset) * c + ch) as usize]);
+            }
+        }
+    }
 }
 
 /// Matching Rust-side DownmixFunc that interprets the PCM buffer as f32
@@ -2497,6 +2545,201 @@ fn test_analysis_run_matches_c_reference_long() {
                 rust_info.music_prob.to_bits(),
                 "frame {f}: music_prob bit-diff (c={}, rust={})",
                 c_info.music_prob, rust_info.music_prob
+            );
+        }
+    }
+}
+
+/// Long-running differential using the actual music_48k_stereo.wav content.
+/// This is the most realistic stress test for the analyzer: it's literally
+/// the same samples the ropus-compare encode path feeds through.
+///
+/// Frame-by-frame byte-compares the full TonalityAnalysisState. Uses
+/// `downmix_int` (C) / `rust_downmix_int` (Rust) since the WAV is i16 PCM
+/// — matching the real `opus_encode` code path.
+///
+/// If this test passes bit-exactly but ropus-compare encode still shows
+/// DIFFER frames on the same WAV, the drift is *downstream* of the
+/// analyzer — in the Opus/CELT wiring that consumes AnalysisInfo.
+#[test]
+fn test_analysis_run_matches_c_reference_real_music() {
+    // Load the WAV file. Minimal parser — expects 44-byte header, PCM i16.
+    let wav_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("tests")
+        .join("vectors")
+        .join("music_48k_stereo.wav");
+    let data = match std::fs::read(&wav_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("SKIPPING: cannot read {}: {}", wav_path.display(), e);
+            return;
+        }
+    };
+    assert!(data.len() >= 44, "WAV too small");
+    assert_eq!(&data[0..4], b"RIFF");
+    assert_eq!(&data[8..12], b"WAVE");
+    let channels = u16::from_le_bytes([data[22], data[23]]) as i32;
+    let sample_rate = u32::from_le_bytes([data[24], data[25], data[26], data[27]]);
+    let bits_per_sample = u16::from_le_bytes([data[34], data[35]]);
+    assert_eq!(sample_rate, 48_000, "expected 48 kHz");
+    assert_eq!(bits_per_sample, 16, "expected 16-bit PCM");
+
+    // Find data chunk.
+    let mut pos = 12;
+    let mut pcm_bytes: &[u8] = &[];
+    while pos + 8 <= data.len() {
+        let chunk_size = u32::from_le_bytes([
+            data[pos + 4],
+            data[pos + 5],
+            data[pos + 6],
+            data[pos + 7],
+        ]) as usize;
+        if &data[pos..pos + 4] == b"data" {
+            pcm_bytes = &data[pos + 8..pos + 8 + chunk_size];
+            break;
+        }
+        pos += 8 + chunk_size;
+        if !chunk_size.is_multiple_of(2) {
+            pos += 1;
+        }
+    }
+    assert!(!pcm_bytes.is_empty(), "no data chunk");
+
+    const FRAME_SIZE: usize = 960; // 20 ms at 48 kHz
+    const FS: i32 = 48_000;
+    const C1: i32 = 0;
+    const C2: i32 = -2;
+    const LSB_DEPTH: i32 = 16;
+
+    let frame_bytes_len = FRAME_SIZE * channels as usize * std::mem::size_of::<i16>();
+    let num_full_frames = pcm_bytes.len() / frame_bytes_len;
+    // Exercise at least 300 frames (~6 s) — well beyond the ~90 frame mark
+    // where ropus-compare first sees a DIFFER. Cap to keep test time sane.
+    let num_frames = num_full_frames.min(300);
+
+    let mut c_state = TonalityAnalysisState::new_boxed();
+    let mut rust_state = TonalityAnalysisState::new_boxed();
+
+    let celt_mode_ptr: *mut std::ffi::c_void = unsafe {
+        let mut err: c_int = 0;
+        let p = opus_custom_mode_create(FS, FRAME_SIZE as c_int, &mut err);
+        assert!(!p.is_null() && err == 0);
+        p
+    };
+
+    unsafe {
+        tonality_analysis_init(&raw mut *c_state, FS);
+    }
+    rust_tonality_analysis_init(&mut rust_state, FS);
+
+    let state_size = std::mem::size_of::<TonalityAnalysisState>();
+    const ARCH_FIELD_BYTES: usize = 4;
+
+    for f in 0..num_frames {
+        let start = f * frame_bytes_len;
+        let end = start + frame_bytes_len;
+        let frame_slice = &pcm_bytes[start..end];
+
+        let mut c_info = AnalysisInfo::default();
+        unsafe {
+            run_analysis(
+                &raw mut *c_state,
+                celt_mode_ptr,
+                frame_slice.as_ptr() as *const std::ffi::c_void,
+                FRAME_SIZE as c_int,
+                FRAME_SIZE as c_int,
+                C1,
+                C2,
+                channels as c_int,
+                FS,
+                LSB_DEPTH,
+                downmix_int,
+                &mut c_info,
+            );
+        }
+
+        let mut rust_info = AnalysisInfo::default();
+        use ropus::celt::modes::MODE_48000_960_120 as ROPUS_CELT_MODE;
+        let rust_downmix_cb: DownmixFunc = rust_downmix_int;
+        rust_run_analysis(
+            &mut rust_state,
+            &ROPUS_CELT_MODE,
+            Some(frame_slice),
+            FRAME_SIZE as i32,
+            FRAME_SIZE as i32,
+            C1,
+            C2,
+            channels,
+            FS,
+            LSB_DEPTH,
+            rust_downmix_cb,
+            &mut rust_info,
+        );
+
+        let c_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(c_state.as_ref() as *const _ as *const u8, state_size)
+        };
+        let r_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(rust_state.as_ref() as *const _ as *const u8, state_size)
+        };
+        let mut first_diff: Option<usize> = None;
+        for (i, (&c, &r)) in c_bytes
+            .iter()
+            .zip(r_bytes.iter())
+            .enumerate()
+            .skip(ARCH_FIELD_BYTES)
+        {
+            if c != r {
+                first_diff = Some(i);
+                break;
+            }
+        }
+        if let Some(off) = first_diff {
+            let end_off = (off + 32).min(state_size);
+            eprintln!(
+                "DIVERGED at frame {f}, first differing byte at 0x{off:x} ({off})\n  C   : {:02x?}\n  Rust: {:02x?}",
+                &c_bytes[off..end_off],
+                &r_bytes[off..end_off],
+            );
+            let aligned = off & !3;
+            if aligned + 4 <= state_size {
+                let c_f32 = f32::from_le_bytes([
+                    c_bytes[aligned],
+                    c_bytes[aligned + 1],
+                    c_bytes[aligned + 2],
+                    c_bytes[aligned + 3],
+                ]);
+                let r_f32 = f32::from_le_bytes([
+                    r_bytes[aligned],
+                    r_bytes[aligned + 1],
+                    r_bytes[aligned + 2],
+                    r_bytes[aligned + 3],
+                ]);
+                eprintln!(
+                    "at aligned offset 0x{aligned:x}: C f32 = {c_f32:e} ({:08x}), Rust f32 = {r_f32:e} ({:08x})",
+                    c_f32.to_bits(),
+                    r_f32.to_bits()
+                );
+            }
+            panic!("state diverges at frame {f}, offset 0x{off:x}");
+        }
+
+        // AnalysisInfo fields
+        assert_eq!(
+            c_info.valid, rust_info.valid,
+            "frame {f}: valid mismatch"
+        );
+        if c_info.valid == 1 {
+            assert_eq!(
+                c_info.music_prob.to_bits(),
+                rust_info.music_prob.to_bits(),
+                "frame {f}: music_prob bit-diff (c={}, rust={})",
+                c_info.music_prob, rust_info.music_prob
+            );
+            assert_eq!(
+                c_info.bandwidth, rust_info.bandwidth,
+                "frame {f}: bandwidth mismatch"
             );
         }
     }
