@@ -1125,27 +1125,12 @@ dependencies = [
 
 [[package]]
 name = "ropus"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "cc",
  "ogg 0.9.2",
  "proptest",
  "wide",
-]
-
-[[package]]
-name = "ropus-cli"
-version = "0.2.3"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "colored",
- "ogg 0.9.2",
- "rodio",
- "ropus",
- "rubato",
- "symphonia",
 ]
 
 [[package]]
@@ -1163,6 +1148,67 @@ dependencies = [
  "cc",
  "ogg 0.9.2",
  "ropus",
+]
+
+[[package]]
+name = "ropus-harness-deep-plc"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "ropus",
+]
+
+[[package]]
+name = "ropus-tools-core"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "colored",
+ "ogg 0.9.2",
+ "rodio",
+ "ropus",
+ "rubato",
+ "symphonia",
+]
+
+[[package]]
+name = "ropusdec"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "ropus-tools-core",
+]
+
+[[package]]
+name = "ropusenc"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "ropus-tools-core",
+]
+
+[[package]]
+name = "ropusinfo"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "ropus-tools-core",
+]
+
+[[package]]
+name = "ropusplay"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "ropus-tools-core",
 ]
 
 [[package]]
