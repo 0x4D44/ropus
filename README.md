@@ -6,10 +6,11 @@ For library usage and the crates.io quickstart, see [`ropus/README.md`](ropus/RE
 
 ## What this project is
 
-This repository is a Cargo workspace: the published library crate lives in `ropus/`, with a C comparison harness, end-user CLI, and C ABI shim alongside for parity testing and integration.
+This repository is a Cargo workspace: the published library crate lives in `ropus/`, with a C comparison harness, four end-user CLIs, a foobar2000 plugin, and a C ABI shim alongside for parity testing and integration.
 
 - `ropus/src/` contains codec modules (`celt`, `silk`, `opus`, `dnn`) and shared types in `types.rs`.
-- `ropus-cli/` is the end-user CLI (encode/decode/transcode/play).
+- End-user CLI binaries, one crate per command: `ropusenc/` (encode any symphonia-supported input to Ogg Opus), `ropusdec/` (decode Ogg Opus to WAV or raw PCM), `ropusinfo/` (print stream metadata), `ropusplay/` (play via the default output device).
+- `ropus-fb2k/` is a foobar2000 input-component backend — Ogg Opus demux + ropus decoder behind a stable C ABI — paired with the C++ SDK adapter in `fb2k-ropus/`.
 - `harness/` builds C Opus as `opus_ref` and runs `ropus-compare`.
 - `capi/` exposes the Rust codec through the libopus C ABI.
 - `tests/conformance/` is the workspace conformance suite; `tests/vectors/` stores deterministic WAV fixtures.
@@ -39,9 +40,12 @@ Required:
 - `reference/` directory containing the Opus C source tree (produced by
   `cargo run -p fetch-assets -- reference`)
 
-If you run `cargo build` before fetching assets, the harness build script panics
-with a clear pointer to the `fetch-assets` command — nothing subtle, but the
-explicit fetch step is cleaner than surprise network I/O during `cargo build`.
+If you run `cargo build` before fetching the reference tree, the harness
+`build.rs` degrades gracefully: it emits a `cargo:warning` pointing at the
+`fetch-assets` command and sets `cfg(no_reference)`, so `cargo build` at the
+workspace root succeeds and FFI-dependent binaries in `harness/` stub out.
+Invoking a stubbed binary prints the fetch hint at runtime. Fetch the
+reference first if you intend to drive the differential-comparison path.
 
 ## Core commands
 
@@ -61,6 +65,32 @@ cargo llvm-cov
 - `framecompare`, `decodecompare`, `mathcompare`, `rngtest`, `bench`
 - `unit <module>` for module checks
 
+### End-user CLIs
+
+Four workspace binaries wrap the codec for day-to-day use. Each lives in its
+own crate (`ropusenc/`, `ropusdec/`, `ropusinfo/`, `ropusplay/`) and can be
+built and run via `cargo run -p <name>` or installed with
+`cargo install --path <crate>`.
+
+```bash
+cargo run -p ropusenc  -- input.wav -o output.opus           # encode → Ogg Opus
+cargo run -p ropusdec  -- input.opus -o output.wav           # decode Ogg Opus → WAV
+cargo run -p ropusinfo -- input.opus                         # print stream metadata
+cargo run -p ropusplay -- input.opus                         # play via default output device
+```
+
+`ropusenc` accepts any input format handled by
+[`symphonia`](https://crates.io/crates/symphonia) (WAV, FLAC, MP3, AAC, …)
+and emits a standard Ogg-Opus file per RFC 7845. `ropusdec` can target
+either 16-bit-PCM WAV, 32-bit-float WAV, or raw interleaved PCM.
+
+### foobar2000 plugin
+
+A Windows foobar2000 input-component backed by ropus lives in
+`ropus-fb2k/` (Rust, decoder + Ogg demux behind a stable C ABI) plus
+`fb2k-ropus/` (C++ SDK adapter). Build the C++ side against the foobar2000
+SDK; it links the Rust static library produced by `cargo build -p ropus-fb2k`.
+
 ## Testing scope
 
 We validate ropus against several independent oracles. This section documents what is and is not covered today, so the compatibility story is legible at a glance.
@@ -70,14 +100,12 @@ We validate ropus against several independent oracles. This section documents wh
 - **Per-module unit tests.** Each `ropus/src/{celt,silk,opus,dnn}/` module ships Rust unit tests that exercise leaf functions against hand-specified expected values.
 - **Differential FFI harness** (`harness/`). Links the C reference as `libopus_ref` and compares encode/decode output byte-for-byte. Drives `ropus-compare encode|decode|roundtrip|framecompare|decodecompare|mathcompare|rngtest`.
 - **`cargo-fuzz` campaigns** (`tests/fuzz/`). Long-running differential fuzz with the C reference as oracle; weekly cadence documented in `tests/fuzz/README.md`.
-- **Official xiph/opus test suite** (`tests/conformance/`). Reference `test_opus_*.c` programs compile unmodified against our C ABI shim (`capi/`) and pass. Invoke with `cargo test -p conformance -- --test-threads=1` (the reference test harness has module-global state; single-threaded execution is required).
+- **Official xiph/opus test suite** (`tests/conformance/`). All 7 reference test binaries — `padding`, `decode`, `api`, `encode`, `extensions`, `ietf_vectors`, and `projection` — compile unmodified against our C ABI shim (`capi/`) and pass. This includes the full `regression_test()` body from `test_opus_encode.c` (11 historical crash repros from `opus_encode_regressions.c` compiled verbatim; 5 QEXT/DRED-gated branches compile out) and `test_opus_projection.c`'s ambisonics `mapping_matrix_*` math plus the public `opus_projection_*` encode/decode surface. Full breakdown in [`tests/conformance/README.md`](tests/conformance/README.md). Invoke with `cargo test -p conformance -- --test-threads=1` (the reference test harness has module-global state; single-threaded execution is required).
 - **IETF RFC 6716 / RFC 8251 bitstream vectors.** The canonical spec-level oracle. The 12 reference bitstreams × {mono, stereo} are driven through `opus_demo -d` + `opus_compare` (both upstream `.c` files compiled verbatim) and asserted to pass the RFC-mandated quality threshold. Fetch once with `tools/fetch_ietf_vectors.sh` (or `.ps1` on Windows) — vectors are ~71 MB and stay out of the repo. Run as part of `cargo test -p conformance --test ietf_vectors -- --test-threads=1`. Status: all 24 vectors pass.
 - **Ambisonics (`channel_mapping == 3`) roundtrip.** `harness/src/bin/projection_roundtrip.rs` verifies byte-exact encode and sample-exact decode across first-through-fifth-order ambisonic fixtures.
 
 ### What we don't test (and why)
 
-- **`test_opus_projection.c`.** End-to-end projection is already validated by the ambisonics roundtrip harness. The reference test additionally pokes the internal `mapping_matrix_*` API, which is not yet exposed through the capi shim. Planned in `wrk_docs/2026.04.19 - HLD - conformance-ietf-projection-regressions.md`.
-- **`regression_test()` in `test_opus_encode.c`.** Currently stubbed — the real `opus_encode_regressions.c` calls surround and projection encoders that weren't wired when the conformance suite first went green. Un-stubbing is part of the HLD above.
 - **`test_opus_dred.c`.** DRED (Deep REDundancy) is Opus 1.5+, not part of RFC 6716. The encoder-side port + decoder-parse/process path shipped under `wrk_docs/2026.04.19 - HLD - dred-port.md` (Stage 8). The one remaining piece — FARGAN-driven PCM reconstruction that `test_opus_dred.c` exercises — is tracked in [`wrk_docs/2026.04.19 - HLD - fargan-dred-joint-followup.md`](wrk_docs/2026.04.19%20-%20HLD%20-%20fargan-dred-joint-followup.md) and **currently deferred**. Rationale: zero in-tree consumers today — capi does not expose `opus_decoder_dred_decode{,24,_float}`, and no harness, CLI, or conformance target calls them — so landing it is strict libopus C-ABI parity rather than a correctness gate. Scope estimate: ~150-200 lines of Rust (shared inner + three thin i16/i32/f32 wrappers, following the existing `decode_native` pattern) plus tier-2 SNR calibration against a C-vs-C float-mode control run, roughly 1-2 days of focused work. Will land when capi drop-in parity becomes a ship requirement, or sooner if a consumer appears.
 - **`test_opus_custom.c`.** Custom modes (`opus_custom_*`, `#ifdef CUSTOM_MODES`) allow non-standard frame sizes and are not interoperable with RFC 6716 streams. Effectively deprecated upstream and out of scope for a "public Opus" crate.
 - **Platform-specific SIMD (NEON, SSE4.1, AVX2 intrinsics).** ropus uses the `wide` crate for portable SIMD. Hand-tuned platform paths are an intentional deferral — see `wrk_journals/` for rationale.
@@ -95,7 +123,12 @@ ropus/            # workspace root
 │       ├── dnn/
 │       ├── lib.rs
 │       └── types.rs
-├── ropus-cli/    # end-user CLI (encode/decode/transcode/play)
+├── ropusenc/     # CLI: encode → Ogg Opus (symphonia-backed input)
+├── ropusdec/     # CLI: decode Ogg Opus → WAV or raw PCM
+├── ropusinfo/    # CLI: Ogg Opus stream metadata
+├── ropusplay/    # CLI: play audio via the default output device
+├── ropus-fb2k/   # foobar2000 input-component backend (Rust, stable C ABI)
+├── fb2k-ropus/   # foobar2000 SDK adapter (C++) loading ropus-fb2k
 ├── harness/      # comparison binary + bindings (ropus-compare)
 ├── capi/         # C ABI shim (libopus-compatible)
 ├── tests/
