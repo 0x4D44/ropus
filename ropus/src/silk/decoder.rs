@@ -1138,6 +1138,14 @@ fn silk_plc_update(dec: &mut SilkDecoderState, dec_ctrl: &SilkDecoderControl) {
     dec.s_plc.prev_gain_q16[0] = dec_ctrl.gains_q16[nb_subfr.saturating_sub(2).max(0)];
     dec.s_plc.prev_gain_q16[1] = dec_ctrl.gains_q16[nb_subfr - 1];
     dec.s_plc.prev_ltp_scale_q14 = dec_ctrl.ltp_scale_q14 as i16;
+
+    // Save subframe geometry for PLC. Matches C PLC.c:188-189. Without
+    // these two lines the PLC `silk_plc_rand_offset` falls back to the
+    // SilkDecoderState::new() defaults (nb_subfr=2, subfr_length=20),
+    // which select the wrong noise-source position in `exc_q14` and
+    // produce divergent PLC output from the C reference.
+    dec.s_plc.subfr_length = dec.subfr_length as i32;
+    dec.s_plc.nb_subfr = dec.nb_subfr as i32;
 }
 
 /// Compute the offset into `exc_q14` for the noise source buffer.
@@ -1281,23 +1289,27 @@ fn silk_plc_conceal(dec: &mut SilkDecoderState, frame: &mut [i16]) {
                 0
             };
 
-            // LTP prediction for voiced
-            let ltp_pred = if dec.prev_signal_type == TYPE_VOICED {
-                let mut pred: i32 = 2; // Rounding bias
+            // LTP prediction. Always starts at the +2 rounding bias (C PLC.c:337
+            // "Avoids introducing a bias because silk_SMLAWB() always rounds to
+            // -inf"). For unvoiced frames the B_Q14 coefficients are all zero
+            // (see C PLC.c:178 silk_PLC_update) so the loop below contributes
+            // nothing and pred stays at 2. Dropping the bias (e.g. returning 0
+            // for unvoiced) produces a consistent 8-unit bias in `exc` per sample
+            // (via `shl32(ltp_pred, 2)`), which compounds through the LPC
+            // synthesis filter.
+            let mut ltp_pred: i32 = 2;
+            if dec.prev_signal_type == TYPE_VOICED {
                 for j in 0..LTP_ORDER {
                     let s_idx = frame_offset as i64 + i as i64 - pitch_lag as i64
                         + (LTP_ORDER / 2) as i64
                         - j as i64;
                     if s_idx >= 0 && (s_idx as usize) < s_ltp_q14.len() {
-                        pred = (pred as i64
+                        ltp_pred = (ltp_pred as i64
                             + ((s_ltp_q14[s_idx as usize] as i64 * b_q14[j] as i64) >> 16))
                             as i32;
                     }
                 }
-                pred
-            } else {
-                0
-            };
+            }
 
             // Combine: LTP_pred + rand_noise * rand_scale
             let exc = shl32(ltp_pred, 2) + ((rand_val as i64 * rand_scale_q14 as i64 >> 14) as i32);

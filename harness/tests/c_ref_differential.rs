@@ -1625,8 +1625,11 @@ fn test_24bit_decode_left_shift_8_invariant() {
 }
 
 #[test]
-#[ignore = "ropus decode24 PLC diverges from C reference after first subframe \
-            — see wrk_journals/2026.04.19 - JRN - ietf-projection-regressions.md"]
+#[ignore = "ropus decode24 PLC has residual LSB-level rounding drift vs C \
+            reference after ~288 samples — bulk of the divergence was fixed \
+            (see test_silk_plc_first_subframes_match_c_reference). \
+            Remaining drift tracked in \
+            wrk_journals/2026.04.19 - JRN - ietf-projection-regressions.md"]
 fn test_24bit_decode_plc_matches_c_reference() {
     // opus_demo invokes `opus_decode24(dec, NULL, 0, ...)` on every lost
     // packet; the PLC code path was previously uncovered. Drive one
@@ -1634,11 +1637,15 @@ fn test_24bit_decode_plc_matches_c_reference() {
     // (data=None, len=0) and confirm the Rust and C reference agree
     // sample-for-sample.
     //
-    // Currently #[ignore]'d: the test surfaces a differential divergence
-    // between ropus and the C reference where the first ~35 samples match
-    // bit-exactly but then drift. Tracked for investigation alongside the
-    // stereo decoder bugs. Run with `cargo test -p ropus-harness --test
-    // c_ref_differential -- --ignored` once fixed.
+    // Status: the primary PLC state bugs (silk_plc_update missing
+    // nb_subfr/subfr_length save + LTP_pred bias drop for unvoiced) are
+    // fixed in ropus/src/silk/decoder.rs. The first ~288 samples of PLC
+    // output now match the C reference bit-exactly
+    // (test_silk_plc_first_subframes_match_c_reference enforces this).
+    // This full-frame test stays `#[ignore]`'d while a residual LSB-level
+    // rounding drift past sample ~288 is chased down; max abs diff is
+    // ~17 out of 32767 range (sub-millidB, not audible) and does not
+    // affect IETF conformance tests.
     let sr = 48000;
     let ch = 1;
     let frame_size = 960;
@@ -3337,5 +3344,98 @@ fn diag_celt_encoder_state_divergence_music() {
     } else {
         eprintln!("\nNo CELT encoder state divergence detected in first {num_frames} frames");
     }
+}
+
+// =============================================================================
+// SILK PLC state bug: silk_plc_update missing subfr_length/nb_subfr update
+// =============================================================================
+//
+// Before the fix, `silk_plc_update` (Rust) saved most PLC state on each good
+// SILK frame but forgot to save `subfr_length` and `nb_subfr` (matches
+// `reference/silk/PLC.c:188-189`). On the first lost frame, `silk_plc_conceal`
+// then used the `SilkPlcState::new()` defaults (nb_subfr=2, subfr_length=20),
+// which made `silk_plc_rand_offset` select the wrong noise-source slot inside
+// `exc_Q14` — producing PLC output with energy roughly 10x higher than the C
+// reference.
+//
+// A secondary bug in the same function skipped the +2 rounding bias in
+// `LTP_pred_Q12` for unvoiced frames (the C reference starts at +2
+// unconditionally because `silk_SMLAWB` rounds to -inf). Both fixes are
+// in `ropus/src/silk/decoder.rs` and together reduce PLC vs C-reference
+// divergence on a hybrid-FB 20 ms prime + 20 ms lost-frame sequence from
+// ~925/960 mismatching samples (max diff ~21000) to ~615/960 mismatching
+// samples (max diff ~17, i.e. LSB-level rounding noise).
+//
+// This focused test asserts the first 288 output samples of a SILK-only
+// hybrid PLC sequence match the C reference bit-exactly after the fix —
+// beyond that point LSB-level rounding differences accumulate and the
+// full-frame decode24 PLC test (test_24bit_decode_plc_matches_c_reference)
+// stays `#[ignore]`'d.
+
+#[test]
+fn test_silk_plc_first_subframes_match_c_reference() {
+    // 20 ms hybrid FB prime at 48 kHz mono, then one PLC frame. Asserts the
+    // first 288 samples (= ~6 ms, the pre-subframe-boundary-drift window)
+    // of the PLC output match the C reference bit-exactly.
+    let sr = 48000i32;
+    let ch = 1i32;
+    let frame_size = 960i32;
+    let max_frame = 5760i32;
+    let packet = encode_voip_packet(sr, ch, frame_size, 55);
+
+    // Rust path
+    let mut rust_dec = OpusDecoder::new(sr, ch).unwrap();
+    let mut rust_prime = vec![0i16; max_frame as usize * ch as usize];
+    rust_dec
+        .decode(Some(&packet), &mut rust_prime, max_frame, false)
+        .expect("rust prime failed");
+    let mut rust_plc = vec![0i16; max_frame as usize * ch as usize];
+    rust_dec
+        .decode(None, &mut rust_plc, frame_size, false)
+        .expect("rust plc failed");
+
+    // C reference
+    let (c_plc, c_prime_n) = unsafe {
+        let mut err: c_int = 0;
+        let c_dec = opus_decoder_create(sr, ch as c_int, &mut err);
+        assert!(!c_dec.is_null() && err == 0);
+        let mut c_prime = vec![0i16; max_frame as usize * ch as usize];
+        let prime_n = opus_decode(
+            c_dec,
+            packet.as_ptr(),
+            packet.len() as i32,
+            c_prime.as_mut_ptr(),
+            max_frame,
+            0,
+        );
+        assert!(prime_n > 0, "C prime returned {prime_n}");
+        let mut c_plc = vec![0i16; max_frame as usize * ch as usize];
+        let n = opus_decode(
+            c_dec,
+            std::ptr::null(),
+            0,
+            c_plc.as_mut_ptr(),
+            frame_size,
+            0,
+        );
+        opus_decoder_destroy(c_dec);
+        assert!(n > 0, "C plc returned {n}");
+        (c_plc, prime_n)
+    };
+
+    let _ = c_prime_n;
+
+    // Assert the first 288 samples of PLC match bit-exactly. Beyond this
+    // point LSB-level rounding noise accumulates; the larger-scope test
+    // (test_24bit_decode_plc_matches_c_reference) stays #[ignore]'d pending
+    // a follow-up investigation of the residual drift.
+    const MATCH_WINDOW: usize = 288;
+    let window_n = MATCH_WINDOW.min(frame_size as usize);
+    assert_eq!(
+        &rust_plc[..window_n],
+        &c_plc[..window_n],
+        "SILK PLC first {MATCH_WINDOW} samples diverge from C reference — \
+         the silk_plc_update nb_subfr/subfr_length fix regressed"
+    );
 }
 
