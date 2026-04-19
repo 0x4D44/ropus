@@ -66,6 +66,9 @@ fn main() {
         Tests,
         Src,
     }
+    // Extras are resolved relative to `manifest_dir` if they start with
+    // "src/" (our own stubs) and relative to `repo_root` otherwise (for
+    // reference upstream sources like `reference/src/mapping_matrix.c`).
     let tests: &[(SrcDir, &str, &str, &[&str])] = &[
         (SrcDir::Tests, "test_opus_padding.c", "test_opus_padding", &[]),
         (SrcDir::Tests, "test_opus_decode.c", "test_opus_decode", &[]),
@@ -94,6 +97,29 @@ fn main() {
             &["src/dred_stub.c"],
         ),
         (SrcDir::Src, "opus_compare.c", "opus_compare", &[]),
+        // Piece B — projection conformance.
+        //
+        // `test_opus_projection.c` exercises the ambisonics matrix math
+        // against the reference C implementation (compiled in via
+        // `reference/src/mapping_matrix.c` as an extra) plus the public
+        // `opus_projection_*` encode/decode path against our capi.
+        //
+        // `mapping_matrix.c` is self-contained: depends only on
+        // `opus_types.h`, `opus_projection.h`, `float_cast.h`, and a few
+        // macros from `arch.h` (`align`, `SAT16`, `PSHR32`, `INT24TORES`).
+        // Our vendored `include/arch.h` supplies those in fixed-point,
+        // non-ENABLE_RES24 mode.
+        //
+        // The test also does `#include "../src/mapping_matrix.h"` — which
+        // resolves relative to the source file at `reference/tests/`, i.e.
+        // directly to `reference/src/mapping_matrix.h`. No include-path
+        // plumbing needed for that.
+        (
+            SrcDir::Tests,
+            "test_opus_projection.c",
+            "test_opus_projection",
+            &["reference/src/mapping_matrix.c"],
+        ),
     ];
 
     for (src_dir, src_name, stem, extras) in tests {
@@ -133,6 +159,26 @@ fn main() {
             build.include(repo_root.join("reference").join("silk"));
         }
 
+        // test_opus_projection.c does `#include "float_cast.h"` purely out
+        // of convention — neither the test itself nor `mapping_matrix.c`'s
+        // fixed-point paths call into it. Rather than add `reference/celt/`
+        // to the include path (which pulls in SSE intrinsics via
+        // `<intrin.h>` on MSVC and blows up with `cc`'s default command
+        // line), we vendor a minimal `float_cast.h` stub in `include/`.
+        //
+        // We also `DISABLE_FLOAT_API` so `mapping_matrix.c` compiles out
+        // the float API branch (which uses `RES2FLOAT` — not needed for the
+        // i16 test paths we exercise). The test itself guards its float
+        // assertions with the same macro plus `!FIXED_POINT`.
+        //
+        // We do NOT include `reference/src/` for the projection test:
+        // `mapping_matrix.c` does `#include "opus_private.h"` which we want
+        // to resolve to our stub (already on the include path), not to the
+        // real `reference/src/opus_private.h` that drags in `celt.h`.
+        if *stem == "test_opus_projection" {
+            build.define("DISABLE_FLOAT_API", "1");
+        }
+
         // test_opus_encode.c and test_opus_extensions.c both do
         // `#include "../src/opus_private.h"` which resolves to the real
         // upstream header; force-include our stub first so its header
@@ -141,8 +187,17 @@ fn main() {
         // already wins there by virtue of being on the include path
         // before `reference/src/`, but we still force-include for belt-
         // and-braces parity.
-        let needs_private_h =
-            matches!(*stem, "test_opus_encode" | "test_opus_extensions" | "opus_demo");
+        //
+        // `test_opus_projection` is also in the list: the extras-compiled
+        // `reference/src/mapping_matrix.c` does `#include "opus_private.h"`
+        // which the compiler's current-directory rule would otherwise
+        // resolve to the real `reference/src/opus_private.h` (dragging in
+        // `celt.h`). Force-including our stub first claims the guard and
+        // defuses the transitive pull.
+        let needs_private_h = matches!(
+            *stem,
+            "test_opus_encode" | "test_opus_extensions" | "opus_demo" | "test_opus_projection"
+        );
         if needs_private_h {
             let compiler = build.get_compiler();
             let flag = if compiler.is_like_msvc() {
@@ -153,8 +208,18 @@ fn main() {
             build.flag(&flag);
         }
 
+        // Resolve extras: paths starting with "src/" live in the conformance
+        // crate (our own stubs); everything else is relative to the repo
+        // root (reference upstream sources like `reference/src/mapping_matrix.c`).
+        let resolve_extra = |e: &str| -> PathBuf {
+            if e.starts_with("src/") {
+                manifest_dir.join(e)
+            } else {
+                repo_root.join(e)
+            }
+        };
         for extra in *extras {
-            build.file(manifest_dir.join(extra));
+            build.file(resolve_extra(extra));
         }
 
         build.compile(stem);
@@ -162,7 +227,7 @@ fn main() {
         for extra in *extras {
             println!(
                 "cargo:rerun-if-changed={}",
-                manifest_dir.join(extra).display()
+                resolve_extra(extra).display()
             );
         }
     }

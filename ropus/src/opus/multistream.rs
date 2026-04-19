@@ -2296,6 +2296,23 @@ impl OpusProjectionEncoder {
     pub fn reset(&mut self) {
         self.ms_encoder.reset();
     }
+
+    /// Number of input channels this encoder is configured for (matches
+    /// `st->layout.nb_channels` on the reference `OpusMSEncoder`).
+    pub fn nb_channels(&self) -> i32 {
+        self.ms_encoder.nb_channels()
+    }
+
+    /// Number of streams carried by the underlying multistream encoder.
+    pub fn nb_streams(&self) -> i32 {
+        self.ms_encoder.nb_streams()
+    }
+
+    /// Number of coupled (stereo) streams carried by the underlying
+    /// multistream encoder.
+    pub fn nb_coupled_streams(&self) -> i32 {
+        self.ms_encoder.nb_coupled_streams()
+    }
 }
 
 // ===========================================================================
@@ -2409,6 +2426,23 @@ impl OpusProjectionDecoder {
     }
     pub fn reset(&mut self) {
         self.ms_decoder.reset();
+    }
+
+    /// Number of output channels this decoder will write (matches
+    /// `st->layout.nb_channels` on the reference `OpusMSDecoder`).
+    pub fn nb_channels(&self) -> i32 {
+        self.ms_decoder.nb_channels()
+    }
+
+    /// Number of streams carried by the underlying multistream decoder.
+    pub fn nb_streams(&self) -> i32 {
+        self.ms_decoder.nb_streams()
+    }
+
+    /// Number of coupled (stereo) streams carried by the underlying
+    /// multistream decoder.
+    pub fn nb_coupled_streams(&self) -> i32 {
+        self.ms_decoder.nb_coupled_streams()
     }
 }
 

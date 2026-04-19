@@ -78,12 +78,21 @@
 #define OPUS_SET_VOICE_RATIO_REQUEST               11018
 #define OPUS_GET_VOICE_RATIO_REQUEST               11019
 
+/* Projection-specific CTLs (opus_projection.h). Live on the ENCODER CTL
+ * surface (the reference source and test_opus_projection.c both call
+ * opus_projection_encoder_ctl with these). */
+#define OPUS_PROJECTION_GET_DEMIXING_MATRIX_GAIN_REQUEST  6001
+#define OPUS_PROJECTION_GET_DEMIXING_MATRIX_SIZE_REQUEST  6003
+#define OPUS_PROJECTION_GET_DEMIXING_MATRIX_REQUEST       6005
+
 typedef uint32_t opus_uint32;
 
 typedef struct OpusEncoder OpusEncoder;
 typedef struct OpusDecoder OpusDecoder;
 typedef struct OpusMSEncoder OpusMSEncoder;
 typedef struct OpusMSDecoder OpusMSDecoder;
+typedef struct OpusProjectionEncoder OpusProjectionEncoder;
+typedef struct OpusProjectionDecoder OpusProjectionDecoder;
 
 /* Rust-side typed dispatchers (see ctl.rs). */
 extern int mdopus_encoder_ctl_reset(OpusEncoder *st);
@@ -109,6 +118,17 @@ extern int mdopus_ms_decoder_ctl_set_int(OpusMSDecoder *st, int request, int val
 extern int mdopus_ms_decoder_ctl_get_int(OpusMSDecoder *st, int request, int *out);
 extern int mdopus_ms_decoder_ctl_get_uint32(OpusMSDecoder *st, int request, opus_uint32 *out);
 extern int mdopus_ms_decoder_ctl_get_decoder_state(OpusMSDecoder *st, int stream_id, OpusDecoder **out);
+
+extern int mdopus_proj_encoder_ctl_reset(OpusProjectionEncoder *st);
+extern int mdopus_proj_encoder_ctl_set_int(OpusProjectionEncoder *st, int request, int value);
+extern int mdopus_proj_encoder_ctl_get_int(OpusProjectionEncoder *st, int request, int *out);
+extern int mdopus_proj_encoder_ctl_get_uint32(OpusProjectionEncoder *st, int request, opus_uint32 *out);
+extern int mdopus_proj_encoder_ctl_get_demixing_matrix(OpusProjectionEncoder *st, unsigned char *out, int size);
+
+extern int mdopus_proj_decoder_ctl_reset(OpusProjectionDecoder *st);
+extern int mdopus_proj_decoder_ctl_set_int(OpusProjectionDecoder *st, int request, int value);
+extern int mdopus_proj_decoder_ctl_get_int(OpusProjectionDecoder *st, int request, int *out);
+extern int mdopus_proj_decoder_ctl_get_uint32(OpusProjectionDecoder *st, int request, opus_uint32 *out);
 
 int opus_encoder_ctl(OpusEncoder *st, int request, ...)
 {
@@ -415,6 +435,122 @@ int opus_multistream_decoder_ctl(OpusMSDecoder *st, int request, ...)
                 ret = OPUS_BAD_ARG;
             } else {
                 ret = mdopus_ms_decoder_ctl_get_decoder_state(st, stream_id, out);
+            }
+            break;
+        }
+
+        default:
+            ret = OPUS_UNIMPLEMENTED;
+            break;
+    }
+    va_end(ap);
+    return ret;
+}
+
+int opus_projection_encoder_ctl(OpusProjectionEncoder *st, int request, ...)
+{
+    va_list ap;
+    int ret;
+
+    if (st == (void *)0) {
+        return OPUS_BAD_ARG;
+    }
+
+    va_start(ap, request);
+    switch (request) {
+        case OPUS_RESET_STATE:
+            ret = mdopus_proj_encoder_ctl_reset(st);
+            break;
+
+        /* int-value setters exposed on projection encoder. Surface is
+         * deliberately narrow: conformance exercises OPUS_SET_BITRATE
+         * plus the three projection getters below. Other common int
+         * setters (complexity, vbr) are routed for symmetry with the
+         * existing MS encoder plumbing. */
+        case OPUS_SET_BITRATE_REQUEST:
+        case OPUS_SET_COMPLEXITY_REQUEST:
+        case OPUS_SET_VBR_REQUEST:
+            ret = mdopus_proj_encoder_ctl_set_int(st, request, va_arg(ap, int));
+            break;
+
+        case OPUS_GET_BITRATE_REQUEST:
+        case OPUS_PROJECTION_GET_DEMIXING_MATRIX_SIZE_REQUEST:
+        case OPUS_PROJECTION_GET_DEMIXING_MATRIX_GAIN_REQUEST: {
+            int *out = va_arg(ap, int *);
+            if (out == (void *)0) {
+                ret = OPUS_BAD_ARG;
+            } else {
+                ret = mdopus_proj_encoder_ctl_get_int(st, request, out);
+            }
+            break;
+        }
+
+        case OPUS_GET_FINAL_RANGE_REQUEST: {
+            opus_uint32 *out = va_arg(ap, opus_uint32 *);
+            if (out == (void *)0) {
+                ret = OPUS_BAD_ARG;
+            } else {
+                ret = mdopus_proj_encoder_ctl_get_uint32(st, request, out);
+            }
+            break;
+        }
+
+        /* OPUS_PROJECTION_GET_DEMIXING_MATRIX(ptr, size) — two-argument CTL.
+         * `ptr` is an `unsigned char *` writable buffer, `size` is an
+         * `opus_int32` advertising its length. Rust-side copies exactly
+         * `size` bytes and returns OPUS_BAD_ARG if the size differs from
+         * `get_demixing_matrix_size()`. */
+        case OPUS_PROJECTION_GET_DEMIXING_MATRIX_REQUEST: {
+            unsigned char *out = va_arg(ap, unsigned char *);
+            int size = va_arg(ap, int);
+            ret = mdopus_proj_encoder_ctl_get_demixing_matrix(st, out, size);
+            break;
+        }
+
+        default:
+            ret = OPUS_UNIMPLEMENTED;
+            break;
+    }
+    va_end(ap);
+    return ret;
+}
+
+int opus_projection_decoder_ctl(OpusProjectionDecoder *st, int request, ...)
+{
+    va_list ap;
+    int ret;
+
+    if (st == (void *)0) {
+        return OPUS_BAD_ARG;
+    }
+
+    va_start(ap, request);
+    switch (request) {
+        case OPUS_RESET_STATE:
+            ret = mdopus_proj_decoder_ctl_reset(st);
+            break;
+
+        case OPUS_SET_GAIN_REQUEST:
+            ret = mdopus_proj_decoder_ctl_set_int(st, request, va_arg(ap, int));
+            break;
+
+        case OPUS_GET_SAMPLE_RATE_REQUEST:
+        case OPUS_GET_GAIN_REQUEST: {
+            int *out = va_arg(ap, int *);
+            if (out == (void *)0) {
+                ret = OPUS_BAD_ARG;
+            } else {
+                ret = mdopus_proj_decoder_ctl_get_int(st, request, out);
+            }
+            break;
+        }
+
+        case OPUS_GET_FINAL_RANGE_REQUEST: {
+            opus_uint32 *out = va_arg(ap, opus_uint32 *);
+            if (out == (void *)0) {
+                ret = OPUS_BAD_ARG;
+            } else {
+                ret = mdopus_proj_decoder_ctl_get_uint32(st, request, out);
             }
             break;
         }

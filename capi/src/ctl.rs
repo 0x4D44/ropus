@@ -8,11 +8,13 @@
 //! Unknown CTLs fall through the default arm in `ctl_shim.c` and return
 //! `OPUS_UNIMPLEMENTED`, which keeps drift visible in test failures.
 
-use std::os::raw::c_int;
+use std::os::raw::{c_int, c_uchar};
 
 use ropus::opus::decoder::OpusDecoder;
 use ropus::opus::encoder::OpusEncoder;
-use ropus::opus::multistream::{OpusMSDecoder, OpusMSEncoder};
+use ropus::opus::multistream::{
+    OpusMSDecoder, OpusMSEncoder, OpusProjectionDecoder, OpusProjectionEncoder,
+};
 
 use crate::{OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, OPUS_OK, OPUS_UNIMPLEMENTED, ffi_guard};
 
@@ -78,6 +80,18 @@ const OPUS_GET_VOICE_RATIO_REQUEST: c_int = 11019;
 const OPUS_SET_LFE_REQUEST: c_int = 10024;
 #[allow(dead_code)]
 const OPUS_SET_ENERGY_MASK_REQUEST: c_int = 10026;
+
+// From `reference/include/opus_projection.h` — projection-specific CTLs
+// exposed on the projection encoder (not decoder: the test and reference
+// source confirm these live on `opus_projection_encoder_ctl`). The `_REQUEST`
+// constant for OPUS_PROJECTION_GET_DEMIXING_MATRIX is only referenced from
+// `ctl_shim.c`; the Rust side dispatches it through a dedicated pointer-argument
+// entry point (`mdopus_proj_encoder_ctl_get_demixing_matrix`) rather than the
+// int-out getter below.
+const OPUS_PROJECTION_GET_DEMIXING_MATRIX_GAIN_REQUEST: c_int = 6001;
+const OPUS_PROJECTION_GET_DEMIXING_MATRIX_SIZE_REQUEST: c_int = 6003;
+#[allow(dead_code)]
+const OPUS_PROJECTION_GET_DEMIXING_MATRIX_REQUEST: c_int = 6005;
 
 const OPUS_AUTO: c_int = -1000;
 
@@ -686,5 +700,218 @@ pub unsafe extern "C" fn mdopus_ms_decoder_ctl_get_decoder_state(
         }
         unsafe { *out = h };
         OPUS_OK
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Projection encoder CTLs
+// ---------------------------------------------------------------------------
+//
+// Surface deliberately minimal: the conformance test exercises
+// `OPUS_SET_BITRATE` plus the three `OPUS_PROJECTION_GET_DEMIXING_MATRIX*`
+// requests. Other encoder CTLs that the generic conformance work already
+// validated on `OpusMSEncoder` fall through to `OPUS_UNIMPLEMENTED` here —
+// the projection encoder state is a thin wrapper, and nothing in the
+// Piece B scope touches it.
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_proj_encoder_ctl_reset(
+    st: *mut OpusProjectionEncoder,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        let Some(enc) = (unsafe { crate::projection::handle_to_proj_encoder(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        enc.reset();
+        unsafe { crate::projection::bump_enc_generation(st) };
+        OPUS_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_proj_encoder_ctl_set_int(
+    st: *mut OpusProjectionEncoder,
+    request: c_int,
+    value: c_int,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        let Some(enc) = (unsafe { crate::projection::handle_to_proj_encoder(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        match request {
+            OPUS_SET_BITRATE_REQUEST => enc.set_bitrate(value),
+            OPUS_SET_COMPLEXITY_REQUEST => enc.set_complexity(value),
+            OPUS_SET_VBR_REQUEST => enc.set_vbr(value),
+            _ => OPUS_UNIMPLEMENTED,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_proj_encoder_ctl_get_int(
+    st: *mut OpusProjectionEncoder,
+    request: c_int,
+    out: *mut c_int,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if out.is_null() {
+            return OPUS_BAD_ARG;
+        }
+        let Some(enc) = (unsafe { crate::projection::handle_to_proj_encoder_ref(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        let value: c_int = match request {
+            OPUS_GET_BITRATE_REQUEST => enc.get_bitrate(),
+            OPUS_PROJECTION_GET_DEMIXING_MATRIX_SIZE_REQUEST => enc.get_demixing_matrix_size(),
+            OPUS_PROJECTION_GET_DEMIXING_MATRIX_GAIN_REQUEST => enc.get_demixing_matrix_gain(),
+            _ => return OPUS_UNIMPLEMENTED,
+        };
+        unsafe { *out = value };
+        OPUS_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_proj_encoder_ctl_get_uint32(
+    st: *mut OpusProjectionEncoder,
+    request: c_int,
+    out: *mut u32,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if out.is_null() {
+            return OPUS_BAD_ARG;
+        }
+        let Some(enc) = (unsafe { crate::projection::handle_to_proj_encoder_ref(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        match request {
+            OPUS_GET_FINAL_RANGE_REQUEST => {
+                unsafe { *out = enc.get_final_range() };
+                OPUS_OK
+            }
+            _ => OPUS_UNIMPLEMENTED,
+        }
+    })
+}
+
+/// `OPUS_PROJECTION_GET_DEMIXING_MATRIX(ptr, size)` — copies the demixing
+/// matrix bytes into the caller-provided buffer of exactly `size` bytes.
+/// The size must equal `get_demixing_matrix_size()`; other sizes fail with
+/// `OPUS_BAD_ARG`, mirroring the reference's same-size check.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_proj_encoder_ctl_get_demixing_matrix(
+    st: *mut OpusProjectionEncoder,
+    out: *mut c_uchar,
+    size: c_int,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if out.is_null() || size < 0 {
+            return OPUS_BAD_ARG;
+        }
+        let Some(enc) = (unsafe { crate::projection::handle_to_proj_encoder_ref(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        let expected = enc.get_demixing_matrix_size();
+        if size != expected {
+            return OPUS_BAD_ARG;
+        }
+        let bytes = enc.get_demixing_matrix();
+        debug_assert_eq!(bytes.len(), expected as usize);
+        // SAFETY: caller provided `size` bytes of writable storage.
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len());
+        }
+        OPUS_OK
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Projection decoder CTLs
+// ---------------------------------------------------------------------------
+//
+// The projection test never calls `opus_projection_decoder_ctl`. We still
+// expose a minimal dispatcher so `opus_projection_decoder_ctl` resolves to
+// something reasonable if a future consumer exercises it. All known
+// requests route through the underlying multistream decoder's behaviour.
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_proj_decoder_ctl_reset(
+    st: *mut OpusProjectionDecoder,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        let Some(dec) = (unsafe { crate::projection::handle_to_proj_decoder(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        dec.reset();
+        unsafe { crate::projection::bump_dec_generation(st) };
+        OPUS_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_proj_decoder_ctl_set_int(
+    st: *mut OpusProjectionDecoder,
+    request: c_int,
+    value: c_int,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        let Some(dec) = (unsafe { crate::projection::handle_to_proj_decoder(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        match request {
+            OPUS_SET_GAIN_REQUEST => {
+                if !(-32768..=32767).contains(&value) {
+                    return OPUS_BAD_ARG;
+                }
+                dec.set_gain(value)
+            }
+            _ => OPUS_UNIMPLEMENTED,
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_proj_decoder_ctl_get_int(
+    st: *mut OpusProjectionDecoder,
+    request: c_int,
+    out: *mut c_int,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if out.is_null() {
+            return OPUS_BAD_ARG;
+        }
+        let Some(dec) = (unsafe { crate::projection::handle_to_proj_decoder(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        let value: c_int = match request {
+            OPUS_GET_SAMPLE_RATE_REQUEST => dec.get_sample_rate(),
+            OPUS_GET_GAIN_REQUEST => dec.get_gain(),
+            _ => return OPUS_UNIMPLEMENTED,
+        };
+        unsafe { *out = value };
+        OPUS_OK
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_proj_decoder_ctl_get_uint32(
+    st: *mut OpusProjectionDecoder,
+    request: c_int,
+    out: *mut u32,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if out.is_null() {
+            return OPUS_BAD_ARG;
+        }
+        let Some(dec) = (unsafe { crate::projection::handle_to_proj_decoder(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        match request {
+            OPUS_GET_FINAL_RANGE_REQUEST => {
+                unsafe { *out = dec.get_final_range() };
+                OPUS_OK
+            }
+            _ => OPUS_UNIMPLEMENTED,
+        }
     })
 }
