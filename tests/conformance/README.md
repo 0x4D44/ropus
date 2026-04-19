@@ -20,14 +20,17 @@ and will produce spurious failures and (worse) silently wrong passes.
 
 ## What each test binary covers
 
-| Test binary       | Source                                          | Notes                                                                                       |
-|-------------------|-------------------------------------------------|---------------------------------------------------------------------------------------------|
-| `padding`         | `reference/tests/test_opus_padding.c`           | Packet padding round-trip.                                                                  |
-| `decode`          | `reference/tests/test_opus_decode.c`            | PLC, zero-length, CTL (`OPUS_RESET_STATE`, `GET_FINAL_RANGE`, `LAST_PACKET_DURATION`).      |
-| `api`             | `reference/tests/test_opus_api.c`               | Every encoder/decoder/multistream/repacketizer CTL surface; state-clone / memcpy semantics. |
-| `encode`          | `reference/tests/test_opus_encode.c`            | Encoder modes + `regression_test()` (currently stubbed — see HLD).                          |
-| `extensions`      | `reference/tests/test_opus_extensions.c`        | `opus_packet_extensions_{count,parse,generate}`.                                            |
-| `ietf_vectors`    | `reference/src/opus_{demo,compare}.c` (verbatim)| 12 RFC 6716 / 8251 bitstreams × {mono, stereo} = 24 subtests.                               |
+| Test binary     | Source                                           | Notes                                                                                                                       |
+|-----------------|--------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------|
+| `padding`       | `reference/tests/test_opus_padding.c`            | Packet padding round-trip.                                                                                                  |
+| `decode`        | `reference/tests/test_opus_decode.c`             | PLC, zero-length, CTL (`OPUS_RESET_STATE`, `GET_FINAL_RANGE`, `LAST_PACKET_DURATION`).                                      |
+| `api`           | `reference/tests/test_opus_api.c`                | Every encoder/decoder/multistream/repacketizer CTL surface; state-clone / memcpy semantics.                                 |
+| `encode`        | `reference/tests/test_opus_encode.c`             | Encoder modes + `regression_test()` (11 historical crash repros from `opus_encode_regressions.c`; 5 QEXT/DRED-gated compile out). |
+| `extensions`    | `reference/tests/test_opus_extensions.c`         | `opus_packet_extensions_{count,parse,generate}`.                                                                            |
+| `ietf_vectors`  | `reference/src/opus_{demo,compare}.c` (verbatim) | 12 RFC 6716 / 8251 bitstreams × {mono, stereo} = 24 subtests.                                                               |
+| `projection`    | `reference/tests/test_opus_projection.c`         | Ambisonics matrix math + public `opus_projection_*` encode/decode.                                                          |
+
+All 7 binaries pass with 0 failures under `cargo test -p conformance -- --test-threads=1`.
 
 ## IETF vectors — fetch once
 
@@ -44,11 +47,6 @@ aborts without overwriting anything.
 If the directory is missing, `cargo test -p conformance --test
 ietf_vectors` panics with a message telling you to run the fetch script.
 
-**Known failures:** `testvector02_stereo` and `testvector10_stereo` are
-currently `#[ignore]`'d pending a ropus stereo decoder fix. Run with
-`cargo test -p conformance --test ietf_vectors -- --ignored` to exercise
-them (they will fail until the decoder bug is fixed).
-
 ## Notes on the build
 
 - All conformance C sources are compiled with `-DFIXED_POINT=1` so the
@@ -62,10 +60,16 @@ them (they will fail until the decoder bug is fixed).
 - `opus_demo.c` calls a handful of DRED symbols that live in the full
   DNN tree we intentionally don't link. Local no-op stubs at
   `src/dred_stub.c` resolve those references. They are inert on the
-  decode-only code path run_vectors.sh and `ietf_vectors` exercise on
+  decode-only code path `run_vectors.sh` and `ietf_vectors` exercise on
   valid RFC 8251 vectors; see the stub's header comment for the exact
   preconditions.
 - All lossgen call sites in `opus_demo.c` are gated by
   `#ifdef ENABLE_LOSSGEN`, which is left undefined for the conformance
   build — so no lossgen symbols are ever referenced and no stub is
   needed.
+- The `projection` binary compiles `reference/src/mapping_matrix.c`
+  verbatim alongside `test_opus_projection.c` with `-DDISABLE_FLOAT_API=1`
+  so only the fixed-point matrix branch is pulled in. Header stubs
+  (`arch.h`, `float_cast.h`, `mathops.h`, `os_support.h`) in
+  `tests/conformance/include/` keep the reference tree off the include
+  path.
