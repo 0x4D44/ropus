@@ -1,6 +1,6 @@
 [package]
 name = "ropus-tools-core"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["0x4D44 <martingdavidson@gmail.com>"]
 description = "Shared library for the ropus command-line tools (encode/decode/info/play)"

@@ -72,7 +72,7 @@ fn encode_then_decode_48k_sine_round_trips_with_snr_above_20_db() {
         output: Some(tmp_opus.clone()),
         bitrate: Some(64_000),
         complexity: None,
-        application: ropus::Application::Audio,
+        application: ropus_tools_core::Application::Audio,
         vbr: true,
         vendor: "ropus-tools-core-test".to_string(),
     };

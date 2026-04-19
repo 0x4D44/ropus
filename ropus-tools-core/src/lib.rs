@@ -26,3 +26,7 @@ pub mod options;
 pub mod prelude;
 pub mod ui;
 pub mod util;
+
+// Re-export so CLI binaries can name `EncodeOptions.application`'s type
+// without taking a second direct dependency on the raw codec crate.
+pub use ropus::Application;

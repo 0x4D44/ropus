@@ -3,6 +3,10 @@ resolver = "3"
 members = [
     "ropus",
     "ropus-tools-core",
+    "ropusenc",
+    "ropusdec",
+    "ropusinfo",
+    "ropusplay",
     "harness",
     "harness-deep-plc",
     "capi",
