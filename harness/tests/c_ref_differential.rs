@@ -1219,3 +1219,147 @@ fn test_encoder_final_range_matches_decoder_on_multiframe_silk_to_celt_redundanc
     unsafe { opus_decoder_destroy(c_dec) };
 }
 
+// -----------------------------------------------------------------------------
+// Encoder `get_final_range` matches decoder for HYBRID CVBR when CELT VBR
+// shrinks the packet small enough that the decoder skips the redundancy-bit
+// read.
+// -----------------------------------------------------------------------------
+//
+// Surfaced by `test_opus_encode.c:501` at SEED=460330478 in the first CVBR
+// Hybrid FB iteration (j=3, rates[j]=16000, rate≈17109 bps).
+//
+// Bug: For HYBRID (mode != CELT_ONLY, start_band==17), the encoder's
+// redundancy-signaling check at `opus_encoder.c:2351` / `encoder.rs:2363` is
+// against the PRE-shrink buffer `8 * (max_data_bytes - 1)` (≈11992 for a
+// 1500-byte max packet), and always writes a 1-symbol `redundancy` bit
+// (`ec_enc_bit_logp(enc, redundancy, 12)`). The decoder's matching check
+// at `opus_decoder.c:501` / `decoder.rs:822` uses the POST-shrink packet
+// `8 * len`. If CELT's internal VBR shrinks the CELT output so small that
+// `ec_tell(&dec) + 37 > 8 * len`, the decoder SKIPS reading the bit.
+// Encoder's `rng` has advanced by one symbol but decoder's hasn't —
+// entropy-coder desync. Bytes are identical; decoded `rng` diverges.
+//
+// C reference prevents this in `celt_encoder.c:2432-2433`:
+//     if (hybrid)
+//        min_allowed = IMAX(min_allowed,
+//            (tell0_frac+(37<<BITRES)+total_boost+(1<<(BITRES+3))-1)
+//            >> (BITRES+3));
+// Ropus's CELT encoder was missing this clamp, so `nbCompressedBytes` could
+// shrink below the 37-bit floor.
+#[test]
+fn test_encoder_final_range_matches_decoder_on_hybrid_cvbr_min_packet_floor() {
+    use ropus::opus::decoder::{MODE_HYBRID, OPUS_BANDWIDTH_FULLBAND};
+
+    let sr: i32 = 48000;
+    let ch: i32 = 2;
+    let max_packet: i32 = 1500;
+    let frame_size: i32 = 960; // 20 ms
+
+    let mut enc = OpusEncoder::new(sr, ch, OPUS_APPLICATION_VOIP).unwrap();
+    enc.set_bitrate(17_000);
+    enc.set_vbr(1);
+    enc.set_vbr_constraint(1); // CVBR
+    enc.set_force_mode(MODE_HYBRID);
+    enc.set_bandwidth(OPUS_BANDWIDTH_FULLBAND);
+
+    let mut rust_dec = OpusDecoder::new(sr, ch).unwrap();
+    let c_dec = unsafe {
+        let mut err: c_int = 0;
+        let d = opus_decoder_create(sr, ch, &mut err);
+        assert!(!d.is_null() && err == 0);
+        d
+    };
+
+    // Generate patterned PCM similar to generate_music() so SILK settles and
+    // the CELT VBR path eventually triggers a small-packet frame.
+    let n_frames = 40;
+    let total_samples = (frame_size as usize) * (ch as usize) * n_frames;
+    let mut music = vec![0i16; total_samples];
+    {
+        let (mut a1, mut b1) = (0i32, 0i32);
+        let (mut c1, mut d1) = (0i32, 0i32);
+        let mut jj: i32 = 0;
+        let mut rng: u64 = 0xFEED_FACE_DEAD_BEEF;
+        for (i, s) in music.iter_mut().enumerate() {
+            let v_base = ((jj.wrapping_mul(
+                (jj >> 12) ^ ((jj >> 10 | jj >> 12) & 26 & (jj >> 7)),
+            )) & 128)
+                + 128;
+            let mut v: i32 = v_base << 15;
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let r = (rng >> 32) as u32 as i32;
+            v = v.wrapping_add(r & 65535);
+            v = v.wrapping_sub(r >> 16);
+            b1 = v.wrapping_sub(a1).wrapping_add((b1 * 61 + 32) >> 6);
+            a1 = v;
+            c1 = (30 * (c1 + b1 + d1) + 32) >> 6;
+            d1 = b1;
+            let out = (c1 + 128) >> 8;
+            *s = out.clamp(-32768, 32767) as i16;
+            if i % 6 == 0 {
+                jj = jj.wrapping_add(1);
+            }
+        }
+    }
+
+    for iter in 0..n_frames {
+        let start = iter * (frame_size as usize) * (ch as usize);
+        let end = start + (frame_size as usize) * (ch as usize);
+        let pcm = &music[start..end];
+
+        let mut out = vec![0u8; max_packet as usize];
+        let len = enc
+            .encode(pcm, frame_size, &mut out, max_packet)
+            .unwrap_or_else(|e| panic!("iter {iter}: encode failed: {e}"));
+        assert!(len > 0, "iter {iter}: empty packet");
+        let pkt = &out[..len as usize];
+        let enc_rng = enc.get_final_range();
+
+        let mut rust_pcm = vec![0i16; frame_size as usize * ch as usize];
+        rust_dec
+            .decode(Some(pkt), &mut rust_pcm, frame_size, false)
+            .unwrap_or_else(|e| panic!("iter {iter}: rust decode failed: {e}"));
+        let rust_dec_rng = rust_dec.get_final_range();
+
+        let mut c_pcm = vec![0i16; frame_size as usize * ch as usize];
+        let c_ret = unsafe {
+            opus_decode(
+                c_dec,
+                pkt.as_ptr(),
+                pkt.len() as i32,
+                c_pcm.as_mut_ptr(),
+                frame_size,
+                0,
+            )
+        };
+        assert!(c_ret > 0, "iter {iter}: C decode failed: {c_ret}");
+        let mut c_dec_rng: u32 = 0;
+        let rc = unsafe {
+            const OPUS_GET_FINAL_RANGE_REQUEST: c_int = 4031;
+            opus_decoder_ctl(
+                c_dec,
+                OPUS_GET_FINAL_RANGE_REQUEST,
+                &mut c_dec_rng as *mut u32,
+            )
+        };
+        assert_eq!(rc, 0, "iter {iter}: C ctl failed");
+
+        assert_eq!(
+            enc_rng, rust_dec_rng,
+            "iter {iter}: encoder.get_final_range={:#010x} disagrees with \
+             ropus decoder={:#010x} (packet {} bytes)",
+            enc_rng, rust_dec_rng, len,
+        );
+        assert_eq!(
+            enc_rng, c_dec_rng,
+            "iter {iter}: encoder.get_final_range={:#010x} disagrees with \
+             C-ref decoder={:#010x} (packet {} bytes)",
+            enc_rng, c_dec_rng, len,
+        );
+    }
+
+    unsafe { opus_decoder_destroy(c_dec) };
+}
+

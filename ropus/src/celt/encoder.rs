@@ -2227,7 +2227,7 @@ fn celt_encode_core(
     let n = m * mode.short_mdct_size;
     let eff_end = end.min(mode.eff_ebands);
 
-    let _tell0_frac = enc_ref.tell_frac();
+    let tell0_frac = enc_ref.tell_frac() as i32;
     let mut tell = enc_ref.tell() as i32;
     let nb_filled_bytes = (tell + 4) >> 3;
 
@@ -2808,9 +2808,23 @@ fn celt_encode_core(
     }
 
     // Minimum allowed bytes
-    let min_allowed = ((enc_ref.tell_frac() as i32 + total_boost_enc + (1 << (BITRES + 3)) - 1)
+    let mut min_allowed = ((enc_ref.tell_frac() as i32 + total_boost_enc
+        + (1 << (BITRES + 3))
+        - 1)
         >> (BITRES + 3))
         + 2;
+    // Take into account the 37 bits we need to have left in the packet to
+    // signal a redundant frame in hybrid mode. Creating a shorter packet
+    // would create an entropy coder desync between the encoder (which wrote
+    // the redundancy bit under its `8*(max_data_bytes-1)` budget) and the
+    // decoder (whose same check uses `8*len` against the final packet size).
+    // Matches C `celt_encoder.c:2432-2433`.
+    if hybrid {
+        min_allowed = min_allowed.max(
+            (tell0_frac + (37 << BITRES) + total_boost_enc + (1 << (BITRES + 3)) - 1)
+                >> (BITRES + 3),
+        );
+    }
 
     // VBR rate control
     if vbr_rate > 0 {
