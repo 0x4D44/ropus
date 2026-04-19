@@ -16,7 +16,7 @@ use crate::consts::{
     FRAME_SAMPLES_PER_CH, FRAMES_PER_PACKET, MAX_OPUS_FRAME_BYTES, MAX_PACKET_BYTES, OPUS_SR,
 };
 use crate::container::ogg::{
-    OGG_STREAM_SERIAL, build_opus_head, build_opus_tags,
+    OGG_STREAM_SERIAL, OpusTags, build_opus_head,
 };
 use crate::options::EncodeOptions;
 use crate::ui::{format_num, heading, ok};
@@ -110,7 +110,11 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         .write_packet(head, OGG_STREAM_SERIAL, PacketWriteEndInfo::EndPage, 0)
         .context("writing OpusHead page")?;
 
-    let tags = build_opus_tags(&opts.vendor);
+    let tags = OpusTags {
+        vendor: opts.vendor.clone(),
+        comments: opts.comments.clone(),
+    }
+    .encode();
     writer
         .write_packet(tags, OGG_STREAM_SERIAL, PacketWriteEndInfo::EndPage, 0)
         .context("writing OpusTags page")?;

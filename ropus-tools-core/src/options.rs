@@ -21,6 +21,11 @@ pub struct EncodeOptions {
     /// its own `CARGO_PKG_NAME` so downstream `opusinfo` output identifies
     /// which tool produced the file.
     pub vendor: String,
+    /// Each entry is a raw `"KEY=value"` Vorbis comment to emit in OpusTags.
+    /// Empty vector means "no user comments" — valid per RFC 7845 and the
+    /// current default behaviour. Step 3 of the opus-tools-parity HLD wires
+    /// CLI flags (`--artist`, `--title`, `--comment`, …) into this field.
+    pub comments: Vec<String>,
 }
 
 #[derive(Debug)]

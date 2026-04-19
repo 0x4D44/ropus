@@ -98,6 +98,7 @@ fn main() -> ExitCode {
         application: cli.application.into(),
         vbr: !cli.cbr,
         vendor: env!("CARGO_PKG_NAME").to_string(),
+        comments: Vec::new(),
     };
 
     prelude::run(commands::encode(opts))

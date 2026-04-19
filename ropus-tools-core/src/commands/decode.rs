@@ -12,7 +12,7 @@ use ogg::reading::PacketReader;
 
 use crate::audio::wav::write_wav_pcm16;
 use crate::consts::OPUS_SR;
-use crate::container::ogg::{parse_opus_head, read_opus_tags};
+use crate::container::ogg::{OpusTags, parse_opus_head};
 use crate::options::DecodeOptions;
 use crate::ui::{format_num, heading, ok};
 use crate::util::{channel_count_to_ropus, with_extension};
@@ -43,10 +43,18 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
         head.pre_skip.to_string().bright_white(),
     );
 
-    // Tags packet: OpusTags. Verify magic to catch malformed files (e.g. a
-    // stripped tags page would otherwise silently consume the first audio
-    // packet).
-    read_opus_tags(&mut reader).context("reading OpusTags packet")?;
+    // Tags packet: OpusTags. Parse rather than verify-only so malformed files
+    // (stripped tags page, truncated lengths, non-UTF-8 vendor) fail here with
+    // a useful error instead of silently consuming the first audio packet.
+    let tags_pkt = reader
+        .read_packet()?
+        .ok_or_else(|| anyhow!("expected OpusTags packet, got end of stream"))?;
+    let tags = OpusTags::parse(&tags_pkt.data).context("parsing OpusTags packet")?;
+    println!(
+        "tags     vendor={}, {} comments",
+        format!("\"{}\"", tags.vendor).bright_white(),
+        tags.comments.len().to_string().bright_white(),
+    );
 
     let opus_channels = channel_count_to_ropus(head.channels as usize)?;
     let mut decoder = RopusDecoder::new(OPUS_SR, opus_channels)

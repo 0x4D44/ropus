@@ -75,6 +75,7 @@ fn encode_then_decode_48k_sine_round_trips_with_snr_above_20_db() {
         application: ropus_tools_core::Application::Audio,
         vbr: true,
         vendor: "ropus-tools-core-test".to_string(),
+        comments: Vec::new(),
     };
     commands::encode(enc_opts).expect("encode");
 

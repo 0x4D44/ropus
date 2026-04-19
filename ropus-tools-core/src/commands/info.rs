@@ -11,7 +11,7 @@ use ropus::{DecodeMode, Decoder as RopusDecoder};
 use ogg::reading::PacketReader;
 
 use crate::consts::OPUS_SR;
-use crate::container::ogg::{parse_opus_head, read_last_granule, read_opus_tags};
+use crate::container::ogg::{OpusTags, parse_opus_head, read_last_granule};
 use crate::options::InfoOptions;
 use crate::ui::{format_num, heading};
 use crate::util::channel_count_to_ropus;
@@ -37,7 +37,14 @@ pub fn info(opts: InfoOptions) -> Result<()> {
     // bitstream we care about in a multiplexed Ogg file. We need it to filter
     // the reverse-scan in `read_last_granule` to the right stream.
     let target_serial = head_pkt.stream_serial();
-    read_opus_tags(&mut reader).context("reading OpusTags packet")?;
+    // Parse the OpusTags packet so malformed files fail here rather than
+    // later. Step 5 of the opus-tools-parity HLD adds a pretty display of
+    // vendor + comments; for now we just consume the packet and discard the
+    // parsed struct (dropping the `_tags` binding).
+    let tags_pkt = reader
+        .read_packet()?
+        .ok_or_else(|| anyhow!("expected OpusTags packet, got end of stream"))?;
+    let _tags = OpusTags::parse(&tags_pkt.data).context("parsing OpusTags packet")?;
 
     let opus_channels = channel_count_to_ropus(head.channels as usize)?;
 
