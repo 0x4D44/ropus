@@ -255,22 +255,20 @@ fn render_category_summary(out: &mut String, per_test: &[TestOutcome]) {
         "Conformance",
     ] {
         let (total, passed, failed) = buckets.get(cat).copied().unwrap_or((0, 0, 0));
-        let fail_cls = if failed > 0 { " class=\"fail\"" } else { "" };
+        // Emit as a single combined class so the result is valid HTML
+        // (browsers tolerate `class="a" class="b"` but HTML5 disallows it).
+        let fail_cls = if failed > 0 { " fail" } else { "" };
         out.push_str(&format!(
-            "<tr><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\"{}>{}</td></tr>\n",
+            "<tr><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num{}\">{}</td></tr>\n",
             html_escape(cat), total, passed, fail_cls, failed,
         ));
     }
     let (other_total, other_passed, other_failed) =
         buckets.get("Other").copied().unwrap_or((0, 0, 0));
     if other_total > 0 {
-        let fail_cls = if other_failed > 0 {
-            " class=\"fail\""
-        } else {
-            ""
-        };
+        let fail_cls = if other_failed > 0 { " fail" } else { "" };
         out.push_str(&format!(
-            "<tr><td>Other</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\"{}>{}</td></tr>\n",
+            "<tr><td>Other</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num{}\">{}</td></tr>\n",
             other_total, other_passed, fail_cls, other_failed,
         ));
     }
@@ -316,7 +314,7 @@ fn render_phase_summary(out: &mut String, ctx: &ReportContext<'_>) {
     let t = &ctx.tests.tests;
     let total = t.total_passed + t.total_failed + t.total_ignored;
     let fail_cls = if t.total_failed > 0 || t.build_failed {
-        " class=\"fail\""
+        " fail"
     } else {
         ""
     };
@@ -326,7 +324,7 @@ fn render_phase_summary(out: &mut String, ctx: &ReportContext<'_>) {
         format_duration(t.duration_ms)
     };
     out.push_str(&format!(
-        "<tr><td>Unit Tests</td><td class=\"num\">{total}</td><td class=\"num\">{passed}</td><td class=\"num\"{fail_cls}>{failed}</td><td class=\"num\">{ignored}</td><td class=\"num\">{dur}</td></tr>\n",
+        "<tr><td>Unit Tests</td><td class=\"num\">{total}</td><td class=\"num\">{passed}</td><td class=\"num{fail_cls}\">{failed}</td><td class=\"num\">{ignored}</td><td class=\"num\">{dur}</td></tr>\n",
         passed = t.total_passed,
         failed = if t.build_failed { "build-failed".to_string() } else { t.total_failed.to_string() },
         ignored = t.total_ignored,
@@ -344,14 +342,14 @@ fn render_phase_summary(out: &mut String, ctx: &ReportContext<'_>) {
         let dur_ms: u64 = q.checks.iter().map(|c| c.duration.as_millis() as u64).sum();
         (total, passed, failed, dur_ms)
     };
-    let q_fail_cls = if q_failed > 0 { " class=\"fail\"" } else { "" };
+    let q_fail_cls = if q_failed > 0 { " fail" } else { "" };
     let q_dur_str = if q.skipped {
         "skipped".to_string()
     } else {
         format_duration(q_dur_ms)
     };
     out.push_str(&format!(
-        "<tr><td>Quality</td><td class=\"num\">{q_total}</td><td class=\"num\">{q_passed}</td><td class=\"num\"{q_fail_cls}>{q_failed}</td><td class=\"num\">{skipped}</td><td class=\"num\">{dur}</td></tr>\n",
+        "<tr><td>Quality</td><td class=\"num\">{q_total}</td><td class=\"num\">{q_passed}</td><td class=\"num{q_fail_cls}\">{q_failed}</td><td class=\"num\">{skipped}</td><td class=\"num\">{dur}</td></tr>\n",
         skipped = if q.skipped { 1 } else { 0 },
         dur = html_escape(&q_dur_str),
     ));
@@ -371,7 +369,7 @@ fn render_phase_summary(out: &mut String, ctx: &ReportContext<'_>) {
         a_failed.to_string()
     };
     let a_fail_cls = if a_failed > 0 || a.build_failed {
-        " class=\"fail\""
+        " fail"
     } else {
         ""
     };
@@ -381,7 +379,7 @@ fn render_phase_summary(out: &mut String, ctx: &ReportContext<'_>) {
         format_duration(a.duration_ms)
     };
     out.push_str(&format!(
-        "<tr><td>Ambisonics</td><td class=\"num\">{a_total}</td><td class=\"num\">{a_passed}</td><td class=\"num\"{a_fail_cls}>{failed}</td><td class=\"num\">{skipped}</td><td class=\"num\">{dur}</td></tr>\n",
+        "<tr><td>Ambisonics</td><td class=\"num\">{a_total}</td><td class=\"num\">{a_passed}</td><td class=\"num{a_fail_cls}\">{failed}</td><td class=\"num\">{skipped}</td><td class=\"num\">{dur}</td></tr>\n",
         failed = html_escape(&a_failed_disp),
         skipped = if a.skipped { 1 } else { 0 },
         dur = html_escape(&a_dur_str),
@@ -404,7 +402,7 @@ fn render_phase_summary(out: &mut String, ctx: &ReportContext<'_>) {
         format_duration(b.duration_ms)
     };
     let b_failed_cls = if b.build_failed || b_crashed > 0 {
-        " class=\"warn\""
+        " warn"
     } else {
         ""
     };
@@ -414,7 +412,7 @@ fn render_phase_summary(out: &mut String, ctx: &ReportContext<'_>) {
         b_crashed.to_string()
     };
     out.push_str(&format!(
-        "<tr><td>Bench</td><td class=\"num\">{b_total}</td><td class=\"num\">{b_passed}</td><td class=\"num\"{b_failed_cls}>{failed}</td><td class=\"num\">{skipped}</td><td class=\"num\">{dur}</td></tr>\n",
+        "<tr><td>Bench</td><td class=\"num\">{b_total}</td><td class=\"num\">{b_passed}</td><td class=\"num{b_failed_cls}\">{failed}</td><td class=\"num\">{skipped}</td><td class=\"num\">{dur}</td></tr>\n",
         failed = html_escape(&b_failed_disp),
         skipped = if b.skipped { 1 } else { b_skipped_rows },
         dur = html_escape(&b_dur_str),
@@ -446,9 +444,9 @@ fn render_module_breakdown(out: &mut String, per_test: &[TestOutcome]) {
     }
     out.push_str("<table>\n<tr><th>Module</th><th class=\"num\">Total</th><th class=\"num\">Passed</th><th class=\"num\">Failed</th></tr>\n");
     for (module, (total, passed, failed)) in &modules {
-        let fail_cls = if *failed > 0 { " class=\"fail\"" } else { "" };
+        let fail_cls = if *failed > 0 { " fail" } else { "" };
         out.push_str(&format!(
-            "<tr><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\"{}>{}</td></tr>\n",
+            "<tr><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num{}\">{}</td></tr>\n",
             html_escape(module),
             total,
             passed,
@@ -577,7 +575,7 @@ fn render_benchmarks(out: &mut String, vectors: &[VectorBench]) {
             continue;
         }
         out.push_str(&format!(
-            "<tr><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\"{}>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\"{}>{}</td></tr>\n",
+            "<tr><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num{}\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num{}\">{}</td></tr>\n",
             html_escape(&v.label),
             html_escape(&cell_ms(v.c_encode_ms)),
             html_escape(&cell_ms(v.rust_encode_ms)),
@@ -606,12 +604,15 @@ fn cell_ratio(v: Option<f64>) -> String {
     }
 }
 
-/// CSS class for a ratio cell. Amber above the WARN threshold, green below
-/// 1.0x (Rust faster than C), no class otherwise.
+/// Extra CSS class to append after `num` in a ratio cell. Amber above the
+/// WARN threshold, green below 1.0x (Rust faster than C), no extra class
+/// otherwise. Returned as a leading-space suffix so the caller can splice it
+/// directly into `class="num{...}"` — emitting a second `class=` attribute
+/// is invalid HTML and some browsers silently drop the later one.
 fn ratio_class(r: Option<f64>) -> &'static str {
     match r {
-        Some(x) if x.is_finite() && x > BENCH_WARN_RATIO => " class=\"ratio-warn\"",
-        Some(x) if x.is_finite() && x < 1.0 => " class=\"ratio-fast\"",
+        Some(x) if x.is_finite() && x > BENCH_WARN_RATIO => " ratio-warn",
+        Some(x) if x.is_finite() && x < 1.0 => " ratio-fast",
         _ => "",
     }
 }

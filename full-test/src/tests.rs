@@ -3,8 +3,10 @@
 //! Dispatches a single cargo invocation based on `--skip-coverage`:
 //!
 //! - **Coverage OFF** (the default):
-//!   `cargo llvm-cov --json --output-path <tmp>.json test --workspace --lib
-//!   --tests --no-fail-fast -- --test-threads=1 [--skip testvector]`.
+//!   `cargo llvm-cov --json --ignore-run-fail --output-path <tmp>.json test
+//!   --workspace --lib --tests -- --test-threads=1 [--skip testvector]`.
+//!   (`--ignore-run-fail` keeps the report written even when a test fails;
+//!   it implies `--no-fail-fast` and the two are mutually exclusive.)
 //! - **Coverage ON** (`--skip-coverage`):
 //!   `cargo test --workspace --lib --tests --no-fail-fast -- --test-threads=1
 //!   [--skip testvector]`.
@@ -94,13 +96,20 @@ fn build_cargo_args(
             args.push(OsString::from(s));
         }
     } else {
+        // `cargo llvm-cov` refuses to emit its JSON report when a test binary
+        // exits non-zero (exit 101 from libtest). `--ignore-run-fail` keeps
+        // report generation on after a test failure; it internally forces
+        // `--no-fail-fast`, and the two flags are mutually exclusive on the
+        // CLI, so we drop the explicit `--no-fail-fast` on this path.
+        // Verified against cargo-llvm-cov 0.8.5 in Phase 5 smoke run.
         args.push(OsString::from("llvm-cov"));
         args.push(OsString::from("--json"));
+        args.push(OsString::from("--ignore-run-fail"));
         args.push(OsString::from("--output-path"));
         args.push(OsString::from(
             cov_path.expect("tempfile present when !skip_coverage"),
         ));
-        for s in ["test", "--workspace", "--lib", "--tests", "--no-fail-fast"] {
+        for s in ["test", "--workspace", "--lib", "--tests"] {
             args.push(OsString::from(s));
         }
     }
@@ -137,8 +146,8 @@ pub fn run(skip_coverage: bool, ietf_vectors_present: bool) -> Outcome {
     } else {
         (
             "tests+coverage",
-            "cargo llvm-cov --json --output-path <tmp>.json test --workspace --lib --tests \
-             --no-fail-fast -- --test-threads=1"
+            "cargo llvm-cov --json --ignore-run-fail --output-path <tmp>.json test \
+             --workspace --lib --tests -- --test-threads=1"
                 .to_string(),
         )
     };
@@ -323,18 +332,36 @@ mod unit_tests {
         let p = Path::new("/tmp/sample.json");
         let args = build_cargo_args(false, true, Some(p));
         let s = args_as_strings(&args);
-        // Leading chunk is the llvm-cov wrapper.
+        // Leading chunk is the llvm-cov wrapper. `--ignore-run-fail` keeps
+        // report generation running when a test fails — without it cargo
+        // llvm-cov skips writing the JSON and coverage reports as
+        // "unavailable" even on an otherwise-valid run (fixed in Phase 5).
         assert_eq!(s[0], "llvm-cov");
         assert_eq!(s[1], "--json");
-        assert_eq!(s[2], "--output-path");
-        assert_eq!(s[3], "/tmp/sample.json");
-        // Test subcommand starts at index 4.
+        assert_eq!(s[2], "--ignore-run-fail");
+        assert_eq!(s[3], "--output-path");
+        assert_eq!(s[4], "/tmp/sample.json");
+        // Test subcommand starts at index 5. Note: no explicit `--no-fail-fast`
+        // here because `--ignore-run-fail` is mutually exclusive with it and
+        // implies it internally.
         assert_eq!(
-            &s[4..9],
-            &["test", "--workspace", "--lib", "--tests", "--no-fail-fast"]
+            &s[5..9],
+            &["test", "--workspace", "--lib", "--tests"]
         );
         // Trailing pass-through to libtest.
         assert_eq!(&s[9..], &["--", "--test-threads=1"]);
+    }
+
+    #[test]
+    fn coverage_on_excludes_explicit_no_fail_fast_flag() {
+        // Regression guard: --ignore-run-fail and --no-fail-fast are mutually
+        // exclusive on cargo-llvm-cov's CLI. Putting both back would cause a
+        // hard error at invocation time. See Phase 5 smoke-run findings.
+        let p = Path::new("/tmp/sample.json");
+        let args = build_cargo_args(false, true, Some(p));
+        let s = args_as_strings(&args);
+        assert!(s.contains(&"--ignore-run-fail".to_string()));
+        assert!(!s.contains(&"--no-fail-fast".to_string()));
     }
 
     #[test]
