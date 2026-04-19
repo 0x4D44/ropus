@@ -1,5 +1,5 @@
 /* ropus_fb2k.h — stable C ABI between the foobar2000 C++ shim and the
- * ropus-fb2k Rust cdylib. Hand-written; reviewed; not generated.
+ * ropus-fb2k Rust staticlib. Hand-written; reviewed; not generated.
  *
  * License: BSD-3-Clause (matches the rest of the ropus workspace).
  */

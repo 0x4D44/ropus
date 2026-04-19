@@ -1,13 +1,15 @@
 # fb2k-ropus — foobar2000 input component (C++)
 
-Thin C++ shim that exposes the Rust `ropus-fb2k` decoder as a foobar2000
-input component. This directory holds only the C++ shell; the Rust decoder
-lives at `../ropus-fb2k/`.
+Builds `foo_ropus.dll`: a single-DLL foobar2000 input component that
+statically links the Rust `ropus-fb2k` decoder crate. This directory
+holds the C++ SDK glue; the Rust decoder sources live at
+`../ropus-fb2k/` and are built (as a staticlib) on demand by CMake.
 
-M4 milestone: the shell compiles, links, and registers itself as an input
-for `.opus` files. It does **not** decode yet — every method logs its name
-via `console::formatter` and returns an inert zero/false. M5 wires the Rust
-decoder through the FFI defined in `ropus-fb2k/include/ropus_fb2k.h`.
+M4 milestone: the component compiles, links, and registers itself as an
+input for `.opus` files. It does **not** decode yet — every method logs
+its name via `console::formatter` and returns an inert zero/false. M5
+wires the statically-linked Rust decoder through the FFI defined in
+`ropus-fb2k/include/ropus_fb2k.h`.
 
 ## Prerequisites
 
@@ -47,7 +49,11 @@ If you are on VS 2026, swap the generator for `"Visual Studio 18 2026"`.
 Do not drop the `-A x64` — fb2k 2.0 is 64-bit and a mismatched platform
 either fails to link or produces a DLL that refuses to load.
 
-The output DLL lands at `fb2k-ropus\build\Release\foo_input_ropus.dll`.
+Note: a single `cmake --build` run drives `cargo build -p ropus-fb2k` as a
+dependency of the C++ link step, so the Rust staticlib (`ropus_fb2k.lib`)
+is (re)built as needed automatically. No separate cargo invocation required.
+
+The output DLL lands at `fb2k-ropus\build\Release\foo_ropus.dll`.
 
 ## Install (for manual testing)
 
@@ -62,9 +68,9 @@ this creates `%APPDATA%\foobar2000-v2\`, which the commands below require.
 For M4 rapid iteration:
 
 ```
-mkdir %APPDATA%\foobar2000-v2\user-components-x64\foo_input_ropus
-copy fb2k-ropus\build\Release\foo_input_ropus.dll ^
-     %APPDATA%\foobar2000-v2\user-components-x64\foo_input_ropus\
+mkdir %APPDATA%\foobar2000-v2\user-components-x64\foo_ropus
+copy fb2k-ropus\build\Release\foo_ropus.dll ^
+     %APPDATA%\foobar2000-v2\user-components-x64\foo_ropus\
 ```
 
 Then restart foobar2000. You should see the component listed at
@@ -78,7 +84,7 @@ console and the file will fail to play (expected for M4).
 
 ```
 fb2k-ropus/
-├── CMakeLists.txt              build script (builds pfc + SDK + component)
+├── CMakeLists.txt              build script (drives cargo + builds pfc/SDK/component)
 ├── README.md                   this file
 ├── sdk/                        foobar2000 SDK — fetched, git-ignored
 └── src/
@@ -95,10 +101,22 @@ directly from the fetched SDK tree:
 - `foobar2000_SDK` — service definitions and helpers.
 - `foobar2000_component_client` — the `foobar2000_get_interface` entry point.
 
-These get linked into `foo_input_ropus.dll` alongside the prebuilt
+It also drives `cargo build -p ropus-fb2k` via an `add_custom_command`,
+producing `target/{release,debug}/ropus_fb2k.lib` (the Rust decoder
+staticlib) with an explicit `add_dependencies` edge so the MSVC linker
+always sees an up-to-date lib.
+
+These get linked into `foo_ropus.dll` alongside the prebuilt
 `shared-x64.lib` (the import library for foobar2000's `shared.dll`, which
 ships with fb2k itself and exposes the UTF-8 collation, logging, and crash
-plumbing the SDK headers declare).
+plumbing the SDK headers declare), plus the Rust staticlib and its
+transitive Windows system deps
+(`kernel32 ntdll userenv ws2_32 dbghelp` — authoritative list from
+`cargo rustc -- --print native-static-libs`).
+
+`dumpbin /dependents foo_ropus.dll` should show `shared.dll`, the MSVCRT
+family, `KERNEL32.dll`, and the usual Windows imports — but **not**
+`ropus_fb2k.dll`: the Rust code is compiled into `foo_ropus.dll` itself.
 
 The CRT is pinned to `/MD` (Release) / `/MDd` (Debug) to match the SDK's
 own settings — mismatched CRT flags produce a DLL that silently fails to

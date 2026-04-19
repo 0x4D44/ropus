@@ -4,7 +4,7 @@
 // either returns a safe zero/false or throws exception_io_unsupported_format
 // so fb2k can route requests through to the next decoder in priority order.
 // No Rust FFI, no Ogg demux, no audio. M5 replaces the bodies with calls
-// into ropus_fb2k.dll.
+// into the ropus_fb2k staticlib linked into this DLL (see CMakeLists.txt).
 //
 // Registration shape follows sdk/foobar2000/foo_sample/input_raw.cpp:
 // inherit from `input_stubs` (supplies stub implementations of the rarely-

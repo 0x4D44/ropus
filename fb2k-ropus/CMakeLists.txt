@@ -2,13 +2,13 @@ cmake_minimum_required(VERSION 3.20)
 project(fb2k_ropus CXX)
 
 # --------------------------------------------------------------------------
-# foo_input_ropus — M4 scaffold
+# foo_ropus — single-DLL foobar2000 input component
 # --------------------------------------------------------------------------
 #
-# This CMake script builds foo_input_ropus.dll: the M4 milestone is a
-# skeleton foobar2000 input component that registers but does nothing (each
-# method logs its name via console::formatter). The Rust-side decoder
-# (ropus_fb2k.dll) is NOT wired yet — that lands in M5.
+# This CMake script builds foo_ropus.dll: a 64-bit foobar2000 input component
+# for .opus files. M4b collapses the old two-DLL split: Rust is now a
+# staticlib linked into this component directly. M5 fills in the stub decode
+# path against those already-linked symbols.
 #
 # The foobar2000 SDK ships as MSBuild .vcxproj files rather than CMake.
 # Instead of shelling out to MSBuild we rebuild the three static helper
@@ -17,19 +17,45 @@ project(fb2k_ropus CXX)
 # prebuilt shared-x64.lib for the parts that live in foobar2000's
 # shared.dll at runtime (logging hooks, UTF-8 compare, crash handler).
 #
+# The Rust codec (workspace crate ropus-fb2k) is built as a staticlib by a
+# custom command that invokes `cargo build`; the resulting ropus_fb2k.lib
+# is linked directly into foo_ropus.dll. No runtime DLL load — single
+# artifact to ship.
+#
 # The SDK itself is fetched via tools/fetch-fb2k-sdk.ps1 — see README.md.
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
-    message(FATAL_ERROR "foo_input_ropus is 64-bit only. Pass -A x64 when configuring.")
+    message(FATAL_ERROR "foo_ropus is 64-bit only. Pass -A x64 when configuring.")
 endif()
 
 if(NOT WIN32)
-    message(FATAL_ERROR "foo_input_ropus is a foobar2000 component; Windows only.")
+    message(FATAL_ERROR "foo_ropus is a foobar2000 component; Windows only.")
 endif()
 
 # foobar2000's DLLs are built with the dynamic CRT (/MD). Plugins that link
-# a mismatched CRT silently fail to load. Pin it globally.
+# a mismatched CRT silently fail to load. Pin it globally. Rust's MSVC
+# toolchain defaults to /MD when +crt-static is not set; the C++ /MD here
+# drags msvcrt.lib into the final link, which is what satisfies CRT symbols
+# referenced by the Rust objects. See the `target_link_libraries` block
+# below for the full story.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+
+# CRT mix caveat: Rust doesn't emit a /DEFAULTLIB directive for the CRT in
+# its staticlib bytes. The C++ side's /MD (release) or /MDd (debug) drags
+# in whichever CRT via its own objects. In Debug, that's msvcrtd — but the
+# Rust staticlib was compiled expecting msvcrt, so we risk cross-allocator
+# heap corruption and duplicate errno/iob. M4b validated Release only.
+# Surface a warning if a developer picks Debug without knowing this.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    message(WARNING
+        "Debug builds of foo_ropus are untested (Rust/C++ CRT mismatch risk). "
+        "Release is the supported config for M4b/M5. See "
+        "wrk_journals/2026.04.19 - JRN - ropus-fb2k-implementation.md §M4b for context.")
+elseif(CMAKE_CONFIGURATION_TYPES AND "Debug" IN_LIST CMAKE_CONFIGURATION_TYPES)
+    message(STATUS
+        "foo_ropus: Debug is listed in CMAKE_CONFIGURATION_TYPES but untested "
+        "(Rust/C++ CRT mismatch risk). Build --config Release for the supported path.")
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -112,24 +138,76 @@ target_compile_definitions(foobar2000_component_client PUBLIC ${FB2K_COMMON_DEFS
 target_link_libraries(foobar2000_component_client PUBLIC foobar2000_SDK pfc)
 
 # --------------------------------------------------------------------------
-# foo_input_ropus.dll — the component
+# ropus_fb2k — Rust decoder staticlib
+# --------------------------------------------------------------------------
+#
+# Drives `cargo build` on the workspace `ropus-fb2k` crate and links the
+# resulting staticlib into foo_ropus.dll. Cargo is invoked with --release
+# when the selected config isn't Debug; plain `cargo build` otherwise.
+# Output lands in the workspace's target/{release,debug}/ropus_fb2k.lib.
+#
+# We use an always-run `add_custom_target(... ALL ...)` plus
+# `add_dependencies` rather than `add_custom_command(OUTPUT ...)` (which
+# short-circuits on the output mtime and misses .rs edits entirely) or the
+# `corrosion` CMake package (one fewer external dep on a one-off Windows
+# component). Cargo's own up-to-date check is authoritative; the ~1s no-op
+# invocation cost on clean rebuilds is acceptable in exchange for correct
+# incremental behaviour.
+
+set(WORKSPACE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
+
+# Per-config cargo profile. Release is the default for Visual Studio
+# generator when CMAKE_BUILD_TYPE isn't set (multi-config picks it at build
+# time), so branch on the generator expression rather than CMAKE_BUILD_TYPE
+# at configure time.
+#
+# `COMMAND_EXPAND_LISTS` + a semicolon-carrying genex is the only shape
+# that emits zero arguments when empty. Without it, `VERBATIM` preserves
+# an empty genex as a literal `""` argument, which cargo rejects with
+# `unexpected argument '' found` on Debug builds. With list expansion, the
+# genex produces either `--release` (non-Debug) or the empty list (Debug),
+# and CMake drops empty list elements before the shell sees them.
+set(ROPUS_TARGET_SUBDIR "$<IF:$<CONFIG:Debug>,debug,release>")
+set(ROPUS_STATIC_LIB    "${WORKSPACE_ROOT}/target/${ROPUS_TARGET_SUBDIR}/ropus_fb2k.lib")
+
+add_custom_target(ropus_fb2k_staticlib ALL
+    # Pre-remove cdylib artefacts left behind when the crate-type flipped
+    # from cdylib to staticlib in M4b — cargo does not clean them on its
+    # own across crate-type changes. Harmless on clean machines; proactive
+    # on dev machines that built Debug under the old shape.
+    COMMAND ${CMAKE_COMMAND} -E rm -f
+        "${WORKSPACE_ROOT}/target/${ROPUS_TARGET_SUBDIR}/ropus_fb2k.dll"
+        "${WORKSPACE_ROOT}/target/${ROPUS_TARGET_SUBDIR}/ropus_fb2k.dll.lib"
+        "${WORKSPACE_ROOT}/target/${ROPUS_TARGET_SUBDIR}/ropus_fb2k.pdb"
+    COMMAND cargo build "$<$<NOT:$<CONFIG:Debug>>:--release>" -p ropus-fb2k
+    WORKING_DIRECTORY "${WORKSPACE_ROOT}"
+    COMMENT "Building ropus-fb2k staticlib ($<IF:$<CONFIG:Debug>,dev,release>)"
+    VERBATIM
+    COMMAND_EXPAND_LISTS
+    USES_TERMINAL
+)
+
+# --------------------------------------------------------------------------
+# foo_ropus.dll — the component
 # --------------------------------------------------------------------------
 
-add_library(foo_input_ropus SHARED
+add_library(foo_ropus SHARED
     src/dllmain.cpp
     src/input_ropus_opus.cpp
 )
 
-# fb2k ignores CMake's default DLL name (foo_input_ropus.dll would already
+add_dependencies(foo_ropus ropus_fb2k_staticlib)
+
+# fb2k ignores CMake's default DLL name (foo_ropus.dll would already
 # be right) but an explicit OUTPUT_NAME guards against anyone sneaking in
 # a prefix/suffix change at the project level.
-set_target_properties(foo_input_ropus PROPERTIES
-    OUTPUT_NAME "foo_input_ropus"
+set_target_properties(foo_ropus PROPERTIES
+    OUTPUT_NAME "foo_ropus"
     PREFIX ""
     SUFFIX ".dll"
 )
 
-target_compile_definitions(foo_input_ropus PRIVATE _WINDLL)
+target_compile_definitions(foo_ropus PRIVATE _WINDLL)
 
 # Per-target split: our code compiles clean at /W4 /permissive- (the
 # `(void)p_xxx;` casts in input_ropus_opus.cpp deliberately silence C4100
@@ -147,7 +225,7 @@ target_compile_definitions(foo_input_ropus PRIVATE _WINDLL)
 # "unreachable code" warning on input_impl.h's intentional `throw;` +
 # trailing return patterns — codegen warnings escape /external:W0.
 if(MSVC)
-    target_compile_options(foo_input_ropus PRIVATE
+    target_compile_options(foo_ropus PRIVATE
         /W4 /permissive-
         /external:anglebrackets
         /external:W0
@@ -155,12 +233,30 @@ if(MSVC)
     )
 endif()
 
-target_link_libraries(foo_input_ropus PRIVATE
+# Windows system libs required by the Rust staticlib. Authoritative list
+# obtained from `cargo rustc --release -p ropus-fb2k -- --print native-static-libs`
+# on 2026-04-19 (Rust 1.x on x86_64-pc-windows-msvc). The command prints:
+#     kernel32.lib ntdll.lib userenv.lib ws2_32.lib dbghelp.lib /defaultlib:msvcrt
+# The trailing /defaultlib:msvcrt is a hint from cargo, not a directive
+# embedded in the .lib file itself. We do not need to pass it explicitly —
+# the C++ side's /MD compile already pulls msvcrt.lib into the link, which
+# satisfies the CRT for both the C++ TUs and the Rust objects that reference
+# CRT symbols (malloc, printf, _iob). winmm stays in the list because pfc
+# (C++ side) uses timeGetTime/timeBeginPeriod independently of Rust. If Rust
+# deps change, re-run the command above and update this list.
+target_link_libraries(foo_ropus PRIVATE
     foobar2000_component_client
     foobar2000_SDK
     pfc
     "${FB2K_ROOT}/shared/shared-x64.lib"
     winmm   # timeGetTime / timeBeginPeriod used by pfc::media_timer
+    # Rust staticlib + its transitive Windows system deps
+    "${ROPUS_STATIC_LIB}"
+    kernel32
+    ntdll
+    userenv
+    ws2_32
+    dbghelp
 )
 
 # shared.dll is part of any foobar2000 install; we resolve against
@@ -170,7 +266,7 @@ target_link_libraries(foo_input_ropus PRIVATE
 # Put the final DLL directly into the build directory's per-config folder
 # (Release/, Debug/) so Arthur can find it without chasing CMake's default
 # generator expressions.
-set_target_properties(foo_input_ropus PROPERTIES
+set_target_properties(foo_ropus PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY            "${CMAKE_BINARY_DIR}"
     RUNTIME_OUTPUT_DIRECTORY_DEBUG      "${CMAKE_BINARY_DIR}/Debug"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE    "${CMAKE_BINARY_DIR}/Release"

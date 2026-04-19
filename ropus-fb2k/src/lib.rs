@@ -1,10 +1,11 @@
-//! Rust backend for the `foo_input_ropus` foobar2000 component.
+//! Rust backend for the `foo_ropus` foobar2000 component.
 //!
-//! This crate is the Rust half of the two-DLL design in the HLD: a `cdylib`
-//! exposing a small, stable C ABI (see `include/ropus_fb2k.h`). An `rlib`
-//! target is kept so `cargo test` can link integration tests against the
-//! same crate that ships as the cdylib; integration tests drive the C
-//! entry points directly (no Rust-only convenience surface).
+//! This crate is the Rust half of the component: a `staticlib` exposing a
+//! small, stable C ABI (see `include/ropus_fb2k.h`) that the C++ SDK glue
+//! links into `foo_ropus.dll` at build time. An `rlib` target is kept so
+//! `cargo test` can link integration tests against the same crate that
+//! ships as the staticlib; integration tests drive the C entry points
+//! directly (no Rust-only convenience surface).
 //!
 //! C ABI surface:
 //!
@@ -43,7 +44,7 @@
 // `extern "C"` hook (`ropus_fb2k_test_set_panic_flag`) that, once armed,
 // makes the next `decode_next` call panic deep in the stack. That's
 // deliberate for the `ffi_guard!` integration test in `tests/roundtrip.rs`,
-// but shipping a release cdylib with this feature on would hand a trivial
+// but shipping a release staticlib with this feature on would hand a trivial
 // DoS primitive to any caller that can reach the symbol. Fail the build
 // if anyone tries to combine the two.
 #[cfg(all(feature = "test-panic", not(debug_assertions)))]
@@ -503,7 +504,7 @@ fn reader_error_code(e: &ReaderError) -> c_int {
 // returns the per-entry sentinel (`-1 BAD_ARG` for `decode_next`).
 //
 // Gated entirely behind `cfg(feature = "test-panic")` so the symbol is not
-// part of the released cdylib's exported surface and the runtime cost in
+// part of the released staticlib's exported surface and the runtime cost in
 // production is exactly zero (no branch, no thread-local, no extra code).
 
 #[cfg(feature = "test-panic")]
@@ -525,7 +526,7 @@ pub(crate) fn test_panic_should_fire() -> bool {
 /// can't trip each other.
 ///
 /// **Not** part of the public ABI — the symbol is only exported when the
-/// `test-panic` feature is on. Don't ship a `cdylib` built with this flag.
+/// `test-panic` feature is on. Don't ship a `staticlib` built with this flag.
 #[cfg(feature = "test-panic")]
 #[unsafe(no_mangle)]
 pub extern "C" fn ropus_fb2k_test_set_panic_flag(on: bool) {

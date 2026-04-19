@@ -12,15 +12,17 @@
 
 #include <SDK/foobar2000.h>
 
-// Version below is the C++ shell's own stream, independent of the Rust
-// `ropus-fb2k` crate (Cargo.toml 0.2.0). Separate build artefacts on separate
-// lifecycles; any alignment is an M6 packaging decision.
+// Version below is the single user-facing component version shown in fb2k's
+// Components dialog. The Rust ropus-fb2k crate has its own internal version
+// (Cargo.toml 0.3.0); post-M4b it's statically linked into this DLL and no
+// longer surfaces as a separate artefact. Bump this string when the
+// component's user-visible behaviour changes.
 DECLARE_COMPONENT_VERSION(
     "ropus (Rust Opus decoder)",
-    "0.0.4",
+    "0.1.0",
     "Development component backed by the Rust `ropus` codec.\n"
     "M4 scaffold: component loads but does not decode yet.\n"
     "Replaces foobar2000's built-in Opus decoder for .opus files "
     "once wired up (milestone M5).");
 
-VALIDATE_COMPONENT_FILENAME("foo_input_ropus.dll");
+VALIDATE_COMPONENT_FILENAME("foo_ropus.dll");

@@ -1,13 +1,13 @@
 [package]
 name = "ropus-fb2k"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "BSD-3-Clause"
 publish = false
 description = "foobar2000 input-component backend: Ogg Opus demux + ropus decoder behind a stable C ABI"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["staticlib", "rlib"]
 
 [features]
 # `test-panic` enables a hidden FFI hook (`ropus_fb2k_test_set_panic_flag`)
