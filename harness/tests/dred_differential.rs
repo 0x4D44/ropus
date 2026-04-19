@@ -42,6 +42,26 @@ unsafe extern "C" {
     fn ec_laplace_decode_p0(this: *mut EcCtx, p0: u16, decay: u16) -> c_int;
 }
 
+// ---------------------------------------------------------------------------
+// DRED stats-data FFI (Stage 8.2).
+//
+// Each `extern` is the C `const opus_uint8 dred_*_q8[N]` array linked in from
+// `reference/dnn/dred_rdovae_stats_data.c`. `harness/build.rs` compiles that
+// TU alongside the rest of the reference library.
+// ---------------------------------------------------------------------------
+
+unsafe extern "C" {
+    static dred_latent_quant_scales_q8: [u8; 400];
+    static dred_latent_dead_zone_q8: [u8; 400];
+    static dred_latent_r_q8: [u8; 400];
+    static dred_latent_p0_q8: [u8; 400];
+
+    static dred_state_quant_scales_q8: [u8; 800];
+    static dred_state_dead_zone_q8: [u8; 800];
+    static dred_state_r_q8: [u8; 800];
+    static dred_state_p0_q8: [u8; 800];
+}
+
 /// `ec_range_bytes` is a static inline in `entcode.h` returning `ctx->offs`.
 /// Read the field directly to avoid needing a non-exported symbol.
 fn range_bytes(ctx: &EcCtx) -> usize {
@@ -190,4 +210,83 @@ fn laplace_p0_decode_matches_c() {
         );
     }
 
+}
+
+/// Stage 8.2: every DRED static quantisation table matches the C reference
+/// byte-for-byte. Any drift here silently corrupts every redundancy frame the
+/// encoder emits (and every one the decoder parses), so the diff is anchored
+/// at stage boundary rather than relying on downstream integration to surface
+/// it.
+#[test]
+fn dred_stats_arrays_match_c() {
+    use ropus::dnn::dred_stats;
+
+    // SAFETY: `extern static` arrays from `dred_rdovae_stats_data.c` are
+    // compile-time constants; reading them is always defined.
+    let pairs: &[(&str, &[u8], &[u8])] = unsafe {
+        &[
+            (
+                "dred_latent_quant_scales_q8",
+                &dred_stats::dred_latent_quant_scales_q8,
+                &dred_latent_quant_scales_q8,
+            ),
+            (
+                "dred_latent_dead_zone_q8",
+                &dred_stats::dred_latent_dead_zone_q8,
+                &dred_latent_dead_zone_q8,
+            ),
+            (
+                "dred_latent_r_q8",
+                &dred_stats::dred_latent_r_q8,
+                &dred_latent_r_q8,
+            ),
+            (
+                "dred_latent_p0_q8",
+                &dred_stats::dred_latent_p0_q8,
+                &dred_latent_p0_q8,
+            ),
+            (
+                "dred_state_quant_scales_q8",
+                &dred_stats::dred_state_quant_scales_q8,
+                &dred_state_quant_scales_q8,
+            ),
+            (
+                "dred_state_dead_zone_q8",
+                &dred_stats::dred_state_dead_zone_q8,
+                &dred_state_dead_zone_q8,
+            ),
+            (
+                "dred_state_r_q8",
+                &dred_stats::dred_state_r_q8,
+                &dred_state_r_q8,
+            ),
+            (
+                "dred_state_p0_q8",
+                &dred_stats::dred_state_p0_q8,
+                &dred_state_p0_q8,
+            ),
+        ]
+    };
+
+    for (name, rust, c) in pairs {
+        assert_eq!(
+            rust.len(),
+            c.len(),
+            "{name}: length mismatch rust={} c={}",
+            rust.len(),
+            c.len()
+        );
+        if rust != c {
+            // Surface the first divergent index to make failures debuggable.
+            let idx = rust
+                .iter()
+                .zip(c.iter())
+                .position(|(a, b)| a != b)
+                .unwrap_or(usize::MAX);
+            panic!(
+                "{name}: byte divergence at index {idx} (rust={} c={})",
+                rust[idx], c[idx],
+            );
+        }
+    }
 }

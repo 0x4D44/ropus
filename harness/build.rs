@@ -200,6 +200,10 @@ fn main() {
         "src/analysis.c",
         "src/mlp.c",
         "src/mlp_data.c",
+        // DRED static quantisation tables (Stage 8.2). Safe to compile in
+        // fixed-point mode — the file only pulls `opus_types.h` + a few
+        // `#define`s via `nnet.h`; no kiss_fft or float kernels.
+        "dnn/dred_rdovae_stats_data.c",
     ];
 
     // --- DNN sources (DEEP_PLC only — DRED/OSCE are Stage 8 scope).
