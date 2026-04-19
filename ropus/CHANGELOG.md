@@ -4,9 +4,126 @@ All notable changes to the `ropus` crate are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 crate aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-The crate has not yet been published to crates.io; versions below correspond
-to in-tree milestones identified by the `ropus/Cargo.toml` version-bump
-commits in this repository.
+The latest version published to crates.io is `0.5.0`. Versions `0.5.1`
+through `0.11.1` are in-tree milestones identified by the
+`ropus/Cargo.toml` version-bump commits in this repository; they will
+land on crates.io as a single jump at the next publish.
+
+## [0.11.1] - 2026-04-19
+
+### Added
+
+- `Decoder::set_dnn_blob` on the typed facade, delegating to the existing
+  low-level `OpusDecoder::set_dnn_blob`. Errors lift to
+  `DecoderInitError`. Lets callers using the idiomatic `Decoder` API
+  install neural-PLC weights without dropping down to the raw libopus
+  surface.
+- Compile-time thread-safety assertion
+  (`api::tests::encoder_decoder_are_send_sync`) that verifies `Encoder`
+  and `Decoder` are `Send + Sync` — catches regressions where a `!Send` /
+  `!Sync` field (e.g., an accidentally introduced `Rc` or `RefCell`) would
+  otherwise silently drift the README claim.
+
+### Fixed
+
+- SILK PLC state-carryover for the DEEP_PLC recovery path — preserves
+  the subframe state across the transition from classical to neural PLC
+  so the decoder reconverges cleanly after a burst loss. (`9bde2c1`)
+
+## [0.11.0] - 2026-04-19
+
+### Added
+
+- Builder methods `EncoderBuilder::vbr_constraint(bool)` and
+  `EncoderBuilder::packet_loss_perc(u8)` on the typed facade, exposing the
+  matching libopus CTLs. (`d5d2d2e`)
+
+## [0.10.0] - 2026-04-19
+
+### Fixed
+
+- `ropus-cli` decode path now applies `OpusHead.output_gain` per RFC 7845
+  §5.1. Previously the Q8 gain field was parsed but ignored, so files
+  encoded with non-zero header gain decoded at the wrong level. (`37b82a3`)
+
+## [0.9.0] - 2026-04-19
+
+### Added
+
+- Real DNN weight population — the build script embeds LPCNet / FARGAN /
+  classical-PLC weights from the xiph reference sources at compile time
+  when they are present on disk, and callers can override at runtime via
+  `OpusDecoder::set_dnn_blob`. (`93f0274`)
+
+## [0.8.0] - 2026-04-19
+
+### Added
+
+- DNN modules (LPCNet, FARGAN) wired into `OpusDecoder`'s PLC path —
+  plumbing-only at this stage, gated behind a tier-2 50 dB SNR floor
+  against the C-float reference. (`77d2a3e`)
+
+## [0.7.2] - 2026-04-19
+
+### Fixed
+
+- SILK `silk_plc_update` now saves subframe geometry and applies the LTP
+  bias for unvoiced frames, matching the C reference and eliminating a
+  drift seen on voiced/unvoiced boundaries. (`60c6a97`)
+
+## [0.7.1] - 2026-04-19
+
+### Fixed
+
+- SILK side-channel resampler is now cloned after `set_fs` during
+  mono→stereo transitions, preventing resampler-state corruption when the
+  encoder switches channel layout mid-stream. (`a215d9b`)
+
+## [0.7.0] - 2026-04-19
+
+### Added
+
+- Analysis / tonality detection wired into `OpusEncoder` (Stage 6.4).
+  Integrated encode reaches a tier-1 95% byte-exact floor against the C
+  reference on music vectors, with 0.000 dB decoded-PCM SNR delta on
+  music + speech under the SNR-equivalence gate. (`141471a`)
+
+## [0.6.0] - 2026-04-19
+
+### Added
+
+- Five additional encoder CTLs routed through the C-ABI shim (`capi/`),
+  bringing the ropus configuration surface closer to full libopus parity.
+  (`469a100`)
+
+## [0.5.3] - 2026-04-19
+
+### Fixed
+
+- CELT hybrid-mode `min_allowed` floor for the redundancy signal bit,
+  correcting a rate-allocation drift on low-bitrate hybrid frames.
+  (`e83f185`)
+
+## [0.5.2] - 2026-04-19
+
+### Added
+
+- Ambisonics mapping matrix data ported for projection / surround encode
+  (`channel_mapping == 3`). Enables first- through fifth-order ambisonic
+  round-trips through the harness. (`1f43890`)
+
+## [0.5.1] - 2026-04-19
+
+### Fixed
+
+- Removed an `encode_multiframe` `range_final` overwrite that could
+  corrupt the entropy-coder range when stitching multi-frame packets.
+  (`3009a6b`)
+
+### Changed
+
+- Crate package now includes `examples/**/*` so the end-to-end samples
+  ship on crates.io. (`3d5ea2a`)
 
 ## [0.5.0] - 2026-04-18
 
@@ -115,6 +232,18 @@ commits in this repository.
   `publish = false` crate hosting the C reference FFI build, integration
   binaries, and tooling. (`fa031ab`)
 
+[0.11.1]: https://github.com/0x4D44/ropus/releases/tag/v0.11.1
+[0.11.0]: https://github.com/0x4D44/ropus/releases/tag/v0.11.0
+[0.10.0]: https://github.com/0x4D44/ropus/releases/tag/v0.10.0
+[0.9.0]: https://github.com/0x4D44/ropus/releases/tag/v0.9.0
+[0.8.0]: https://github.com/0x4D44/ropus/releases/tag/v0.8.0
+[0.7.2]: https://github.com/0x4D44/ropus/releases/tag/v0.7.2
+[0.7.1]: https://github.com/0x4D44/ropus/releases/tag/v0.7.1
+[0.7.0]: https://github.com/0x4D44/ropus/releases/tag/v0.7.0
+[0.6.0]: https://github.com/0x4D44/ropus/releases/tag/v0.6.0
+[0.5.3]: https://github.com/0x4D44/ropus/releases/tag/v0.5.3
+[0.5.2]: https://github.com/0x4D44/ropus/releases/tag/v0.5.2
+[0.5.1]: https://github.com/0x4D44/ropus/releases/tag/v0.5.1
 [0.5.0]: https://github.com/0x4D44/ropus/releases/tag/v0.5.0
 [0.4.0]: https://github.com/0x4D44/ropus/releases/tag/v0.4.0
 [0.3.0]: https://github.com/0x4D44/ropus/releases/tag/v0.3.0

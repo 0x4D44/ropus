@@ -126,8 +126,11 @@ the C reference (which dispatches to hand-tuned SSE4.1/AVX2 at runtime).
 | MUSIC 48k stereo         | 1.01×  | 0.98×  |
 | **Mean**                 | **1.02×** | **0.95×** |
 
-Four vectors encode *faster* than C (sine, sweep, SPEECH, with MUSIC at parity).
-Decode is uniformly at or faster than the C reference. Full measurement log:
+Three vectors encode *faster* than C (sine, sweep, SPEECH) with MUSIC
+essentially at parity (1.01×); the remaining six run 3-14% slower, dominated
+by SILK where the C reference dispatches to hand-tuned SSE. Decode is faster
+or at parity on eight of ten vectors, with CELT full-band sine (1.05×) and
+square (1.03×) running slightly behind. Full measurement log:
 [`wrk_journals/2026.04.19 - JRN - avx2-baseline.md`](wrk_journals/2026.04.19%20-%20JRN%20-%20avx2-baseline.md).
 
 ### Non-standard release profile

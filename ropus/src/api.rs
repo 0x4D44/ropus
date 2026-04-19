@@ -688,6 +688,25 @@ impl Decoder {
         Ok(Self { inner })
     }
 
+    /// Load DNN weights for neural packet-loss concealment (LPCNet + FARGAN).
+    ///
+    /// By default the crate embeds weights from the xiph reference sources at
+    /// build time if they are on disk (typically via
+    /// `cargo run -p fetch-assets -- weights` in-tree development). When
+    /// installed from crates.io the embedded blob is empty, and neural PLC
+    /// stays disabled unless a caller supplies a blob here; lost frames then
+    /// take the classical pitch/noise PLC branch.
+    ///
+    /// The blob format is xiph's `write_lpcnet_weights` output. Unknown
+    /// records (for example DRED or OSCE tables packed into the same tarball)
+    /// are silently ignored, matching the C reference's `find_array_check`
+    /// semantics.
+    pub fn set_dnn_blob(&mut self, data: &[u8]) -> Result<(), DecoderInitError> {
+        self.inner
+            .set_dnn_blob(data)
+            .map_err(DecoderInitError::from_code)
+    }
+
     /// Decode a packet to 16-bit PCM. An empty `packet` triggers PLC
     /// (packet-loss concealment) — pass the next valid packet when available.
     ///
@@ -786,6 +805,40 @@ fn packet_arg(packet: &[u8]) -> Option<&[u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- Thread-safety contract: Encoder and Decoder are Send + Sync ----
+    //
+    // This is a compile-time assertion — if the inner codec state ever grows
+    // a !Send / !Sync field (e.g., Rc, RefCell, raw pointer), the README's
+    // thread-safety claim would silently drift and this test would fail to
+    // compile. Keep it here so the claim stays honest.
+
+    #[test]
+    fn encoder_decoder_are_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Encoder>();
+        assert_send_sync::<Decoder>();
+    }
+
+    #[test]
+    fn decoder_set_dnn_blob_rejects_garbage() {
+        let mut decoder = Decoder::new(48_000, Channels::Mono).unwrap();
+        // A short garbage blob can't parse as xiph's weight-record format;
+        // the wrapped OpusDecoder returns OPUS_BAD_ARG, which the facade
+        // lifts to DecoderInitError::BadArg.
+        assert_eq!(
+            decoder.set_dnn_blob(&[0u8; 4]),
+            Err(DecoderInitError::BadArg),
+        );
+    }
+
+    #[test]
+    fn decoder_set_dnn_blob_accepts_empty_blob() {
+        let mut decoder = Decoder::new(48_000, Channels::Mono).unwrap();
+        // An empty blob is the build-without-weights default; it should
+        // either succeed (no-op) or fail cleanly with BadArg — never panic.
+        let _ = decoder.set_dnn_blob(&[]);
+    }
 
     // ---- as_c_int round-trips against the existing OPUS_* constants ----
 
