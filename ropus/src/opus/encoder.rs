@@ -7773,4 +7773,153 @@ mod tests {
              shaping the distribution"
         );
     }
+
+    // =========================================================================
+    // Pinning tests — assert exact encoded bytes to catch arithmetic mutations
+    // =========================================================================
+
+    #[test]
+    fn test_pin_encode_silence_silk_16k() {
+        let mut enc = OpusEncoder::new(16000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_bitrate(16000), OPUS_OK);
+        assert_eq!(enc.set_force_mode(MODE_SILK_ONLY), OPUS_OK);
+        assert_eq!(enc.set_vbr(0), OPUS_OK);
+        assert_eq!(enc.set_complexity(10), OPUS_OK);
+
+        let pcm = vec![0i16; 320];
+        let mut packet = vec![0u8; 1500];
+
+        for _ in 0..3 {
+            let _ = enc.encode(&pcm, 320, &mut packet, 1500).unwrap();
+        }
+        let len = enc.encode(&pcm, 320, &mut packet, 1500).unwrap();
+        let bytes = &packet[..len as usize];
+
+        #[rustfmt::skip]
+        let expected: &[u8] = &[
+            75, 65, 30, 6, 227, 121, 200, 201, 87, 192,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        assert_eq!(len, 40);
+        assert_eq!(bytes, expected);
+        assert_eq!(enc.get_final_range(), 13889924);
+    }
+
+    #[test]
+    fn test_pin_encode_dc_silk_16k() {
+        let mut enc = OpusEncoder::new(16000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        assert_eq!(enc.set_bitrate(16000), OPUS_OK);
+        assert_eq!(enc.set_force_mode(MODE_SILK_ONLY), OPUS_OK);
+        assert_eq!(enc.set_vbr(0), OPUS_OK);
+        assert_eq!(enc.set_complexity(10), OPUS_OK);
+
+        let pcm = vec![10000i16; 320];
+        let mut packet = vec![0u8; 1500];
+
+        for _ in 0..3 {
+            let _ = enc.encode(&pcm, 320, &mut packet, 1500).unwrap();
+        }
+        let len = enc.encode(&pcm, 320, &mut packet, 1500).unwrap();
+        let bytes = &packet[..len as usize];
+
+        #[rustfmt::skip]
+        let expected: &[u8] = &[
+            75, 65, 25, 6, 234, 164, 197, 41, 14, 40,
+            156, 23, 106, 191, 180, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        assert_eq!(len, 40);
+        assert_eq!(bytes, expected);
+        assert_eq!(enc.get_final_range(), 60564882);
+    }
+
+    #[test]
+    fn test_pin_encode_tone_celt_48k() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_bitrate(64000), OPUS_OK);
+        assert_eq!(enc.set_force_mode(MODE_CELT_ONLY), OPUS_OK);
+        assert_eq!(enc.set_vbr(0), OPUS_OK);
+        assert_eq!(enc.set_complexity(10), OPUS_OK);
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_FULLBAND), OPUS_OK);
+
+        let frame_size = 960;
+        let pcm: Vec<i16> = (0..frame_size)
+            .map(|i| {
+                let phase = 2.0 * std::f64::consts::PI * 440.0 * (i as f64) / 48000.0;
+                (phase.sin() * 16000.0) as i16
+            })
+            .collect();
+        let mut packet = vec![0u8; 1500];
+
+        for _ in 0..3 {
+            let _ = enc.encode(&pcm, 960, &mut packet, 1500).unwrap();
+        }
+        let len = enc.encode(&pcm, 960, &mut packet, 1500).unwrap();
+        let bytes = &packet[..len as usize];
+
+        #[rustfmt::skip]
+        let expected: &[u8] = &[
+            248, 180, 175, 185, 188,   6,  86,  78, 194,  39,
+             81,  29,  78, 146, 151, 180, 205, 218, 123, 197,
+             18, 142, 171,  77,  69, 220, 249, 205, 153, 126,
+            214,  54,  13,  51, 108,  34,  75,  46, 132, 215,
+             57, 242,  59, 220, 229, 245,  54, 101, 176, 215,
+             24, 133, 156, 177, 123, 237, 238, 164, 237, 102,
+            124, 203, 188,  86, 130,  92,  20, 171, 102,  79,
+            156,  93, 161,  46,  70, 152,  54, 106,  89, 111,
+            229, 145,  32,   9, 201,  21,  51, 114,  87,  14,
+             41, 114,   5, 188,  93,  34, 124,  87,   3,  97,
+            212, 227, 237, 205,  38, 245, 134, 184, 128, 148,
+            154, 227, 108,  96, 218, 113, 149, 244,  51, 200,
+            177, 138,  46,  33, 123,  75, 131,  15,  79, 109,
+            165, 238, 194, 247, 193, 136, 237, 241, 144,  20,
+             19, 209,  64, 145, 110, 234, 161, 215, 209,  90,
+            240, 248, 145,  31, 205, 172, 170,  20,  76, 171,
+        ];
+        assert_eq!(len, 160);
+        assert_eq!(bytes, expected);
+        assert_eq!(enc.get_final_range(), 238008320);
+    }
+
+    #[test]
+    fn test_pin_encode_tone_hybrid_48k() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_bitrate(32000), OPUS_OK);
+        assert_eq!(enc.set_force_mode(MODE_HYBRID), OPUS_OK);
+        assert_eq!(enc.set_vbr(0), OPUS_OK);
+        assert_eq!(enc.set_complexity(10), OPUS_OK);
+
+        let frame_size = 960;
+        let pcm: Vec<i16> = (0..frame_size)
+            .map(|i| {
+                let phase = 2.0 * std::f64::consts::PI * 440.0 * (i as f64) / 48000.0;
+                (phase.sin() * 16000.0) as i16
+            })
+            .collect();
+        let mut packet = vec![0u8; 1500];
+
+        for _ in 0..3 {
+            let _ = enc.encode(&pcm, 960, &mut packet, 1500).unwrap();
+        }
+        let len = enc.encode(&pcm, 960, &mut packet, 1500).unwrap();
+        let bytes = &packet[..len as usize];
+
+        #[rustfmt::skip]
+        let expected: &[u8] = &[
+            120, 182,  91,  44, 198, 207, 225, 206, 152, 103,
+             98, 143, 189, 203, 190, 180,  82, 177, 108, 171,
+            144,  96,  11,  14, 254, 189, 142,  23, 158, 167,
+             56, 140, 155,   8,  12,  22, 167, 133,  30,   1,
+             51, 109,  88,  14,  55, 200,  30, 161,  51, 111,
+             37, 231, 148, 248,  83,  72,  43, 206,  93, 183,
+            127,  27, 122, 253, 152,  53, 238, 217, 188, 126,
+             41, 251, 234,  89, 132, 254, 171, 228,  92, 141,
+        ];
+        assert_eq!(len, 80);
+        assert_eq!(bytes, expected);
+        assert_eq!(enc.get_final_range(), 712099840);
+    }
 }
