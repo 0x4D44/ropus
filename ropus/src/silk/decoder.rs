@@ -2348,15 +2348,13 @@ pub fn silk_decode(
         decoder.channel_state[1] = SilkDecoderState::new();
     }
 
-    // C: dec_API.c line 218 — reset stereo state when transitioning to stereo
-    if dec_control.n_channels_api == 2
-        && n_channels_internal == 2
-        && (decoder.n_channels_api == 1 || decoder.n_channels_internal == 1)
-    {
-        decoder.s_stereo.pred_prev_q13 = [0; 2];
-        decoder.s_stereo.s_side = [0; 2];
-        decoder.channel_state[1].resampler_state = decoder.channel_state[0].resampler_state.clone();
-    }
+    // Stash the "previous" channel-count values because the stereo-reset
+    // block below must see the transition but sits after the set_fs loop,
+    // which does not touch them.  Matches C's dec_API.c where
+    // psDec->nChannelsAPI / nChannelsInternal are updated AFTER the copy
+    // at lines 218-222.
+    let prev_n_channels_api = decoder.n_channels_api;
+    let prev_n_channels_internal = decoder.n_channels_internal;
 
     // Configure frame geometry on first frame
     if decoder.channel_state[0].n_frames_decoded == 0 {
@@ -2470,6 +2468,32 @@ pub fn silk_decode(
                 }
             }
         }
+    }
+
+    // C: dec_API.c lines 218-222 — on mono→stereo transition, clone the
+    // (now fresh) channel 0 resampler state into channel 1 so the side
+    // channel starts from the same warm filter memory as the mid channel.
+    //
+    // This MUST run AFTER the silk_decoder_set_fs loop above (inside the
+    // `n_frames_decoded == 0` block): set_fs calls silk_resampler_init which
+    // resets the resampler state to zeros, and this block overwrites that
+    // reset with channel 0's warm copy.  Running the clone before set_fs (as
+    // an earlier version did) is a no-op because set_fs overwrites it.
+    //
+    // Condition is gated by `prev_n_channels_api == 1 || prev_n_channels_internal == 1`
+    // — the channel-count values as they were on entry to this function —
+    // because `decoder.n_channels_internal` is only updated at the very end
+    // of this function, so using the stashed `prev_` values is equivalent to
+    // C's check against `psDec->nChannelsInternal` (which C updates
+    // immediately after this block at dec_API.c:223-224).
+    if dec_control.n_channels_api == 2
+        && n_channels_internal == 2
+        && (prev_n_channels_api == 1 || prev_n_channels_internal == 1)
+    {
+        decoder.s_stereo.pred_prev_q13 = [0; 2];
+        decoder.s_stereo.s_side = [0; 2];
+        decoder.channel_state[1].resampler_state =
+            decoder.channel_state[0].resampler_state.clone();
     }
 
     // Decode stereo predictor (opus_int32 in C; narrowed only on write back

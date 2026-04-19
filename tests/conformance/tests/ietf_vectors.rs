@@ -224,12 +224,7 @@ macro_rules! vector_test {
 vector_test!(testvector01_mono, "testvector01", 1);
 vector_test!(testvector01_stereo, "testvector01", 2);
 vector_test!(testvector02_mono, "testvector02", 1);
-vector_test!(
-    testvector02_stereo,
-    "testvector02",
-    2,
-    ignore = "ropus stereo decoder bug — see wrk_journals/2026.04.19 - JRN - ietf-projection-regressions.md"
-);
+vector_test!(testvector02_stereo, "testvector02", 2);
 vector_test!(testvector03_mono, "testvector03", 1);
 vector_test!(testvector03_stereo, "testvector03", 2);
 vector_test!(testvector04_mono, "testvector04", 1);
@@ -245,12 +240,7 @@ vector_test!(testvector08_stereo, "testvector08", 2);
 vector_test!(testvector09_mono, "testvector09", 1);
 vector_test!(testvector09_stereo, "testvector09", 2);
 vector_test!(testvector10_mono, "testvector10", 1);
-vector_test!(
-    testvector10_stereo,
-    "testvector10",
-    2,
-    ignore = "ropus stereo decoder bug — see wrk_journals/2026.04.19 - JRN - ietf-projection-regressions.md"
-);
+vector_test!(testvector10_stereo, "testvector10", 2);
 vector_test!(testvector11_mono, "testvector11", 1);
 vector_test!(testvector11_stereo, "testvector11", 2);
 vector_test!(testvector12_mono, "testvector12", 1);
