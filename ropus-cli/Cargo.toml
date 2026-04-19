@@ -7,7 +7,7 @@ description = "Command-line tool for encode/decode/transcode/play with the ropus
 license = "BSD-3-Clause"
 
 [dependencies]
-ropus = { path = "../ropus", version = "0.6" }
+ropus = { path = "../ropus", version = "0.7" }
 clap = { version = "4.6", features = ["derive"] }
 colored = "2.2"
 symphonia = { version = "0.5", default-features = false, features = ["wav", "pcm", "adpcm", "mp3", "flac", "ogg", "aac", "vorbis"] }    # WAV/MP3/FLAC/OGG/AAC input

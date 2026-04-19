@@ -1625,6 +1625,78 @@ fn test_24bit_decode_left_shift_8_invariant() {
 }
 
 #[test]
+#[ignore = "ropus decode24 PLC diverges from C reference after first subframe \
+            — see wrk_journals/2026.04.19 - JRN - ietf-projection-regressions.md"]
+fn test_24bit_decode_plc_matches_c_reference() {
+    // opus_demo invokes `opus_decode24(dec, NULL, 0, ...)` on every lost
+    // packet; the PLC code path was previously uncovered. Drive one
+    // successful packet to prime decoder state, then invoke PLC via
+    // (data=None, len=0) and confirm the Rust and C reference agree
+    // sample-for-sample.
+    //
+    // Currently #[ignore]'d: the test surfaces a differential divergence
+    // between ropus and the C reference where the first ~35 samples match
+    // bit-exactly but then drift. Tracked for investigation alongside the
+    // stereo decoder bugs. Run with `cargo test -p ropus-harness --test
+    // c_ref_differential -- --ignored` once fixed.
+    let sr = 48000;
+    let ch = 1;
+    let frame_size = 960;
+    let max_frame = 5760;
+    let packet = encode_voip_packet(sr, ch, frame_size, 55);
+
+    // Prime both decoders with a successful frame so PLC has state to
+    // extrapolate from.
+    let mut rust_dec = OpusDecoder::new(sr, ch).unwrap();
+    let mut prime_buf = vec![0i32; max_frame as usize * ch as usize];
+    rust_dec
+        .decode24(Some(&packet), &mut prime_buf, max_frame, false)
+        .expect("Rust decode24 prime failed");
+    let mut rust_pcm24 = vec![0i32; max_frame as usize * ch as usize];
+    let rust_n = rust_dec
+        .decode24(None, &mut rust_pcm24, frame_size, false)
+        .expect("Rust decode24 PLC failed");
+
+    let (c_sample_count, c_pcm24) = unsafe {
+        let mut err: c_int = 0;
+        let c_dec = opus_decoder_create(sr, ch, &mut err);
+        assert!(!c_dec.is_null() && err == 0);
+        // Prime with the same packet.
+        let mut prime_c = vec![0i32; max_frame as usize * ch as usize];
+        let prime_n = opus_decode24(
+            c_dec,
+            packet.as_ptr(),
+            packet.len() as i32,
+            prime_c.as_mut_ptr(),
+            max_frame,
+            0,
+        );
+        assert!(prime_n > 0, "C opus_decode24 prime returned {prime_n}");
+        // Now invoke PLC: data=NULL, len=0.
+        let mut c_pcm24 = vec![0i32; max_frame as usize * ch as usize];
+        let n = opus_decode24(
+            c_dec,
+            std::ptr::null(),
+            0,
+            c_pcm24.as_mut_ptr(),
+            frame_size,
+            0,
+        );
+        opus_decoder_destroy(c_dec);
+        assert!(n > 0, "C opus_decode24 PLC returned {n}");
+        (n, c_pcm24)
+    };
+
+    assert_eq!(rust_n, c_sample_count, "decode24 PLC: sample count mismatch");
+    let n_samples = (rust_n as usize) * (ch as usize);
+    assert_eq!(
+        &rust_pcm24[..n_samples],
+        &c_pcm24[..n_samples],
+        "decode24 PLC: PCM mismatch with C reference"
+    );
+}
+
+#[test]
 fn test_24bit_multistream_decode_matches_c_reference_stereo() {
     // Two-channel multistream, dual-mono mapping.
     use ropus::opus::multistream::OpusMSEncoder;

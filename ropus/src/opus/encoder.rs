@@ -2,16 +2,27 @@
 //!
 //! Ported from: reference/src/opus_encoder.c
 //! Fixed-point path (non-RES24, non-QEXT, non-DRED).
-//! Analysis (tonality detection) is NOT included (matches DISABLE_FLOAT_API).
-//! Mode/bandwidth decisions use bitrate thresholds and user hints only.
+//!
+//! Tonality / speech-vs-music analysis (Stage 6) is wired in via
+//! [`super::analysis`]. At complexity >= 10 and sample rate 16..48 kHz, the
+//! encoder runs `run_analysis` per frame and consumes the resulting
+//! [`AnalysisInfo`] for mode / bandwidth / DTX decisions, and forwards it
+//! to the CELT encoder via `CELT_SET_ANALYSIS`.
 
-use crate::celt::encoder::{CeltEncoder, CeltEncoderCtl, SILKInfo, celt_encode_with_ec};
+use crate::celt::encoder::{
+    AnalysisInfo as CeltAnalysisInfo, CeltEncoder, CeltEncoderCtl, LEAK_BANDS as CELT_LEAK_BANDS,
+    SILKInfo, celt_encode_with_ec,
+};
 use crate::celt::math_ops::{celt_exp2, celt_ilog2, celt_sqrt, frac_div32};
 use crate::celt::range_coder::RangeEncoder;
 use crate::silk::common::{silk_lin2log, silk_log2lin};
 use crate::silk::encoder::{SilkEncControlStruct, SilkEncoder, silk_encode, silk_init_encoder_top};
 use crate::types::*;
 
+use super::analysis::{
+    AnalysisInfo, DownmixFunc, TonalityAnalysisState, run_analysis, tonality_analysis_init,
+    tonality_analysis_reset, tonality_get_info,
+};
 use super::decoder::{
     MODE_CELT_ONLY, MODE_HYBRID, MODE_SILK_ONLY, OPUS_BAD_ARG, OPUS_BANDWIDTH_FULLBAND,
     OPUS_BANDWIDTH_MEDIUMBAND, OPUS_BANDWIDTH_NARROWBAND, OPUS_BANDWIDTH_SUPERWIDEBAND,
@@ -70,6 +81,12 @@ const MAX_CONSECUTIVE_DTX: i32 = 20; // 400ms
 
 // PSEUDO_SNR_THRESHOLD = 10^(25/10) = 316.23 → QCONST16(316.23, 0) = 316
 const PSEUDO_SNR_THRESHOLD: i32 = 316;
+
+/// DTX activity threshold — matches C `silk/define.h:54`
+/// (`#define DTX_ACTIVITY_THRESHOLD 0.1f`). Used both to gate the
+/// peak-signal-energy update and to derive the per-frame `activity` flag
+/// when tonality analysis is valid.
+const DTX_ACTIVITY_THRESHOLD: f32 = 0.1_f32;
 
 // HP filter smoothing coefficient — Q16, matching C's SILK_FIX_CONST(0.015, 16) = 983
 const VARIABLE_HP_SMTH_COEF2: i32 = 983; // Q16
@@ -257,6 +274,11 @@ pub struct OpusEncoder {
     prev_channels: i32,
     prev_framesize: i32,
     bandwidth: i32,
+    /// Analysis-derived bandwidth override. Non-zero values pull the
+    /// encoded bandwidth down to the classifier's estimate, mirroring the
+    /// C `st->detected_bandwidth` field. Reset every frame before
+    /// `run_analysis` runs; only populated when `analysis_info.valid`.
+    detected_bandwidth: i32,
     auto_bandwidth: i32,
     silk_bw_switch: i32,
     first: i32,
@@ -270,6 +292,13 @@ pub struct OpusEncoder {
     /// delay buffer update. Used for CELT prefill on mode transitions.
     /// C: tmp_prefill in opus_encode_frame_native.
     tmp_prefill: Vec<i16>,
+
+    /// Tonality / speech-vs-music analyzer state. Boxed so the ~75 KB
+    /// struct lives on the heap rather than inside `OpusEncoder`'s stack
+    /// footprint; matches C `st->analysis` when `DISABLE_FLOAT_API` is
+    /// not set. Driven by `run_analysis` on every frame where complexity
+    /// is high enough and the sample rate is supported.
+    analysis: Box<TonalityAnalysisState>,
 }
 
 // ===========================================================================
@@ -363,6 +392,163 @@ fn bits_to_bitrate(bits: i32, fs: i32, frame_size: i32) -> i32 {
 #[inline(always)]
 fn bitrate_to_bits(bitrate: i32, fs: i32, frame_size: i32) -> i32 {
     (bitrate as i64 * 6 / (6 * fs as i64 / frame_size as i64)) as i32
+}
+
+// ===========================================================================
+// Downmix callbacks — feed PCM samples into the tonality analyzer
+// ===========================================================================
+//
+// These mirror C `downmix_int` / `downmix_float` in
+// `reference/src/opus_encoder.c:748-825`. They take an opaque byte view of
+// the caller's PCM buffer and write `subframe` i32 samples into `output`,
+// applying the FIXED_POINT Q-format conversion that the analyzer's `inmem`
+// buffer expects.
+//
+// Stage 6.3b lesson: the scaling has to be bit-exact. `downmix_int` uses
+// `INT16TOSIG(x) = x << SIG_SHIFT` (no clamp, no rounding — the i16 input
+// is already bounded). `downmix_float` uses the `FLOAT2SIG` chain:
+// `x * (32768 << SIG_SHIFT)`, clamp to `±(65536 << SIG_SHIFT)`, then
+// round-half-even. SIG_SHIFT is 12 here (see `types::SIG_SHIFT`).
+//
+// The callbacks deliberately match `super::analysis::DownmixFunc` — a
+// byte-view signature — so the analyzer can stay agnostic to the input
+// PCM type. The caller (the main Rust encoder) picks the right one.
+
+/// FIXED_POINT `INT16TOSIG(x) = x << SIG_SHIFT`. No clamp: an i16 scaled
+/// by 2^12 always fits in i32.
+#[inline(always)]
+fn int16_to_sig(x: i16) -> i32 {
+    (x as i32) << SIG_SHIFT
+}
+
+/// FIXED_POINT `FLOAT2SIG` per `reference/celt/float_cast.h:166-172`.
+///   y = float2int( clamp( x * (32768<<SIG_SHIFT),
+///                         -(65536<<SIG_SHIFT), +(65536<<SIG_SHIFT) ) )
+/// where `float2int` is round-half-even. With `SIG_SHIFT = 12`:
+///   FLOAT2SIG_MULT = 32768 << 12 = 134_217_728
+///   SIG_CLAMP      = 65536 << 12 = 268_435_456
+#[inline(always)]
+fn float_to_sig(x: f32) -> i32 {
+    const FLOAT2SIG_MULT: f32 = 134_217_728.0;
+    const SIG_CLAMP_MAX: f32 = 268_435_456.0;
+    const SIG_CLAMP_MIN: f32 = -268_435_456.0;
+    let mut y = x * FLOAT2SIG_MULT;
+    if y > SIG_CLAMP_MAX {
+        y = SIG_CLAMP_MAX;
+    }
+    if y < SIG_CLAMP_MIN {
+        y = SIG_CLAMP_MIN;
+    }
+    y.round_ties_even() as i32
+}
+
+/// Downmix i16 PCM into Q(SIG_SHIFT) samples. Port of C `downmix_int` in
+/// `opus_encoder.c:781-802`. The `input` slice is a byte view of an `&[i16]`
+/// passed by the caller; reinterpreted natively here.
+pub(crate) fn downmix_int(
+    input: &[u8],
+    output: &mut [i32],
+    subframe: i32,
+    offset: i32,
+    c1: i32,
+    c2: i32,
+    c: i32,
+) {
+    // Safety: the caller guarantees `input` is a byte view of a valid
+    // `&[i16]`. This is the same contract `analysis::DownmixFunc`
+    // documents and `harness/tests/c_ref_differential.rs` uses.
+    let samples: &[i16] = unsafe {
+        core::slice::from_raw_parts(
+            input.as_ptr() as *const i16,
+            input.len() / core::mem::size_of::<i16>(),
+        )
+    };
+    for j in 0..subframe as usize {
+        output[j] = int16_to_sig(samples[((j as i32 + offset) * c + c1) as usize]);
+    }
+    if c2 > -1 {
+        for j in 0..subframe as usize {
+            output[j] += int16_to_sig(samples[((j as i32 + offset) * c + c2) as usize]);
+        }
+    } else if c2 == -2 {
+        for ch in 1..c {
+            for j in 0..subframe as usize {
+                output[j] += int16_to_sig(samples[((j as i32 + offset) * c + ch) as usize]);
+            }
+        }
+    }
+    // FIXED_POINT: no post-clamp for i16 input (C downmix_int has no
+    // equivalent of downmix_float's ±6 dBFS cap — that branch is guarded
+    // by `#ifndef FIXED_POINT`).
+}
+
+/// Downmix f32 PCM into Q(SIG_SHIFT) samples. Port of C `downmix_float` in
+/// `opus_encoder.c:748-778` (FIXED_POINT branch). Each float sample flows
+/// through the `FLOAT2SIG` chain (multiply, clamp, round-half-even).
+pub(crate) fn downmix_float(
+    input: &[u8],
+    output: &mut [i32],
+    subframe: i32,
+    offset: i32,
+    c1: i32,
+    c2: i32,
+    c: i32,
+) {
+    let samples: &[f32] = unsafe {
+        core::slice::from_raw_parts(
+            input.as_ptr() as *const f32,
+            input.len() / core::mem::size_of::<f32>(),
+        )
+    };
+    for j in 0..subframe as usize {
+        output[j] = float_to_sig(samples[((j as i32 + offset) * c + c1) as usize]);
+    }
+    if c2 > -1 {
+        for j in 0..subframe as usize {
+            output[j] += float_to_sig(samples[((j as i32 + offset) * c + c2) as usize]);
+        }
+    } else if c2 == -2 {
+        for ch in 1..c {
+            for j in 0..subframe as usize {
+                output[j] += float_to_sig(samples[((j as i32 + offset) * c + ch) as usize]);
+            }
+        }
+    }
+    // FIXED_POINT: the C `#ifndef FIXED_POINT` ±6 dBFS cap does not run
+    // on this path. The clamp inside `float_to_sig` already keeps samples
+    // within `±(65536<<SIG_SHIFT)`.
+}
+
+/// Convert an Opus-layer `AnalysisInfo` into the CELT-layer struct.
+///
+/// The two types carry identical logical fields (valid, tonality, …,
+/// leak_boost), but live in sibling modules — the CELT encoder cannot
+/// depend on `opus::analysis`. This helper exists to keep the wiring at
+/// the boundary where the analyzer runs.
+///
+/// Matches the data flow of C `CELT_SET_ANALYSIS(analysis_info)` in
+/// `opus_encoder.c:2418`, which passes the (identical-layout) struct
+/// pointer to the CELT encoder, which then `*st->analysis = *info` copies
+/// every field verbatim.
+#[inline]
+fn analysis_info_to_celt(info: &AnalysisInfo) -> CeltAnalysisInfo {
+    let mut leak_boost = [0u8; CELT_LEAK_BANDS];
+    let n = leak_boost.len().min(info.leak_boost.len());
+    leak_boost[..n].copy_from_slice(&info.leak_boost[..n]);
+    CeltAnalysisInfo {
+        valid: info.valid,
+        tonality: info.tonality,
+        tonality_slope: info.tonality_slope,
+        noisiness: info.noisiness,
+        activity: info.activity,
+        music_prob: info.music_prob,
+        music_prob_min: info.music_prob_min,
+        music_prob_max: info.music_prob_max,
+        bandwidth: info.bandwidth,
+        activity_probability: info.activity_probability,
+        max_pitch_ratio: info.max_pitch_ratio,
+        leak_boost,
+    }
 }
 
 /// Detect digital silence in PCM buffer.
@@ -1039,6 +1225,7 @@ impl OpusEncoder {
             prev_channels: 0,
             prev_framesize: fs / 50, // 20ms
             bandwidth: OPUS_BANDWIDTH_FULLBAND,
+            detected_bandwidth: 0,
             auto_bandwidth: OPUS_BANDWIDTH_FULLBAND,
             silk_bw_switch: 0,
             first: 1,
@@ -1049,7 +1236,15 @@ impl OpusEncoder {
             range_final: 0,
             delay_buffer: vec![0i16; (encoder_buffer * channels) as usize],
             tmp_prefill: vec![0i16; (channels * fs / 400) as usize],
+            analysis: TonalityAnalysisState::new_boxed(),
         };
+
+        // Initialise the tonality analyzer. Matches C
+        // `tonality_analysis_init(&st->analysis, st->Fs)` +
+        // `st->analysis.application = st->application` at
+        // opus_encoder.c:322-324.
+        tonality_analysis_init(enc.analysis.as_mut(), fs);
+        enc.analysis.application = application;
 
         // Configure CELT
         if let Some(ref mut celt) = enc.celt_enc {
@@ -1172,6 +1367,8 @@ impl OpusEncoder {
             || v == OPUS_APPLICATION_RESTRICTED_LOWDELAY
         {
             self.application = v;
+            // Matches C opus_encoder.c:2803 (analysis sees application updates too).
+            self.analysis.application = v;
         }
     }
     #[allow(dead_code)]
@@ -1185,6 +1382,10 @@ impl OpusEncoder {
 
     /// Reset encoder to initial state.
     pub fn reset(&mut self) {
+        // Matches C opus_encoder.c:3249-3250: reset the tonality analyzer
+        // first, before the OPUS_ENCODER_RESET_START block gets cleared.
+        tonality_analysis_reset(self.analysis.as_mut());
+
         self.stream_channels = self.channels;
         self.hybrid_stereo_width_q14 = 1 << 14;
         self.variable_hp_smth2_q15 = silk_lshift(silk_lin2log(60), 8);
@@ -1195,6 +1396,7 @@ impl OpusEncoder {
         self.prev_channels = self.channels;
         self.prev_framesize = self.fs / 50;
         self.bandwidth = OPUS_BANDWIDTH_FULLBAND;
+        self.detected_bandwidth = 0;
         self.auto_bandwidth = OPUS_BANDWIDTH_FULLBAND;
         self.silk_bw_switch = 0;
         self.first = 1;
@@ -1223,11 +1425,30 @@ impl OpusEncoder {
         data: &mut [u8],
         max_data_bytes: i32,
     ) -> Result<i32, i32> {
+        // Preserve the caller-supplied `analysis_frame_size` for run_analysis,
+        // which takes the pre-`frame_size_select` value — matches C
+        // `opus_encoder.c:2666-2668`.
+        let analysis_frame_size = frame_size;
         let frame_size = frame_size_select(frame_size, self.variable_duration, self.fs);
         if frame_size < 0 {
             return Err(OPUS_BAD_ARG);
         }
-        self.encode_native(pcm, frame_size, data, max_data_bytes, 16)
+        // Build the byte view of `pcm` for the downmix callback; the i16
+        // samples are passed straight through — no conversion.
+        let pcm_bytes = unsafe {
+            core::slice::from_raw_parts(
+                pcm.as_ptr() as *const u8,
+                std::mem::size_of_val(pcm),
+            )
+        };
+        self.encode_native_with_analysis(
+            pcm,
+            frame_size,
+            data,
+            max_data_bytes,
+            16,
+            Some((pcm_bytes, analysis_frame_size, downmix_int as DownmixFunc)),
+        )
     }
 
     /// Encode PCM audio (float input, converts to i16 internally).
@@ -1239,23 +1460,43 @@ impl OpusEncoder {
         data: &mut [u8],
         max_data_bytes: i32,
     ) -> Result<i32, i32> {
+        let analysis_frame_size = frame_size;
         let frame_size = frame_size_select(frame_size, self.variable_duration, self.fs);
         if frame_size < 0 {
             return Err(OPUS_BAD_ARG);
         }
-        // Convert float to i16
+        // Convert float to i16 for the main encode path.
         let n = (frame_size * self.channels) as usize;
         let mut pcm16 = vec![0i16; n];
         for i in 0..n {
             pcm16[i] = float2int16(pcm[i]);
         }
-        self.encode_native(&pcm16, frame_size, data, max_data_bytes, 24)
+        // Analysis still sees the original f32 samples via `downmix_float`,
+        // matching C `opus_encode_float`'s choice to pass `pcm` (floats)
+        // and `downmix_float` to `opus_encode_native`.
+        let pcm_bytes = unsafe {
+            core::slice::from_raw_parts(
+                pcm.as_ptr() as *const u8,
+                std::mem::size_of_val(pcm),
+            )
+        };
+        self.encode_native_with_analysis(
+            &pcm16,
+            frame_size,
+            data,
+            max_data_bytes,
+            24,
+            Some((pcm_bytes, analysis_frame_size, downmix_float as DownmixFunc)),
+        )
     }
 
     // -----------------------------------------------------------------------
     // opus_encode_native — top-level orchestrator
     // -----------------------------------------------------------------------
 
+    /// Convenience wrapper for internal callers that don't run analysis.
+    /// Matches the legacy three-arg signature used by `opus/multistream.rs`
+    /// where each sub-stream already handles its own PCM dispatch.
     pub(crate) fn encode_native(
         &mut self,
         pcm: &[i16],
@@ -1263,6 +1504,22 @@ impl OpusEncoder {
         data: &mut [u8],
         out_data_bytes: i32,
         lsb_depth: i32,
+    ) -> Result<i32, i32> {
+        self.encode_native_with_analysis(pcm, frame_size, data, out_data_bytes, lsb_depth, None)
+    }
+
+    /// Full-fat encode entry point. `analysis` is `Some((pcm_bytes, analysis_frame_size, downmix))`
+    /// when the caller wants the tonality analyzer to run over the input
+    /// (matches C `opus_encode_native` with `analysis_pcm`, `analysis_size`,
+    /// `downmix` parameters) or `None` to skip it.
+    pub(crate) fn encode_native_with_analysis(
+        &mut self,
+        pcm: &[i16],
+        frame_size: i32,
+        data: &mut [u8],
+        out_data_bytes: i32,
+        lsb_depth: i32,
+        analysis: Option<(&[u8], i32, DownmixFunc)>,
     ) -> Result<i32, i32> {
         let max_data_bytes = imin(1276 * 6, out_data_bytes);
         self.range_final = 0;
@@ -1278,13 +1535,100 @@ impl OpusEncoder {
         let lsb_depth = imin(lsb_depth, self.lsb_depth);
         let is_silence = is_digital_silence(pcm, frame_size, self.channels, lsb_depth);
 
-        // C: st->voice_ratio = -1; (reset each frame, #else / FIXED_POINT path)
-        self.voice_ratio = -1;
+        // --- Tonality analysis ---
+        // C `opus_encoder.c:1247-1263`:
+        //   analysis_info.valid = 0;
+        //   if (complexity >= 10 && 16000 <= Fs <= 48000 && !RESTRICTED_SILK)
+        //       run_analysis(...);
+        //   else if (initialized) tonality_analysis_reset(...);
+        //
+        // The complexity gate is `>= 10` in FIXED_POINT (C line 1250) vs
+        // `>= 7` in float — we match the FIXED_POINT path.
+        let mut analysis_info = AnalysisInfo::default();
+        let mut _analysis_read_pos_bak: i32 = -1;
+        let mut _analysis_read_subframe_bak: i32 = -1;
+        if self.silk_mode.complexity >= 10
+            && self.fs >= 16000
+            && self.fs <= 48000
+            && self.application != OPUS_APPLICATION_RESTRICTED_SILK
+        {
+            if let Some((analysis_pcm, analysis_frame_size, downmix)) = analysis {
+                let celt_mode = self
+                    .celt_enc
+                    .as_ref()
+                    .map(|c| c.mode)
+                    .ok_or(OPUS_INTERNAL_ERROR)?;
+                _analysis_read_pos_bak = self.analysis.read_pos;
+                _analysis_read_subframe_bak = self.analysis.read_subframe;
+                run_analysis(
+                    self.analysis.as_mut(),
+                    celt_mode,
+                    Some(analysis_pcm),
+                    analysis_frame_size,
+                    frame_size,
+                    0,  // c1
+                    -2, // c2 — downmix all non-primary channels
+                    self.channels,
+                    self.fs,
+                    lsb_depth,
+                    downmix,
+                    &mut analysis_info,
+                );
+            }
+        } else if self.analysis.initialized != 0 {
+            tonality_analysis_reset(self.analysis.as_mut());
+        }
+
+        // C opus_encoder.c:1275-1276: preserve voice_ratio during silence so
+        // the last non-silent frame's classifier decision keeps driving
+        // mode/bandwidth choices.
+        if !is_silence {
+            self.voice_ratio = -1;
+        }
+
+        // C opus_encoder.c:1278-1305: consume analysis_info.
+        self.detected_bandwidth = 0;
+        if analysis_info.valid != 0 {
+            if self.signal_type == OPUS_AUTO {
+                let prob = if self.prev_mode == 0 {
+                    analysis_info.music_prob
+                } else if self.prev_mode == MODE_CELT_ONLY {
+                    analysis_info.music_prob_max
+                } else {
+                    analysis_info.music_prob_min
+                };
+                // C opus_encoder.c:1291:
+                //   st->voice_ratio = (int)floor(.5+100*(1-prob));
+                // `prob` is f32 but `.5` and `100` are bare (double) literals,
+                // so the `+` promotes to f64 before `floor`. `(int)` then
+                // truncates toward zero from f64. We replicate that chain
+                // exactly.
+                let v = (0.5_f64 + 100.0_f64 * (1.0_f64 - prob as f64)).floor();
+                self.voice_ratio = v as i32;
+            }
+
+            // Bandwidth mapping (C lines 1294-1305).
+            let ab = analysis_info.bandwidth;
+            self.detected_bandwidth = if ab <= 12 {
+                OPUS_BANDWIDTH_NARROWBAND
+            } else if ab <= 14 {
+                OPUS_BANDWIDTH_MEDIUMBAND
+            } else if ab <= 16 {
+                OPUS_BANDWIDTH_WIDEBAND
+            } else if ab <= 18 {
+                OPUS_BANDWIDTH_SUPERWIDEBAND
+            } else {
+                OPUS_BANDWIDTH_FULLBAND
+            };
+        }
 
         // --- Track peak signal energy ---
-        // C: st->peak_signal_energy = MAX32(MULT16_32_Q15(QCONST16(0.999f, 15), st->peak_signal_energy),
-        //         compute_frame_energy(pcm, frame_size, st->channels, st->arch));
-        if !is_silence {
+        // C opus_encoder.c:1311-1320: the update is gated by
+        //   !analysis_info.valid || activity_probability > DTX_ACTIVITY_THRESHOLD
+        // so silent-but-valid frames don't skew the peak.
+        let peak_update_allowed = analysis_info.valid == 0
+            || analysis_info.activity_probability > DTX_ACTIVITY_THRESHOLD;
+        if peak_update_allowed && !is_silence {
             let frame_energy = compute_frame_energy(pcm, frame_size, self.channels);
             self.peak_signal_energy =
                 (((self.peak_signal_energy as i64 * 32735) >> 15) as i32).max(frame_energy);
@@ -1477,8 +1821,13 @@ impl OpusEncoder {
         );
 
         // --- SILK DTX ---
-        // C: st->silk_mode.useDTX = st->use_dtx && !is_silence;
-        self.silk_mode.use_dtx = if self.use_dtx != 0 && !is_silence {
+        // C opus_encoder.c:1460-1464: with analysis live, SILK's DTX is only
+        // enabled when we *don't* have a confident analysis-classified frame
+        // (or an all-zero silence frame). The generalized DTX path driven
+        // from analysis.activity_probability takes over otherwise.
+        //   st->silk_mode.useDTX = st->use_dtx && !(analysis_info.valid || is_silence);
+        let analysis_or_silence = analysis_info.valid != 0 || is_silence;
+        self.silk_mode.use_dtx = if self.use_dtx != 0 && !analysis_or_silence {
             1
         } else {
             0
@@ -1681,6 +2030,28 @@ impl OpusEncoder {
             self.bandwidth = imin(self.bandwidth, OPUS_BANDWIDTH_NARROWBAND);
         }
 
+        // Analysis-driven bandwidth reduction (C opus_encoder.c:1651-1674).
+        // The classifier's detected bandwidth is allowed to clamp our
+        // rate-driven bandwidth *down* when user_bandwidth is AUTO, subject
+        // to per-mode minimums that keep SILK/hybrid at wideband or above.
+        if self.detected_bandwidth != 0 && self.user_bandwidth == OPUS_AUTO {
+            let min_detected_bandwidth =
+                if equiv_rate <= 18000 * self.stream_channels && mode == MODE_CELT_ONLY {
+                    OPUS_BANDWIDTH_NARROWBAND
+                } else if equiv_rate <= 24000 * self.stream_channels && mode == MODE_CELT_ONLY {
+                    OPUS_BANDWIDTH_MEDIUMBAND
+                } else if equiv_rate <= 30000 * self.stream_channels {
+                    OPUS_BANDWIDTH_WIDEBAND
+                } else if equiv_rate <= 44000 * self.stream_channels {
+                    OPUS_BANDWIDTH_SUPERWIDEBAND
+                } else {
+                    OPUS_BANDWIDTH_FULLBAND
+                };
+
+            self.detected_bandwidth = imax(self.detected_bandwidth, min_detected_bandwidth);
+            self.bandwidth = imin(self.bandwidth, self.detected_bandwidth);
+        }
+
         // --- FEC decision ---
         let mut fec_bandwidth = self.bandwidth;
         self.silk_mode.lbrr_coded = decide_fec(
@@ -1745,6 +2116,8 @@ impl OpusEncoder {
                 prefill,
                 equiv_rate,
                 to_celt,
+                _analysis_read_pos_bak,
+                _analysis_read_subframe_bak,
             );
         }
 
@@ -1761,6 +2134,7 @@ impl OpusEncoder {
             prefill,
             equiv_rate,
             to_celt,
+            &analysis_info,
         )
     }
 
@@ -1785,6 +2159,8 @@ impl OpusEncoder {
         prefill: i32,
         equiv_rate: i32,
         to_celt: bool,
+        analysis_read_pos_bak: i32,
+        analysis_read_subframe_bak: i32,
     ) -> Result<i32, i32> {
         // Ensure self.mode matches the mode parameter.  In the normal encode
         // path this is already set by the caller (line ~1628), but being
@@ -1809,6 +2185,15 @@ impl OpusEncoder {
         let nb_frames = frame_size / enc_frame_size;
         if nb_frames < 1 {
             return Err(OPUS_INTERNAL_ERROR);
+        }
+
+        // C opus_encoder.c:1728-1734: rewind the analysis ring buffer so the
+        // per-sub-frame `tonality_get_info` call reads contiguous data starting
+        // at the first sub-frame, not wherever the original `run_analysis`
+        // left the read cursor.
+        if analysis_read_pos_bak != -1 {
+            self.analysis.read_pos = analysis_read_pos_bak;
+            self.analysis.read_subframe = analysis_read_subframe_bak;
         }
 
         // C: bak_to_mono = st->silk_mode.toMono;
@@ -1862,6 +2247,17 @@ impl OpusEncoder {
             let frame_is_silence =
                 is_digital_silence(pcm_frame, enc_frame_size, self.channels, lsb_depth);
 
+            // C opus_encoder.c:1796-1800: fetch per-sub-frame AnalysisInfo from
+            // the ring buffer populated by the outer `run_analysis` call.
+            let mut frame_analysis_info = AnalysisInfo::default();
+            if analysis_read_pos_bak != -1 {
+                tonality_get_info(
+                    self.analysis.as_mut(),
+                    &mut frame_analysis_info,
+                    enc_frame_size,
+                );
+            }
+
             let mut frame_buf = vec![0u8; curr_max as usize];
 
             let ret = self.encode_frame_native(
@@ -1876,6 +2272,7 @@ impl OpusEncoder {
                 prefill,
                 equiv_rate,
                 frame_to_celt,
+                &frame_analysis_info,
             )?;
 
             if ret == 1 {
@@ -1943,6 +2340,7 @@ impl OpusEncoder {
         mut prefill: i32,
         equiv_rate: i32,
         to_celt: bool,
+        analysis_info: &AnalysisInfo,
     ) -> Result<i32, i32> {
         let max_data_bytes = imin(max_data_bytes, 1276);
         let mut curr_bandwidth = self.bandwidth;
@@ -1955,15 +2353,38 @@ impl OpusEncoder {
         let frame_rate = self.fs / frame_size;
 
         // --- Activity detection ---
-        // C: if (is_silence) activity = !is_silence;
-        //    else if (st->mode == MODE_CELT_ONLY) { noise_energy based check }
-        //    else activity = VAD_NO_DECISION; (SILK handles it)
+        // C opus_encoder.c:1911-1930.
+        //   if (is_silence)               activity = !is_silence   (i.e. 0)
+        //   else if (analysis_info.valid) activity =
+        //        analysis_info.activity_probability >= DTX_ACTIVITY_THRESHOLD
+        //        || peak_signal_energy < PSEUDO_SNR_THRESHOLD * noise_energy
+        //   else if (mode == CELT_ONLY)    activity = peak < 316 * (noise>>1)
+        //   else                           activity = VAD_NO_DECISION
         let mut activity = if is_silence {
             0
+        } else if analysis_info.valid != 0 {
+            let mut act = if analysis_info.activity_probability >= DTX_ACTIVITY_THRESHOLD {
+                1
+            } else {
+                0
+            };
+            if act == 0 {
+                // Mark active if the noise frame is loud enough. This uses
+                // the *un-QCONST'd* PSEUDO_SNR_THRESHOLD (f32 316.23) because
+                // in C analysis_info.valid's branch does `PSEUDO_SNR_THRESHOLD
+                // * noise_energy` without the `QCONST16(·, 0)` wrapper.
+                let noise_energy = compute_frame_energy(pcm, frame_size, self.channels);
+                let threshold = 316.23_f32 * noise_energy as f32;
+                if (self.peak_signal_energy as f32) < threshold {
+                    act = 1;
+                }
+            }
+            act
         } else if self.mode == MODE_CELT_ONLY {
             let noise_energy = compute_frame_energy(pcm, frame_size, self.channels);
-            // C: activity = st->peak_signal_energy < (QCONST16(PSEUDO_SNR_THRESHOLD, 0) * (opus_val64)HALF32(noise_energy));
-            // HALF32(x) = x >> 1 in fixed-point
+            // C: activity = peak_signal_energy <
+            //       QCONST16(PSEUDO_SNR_THRESHOLD, 0) * (opus_val64)HALF32(noise_energy)
+            // QCONST16(316.23, 0) = 316. HALF32(x) = x >> 1 in fixed-point.
             let half_noise = (noise_energy >> 1) as i64;
             if (self.peak_signal_energy as i64) < (PSEUDO_SNR_THRESHOLD as i64 * half_noise) {
                 1
@@ -2476,6 +2897,19 @@ impl OpusEncoder {
                 nb_compr_bytes = (max_data_bytes - 1) - redundancy_bytes;
                 enc.shrink(nb_compr_bytes as u32);
                 range_final = 0; // Will be set after CELT
+            }
+
+            // Analysis hand-off to CELT (C opus_encoder.c:2416-2418).
+            //   if (redundancy || mode != SILK_ONLY) CELT_SET_ANALYSIS(info)
+            // The redundancy-CELT path needs it too. OPUS_RESET_STATE later
+            // wipes `st->analysis` on the CELT side, so we re-apply for the
+            // main encode below as well.
+            if redundancy || self.mode != MODE_SILK_ONLY {
+                if let Some(ref mut celt) = self.celt_enc {
+                    celt.ctl(CeltEncoderCtl::SetAnalysis(analysis_info_to_celt(
+                        analysis_info,
+                    )));
+                }
             }
 
             // --- CELT→SILK redundancy frame ---
@@ -3141,6 +3575,8 @@ impl OpusEncoder {
             return OPUS_BAD_ARG;
         }
         self.application = application;
+        // Matches C opus_encoder.c:2803 (`st->analysis.application = value`).
+        self.analysis.application = application;
         OPUS_OK
     }
 
@@ -4081,6 +4517,8 @@ mod tests {
                 0,
                 enc.bitrate_bps,
                 false,
+                -1,
+                -1,
             )
             .unwrap();
         assert!(len_80 > 1);
@@ -4103,6 +4541,8 @@ mod tests {
                 0,
                 enc.bitrate_bps,
                 false,
+                -1,
+                -1,
             )
             .unwrap();
         assert!(len_120 > 1);
@@ -4167,6 +4607,7 @@ mod tests {
                 0,
                 enc.bitrate_bps,
                 false,
+                &AnalysisInfo::default(),
             )
             .unwrap();
 
@@ -4231,6 +4672,7 @@ mod tests {
                 0,
                 6000,
                 false,
+                &AnalysisInfo::default(),
             );
             assert_eq!(
                 enc.silk_mode.max_internal_sample_rate, 16000,
@@ -4260,6 +4702,7 @@ mod tests {
                 0,
                 6000,
                 false,
+                &AnalysisInfo::default(),
             );
             assert_eq!(
                 enc.silk_mode.max_internal_sample_rate, 12000,
@@ -4289,6 +4732,7 @@ mod tests {
                 0,
                 6000,
                 false,
+                &AnalysisInfo::default(),
             );
             assert_eq!(
                 enc.silk_mode.max_internal_sample_rate, 8000,
@@ -4335,6 +4779,7 @@ mod tests {
                 0,
                 6000,
                 false,
+                &AnalysisInfo::default(),
             );
             assert_eq!(
                 enc.silk_mode.max_internal_sample_rate, 16000,
@@ -4363,6 +4808,7 @@ mod tests {
                 0,
                 6000,
                 false,
+                &AnalysisInfo::default(),
             );
             assert_eq!(
                 enc.silk_mode.max_internal_sample_rate, 12000,
@@ -4391,6 +4837,7 @@ mod tests {
                 0,
                 6000,
                 false,
+                &AnalysisInfo::default(),
             );
             assert_eq!(
                 enc.silk_mode.max_internal_sample_rate, 8000,
@@ -4440,6 +4887,7 @@ mod tests {
                 0,
                 enc.bitrate_bps,
                 false,
+                &AnalysisInfo::default(),
             )
             .unwrap();
         assert!(len > 1);
@@ -4876,6 +5324,7 @@ mod tests {
                 0,
                 enc.bitrate_bps,
                 false,
+                &AnalysisInfo::default(),
             )
             .unwrap();
         assert!(len > 1);

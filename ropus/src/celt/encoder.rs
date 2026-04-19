@@ -104,11 +104,18 @@ static INTENSITY_HISTERESIS: [i32; 21] = [
 // Types
 // ===========================================================================
 
+/// Number of leak-boost bands carried in `AnalysisInfo`. Matches the C
+/// `#define LEAK_BANDS 19` in `celt.h:63`.
+pub const LEAK_BANDS: usize = 19;
+
 /// External audio analysis data from the Opus layer.
 ///
 /// In the full Opus encoder, this carries machine-learning analysis results
 /// (tonality, activity, bandwidth, etc.). For standalone CELT encoding,
 /// this is zeroed / invalid.
+///
+/// Layout mirrors C `AnalysisInfo` in `celt.h:65-79` — including the
+/// `leak_boost[19]` Q6 bytes consumed by `dynalloc_analysis`.
 #[derive(Clone, Debug)]
 pub struct AnalysisInfo {
     pub valid: i32,
@@ -122,6 +129,7 @@ pub struct AnalysisInfo {
     pub bandwidth: i32,
     pub activity_probability: f32,
     pub max_pitch_ratio: f32,
+    pub leak_boost: [u8; LEAK_BANDS],
 }
 
 impl Default for AnalysisInfo {
@@ -138,6 +146,7 @@ impl Default for AnalysisInfo {
             bandwidth: 0,
             activity_probability: 0.0,
             max_pitch_ratio: 0.0,
+            leak_boost: [0; LEAK_BANDS],
         }
     }
 }
@@ -1092,7 +1101,7 @@ fn alloc_trim_analysis(
     lm: i32,
     c: i32,
     n0: i32,
-    _analysis: &AnalysisInfo,
+    analysis: &AnalysisInfo,
     stereo_saving: &mut i32,
     tf_estimate: i32,
     intensity: i32,
@@ -1210,7 +1219,13 @@ fn alloc_trim_analysis(
     // C: trim -= 2*SHR16(tf_estimate, 14-8);
     trim -= 2 * shr16(tf_estimate, 14 - 8);
 
-    // DISABLE_FLOAT_API: skip analysis-based adjustments (analysis is unused)
+    // Analysis-based tonality-slope adjustment (C celt_encoder.c:934-939).
+    if analysis.valid != 0 {
+        let slope_f = 512.0_f32 * (analysis.tonality_slope + 0.05_f32);
+        let slope_i16 = slope_f as i16;
+        let clamped = (slope_i16 as i32).clamp(-512, 512);
+        trim -= clamped;
+    }
 
     // Quantize to integer 0–10
     // C: trim_index = PSHR32(trim, 8);
@@ -1333,7 +1348,7 @@ fn dynalloc_analysis(
     tot_boost: &mut i32,
     lfe: i32,
     surround_dynalloc: &[i32],
-    _analysis: &AnalysisInfo,
+    analysis: &AnalysisInfo,
     importance: &mut [i32],
     spread_weight: &mut [i32],
     tone_freq: i32,
@@ -1522,6 +1537,14 @@ fn dynalloc_analysis(
             if freq_bin >= e_bands[end as usize] as i32 {
                 follower[end as usize - 1] += gconst(2.0);
                 follower[end as usize - 2] += gconst(1.0);
+            }
+        }
+
+        // Analysis-driven leak boost (C celt_encoder.c:1226-1230).
+        if analysis.valid != 0 {
+            let leak_end = (LEAK_BANDS as i32).min(end) as usize;
+            for i in start as usize..leak_end {
+                follower[i] += gconst(1.0 / 64.0) * analysis.leak_boost[i] as i32;
             }
         }
 
@@ -1834,6 +1857,12 @@ fn run_prefilter(
         pitch_idx = COMBFILTER_MINPERIOD;
     }
 
+    // Analysis-driven pitch gain attenuation (C celt_encoder.c:1492-1497).
+    if st.analysis.valid != 0 {
+        let scaled = gain1 as f32 * st.analysis.max_pitch_ratio;
+        gain1 = (scaled as i16) as i32;
+    }
+
     // --- Adaptive threshold and quantization (C lines 1506-1546) ---
 
     let mut pf_threshold = qconst16(0.2, 15);
@@ -2048,7 +2077,7 @@ fn run_prefilter(
 /// Matches C `compute_vbr()` from `celt_encoder.c`.
 fn compute_vbr(
     mode: &CELTMode,
-    _analysis: &AnalysisInfo,
+    analysis: &AnalysisInfo,
     base_target: i32,
     lm: i32,
     bitrate: i32,
@@ -2059,7 +2088,7 @@ fn compute_vbr(
     stereo_saving: i32,
     tot_boost: i32,
     tf_estimate: i32,
-    _pitch_change: i32,
+    pitch_change: i32,
     max_depth: i32,
     lfe: i32,
     has_surround_mask: bool,
@@ -2081,7 +2110,15 @@ fn compute_vbr(
 
     let mut target = base_target;
 
-    // DISABLE_FLOAT_API: skip analysis-based activity reduction
+    // Analysis-driven activity reduction (C celt_encoder.c:1630-1633).
+    //   if (analysis->valid && analysis->activity<.4)
+    //      target -= (opus_int32)((coded_bins<<BITRES)*(.4f-analysis->activity));
+    // The f32 product casts to i32 with truncation toward zero, then the
+    // `target -= …` is an integer subtraction.
+    if analysis.valid != 0 && analysis.activity < 0.4_f32 {
+        let reduction = ((coded_bins << BITRES) as f32 * (0.4_f32 - analysis.activity)) as i32;
+        target -= reduction;
+    }
 
     // Stereo savings
     if c == 2 {
@@ -2107,7 +2144,22 @@ fn compute_vbr(
     let tf_calibration = qconst16(0.044, 14);
     target += shl32(mult16_32_q15(tf_estimate - tf_calibration, target), 1);
 
-    // DISABLE_FLOAT_API: skip tonality boost
+    // Analysis-driven tonality boost (C celt_encoder.c:1655-1669).
+    // Mirrors C exactly:
+    //   tonal = MAX(0, analysis->tonality-.15f) - 0.12f;     // f32
+    //   tonal_target = target + (opus_int32)((coded_bins<<BITRES)*1.2f*tonal);
+    //   if (pitch_change) tonal_target += (opus_int32)((coded_bins<<BITRES)*.8f);
+    // Each `(opus_int32)` cast truncates toward zero from f32, and each
+    // addition is i32 + i32.
+    if analysis.valid != 0 && lfe == 0 {
+        let tonal = (analysis.tonality - 0.15_f32).max(0.0_f32) - 0.12_f32;
+        let bits = (coded_bins << BITRES) as f32;
+        let mut tonal_target = target + (bits * 1.2_f32 * tonal) as i32;
+        if pitch_change != 0 {
+            tonal_target += (bits * 0.8_f32) as i32;
+        }
+        target = tonal_target;
+    }
 
     // Surround masking (not applicable for non-surround, but keep structure)
     // (skipped: has_surround_mask is false for standard encoding)
@@ -2400,7 +2452,14 @@ fn celt_encode_core(
         toneishness,
     );
 
+    // C celt_encoder.c:2042-2044:
+    //   pitch_change = (gain1>.4 || prefilter_gain>.4)
+    //               && (!analysis.valid || analysis.tonality>.3)
+    //               && (pitch_index > 1.26*prev || pitch_index < .79*prev);
+    // The analysis gate prevents spurious pitch-change decisions when the
+    // tonality analyzer says the current frame isn't actually tonal.
     pitch_change = if (gain1 > qconst16(0.4, 15) || st.prefilter_gain > qconst16(0.4, 15))
+        && (st.analysis.valid == 0 || st.analysis.tonality > 0.3_f32)
         && (pitch_index as f64 > 1.26 * st.prefilter_period as f64
             || (pitch_index as f64) < 0.79 * st.prefilter_period as f64)
     {
@@ -2948,7 +3007,29 @@ fn celt_encode_core(
     };
     let bits = bits - anti_collapse_rsv;
 
-    let signal_bandwidth = end - 1;
+    let mut signal_bandwidth = end - 1;
+
+    // Analysis-driven signal bandwidth floor (C celt_encoder.c:2607-2622).
+    // When the tonality analyzer is confident, we pick `max(analysis.bandwidth,
+    // min_bandwidth_for_rate)` as the last coded band for CELT allocation.
+    // Rate thresholds are in bit-rate per channel.
+    if st.analysis.valid != 0 {
+        let min_bandwidth = if equiv_rate < 32000 * c {
+            13
+        } else if equiv_rate < 48000 * c {
+            16
+        } else if equiv_rate < 60000 * c {
+            18
+        } else if equiv_rate < 80000 * c {
+            19
+        } else {
+            20
+        };
+        signal_bandwidth = imax(st.analysis.bandwidth, min_bandwidth);
+    }
+    if st.lfe != 0 {
+        signal_bandwidth = 1;
+    }
 
     let coded_bands = clt_compute_allocation(
         mode,

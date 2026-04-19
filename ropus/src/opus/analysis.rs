@@ -1289,9 +1289,14 @@ fn tonality_analysis(
     for b in 0..(NB_TBANDS + 1) {
         let boost = fmax16(0.0_f32, leakage_to[b] - band_log2[b])
             + fmax16(0.0_f32, band_log2[b] - (leakage_from[b] + LEAKAGE_OFFSET));
+        // C analysis.c:752: `info->leak_boost[b] = IMIN(255, (int)floor(.5 + 64.f*boost));`
+        // IMIN clamps the positive side only. The (int) cast truncates toward
+        // zero in C; assignment to `unsigned char` wraps negatives via
+        // two's-complement reinterpretation. Replicate exactly: cast the IMIN
+        // result to `i32`, then `as u8` to wrap modulo 256.
         let packed = (0.5_f64 + 64.0_f64 * boost as f64).floor() as i32;
-        let clamped = if packed < 0 { 0 } else if packed > 255 { 255 } else { packed };
-        tonal.info[info_slot].leak_boost[b] = clamped as u8;
+        let clipped = packed.min(255);
+        tonal.info[info_slot].leak_boost[b] = clipped as u8;
     }
     // C: `for (;b<LEAK_BANDS;b++) info->leak_boost[b] = 0;`. With the
     // current constants (NB_TBANDS=18, LEAK_BANDS=19) this range is
