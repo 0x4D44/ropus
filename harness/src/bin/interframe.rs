@@ -120,6 +120,235 @@ struct RustInterframeState {
     n_bits_exceeded: i32,
 }
 
+/// Extended SILK encoder state for bug E/F/G/H investigation.
+#[derive(Debug, Default)]
+struct ExtendedState {
+    // NSQ
+    nsq_rand_seed: i32,
+    nsq_slf_ar_shp_q14: i32,
+    nsq_lag_prev: i32,
+    nsq_sdiff_shp_q14: i32,
+    nsq_sltp_buf_idx: i32,
+    nsq_sltp_shp_buf_idx: i32,
+    nsq_rewhite_flag: i32,
+    nsq_slpc_q14: [i32; 16],
+    nsq_sar2_q14: [i32; 16],
+    nsq_sltp_shp_q14: [i32; 32],
+    // VAD
+    vad_hp_state: i32,
+    vad_counter: i32,
+    vad_noise_level_bias: [i32; 4],
+    vad_ana_state: [i32; 2],
+    vad_ana_state1: [i32; 2],
+    vad_ana_state2: [i32; 2],
+    vad_nrg_ratio_smth_q8: [i32; 4],
+    vad_nl: [i32; 4],
+    vad_inv_nl: [i32; 4],
+    // Common
+    sum_log_gain_q7: i32,
+    in_hp_state: [i32; 2],
+    input_tilt_q15: i32,
+    input_quality_bands_q15: [i32; 4],
+    frame_counter: i32,
+    no_speech_counter: i32,
+    // LP state
+    lp_in_lp_state: [i32; 2],
+    lp_transition_frame_no: i32,
+    // Shape
+    shape_harm_boost_smth: i32,
+    // x_buf
+    x_buf_hash: i32,
+    ltp_corr_q15: i32,
+    res_nrg_smth: i32,
+}
+
+fn get_c_extended_state(enc: *mut bindings::OpusEncoder, channel: i32) -> ExtendedState {
+    let mut s = ExtendedState::default();
+    unsafe {
+        bindings::debug_get_silk_extended_state(
+            enc,
+            channel as c_int,
+            &mut s.nsq_rand_seed,
+            &mut s.nsq_slf_ar_shp_q14,
+            &mut s.nsq_lag_prev,
+            &mut s.nsq_sdiff_shp_q14,
+            &mut s.nsq_sltp_buf_idx,
+            &mut s.nsq_sltp_shp_buf_idx,
+            &mut s.nsq_rewhite_flag,
+            s.nsq_slpc_q14.as_mut_ptr(),
+            s.nsq_sar2_q14.as_mut_ptr(),
+            s.nsq_sltp_shp_q14.as_mut_ptr(),
+            &mut s.vad_hp_state,
+            &mut s.vad_counter,
+            s.vad_noise_level_bias.as_mut_ptr(),
+            s.vad_ana_state.as_mut_ptr(),
+            s.vad_ana_state1.as_mut_ptr(),
+            s.vad_ana_state2.as_mut_ptr(),
+            s.vad_nrg_ratio_smth_q8.as_mut_ptr(),
+            s.vad_nl.as_mut_ptr(),
+            s.vad_inv_nl.as_mut_ptr(),
+            &mut s.sum_log_gain_q7,
+            s.in_hp_state.as_mut_ptr(),
+            &mut s.input_tilt_q15,
+            s.input_quality_bands_q15.as_mut_ptr(),
+            &mut s.frame_counter,
+            &mut s.no_speech_counter,
+            s.lp_in_lp_state.as_mut_ptr(),
+            &mut s.lp_transition_frame_no,
+            &mut s.shape_harm_boost_smth,
+            &mut s.x_buf_hash,
+            &mut s.ltp_corr_q15,
+            &mut s.res_nrg_smth,
+        );
+    }
+    s
+}
+
+fn get_rust_extended_state(enc: &RustOpusEncoder, channel: usize) -> ExtendedState {
+    let silk = enc.silk_encoder().expect("SILK encoder not allocated");
+    let ch = &silk.state_fxx[channel];
+    let st = &ch.s_cmn;
+
+    let mut s = ExtendedState::default();
+    s.nsq_rand_seed = st.s_nsq.rand_seed;
+    s.nsq_slf_ar_shp_q14 = st.s_nsq.s_lf_ar_shp_q14;
+    s.nsq_lag_prev = st.s_nsq.lag_prev;
+    s.nsq_sdiff_shp_q14 = st.s_nsq.s_diff_shp_q14;
+    s.nsq_sltp_buf_idx = st.s_nsq.s_ltp_buf_idx;
+    s.nsq_sltp_shp_buf_idx = st.s_nsq.s_ltp_shp_buf_idx;
+    s.nsq_rewhite_flag = st.s_nsq.rewhite_flag;
+    for i in 0..16 {
+        s.nsq_slpc_q14[i] = st.s_nsq.s_lpc_q14[i];
+        s.nsq_sar2_q14[i] = st.s_nsq.s_ar2_q14[i];
+    }
+    for i in 0..32 {
+        s.nsq_sltp_shp_q14[i] = st.s_nsq.s_ltp_shp_q14[i];
+    }
+
+    s.vad_hp_state = st.s_vad.hp_state as i32;
+    s.vad_counter = st.s_vad.counter;
+    for i in 0..4 {
+        s.vad_noise_level_bias[i] = st.s_vad.noise_level_bias[i];
+        s.vad_nrg_ratio_smth_q8[i] = st.s_vad.nrg_ratio_smth_q8[i];
+        s.vad_nl[i] = st.s_vad.nl[i];
+        s.vad_inv_nl[i] = st.s_vad.inv_nl[i];
+    }
+    for i in 0..2 {
+        s.vad_ana_state[i] = st.s_vad.ana_state[i];
+        s.vad_ana_state1[i] = st.s_vad.ana_state1[i];
+        s.vad_ana_state2[i] = st.s_vad.ana_state2[i];
+    }
+
+    s.sum_log_gain_q7 = st.sum_log_gain_q7;
+    s.in_hp_state[0] = st.in_hp_state[0];
+    s.in_hp_state[1] = st.in_hp_state[1];
+    s.input_tilt_q15 = st.input_tilt_q15;
+    for i in 0..4 {
+        s.input_quality_bands_q15[i] = st.input_quality_bands_q15[i];
+    }
+    s.frame_counter = st.frame_counter;
+    s.no_speech_counter = st.no_speech_counter;
+
+    s.lp_in_lp_state[0] = st.s_lp.in_lp_state[0];
+    s.lp_in_lp_state[1] = st.s_lp.in_lp_state[1];
+    s.lp_transition_frame_no = st.s_lp.transition_frame_no;
+
+    // Rust doesn't have HarmBoost_smth_Q16 — C has it but it's a dead field.
+    // Report 0 to match an uninitialized/zero C value if C also zeros it.
+    s.shape_harm_boost_smth = 0;
+
+    // x_buf hash
+    let mut h: i32 = 0;
+    for b in ch.x_buf.iter() {
+        h = h.wrapping_mul(31).wrapping_add(*b as i32);
+    }
+    s.x_buf_hash = h;
+    s.ltp_corr_q15 = ch.ltp_corr_q15;
+    s.res_nrg_smth = ch.res_nrg_smth;
+    s
+}
+
+/// Compare extended state — returns the index of the first-mismatched scalar field
+/// (or a descriptive name). Prints a MISMATCH line for each divergence.
+fn compare_extended(
+    frame_idx: usize,
+    channel: usize,
+    c: &ExtendedState,
+    r: &ExtendedState,
+) -> usize {
+    let mut mismatches = 0usize;
+
+    macro_rules! scalar {
+        ($name:ident) => {
+            if c.$name != r.$name {
+                println!(
+                    "  EXT MISMATCH ch{} frame{} {}: C={} Rust={}",
+                    channel,
+                    frame_idx,
+                    stringify!($name),
+                    c.$name,
+                    r.$name
+                );
+                mismatches += 1;
+            }
+        };
+    }
+    macro_rules! array {
+        ($name:ident) => {
+            for i in 0..c.$name.len() {
+                if c.$name[i] != r.$name[i] {
+                    println!(
+                        "  EXT MISMATCH ch{} frame{} {}[{}]: C={} Rust={}",
+                        channel,
+                        frame_idx,
+                        stringify!($name),
+                        i,
+                        c.$name[i],
+                        r.$name[i]
+                    );
+                    mismatches += 1;
+                }
+            }
+        };
+    }
+    // NSQ
+    scalar!(nsq_rand_seed);
+    scalar!(nsq_slf_ar_shp_q14);
+    scalar!(nsq_lag_prev);
+    scalar!(nsq_sdiff_shp_q14);
+    scalar!(nsq_sltp_buf_idx);
+    scalar!(nsq_sltp_shp_buf_idx);
+    scalar!(nsq_rewhite_flag);
+    array!(nsq_slpc_q14);
+    array!(nsq_sar2_q14);
+    array!(nsq_sltp_shp_q14);
+    // VAD
+    scalar!(vad_hp_state);
+    scalar!(vad_counter);
+    array!(vad_noise_level_bias);
+    array!(vad_ana_state);
+    array!(vad_ana_state1);
+    array!(vad_ana_state2);
+    array!(vad_nrg_ratio_smth_q8);
+    array!(vad_nl);
+    array!(vad_inv_nl);
+    // Common
+    scalar!(sum_log_gain_q7);
+    array!(in_hp_state);
+    scalar!(input_tilt_q15);
+    array!(input_quality_bands_q15);
+    scalar!(frame_counter);
+    scalar!(no_speech_counter);
+    // LP
+    array!(lp_in_lp_state);
+    scalar!(lp_transition_frame_no);
+    // x_buf
+    scalar!(x_buf_hash);
+    scalar!(ltp_corr_q15);
+    scalar!(res_nrg_smth);
+    mismatches
+}
+
 fn get_rust_interframe_state(enc: &RustOpusEncoder, channel: usize) -> RustInterframeState {
     let silk = enc.silk_encoder().expect("SILK encoder not allocated");
     let ch = &silk.state_fxx[channel];
@@ -348,7 +577,9 @@ fn main() {
             continue;
         }
 
-        if data.len() < 7 + 5 * 320 {
+        // Minimal viable size: 7 header bytes + at least one frame's PCM.
+        // For single-file mode we relax the lower bound.
+        if data.len() < 7 + 320 {
             eprintln!(
                 "SKIP: seed {:?} too small ({} bytes)",
                 seed_path.file_name().unwrap_or_default(),
@@ -415,8 +646,15 @@ fn main() {
             enc
         };
 
-        // Encode frames and compare state after each
-        let frames_to_check = std::cmp::min(num_frames, 5);
+        // Encode frames and compare state after each.
+        // When a specific seed file is given as arg, check every frame;
+        // otherwise cap at 5 for batch speed.
+        let single_file_mode = args.len() > 1;
+        let frames_to_check = if single_file_mode {
+            num_frames
+        } else {
+            std::cmp::min(num_frames, 5)
+        };
         let num_channels = if channels == 2 { 2 } else { 1 };
         let mut seed_has_mismatch = false;
 
@@ -515,6 +753,33 @@ fn main() {
                 // Print abbreviated state after frame 0 for context
                 for ch in 0..num_channels {
                     compare_nlsf_indices(frame_idx, ch, c_enc, &rust_enc);
+                }
+            }
+
+            // Extended state comparison (bug E/F/G/H investigation):
+            // always dump after every frame when in single-file mode so we
+            // can find the first-diverging "untracked" field.
+            if single_file_mode {
+                let match_tag = if bytes_match { "BYTES-OK" } else { "BYTES-DIFF" };
+                println!(
+                    "[ext frame {} {}] Rust={}B C={}B",
+                    frame_idx,
+                    match_tag,
+                    rust_out.len(),
+                    c_out.len()
+                );
+                for ch in 0..num_channels {
+                    let c_ext = get_c_extended_state(c_enc, ch as i32);
+                    let r_ext = get_rust_extended_state(&rust_enc, ch);
+                    let ext_mm = compare_extended(frame_idx, ch, &c_ext, &r_ext);
+                    if ext_mm > 0 {
+                        println!(
+                            "[ext frame {} ch{}] {} extended-state mismatches",
+                            frame_idx, ch, ext_mm
+                        );
+                    } else {
+                        println!("[ext frame {} ch{}] extended state OK", frame_idx, ch);
+                    }
                 }
             }
         }

@@ -1102,3 +1102,125 @@ void debug_get_silk_xbuf_hash(OpusEncoder *enc, int channel,
     *hash_out = h;
 }
 
+/* Extended SILK encoder inter-frame state dump — covers the "untracked"
+ * state that the bug E/F/G/H investigation needs. */
+void debug_get_silk_extended_state(OpusEncoder *enc, int channel,
+    /* NSQ state */
+    opus_int32 *nsq_rand_seed,
+    opus_int32 *nsq_slf_ar_shp_q14,
+    opus_int32 *nsq_lag_prev,
+    opus_int32 *nsq_sdiff_shp_q14,
+    opus_int32 *nsq_sltp_buf_idx,
+    opus_int32 *nsq_sltp_shp_buf_idx,
+    opus_int32 *nsq_rewhite_flag,
+    opus_int32 *nsq_slpc_q14,      /* 16 entries */
+    opus_int32 *nsq_sar2_q14,      /* 16 entries (MAX_SHAPE_LPC_ORDER) */
+    opus_int32 *nsq_sltp_shp_q14,  /* 32 entries */
+    /* VAD state */
+    opus_int32 *vad_hp_state,
+    opus_int32 *vad_counter,
+    opus_int32 *vad_noise_level_bias, /* 4 entries (VAD_N_BANDS) */
+    opus_int32 *vad_ana_state,        /* 2 entries */
+    opus_int32 *vad_ana_state1,       /* 2 entries */
+    opus_int32 *vad_ana_state2,       /* 2 entries */
+    opus_int32 *vad_nrg_ratio_smth_q8,/* 4 entries */
+    opus_int32 *vad_nl,               /* 4 entries */
+    opus_int32 *vad_inv_nl,           /* 4 entries */
+    /* Common state */
+    opus_int32 *sum_log_gain_q7,
+    opus_int32 *in_hp_state,          /* 2 entries */
+    opus_int32 *input_tilt_q15,
+    opus_int32 *input_quality_bands_q15, /* 4 entries */
+    opus_int32 *frame_counter,
+    opus_int32 *no_speech_counter,
+    /* LP state */
+    opus_int32 *lp_in_lp_state,       /* 2 entries */
+    opus_int32 *lp_transition_frame_no,
+    /* Shape state */
+    opus_int32 *shape_harm_boost_smth,
+    /* x_buf hash */
+    opus_int32 *x_buf_hash,
+    opus_int32 *ltp_corr_q15,
+    opus_int32 *res_nrg_smth)
+{
+    OpusEncoderOffsets *hdr = (OpusEncoderOffsets *)enc;
+    silk_encoder *psEnc = (silk_encoder *)((char *)enc + hdr->silk_enc_offset);
+    silk_encoder_state_FIX *ch = &psEnc->state_Fxx[channel];
+    silk_encoder_state *st = &ch->sCmn;
+
+    /* ----- NSQ ----- */
+    *nsq_rand_seed = st->sNSQ.rand_seed;
+    *nsq_slf_ar_shp_q14 = st->sNSQ.sLF_AR_shp_Q14;
+    *nsq_lag_prev = st->sNSQ.lagPrev;
+    *nsq_sdiff_shp_q14 = st->sNSQ.sDiff_shp_Q14;
+    *nsq_sltp_buf_idx = st->sNSQ.sLTP_buf_idx;
+    *nsq_sltp_shp_buf_idx = st->sNSQ.sLTP_shp_buf_idx;
+    *nsq_rewhite_flag = st->sNSQ.rewhite_flag;
+    {
+        int i;
+        for (i = 0; i < 16; i++) {
+            nsq_slpc_q14[i] = st->sNSQ.sLPC_Q14[i];
+        }
+        for (i = 0; i < 16; i++) {
+            nsq_sar2_q14[i] = st->sNSQ.sAR2_Q14[i];
+        }
+        for (i = 0; i < 32; i++) {
+            nsq_sltp_shp_q14[i] = st->sNSQ.sLTP_shp_Q14[i];
+        }
+    }
+
+    /* ----- VAD ----- */
+    *vad_hp_state = (opus_int32)st->sVAD.HPstate;
+    *vad_counter = st->sVAD.counter;
+    {
+        int i;
+        for (i = 0; i < VAD_N_BANDS && i < 4; i++) {
+            vad_noise_level_bias[i] = st->sVAD.NoiseLevelBias[i];
+            vad_nrg_ratio_smth_q8[i] = st->sVAD.NrgRatioSmth_Q8[i];
+            vad_nl[i] = st->sVAD.NL[i];
+            vad_inv_nl[i] = st->sVAD.inv_NL[i];
+        }
+        for (i = 0; i < 2; i++) {
+            vad_ana_state[i] = st->sVAD.AnaState[i];
+            vad_ana_state1[i] = st->sVAD.AnaState1[i];
+            vad_ana_state2[i] = st->sVAD.AnaState2[i];
+        }
+    }
+
+    /* ----- Common ----- */
+    *sum_log_gain_q7 = st->sum_log_gain_Q7;
+    in_hp_state[0] = st->In_HP_State[0];
+    in_hp_state[1] = st->In_HP_State[1];
+    *input_tilt_q15 = st->input_tilt_Q15;
+    {
+        int i;
+        for (i = 0; i < VAD_N_BANDS && i < 4; i++) {
+            input_quality_bands_q15[i] = st->input_quality_bands_Q15[i];
+        }
+    }
+    *frame_counter = st->frameCounter;
+    *no_speech_counter = st->noSpeechCounter;
+
+    /* ----- LP state ----- */
+    lp_in_lp_state[0] = st->sLP.In_LP_State[0];
+    lp_in_lp_state[1] = st->sLP.In_LP_State[1];
+    *lp_transition_frame_no = st->sLP.transition_frame_no;
+
+    /* ----- Shape ----- */
+    *shape_harm_boost_smth = ch->sShape.HarmBoost_smth_Q16;
+
+    /* ----- x_buf hash ----- */
+    {
+        int x_buf_len = 2 * MAX_FRAME_LENGTH + LA_SHAPE_MAX;
+        opus_int32 h = 0;
+        int j;
+        for (j = 0; j < x_buf_len; j++) {
+            h = h * 31 + (opus_int32)ch->x_buf[j];
+        }
+        *x_buf_hash = h;
+    }
+
+    *ltp_corr_q15 = ch->LTPCorr_Q15;
+    *res_nrg_smth = ch->resNrgSmth;
+}
+
