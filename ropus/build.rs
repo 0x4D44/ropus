@@ -61,7 +61,9 @@ fn main() {
         println!(
             "cargo:warning=ropus: reference DNN data files not found under {}, \
              compile-time weights blob left empty. Run `cargo run -p fetch-assets -- \
-             weights` to embed neural PLC weights out-of-the-box.",
+             weights` to embed neural PLC weights out-of-the-box. Without this, \
+             tier-2 SNR tests (e.g. `ropus-harness-deep-plc::tier2_snr`) fail at \
+             ~9 dB because the decoder falls back to silent classical PLC.",
             dnn_dir.display()
         );
         write_empty_blob(&blob_path);

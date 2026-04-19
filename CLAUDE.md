@@ -9,7 +9,12 @@ Note: the workspace directory on disk is still named `mdopus/` — only the crat
 
 ## Project Status
 
-All 26 modules ported and passing bit-exact comparison tests against the C reference.
+All 26 modules ported. Tier-1 (bit-exact against the C reference) on range
+coder, CELT primitives, integer paths, RDOVAE forward pass, and the DRED
+range-coded payload. Tier-2 (SNR-bounded, typically >= 50/60 dB) where
+float-path drift exists: Analysis, LPCNet features, DEEP_PLC, and DRED
+WAV-level reconstruction.
+
 Currently in the **integration** phase — full encode/decode round-trip validation.
 
 ## Architecture

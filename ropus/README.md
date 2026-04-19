@@ -52,12 +52,23 @@ Works today:
 - FEC (in-band forward error correction) and DTX (discontinuous transmission)
 - Multistream encode/decode and the repacketizer
 
+Additional shipped features (tier-2 where noted):
+
+- Analysis / tonality detection — module-level bit-exact; integrated encode
+  accepts ~5% byte-drift on music under a decoded-PCM SNR-equivalence gate
+  (0.000 dB codec-SNR delta on music + speech vectors)
+- DNN wiring into the decode pipeline — real weight blob embedded; LPCNet,
+  FARGAN, and classical-PLC paths live for packet-loss concealment at a
+  tier-2 50 dB SNR gate (calibrated against a 42.33 dB C-fixed-vs-C-float
+  classical-PLC ceiling)
+- DRED (Deep REDundancy) — encoder and decoder-parse shipped; decoder PCM
+  reconstruction via FARGAN synthesis is the one open follow-up (see
+  `wrk_docs/2026.04.19 - HLD - fargan-dred-joint-followup.md`)
+
 Deferred:
 
 - Platform-specific SIMD (ARM NEON, x86 AVX) — portable `wide` SIMD only
-- DNN wiring into the encode/decode pipeline (module ports exist but are inert)
-- OSCE / DRED neural post-processing
-- Analysis / tonality detection (encoder runs without it)
+- OSCE neural post-processing
 
 ## Performance & SIMD
 

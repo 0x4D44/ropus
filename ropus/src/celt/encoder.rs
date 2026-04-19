@@ -214,6 +214,12 @@ pub struct CeltEncoder {
     pub disable_inv: i32,
 
     // -- Running state fields (cleared on reset) --
+    // TODO(stage-6-tier-1): `delayed_intra`, `tonal_average`, and `spec_avg`
+    // below are the three CELT state fields flagged by Stage 6.4c as
+    // diverging simultaneously at frame 90 on music vectors (downstream of
+    // bandLogE/MDCT). A future tier-1 campaign should dump `bandE`/
+    // `bandLogE`/MDCT output `X` at frame 89 exit and frame 90 entry; see
+    // `wrk_journals/2026.04.19 - JRN - stage10-audit-stream-B.md` (G-6.1).
     pub rng: u32,
     pub spread_decision: i32,
     pub delayed_intra: i32,
