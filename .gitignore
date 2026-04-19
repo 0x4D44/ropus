@@ -44,3 +44,8 @@ notes/*.log
 # tools/fetch_ietf_vectors.sh / .ps1 and used by the conformance
 # `ietf_vectors` test).
 /tests/vectors/ietf/
+
+# full-test runner reports (HTML + JSON/LCOV sidecars; disposable; keep the
+# directory via tests/results/.gitkeep).
+/tests/results/*
+!/tests/results/.gitkeep
