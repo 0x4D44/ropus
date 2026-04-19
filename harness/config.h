@@ -17,10 +17,12 @@
 /* We have C99 lrintf */
 #define HAVE_LRINTF 1
 
-/* Disable float analysis API for bit-exact fixed-point comparison.
-   The Rust implementation doesn't have the analysis module, so we need
-   to disable it in C to get an apples-to-apples comparison. */
-#define DISABLE_FLOAT_API 1
+/* Float analysis API is enabled on both sides. The Rust port is under
+   way (Stage 6 of the 2026-04-19 deferred-work closeout); while that
+   is in flight, encode-comparison tests that exercise the analysis
+   path will diverge. That divergence is expected and is the visible
+   signal that Stage 6 is needed. Do NOT re-gate analysis by adding
+   DISABLE_FLOAT_API back unless the closeout is abandoned. */
 
 /* Enable x86 SIMD (SSE/SSE2/SSE4.1) with runtime detection */
 #define OPUS_HAVE_RTCD 1

@@ -205,6 +205,13 @@ fn main() {
         .define("HAVE_CONFIG_H", "1")
         .define("OPUS_BUILD", None);
 
+    // Disable compiler-driven multiply-add fusion so scalar float paths
+    // (analysis.c, mlp.c, any DNN code added later) produce identical
+    // bit patterns to the Rust side, which does not use f32::mul_add.
+    // MSVC /fp:precise already prohibits contraction; this flag locks
+    // gcc/clang down to the same behaviour. Silent no-op on MSVC.
+    build.flag_if_supported("-ffp-contract=off");
+
     // --- Fuzzing context detection ---
     //
     // When built under cargo-fuzz, the Rust code is compiled with
