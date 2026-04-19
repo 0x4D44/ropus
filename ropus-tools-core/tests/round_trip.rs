@@ -694,3 +694,273 @@ fn decode_packet_loss_nonzero_produces_valid_output() {
     let _ = std::fs::remove_file(&opus_path);
     let _ = std::fs::remove_file(&wav_out);
 }
+
+/// Pull the raw OpusHead packet bytes from a freshly-encoded Ogg Opus file.
+/// Mirror of `read_opus_tags_from_file` but stops after packet 0 so the caller
+/// can feed it into `container::ogg::parse_opus_head` directly.
+fn read_opus_head_from_file(path: &std::path::Path) -> ropus_tools_core::container::ogg::OpusHead {
+    use ogg::reading::PacketReader;
+    use ropus_tools_core::container::ogg::parse_opus_head;
+
+    let file = std::fs::File::open(path).expect("open opus");
+    let mut reader = PacketReader::new(std::io::BufReader::new(file));
+    let head_pkt = reader
+        .read_packet()
+        .expect("read OpusHead")
+        .expect("packet 0");
+    parse_opus_head(&head_pkt.data).expect("parse OpusHead")
+}
+
+/// Encode-then-decode a 1 s mono sine under the given signal hint and
+/// confirm the pipeline doesn't panic / error and produces non-silent PCM.
+/// Asserting the encoder actually *used* the hint is out of scope — that's a
+/// codec-internal choice — but the flag must plumb through cleanly.
+fn signal_hint_round_trip(tag: &str, signal: ropus_tools_core::Signal) {
+    let nonce = format!(
+        "{}_{}_{}",
+        tag,
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let tmp_wav_in = std::env::temp_dir().join(format!("ropus_sig_in_{nonce}.wav"));
+    let tmp_opus = std::env::temp_dir().join(format!("ropus_sig_{nonce}.opus"));
+    let tmp_wav_out = std::env::temp_dir().join(format!("ropus_sig_out_{nonce}.wav"));
+
+    write_sine_wav(&tmp_wav_in, 1, 1000.0);
+
+    let enc_opts = EncodeOptions {
+        input: tmp_wav_in.clone(),
+        output: Some(tmp_opus.clone()),
+        bitrate: Some(64_000),
+        complexity: None,
+        application: ropus_tools_core::Application::Audio,
+        vbr: true,
+        vbr_constraint: false,
+        signal,
+        frame_duration: ropus_tools_core::FrameDuration::Ms20,
+        expect_loss: 0,
+        downmix_to_mono: false,
+        serial: None,
+        picture_path: None,
+        vendor: "ropus-tools-core-test".to_string(),
+        comments: Vec::new(),
+    };
+    commands::encode(enc_opts).expect("encode with signal hint");
+
+    let dec_opts = DecodeOptions {
+        input: tmp_opus.clone(),
+        output: Some(tmp_wav_out.clone()),
+        float: false,
+        raw: false,
+        rate: None,
+        gain_db: 0.0,
+        dither: true,
+        packet_loss_pct: 0,
+    };
+    commands::decode(dec_opts).expect("decode signal-hinted file");
+
+    let (samples, sr, _) = read_pcm16_wav(&tmp_wav_out);
+    assert_eq!(sr, 48_000, "output WAV must be 48 kHz");
+    assert!(
+        samples.iter().any(|&s| s != 0),
+        "decoded PCM is all-zero — signal hint likely broke the encode path"
+    );
+
+    let _ = std::fs::remove_file(&tmp_wav_in);
+    let _ = std::fs::remove_file(&tmp_opus);
+    let _ = std::fs::remove_file(&tmp_wav_out);
+}
+
+#[test]
+fn encode_with_music_signal_hint_round_trips() {
+    // Step-4 coverage: pinning `Signal::Music` must plumb through the encoder
+    // builder without panic or error. We don't assert the bitstream changed —
+    // that's codec-internal — only that the flag reaches the encoder cleanly
+    // and a valid, non-zero PCM round-trip survives.
+    signal_hint_round_trip("music", ropus_tools_core::Signal::Music);
+}
+
+#[test]
+fn encode_with_voice_signal_hint_round_trips() {
+    // Mirror of the Music test for `Signal::Voice`; same plumbing assertion,
+    // different enum variant. Together they cover both sides of `--music` /
+    // `--speech` mapping in the CLI.
+    signal_hint_round_trip("voice", ropus_tools_core::Signal::Voice);
+}
+
+#[test]
+fn encode_with_downmix_mono_produces_mono_output() {
+    // Step-4 coverage: `downmix_to_mono: true` on a stereo input must
+    // collapse to a 1-channel stream end-to-end. The critical assertion is
+    // `channels == 1` in OpusHead — if the flag didn't plumb through, the
+    // encoder would see the original 2-channel PCM and write channels=2.
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("workspace parent")
+        .to_path_buf();
+    let stereo_wav = workspace.join("tests/vectors/48000hz_stereo_sine440.wav");
+    if !stereo_wav.exists() {
+        eprintln!(
+            "SKIPPING encode_with_downmix_mono_produces_mono_output: \
+             stereo fixture {stereo_wav:?} not present"
+        );
+        return;
+    }
+
+    // Sanity: the fixture really is stereo. If someone swaps it for a mono
+    // file by accident, the test degenerates into a tautology and this catches it.
+    let (_, _, in_ch) = read_pcm16_wav(&stereo_wav);
+    assert_eq!(in_ch, 2, "downmix test needs a stereo input fixture");
+
+    let nonce = format!(
+        "{}_{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let tmp_opus = std::env::temp_dir().join(format!("ropus_downmix_{nonce}.opus"));
+    let tmp_wav_out = std::env::temp_dir().join(format!("ropus_downmix_out_{nonce}.wav"));
+
+    let enc_opts = EncodeOptions {
+        input: stereo_wav,
+        output: Some(tmp_opus.clone()),
+        bitrate: Some(64_000),
+        complexity: None,
+        application: ropus_tools_core::Application::Audio,
+        vbr: true,
+        vbr_constraint: false,
+        signal: ropus_tools_core::Signal::Auto,
+        frame_duration: ropus_tools_core::FrameDuration::Ms20,
+        expect_loss: 0,
+        downmix_to_mono: true,
+        serial: None,
+        picture_path: None,
+        vendor: "ropus-tools-core-test".to_string(),
+        comments: Vec::new(),
+    };
+    commands::encode(enc_opts).expect("encode with downmix_to_mono");
+
+    // Load-bearing check: OpusHead.channels must be 1.
+    let head = read_opus_head_from_file(&tmp_opus);
+    assert_eq!(
+        head.channels, 1,
+        "downmix_to_mono must write channels=1 into OpusHead, got {}",
+        head.channels
+    );
+
+    // Secondary check: the decoded WAV reports 1 channel and its interleaved
+    // sample count is evenly divisible by 1 (trivially true, but the channel
+    // field in the fmt chunk is what matters).
+    let dec_opts = DecodeOptions {
+        input: tmp_opus.clone(),
+        output: Some(tmp_wav_out.clone()),
+        float: false,
+        raw: false,
+        rate: None,
+        gain_db: 0.0,
+        dither: true,
+        packet_loss_pct: 0,
+    };
+    commands::decode(dec_opts).expect("decode downmixed file");
+    let (samples, _, out_ch) = read_pcm16_wav(&tmp_wav_out);
+    assert_eq!(out_ch, 1, "decoded WAV must report 1 channel");
+    assert!(!samples.is_empty(), "decoded WAV has no sample data");
+
+    let _ = std::fs::remove_file(&tmp_opus);
+    let _ = std::fs::remove_file(&tmp_wav_out);
+}
+
+#[test]
+fn encode_with_picture_flag_embeds_metadata_block_picture() {
+    // Step-4 coverage: `picture_path: Some(path)` must wrap the file in a
+    // METADATA_BLOCK_PICTURE structure, base64-encode it, and prepend it to
+    // the Vorbis comments in OpusTags. The detector only inspects the first
+    // handful of bytes, so a hand-rolled 32-byte PNG-magic-plus-filler buffer
+    // is enough to pass `detect_format`.
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("workspace parent")
+        .to_path_buf();
+    let input_wav = workspace.join("tests/vectors/48k_sine1k_loud.wav");
+    if !input_wav.exists() {
+        eprintln!(
+            "SKIPPING encode_with_picture_flag_embeds_metadata_block_picture: \
+             test vector {input_wav:?} not present"
+        );
+        return;
+    }
+
+    let nonce = format!(
+        "{}_{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let tmp_png = std::env::temp_dir().join(format!("ropus_pic_{nonce}.png"));
+    let tmp_opus = std::env::temp_dir().join(format!("ropus_pic_{nonce}.opus"));
+
+    // Minimal PNG stand-in: the 8-byte PNG signature followed by enough
+    // filler bytes that `build_picture_block` emits a realistic payload.
+    // `detect_format` only looks at bytes 0..8 for the PNG magic, so the
+    // rest is opaque — we never ask anything to actually decode the image.
+    let mut png_bytes: Vec<u8> = vec![
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG magic
+    ];
+    png_bytes.extend_from_slice(&[0xAAu8; 24]); // 24 bytes of filler -> 32 total
+    std::fs::write(&tmp_png, &png_bytes).expect("write fake PNG fixture");
+
+    let enc_opts = EncodeOptions {
+        input: input_wav,
+        output: Some(tmp_opus.clone()),
+        bitrate: Some(64_000),
+        complexity: None,
+        application: ropus_tools_core::Application::Audio,
+        vbr: true,
+        vbr_constraint: false,
+        signal: ropus_tools_core::Signal::Auto,
+        frame_duration: ropus_tools_core::FrameDuration::Ms20,
+        expect_loss: 0,
+        downmix_to_mono: false,
+        serial: None,
+        picture_path: Some(tmp_png.clone()),
+        vendor: "ropus-tools-core-test".to_string(),
+        comments: Vec::new(),
+    };
+    commands::encode(enc_opts).expect("encode with picture_path");
+
+    // Parse OpusTags back out, find the METADATA_BLOCK_PICTURE entry, and
+    // confirm it carries a non-trivial base64 payload. A METADATA_BLOCK_PICTURE
+    // that plumbed correctly will be well over 50 chars: 32 bytes of header +
+    // 9-byte MIME + 32-byte payload ≈ 73 raw bytes → ~100 chars base64.
+    let tags = read_opus_tags_from_file(&tmp_opus);
+    let pic = tags
+        .comments
+        .iter()
+        .find(|c| c.starts_with("METADATA_BLOCK_PICTURE="))
+        .expect("METADATA_BLOCK_PICTURE comment must be present");
+    let b64 = pic
+        .strip_prefix("METADATA_BLOCK_PICTURE=")
+        .expect("prefix just matched");
+    assert!(
+        b64.len() >= 50,
+        "picture payload only {} chars (< 50) — likely unplumbed: full comment = {}",
+        b64.len(),
+        pic
+    );
+    // base64 output must be a multiple of 4 (RFC 4648 canonical form).
+    assert!(
+        b64.len().is_multiple_of(4),
+        "base64 payload length {} is not a multiple of 4",
+        b64.len()
+    );
+
+    let _ = std::fs::remove_file(&tmp_png);
+    let _ = std::fs::remove_file(&tmp_opus);
+}
