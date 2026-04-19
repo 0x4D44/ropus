@@ -1,0 +1,11 @@
+# Target x86-64-v3 microarchitecture level (Haswell 2013 / Excavator 2015 and later).
+# Enables AVX2, FMA3, BMI1/BMI2, F16C, LZCNT, MOVBE, XSAVE atop the x86-64-v2 base.
+# Near-universal on modern desktop/server x86_64 hardware (Steam HW survey: ~97%
+# of gaming x86 machines; all current AWS/GCP/Azure instance families).
+#
+# Users on pre-2013 CPUs (Sandy/Ivy Bridge, pre-Excavator AMD) can rebuild with
+# `RUSTFLAGS="-C target-cpu=x86-64-v2"` or `=x86-64` if needed.
+#
+# See wrk_journals/2026.04.19 - JRN - avx2-baseline.md for the measurement.
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-cpu=x86-64-v3"]
