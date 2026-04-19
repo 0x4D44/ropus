@@ -238,6 +238,11 @@ fn main() {
     println!("cargo:rerun-if-changed=include/opus_types.h");
     println!("cargo:rerun-if-changed=include/opus_multistream.h");
     println!("cargo:rerun-if-changed=include/opus_private.h");
+    println!("cargo:rerun-if-changed=include/opus_projection.h");
+    println!("cargo:rerun-if-changed=include/mapping_matrix.h");
+    println!("cargo:rerun-if-changed=include/os_support.h");
+    println!("cargo:rerun-if-changed=include/float_cast.h");
+    println!("cargo:rerun-if-changed=include/mathops.h");
     println!("cargo:rerun-if-changed=include/arch.h");
     println!("cargo:rerun-if-changed=build.rs");
 }
