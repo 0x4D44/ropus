@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "ropus",
+    "ropus-tools-core",
     "harness",
     "harness-deep-plc",
     "capi",
