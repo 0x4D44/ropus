@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! Stage 8.7 C-differential test — `dred_ec_decode`.
 //!
 //! The Rust round-trip (in `ropus/src/dnn/dred.rs::tests`) proves

@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! Integration tests that exercise the Rust codec against the C reference.
 //!
 //! These tests were previously inside the `ropus` library's `#[cfg(test)]`

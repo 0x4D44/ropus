@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! Stage 7b.2 tier-2 acceptance — DEEP_PLC output quality comparison.
 //!
 //! Test plan (from `wrk_journals/2026.04.19 - JRN - stage7-dnn-wiring-supervisor.md`

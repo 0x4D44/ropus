@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! Stage 8.6 acceptance gate — byte-exact DRED payload test on a WAV input.
 //!
 //! Tier 1 target (per `wrk_docs/2026.04.19 - HLD - dred-port.md` staging

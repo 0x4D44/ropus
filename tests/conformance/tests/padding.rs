@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! Conformance test: `reference/tests/test_opus_padding.c`.
 //!
 //! Cargo auto-discovers each `tests/<name>.rs` as its own integration-test

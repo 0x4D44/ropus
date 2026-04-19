@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! Conformance test: `reference/tests/test_opus_encode.c`.
 //!
 //! 756-line encoder contract test that combines targeted API probes

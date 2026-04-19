@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! Stage 7b.3 state-divergence diagnostic.
 //!
 //! Task: with the `fs_khz` sync + sLPC back-copy fix applied (partial — total

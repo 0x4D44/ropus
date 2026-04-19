@@ -17,33 +17,39 @@ fn main() {
     let ref_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../reference");
     let harness_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".");
 
-    if !ref_dir.join("celt/bands.c").exists() {
-        panic!(
-            "\n\n\
-             === Reference opus C source not found ===\n\
-             Expected under: {}\n\n\
-             Fetch it (pinned commit, idempotent):\n\
-             \n\
-             \x20   cargo run -p fetch-assets -- all\n\
-             \n\
-             (Must be `all`, not `reference` — this harness needs the DNN\n\
-              weights tarball too.)\n\n",
+    // Always declare the cfg so rustc's cfg-checking accepts the gate.
+    println!("cargo:rustc-check-cfg=cfg(no_reference)");
+    println!(
+        "cargo:rerun-if-changed={}",
+        ref_dir.join("celt/bands.c").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        ref_dir.join("dnn/fargan_data.c").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        ref_dir.join("dnn/plc_data.c").display()
+    );
+
+    if !ref_dir.join("celt/bands.c").exists()
+        || !ref_dir.join("dnn/fargan_data.c").exists()
+        || !ref_dir.join("dnn/plc_data.c").exists()
+    {
+        // Missing either the C reference source or the DNN weights
+        // tarball. Downgrade from the historical hard panic to a cfg
+        // flag + warning so `cargo build` at the workspace root
+        // succeeds on a fresh clone. Float-mode FFI users stub out at
+        // runtime until `cargo run -p fetch-assets -- all` lands the
+        // sources and weights.
+        println!("cargo:rustc-cfg=no_reference");
+        println!(
+            "cargo:warning=ropus-harness-deep-plc: reference sources or DNN weights missing under {} — \
+             float-mode FFI is disabled. Run `cargo run -p fetch-assets -- all` to enable (needs both \
+             the C reference and the DNN weights tarball).",
             ref_dir.display()
         );
-    }
-    // DEEP_PLC requires the weights tarball, not just the source tree.
-    if !ref_dir.join("dnn/fargan_data.c").exists() || !ref_dir.join("dnn/plc_data.c").exists() {
-        panic!(
-            "\n\n\
-             === DNN weight source files not found ===\n\
-             Expected under: {}/dnn/\n\n\
-             The DEEP_PLC harness needs the xiph weights tarball unpacked\n\
-             (generates `dnn/*_data.c` files):\n\
-             \n\
-             \x20   cargo run -p fetch-assets -- all\n\
-             \n",
-            ref_dir.display()
-        );
+        return;
     }
 
     // --- CELT sources (platform-independent only) ---

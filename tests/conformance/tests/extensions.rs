@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! Conformance test: `reference/tests/test_opus_extensions.c`.
 //!
 //! Exercises the extension iterator, the five public

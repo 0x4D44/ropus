@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! DRED-scoped differential tests against the C reference.
 //!
 //! Keeps Stage 8 tests isolated from `c_ref_differential.rs` (which is

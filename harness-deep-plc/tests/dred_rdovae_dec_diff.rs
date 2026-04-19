@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! Stage 8.5 differential test — RDOVAE decoder forward pass.
 //!
 //! Tier 1 target (per `wrk_docs/2026.04.19 - HLD - dred-port.md` staging

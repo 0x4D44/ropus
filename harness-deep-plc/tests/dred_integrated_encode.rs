@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! Stage 8.8 acceptance gate — integrated `OpusEncoder` wiring for DRED.
 //!
 //! Three format-level cross-compatibility tests (the HLD's exit criterion

@@ -9,6 +9,10 @@
 //! under `!USE_WEIGHTS_FILE`).
 
 #![allow(non_camel_case_types, dead_code)]
+// When `build.rs` can't find `reference/` it sets `cfg(no_reference)` so the
+// workspace still builds on a fresh clone. In that mode the whole FFI
+// surface compiles to nothing; consumers cfg-gate behind the same flag.
+#![cfg(not(no_reference))]
 
 use std::os::raw::{c_int, c_uchar, c_void};
 
