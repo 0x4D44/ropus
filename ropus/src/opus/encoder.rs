@@ -3644,9 +3644,16 @@ impl OpusEncoder {
     // embedded weight blob when present).
 
     /// Set the DRED payload duration in 2.5 ms units.
-    /// Returns `OPUS_OK` on success, `OPUS_BAD_ARG` if out of range.
+    /// Returns `OPUS_OK` on success, `OPUS_BAD_ARG` if out of range or if
+    /// the encoder is multi-channel (stereo DRED is not yet validated — see
+    /// the `debug_assert!` in `DREDEnc::compute_latents`). Rejecting at the
+    /// public API boundary avoids silently emitting garbage DRED payloads
+    /// on release builds where the debug-only assert is compiled away.
     pub fn set_dred_duration(&mut self, duration: i32) -> i32 {
         if duration < 0 || duration > DRED_MAX_FRAMES as i32 {
+            return OPUS_BAD_ARG;
+        }
+        if duration > 0 && self.channels > 1 {
             return OPUS_BAD_ARG;
         }
         self.dred_duration = duration;
@@ -8173,5 +8180,22 @@ mod tests {
         assert_eq!(len, 80);
         assert_eq!(bytes, expected);
         assert_eq!(enc.get_final_range(), 712099840);
+    }
+
+    #[test]
+    fn test_set_dred_duration_rejects_stereo() {
+        // Stage 8 close-out: the DRED `compute_latents` path has only been
+        // bit-exact-validated for mono. A stereo encoder calling
+        // `set_dred_duration(>0)` must fail fast at the API boundary with
+        // OPUS_BAD_ARG rather than silently produce garbage payloads.
+        let mut stereo = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(stereo.set_dred_duration(100), OPUS_BAD_ARG);
+        // Zero is always allowed (it's the "disable" path and never touches
+        // the stereo-unsafe code).
+        assert_eq!(stereo.set_dred_duration(0), OPUS_OK);
+
+        // Mono must continue to accept the same non-zero duration.
+        let mut mono = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(mono.set_dred_duration(100), OPUS_OK);
     }
 }

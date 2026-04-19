@@ -7,8 +7,6 @@
 //! port (Stage 8.3+) can cross-reference them directly against the
 //! reference tree.
 
-// TODO(stage-8.3): remove `dead_code` allow once dred encoder/decoder wire these consts.
-#![allow(dead_code)]
 #![allow(non_upper_case_globals)]
 
 pub const dred_latent_quant_scales_q8: [u8; 400] = [
