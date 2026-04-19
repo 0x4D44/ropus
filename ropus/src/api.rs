@@ -438,7 +438,7 @@ impl Encoder {
 
     fn frame_size_from_pcm_len(&self, pcm_len: usize) -> Result<i32, EncodeError> {
         let ch = self.inner.get_channels() as usize;
-        if ch == 0 || pcm_len % ch != 0 {
+        if ch == 0 || !pcm_len.is_multiple_of(ch) {
             return Err(EncodeError::BadArg);
         }
         let per_channel = pcm_len / ch;
@@ -685,7 +685,7 @@ impl Decoder {
 
     fn frame_size_from_pcm_len(&self, pcm_len: usize) -> Result<i32, DecodeError> {
         let ch = self.inner.get_channels() as usize;
-        if ch == 0 || pcm_len % ch != 0 {
+        if ch == 0 || !pcm_len.is_multiple_of(ch) {
             return Err(DecodeError::BadArg);
         }
         let per_channel = pcm_len / ch;

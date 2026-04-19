@@ -32,7 +32,7 @@ cargo build
 
 Required:
 
-- Rust 2024 (`1.85+`)
+- Rust 2024 (`1.88+`; required for let-chains in the neural PLC wiring)
 - C compiler toolchain (MSVC/GCC/Clang)
 - `git`, `curl`, `tar` on `PATH` (all three ship with Windows 10 1803+, macOS, and
   every mainstream Linux distro — used by `fetch-assets`)

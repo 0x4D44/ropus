@@ -1,8 +1,8 @@
 [package]
 name = "ropus"
-version = "0.7.2"
+version = "0.8.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Rust port of the xiph Opus audio codec (fixed-point), bit-exact against the reference."
 license = "BSD-3-Clause"
 repository = "https://github.com/0x4D44/ropus"

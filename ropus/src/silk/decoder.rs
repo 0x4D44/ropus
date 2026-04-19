@@ -15,9 +15,11 @@ use crate::types::*;
 // DNN PLC argument type
 // ===========================================================================
 
-/// DNN PLC is not wired into the pipeline; the argument is a zero-size `()`
-/// that optimises away entirely.
-pub type DnnPlcArg<'a> = ();
+/// Optional `&mut LPCNetPLCState` threaded through SILK decode. On good
+/// frames the caller passes `Some(lpcnet)` so `lpcnet.update(pcm)` can
+/// track state; on lost frames `lpcnet.conceal(pcm)` replaces the
+/// classical concealment output. `None` keeps the classical path.
+pub type DnnPlcArg<'a> = Option<&'a mut crate::dnn::lpcnet::LPCNetPLCState>;
 
 // ===========================================================================
 // State structures
@@ -77,6 +79,11 @@ pub struct SilkPlcState {
     pub fs_khz: i32,
     pub nb_subfr: i32,
     pub subfr_length: i32,
+    /// When `true`, lost-frame handling switches to LPCNet synthesis
+    /// whenever the blob is loaded (C: `enable_deep_plc` in `silk_PLC`).
+    /// Set via decoder CTL / `SilkDecControl`. Required to run deep PLC
+    /// unless `fec_fill_pos != 0` forces it for DRED.
+    pub enable_deep_plc: bool,
 }
 
 impl Default for SilkPlcState {
@@ -95,6 +102,7 @@ impl Default for SilkPlcState {
             fs_khz: 0,
             nb_subfr: 0,
             subfr_length: 0,
+            enable_deep_plc: false,
         }
     }
 }
@@ -320,6 +328,9 @@ pub struct SilkDecControl {
     pub internal_sample_rate: i32,
     pub payload_size_ms: i32,
     pub prev_pitch_lag: i32,
+    /// Propagated to `SilkPlcState::enable_deep_plc` so lost-frame
+    /// handling can pick the neural PLC path when weights are loaded.
+    pub enable_deep_plc: bool,
 }
 
 // ===========================================================================
@@ -2285,9 +2296,26 @@ pub fn silk_decode_frame(
         // PLC update (save state from good frame)
         silk_plc_update(dec, &dec_ctrl);
 
-        // Neural PLC is not wired into the pipeline.
-        #[allow(clippy::let_unit_value)]
-        let _ = lpcnet;
+        // Feed good-frame PCM to LPCNet so its GRU history stays in sync
+        // with the decoded signal. Only the 16 kHz SILK internal sample
+        // rate is supported (LPCNet frames are 160 samples @ 16 kHz) and
+        // the `conceal()` contract requires pairs of subframes. Gating on
+        // `loaded` mirrors the lost-frame branch: a partially-populated
+        // or never-loaded model would only feed garbage into the history
+        // for the next `conceal()` call, so skipping the update entirely
+        // keeps behaviour equivalent to classical PLC.
+        if let Some(lpcnet) = lpcnet
+            && lpcnet.loaded
+            && dec.s_plc.fs_khz == 16
+        {
+            let subfr_len = dec.subfr_length;
+            let pair_len = subfr_len * 2;
+            let mut k = 0;
+            while k + pair_len <= frame_length {
+                lpcnet.update(&p_out[k..k + pair_len]);
+                k += pair_len;
+            }
+        }
 
         dec.loss_cnt = 0;
         dec.prev_signal_type = dec.indices.signal_type as i32;
@@ -2306,7 +2334,31 @@ pub fn silk_decode_frame(
         // for first-frame init) but BEFORE CNG/glue (which check loss_cnt > 0).
         dec.loss_cnt += 1;
 
-        // Neural PLC is not wired into the pipeline.
+        // Neural PLC override. If weights are loaded and we're at 16 kHz,
+        // either overwrite the classical PLC with LPCNet output (`run_deep`)
+        // or, when not running deep PLC, still feed classical PCM into
+        // LPCNet's state so a later neural frame has a sensible history.
+        if let Some(lpcnet) = lpcnet
+            && lpcnet.loaded
+            && dec.s_plc.fs_khz == 16
+        {
+            let run_deep = dec.s_plc.enable_deep_plc || lpcnet.fec_fill_pos != 0;
+            let subfr_len = dec.subfr_length;
+            let pair_len = subfr_len * 2;
+            if run_deep {
+                let mut k = 0;
+                while k + pair_len <= frame_length {
+                    lpcnet.conceal(&mut p_out[k..k + pair_len]);
+                    k += pair_len;
+                }
+            } else {
+                let mut k = 0;
+                while k + pair_len <= frame_length {
+                    lpcnet.update(&p_out[k..k + pair_len]);
+                    k += pair_len;
+                }
+            }
+        }
 
         // Update output buffer
         let mv_len = dec.ltp_mem_length - frame_length;
@@ -2551,9 +2603,16 @@ pub fn silk_decode(
     // Per-channel decoding
     let mut samples_out1_tmp = vec![vec![0i16; frame_length + 2]; n_channels_internal];
 
-    // Neural PLC is not wired into the pipeline.
-    #[allow(clippy::let_unit_value)]
-    let _ = lpcnet;
+    // Propagate the caller's deep-PLC preference into each channel's PLC
+    // state so `silk_decode_frame` can gate neural concealment locally.
+    for cs in &mut decoder.channel_state[..n_channels_internal] {
+        cs.s_plc.enable_deep_plc = dec_control.enable_deep_plc;
+    }
+
+    // Reborrow so we can split between channels: LPCNet PLC is mono-only,
+    // so only channel 0 receives the state; channel 1 always sees `None`.
+    // This matches C `silk_Decode` in `ENABLE_DEEP_PLC` builds.
+    let mut lpcnet = lpcnet;
 
     for n in 0..n_channels_internal {
         let should_decode = n == 0 || !decode_only_middle;
@@ -2574,8 +2633,11 @@ pub fn silk_decode(
                 CODE_CONDITIONALLY
             };
 
-            // Neural PLC is not wired into the pipeline.
-            let ch_lpcnet: DnnPlcArg<'_> = ();
+            let ch_lpcnet: DnnPlcArg<'_> = if n == 0 {
+                lpcnet.as_deref_mut()
+            } else {
+                None
+            };
 
             let mut n_out = 0;
             // C reference decodes into &samplesOut1_tmp[n][2] — offset by 2
@@ -3206,9 +3268,10 @@ mod tests {
             internal_sample_rate: 16_384,
             payload_size_ms: 30,
             prev_pitch_lag: 0,
+            enable_deep_plc: false,
         };
         let mut rc = RangeDecoder::new(&rc_buf);
-        let lpcnet_arg: DnnPlcArg<'_> = ();
+        let lpcnet_arg: DnnPlcArg<'_> = None;
         assert_eq!(
             silk_decode(
                 &mut decoder,
@@ -3231,9 +3294,10 @@ mod tests {
             internal_sample_rate: 8_192,
             payload_size_ms: 20,
             prev_pitch_lag: 0,
+            enable_deep_plc: false,
         };
         let mut rc = RangeDecoder::new(&rc_buf);
-        let lpcnet_arg: DnnPlcArg<'_> = ();
+        let lpcnet_arg: DnnPlcArg<'_> = None;
         assert_eq!(
             silk_decode(
                 &mut decoder,
@@ -3286,12 +3350,13 @@ mod tests {
             internal_sample_rate: 7_168,
             payload_size_ms: 20,
             prev_pitch_lag: 0,
+            enable_deep_plc: false,
         };
         let rc_buf = [0x80u8];
         let mut rc = RangeDecoder::new(&rc_buf);
         let mut out = vec![0i16; 1920];
         let mut n = 0usize;
-        let lpcnet_arg: DnnPlcArg<'_> = ();
+        let lpcnet_arg: DnnPlcArg<'_> = None;
 
         assert_eq!(
             silk_decode(
@@ -3374,7 +3439,7 @@ mod tests {
         let mut out = vec![0i16; dec.frame_length];
         let mut n = 0usize;
 
-        let lpcnet_arg: DnnPlcArg<'_> = ();
+        let lpcnet_arg: DnnPlcArg<'_> = None;
         silk_decode_frame(
             &mut dec,
             &mut rc,
@@ -3661,6 +3726,7 @@ mod tests {
             internal_sample_rate: 7_168, // fs_khz=8
             payload_size_ms: 10,
             prev_pitch_lag: 0,
+            enable_deep_plc: false,
         };
 
         // Use packet loss to avoid needing a valid encoded bitstream
@@ -3669,7 +3735,7 @@ mod tests {
         let mut out = vec![0i16; 1920];
         let mut n = 0usize;
 
-        let lpcnet_arg: DnnPlcArg<'_> = ();
+        let lpcnet_arg: DnnPlcArg<'_> = None;
 
         let ret = silk_decode(
             &mut decoder,
@@ -3699,6 +3765,7 @@ mod tests {
             internal_sample_rate: 7_168,
             payload_size_ms: 40,
             prev_pitch_lag: 0,
+            enable_deep_plc: false,
         };
 
         let rc_buf = [0x80u8];
@@ -3706,7 +3773,7 @@ mod tests {
         let mut out = vec![0i16; 1920];
         let mut n = 0usize;
 
-        let lpcnet_arg: DnnPlcArg<'_> = ();
+        let lpcnet_arg: DnnPlcArg<'_> = None;
 
         let ret = silk_decode(
             &mut decoder,
@@ -3734,6 +3801,7 @@ mod tests {
             internal_sample_rate: 7_168,
             payload_size_ms: 60,
             prev_pitch_lag: 0,
+            enable_deep_plc: false,
         };
 
         let rc_buf = [0x80u8];
@@ -3741,7 +3809,7 @@ mod tests {
         let mut out = vec![0i16; 1920];
         let mut n = 0usize;
 
-        let lpcnet_arg: DnnPlcArg<'_> = ();
+        let lpcnet_arg: DnnPlcArg<'_> = None;
 
         let ret = silk_decode(
             &mut decoder,
@@ -3788,6 +3856,7 @@ mod tests {
             internal_sample_rate: 7_168,
             payload_size_ms: 20,
             prev_pitch_lag: 0,
+            enable_deep_plc: false,
         };
 
         let rc_buf = [0x80u8];
@@ -3795,7 +3864,7 @@ mod tests {
         let mut out = vec![0i16; 1920];
         let mut n = 0usize;
 
-        let lpcnet_arg: DnnPlcArg<'_> = ();
+        let lpcnet_arg: DnnPlcArg<'_> = None;
 
         // Packet lost triggers PLC for both channels
         let ret = silk_decode(
@@ -3842,6 +3911,7 @@ mod tests {
             internal_sample_rate: 7_168,
             payload_size_ms: 20,
             prev_pitch_lag: 0,
+            enable_deep_plc: false,
         };
 
         let rc_buf = [0x80u8];
@@ -3849,7 +3919,7 @@ mod tests {
         let mut out = vec![0i16; 3840];
         let mut n = 0usize;
 
-        let lpcnet_arg: DnnPlcArg<'_> = ();
+        let lpcnet_arg: DnnPlcArg<'_> = None;
 
         let ret = silk_decode(
             &mut decoder,
@@ -3994,6 +4064,7 @@ mod tests {
             internal_sample_rate: 7_168,
             payload_size_ms: 20,
             prev_pitch_lag: 0,
+            enable_deep_plc: false,
         };
 
         decoder.channel_state[0].n_frames_decoded = 1;
@@ -4009,7 +4080,7 @@ mod tests {
         let mut out = vec![0i16; 1920];
         let mut n = 0usize;
 
-        let lpcnet_arg: DnnPlcArg<'_> = ();
+        let lpcnet_arg: DnnPlcArg<'_> = None;
 
         silk_decode(
             &mut decoder,
@@ -4079,6 +4150,7 @@ mod tests {
             internal_sample_rate: 7_168,
             payload_size_ms: 20,
             prev_pitch_lag: 0,
+            enable_deep_plc: false,
         };
 
         let rc_buf = [0x80u8];
@@ -4086,7 +4158,7 @@ mod tests {
         let mut out = vec![0i16; 3840]; // 2 * 960
         let mut n = 0usize;
 
-        let lpcnet_arg: DnnPlcArg<'_> = ();
+        let lpcnet_arg: DnnPlcArg<'_> = None;
 
         let ret = silk_decode(
             &mut decoder,
@@ -4810,11 +4882,12 @@ mod tests {
                 internal_sample_rate: fs_khz * 1000,
                 payload_size_ms,
                 prev_pitch_lag: 0,
+                enable_deep_plc: false,
             }
         }
 
         fn lpc_arg() -> DnnPlcArg<'static> {
-            ()
+            None
         }
 
         /// Drive silk_decode with `n` consecutive packet losses.

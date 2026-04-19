@@ -2901,7 +2901,7 @@ mod tests {
         use crate::celt::encoder::{celt_encode_with_ec, CeltEncoder};
 
         fn plc_arg<'a>() -> crate::celt::decoder::DnnPlcArg<'a> {
-            ()
+            None
         }
 
         /// Noisy PCM helper — useful for exercising encoder/decoder paths.

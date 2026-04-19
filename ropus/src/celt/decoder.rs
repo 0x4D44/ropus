@@ -22,8 +22,10 @@ use crate::types::*;
 // DNN PLC argument type
 // ===========================================================================
 
-/// DNN PLC is not wired into the pipeline; the argument is a zero-size `()`.
-pub type DnnPlcArg<'a> = ();
+/// Optional `&mut LPCNetPLCState` threaded through CELT decode so the PLC
+/// path can synthesise at 16 kHz and upsample to 48 kHz when the blob is
+/// loaded. `None` keeps the classical PLC path; there is no feature flag.
+pub type DnnPlcArg<'a> = Option<&'a mut crate::dnn::lpcnet::LPCNetPLCState>;
 
 // ===========================================================================
 // Constants
@@ -44,10 +46,24 @@ const PLC_PITCH_LAG_MAX: i32 = 720;
 const PLC_PITCH_LAG_MIN: i32 = 100;
 
 // --- Frame type constants ---
+//
+// Numbering matches the C reference (`reference/celt/celt_decoder.c:67-72`):
+// NONE=0, NORMAL=1, PLC_NOISE=2, PLC_PERIODIC=3, PLC_NEURAL=4, DRED=5.
+// These are decoder-local identifiers (never crossing a wire or FFI
+// boundary) so alignment with upstream is primarily about making
+// future reference merges friction-free.
 const FRAME_NONE: i32 = 0;
 const FRAME_NORMAL: i32 = 1;
 const FRAME_PLC_NOISE: i32 = 2;
 const FRAME_PLC_PERIODIC: i32 = 3;
+/// Neural PLC: LPCNet synthesises 16 kHz PCM, then a polyphase sinc
+/// resampler lifts it to 48 kHz and cross-fades with the classical
+/// periodic PLC output on the first neural frame.
+const FRAME_PLC_NEURAL: i32 = 4;
+/// DRED (Deep REDundancy) FEC path. Transport plumbing only in Stage 7b;
+/// full DRED decoder is Stage 8. When selected, behaves like FRAME_PLC_NEURAL
+/// plus `plc_duration` / `skip_plc` are reset to signal "real data arrived".
+const FRAME_DRED: i32 = 5;
 
 // ===========================================================================
 // Static tables
@@ -140,6 +156,17 @@ pub struct CeltDecoder {
     background_log_e: Vec<i32>,
     /// LPC coefficients for PLC. Length: channels × CELT_LPC_ORDER.
     lpc_coef: Vec<i32>,
+
+    // --- DNN neural PLC state ---
+    // Only touched when the caller threads a `&mut LPCNetPLCState` through
+    // `decode_with_ec`. When the classical PLC path runs these stay zero.
+    /// 16 kHz PCM scratch buffer for LPCNet concealment output.
+    plc_pcm: Vec<i16>,
+    /// Valid-sample count in `plc_pcm`.
+    plc_fill: usize,
+    /// Preemphasis filter memory used when de-emphasising the upsampled
+    /// neural PLC output back into the 48 kHz decode buffer.
+    plc_preemphasis_mem: f32,
 }
 
 // ===========================================================================
@@ -672,6 +699,13 @@ impl CeltDecoder {
             old_log_e2: vec![-gconst(28.0); 2 * nb_ebands],
             background_log_e: vec![0i32; 2 * nb_ebands],
             lpc_coef: vec![0i32; channels as usize * CELT_LPC_ORDER],
+
+            // Worst-case 16 kHz PLC scratch: (n + sinc_order + overlap)/3 plus
+            // one LPCNet frame of slack (= PLC_UPDATE * 160). Matches the
+            // 560-sample starting allocation in 6822dd6.
+            plc_pcm: vec![0i16; 560],
+            plc_fill: 0,
+            plc_preemphasis_mem: 0.0,
         };
 
         Ok(dec)
@@ -700,6 +734,9 @@ impl CeltDecoder {
         self.old_log_e2.fill(-gconst(28.0));
         self.background_log_e.fill(0);
         self.lpc_coef.fill(0);
+        self.plc_pcm.fill(0);
+        self.plc_fill = 0;
+        self.plc_preemphasis_mem = 0.0;
     }
 
     /// Per-channel decode buffer size including overlap.
@@ -752,15 +789,103 @@ impl CeltDecoder {
     }
 
     // -----------------------------------------------------------------------
+    // Neural PLC helpers (48 kHz <-> 16 kHz polyphase resampling)
+    // -----------------------------------------------------------------------
+
+    /// 49-tap sinc low-pass for 3:1 up/downsampling between 48 kHz (decoder
+    /// native rate) and 16 kHz (LPCNet operating rate). Values are drawn
+    /// from the C reference (`celt_decoder.c:629`, `SINC_FILTER`).
+    const SINC_FILTER: [f32; 49] = [
+        4.2931e-05, -0.000190293, -0.000816132, -0.000637162, 0.00141662,
+        0.00354764, 0.00184368, -0.00428274, -0.00856105, -0.0034003,
+        0.00930201, 0.0159616, 0.00489785, -0.0169649, -0.0259484, -0.00596856,
+        0.0286551, 0.0405872, 0.00649994, -0.0509284, -0.0716655, -0.00665212,
+        0.134336, 0.278927, 0.339995, 0.278927, 0.134336, -0.00665212,
+        -0.0716655, -0.0509284, 0.00649994, 0.0405872, 0.0286551, -0.00596856,
+        -0.0259484, -0.0169649, 0.00489785, 0.0159616, 0.00930201, -0.0034003,
+        -0.00856105, -0.00428274, 0.00184368, 0.00354764, 0.00141662,
+        -0.000637162, -0.000816132, -0.000190293, 4.2931e-05,
+    ];
+
+    /// CELT's standard preemphasis coefficient (matches C `dnn/freq.h`
+    /// `PREEMPHASIS = 0.85f`).
+    const PREEMPHASIS: f32 = 0.85;
+
+    /// Filter length - 1 for `SINC_FILTER`.
+    const SINC_ORDER: usize = 48;
+
+    /// Samples per LPCNet frame at 16 kHz (10 ms).
+    const LPCNET_FRAME_SIZE: usize = 160;
+
+    /// Number of 10 ms frames pushed into LPCNet's history on a
+    /// good-frame state update (C: 4 × 10ms = 40 ms of context).
+    const PLC_UPDATE_FRAMES: usize = 4;
+
+    /// Mix the 48 kHz decode memory to mono, preemphasise, downsample to
+    /// 16 kHz, and feed four 10 ms frames to `lpcnet.update` so its GRU
+    /// history tracks the just-decoded classical output. Leaves the
+    /// FEC read cursor untouched — the loader adds FEC features ahead of
+    /// this state update and we must not consume them here.
+    /// Matches C `update_plc_state()` in `celt_decoder.c:639`.
+    fn update_plc_state(&mut self, lpcnet: &mut crate::dnn::lpcnet::LPCNetPLCState) {
+        let decode_buffer_size = DECODE_BUFFER_SIZE as usize;
+        let cc = self.channels as usize;
+        let plc_update_samples = Self::PLC_UPDATE_FRAMES * Self::LPCNET_FRAME_SIZE;
+
+        let mut buf48k = vec![0.0f32; decode_buffer_size];
+        if cc == 1 {
+            let off = self.ch_off(0);
+            for i in 0..decode_buffer_size {
+                buf48k[i] = self.decode_mem[off + i] as f32;
+            }
+        } else {
+            let off0 = self.ch_off(0);
+            let off1 = self.ch_off(1);
+            for i in 0..decode_buffer_size {
+                buf48k[i] =
+                    0.5 * (self.decode_mem[off0 + i] as f32 + self.decode_mem[off1 + i] as f32);
+            }
+        }
+
+        // Preemphasise in place so the downsampling filter sees a signal
+        // with the flat spectral tilt LPCNet was trained on.
+        for i in 1..decode_buffer_size {
+            buf48k[i] += Self::PREEMPHASIS * buf48k[i - 1];
+        }
+        self.plc_preemphasis_mem = buf48k[decode_buffer_size - 1];
+
+        // 48 kHz → 16 kHz (3:1 decimation) with the sinc filter.
+        let offset =
+            decode_buffer_size - Self::SINC_ORDER - 1 - 3 * (plc_update_samples - 1);
+        let mut buf16k = vec![0i16; plc_update_samples];
+        for i in 0..plc_update_samples {
+            let mut sum = 0.0f32;
+            for j in 0..=Self::SINC_ORDER {
+                sum += buf48k[3 * i + j + offset] * Self::SINC_FILTER[j];
+            }
+            buf16k[i] = sum.round().clamp(-32767.0, 32767.0) as i16;
+        }
+
+        // Preserve FEC cursors across the update so queued features
+        // survive to the concealment call that follows.
+        let tmp_read_pos = lpcnet.fec_read_pos;
+        let tmp_fec_skip = lpcnet.fec_skip;
+        for i in 0..Self::PLC_UPDATE_FRAMES {
+            let start = Self::LPCNET_FRAME_SIZE * i;
+            let end = start + Self::LPCNET_FRAME_SIZE;
+            lpcnet.update(&buf16k[start..end]);
+        }
+        lpcnet.fec_read_pos = tmp_read_pos;
+        lpcnet.fec_skip = tmp_fec_skip;
+    }
+
+    // -----------------------------------------------------------------------
     // Packet loss concealment
     // -----------------------------------------------------------------------
 
     /// Handle a lost frame by generating concealment audio.
     /// Matches C `celt_decode_lost()`.
-    fn decode_lost(&mut self, n: i32, lm: i32, lpcnet: DnnPlcArg<'_>) {
-        #[allow(clippy::let_unit_value)]
-        let _ = lpcnet;
-
+    fn decode_lost(&mut self, n: i32, lm: i32, mut lpcnet: DnnPlcArg<'_>) {
         let mode = self.mode;
         let cc = self.channels;
         let c_stream = cc; // In non-hybrid mode, C == CC
@@ -771,12 +896,28 @@ impl CeltDecoder {
         let max_period = MAX_PERIOD;
         let _buf_size_per_ch = self.buf_size();
 
-        // Determine PLC strategy. DNN-based neural PLC is not wired into the pipeline.
-        let curr_frame_type = if self.plc_duration >= 40 || start != 0 || self.skip_plc != 0 {
+        // Determine PLC strategy.
+        let mut curr_frame_type = if self.plc_duration >= 40 || start != 0 || self.skip_plc != 0 {
             FRAME_PLC_NOISE
         } else {
             FRAME_PLC_PERIODIC
         };
+
+        // Neural PLC override: once weights are loaded and we're not inside
+        // the noise-only low-quality regime, switch to LPCNet synthesis.
+        // The inner `start == 0` check mirrors the C reference — neural PLC
+        // only replaces the full-band periodic PLC, never the noise path.
+        if let Some(ref lpcnet) = lpcnet
+            && start == 0
+            && lpcnet.loaded
+        {
+            if self.complexity >= 5 && self.plc_duration < 80 && self.skip_plc == 0 {
+                curr_frame_type = FRAME_PLC_NEURAL;
+            }
+            if lpcnet.fec_fill_pos > lpcnet.fec_read_pos {
+                curr_frame_type = FRAME_DRED;
+            }
+        }
 
         if curr_frame_type == FRAME_PLC_NOISE {
             // --- Noise-based PLC ---
@@ -906,8 +1047,17 @@ impl CeltDecoder {
             let mut fade: i32 = Q15ONE;
             let pitch_index;
 
-            // Pitch search: skip if continuing periodic PLC.
-            let skip_pitch_search = self.last_frame_type == FRAME_PLC_PERIODIC;
+            let curr_neural =
+                curr_frame_type == FRAME_PLC_NEURAL || curr_frame_type == FRAME_DRED;
+            let last_neural = self.last_frame_type == FRAME_PLC_NEURAL
+                || self.last_frame_type == FRAME_DRED;
+
+            // Pitch search: skip if continuing a neural or periodic PLC
+            // run (C: `last_frame_type == FRAME_PLC_PERIODIC`, extended
+            // in the DEEP_PLC path to also cover neural-to-neural
+            // continuations so we preserve the previous fade value).
+            let skip_pitch_search = self.last_frame_type == FRAME_PLC_PERIODIC
+                || (last_neural && curr_neural);
 
             if !skip_pitch_search {
                 pitch_index = self.plc_pitch_search();
@@ -915,6 +1065,16 @@ impl CeltDecoder {
             } else {
                 pitch_index = self.last_pitch_index;
                 fade = qconst16(0.8, 15);
+            }
+
+            // First neural frame after a classical-PLC / good-frame run:
+            // prime LPCNet's GRU history from the 48 kHz decode memory so
+            // the upcoming synthesis picks up where classical output left off.
+            if curr_neural
+                && !last_neural
+                && let Some(ref mut lpcnet_ref) = lpcnet
+            {
+                self.update_plc_state(lpcnet_ref);
             }
 
             let exc_length = imin(2 * pitch_index, max_period);
@@ -1125,7 +1285,137 @@ impl CeltDecoder {
                 }
             } // end per-channel loop
 
-            // Neural PLC (DNN-based) is not wired into the pipeline.
+            // --- Neural PLC synthesis (overlays the classical output) ---
+            //
+            // When FRAME_PLC_NEURAL / FRAME_DRED is selected we synthesise
+            // 16 kHz PCM from LPCNet, 3× upsample via the polyphase sinc
+            // filter, and either replace the classical output outright
+            // (continuing neural run) or cross-fade into it over the MDCT
+            // overlap region (first neural frame).
+            if curr_neural
+                && let Some(ref mut lpcnet_ref) = lpcnet
+            {
+                let decode_buffer_size = DECODE_BUFFER_SIZE as usize;
+                let overlap_usize = overlap as usize;
+
+                // Save the classical-PLC overlap region (ch0 only — neural
+                // PLC is mono) so we can cross-fade into the neural output.
+                let mut buf_copy = vec![vec![0.0f32; overlap_usize]; cc as usize];
+                for c in 0..cc as usize {
+                    let off = self.ch_off(c) + decode_buffer_size - n as usize;
+                    for i in 0..overlap_usize {
+                        buf_copy[c][i] = self.decode_mem[off + i] as f32;
+                    }
+                }
+
+                // Fill plc_pcm with enough 16 kHz samples to produce
+                // (n + overlap) output at 48 kHz.
+                let samples_needed_16k =
+                    ((n + Self::SINC_ORDER as i32 + overlap) / 3) as usize;
+                if !last_neural {
+                    self.plc_fill = 0;
+                }
+                while self.plc_fill < samples_needed_16k {
+                    if self.plc_fill + Self::LPCNET_FRAME_SIZE > self.plc_pcm.len() {
+                        self.plc_pcm
+                            .resize(self.plc_fill + Self::LPCNET_FRAME_SIZE, 0);
+                    }
+                    lpcnet_ref.conceal(
+                        &mut self.plc_pcm
+                            [self.plc_fill..self.plc_fill + Self::LPCNET_FRAME_SIZE],
+                    );
+                    self.plc_fill += Self::LPCNET_FRAME_SIZE;
+                }
+
+                // 16 kHz → 48 kHz (1:3 interpolation). The polyphase
+                // filter writes three output samples per input, using
+                // three disjoint sinc phases. Scaled by 3 because the
+                // filter coefficients sum to ~1/3 per phase.
+                let buf_off = self.ch_off(0);
+                let resamp_len = ((n + overlap) / 3) as usize;
+                for i in 0..resamp_len {
+                    let mut sum0 = 0.0f32;
+                    for j in 0..17 {
+                        sum0 += 3.0
+                            * self.plc_pcm[i + j] as f32
+                            * Self::SINC_FILTER[3 * j];
+                    }
+                    self.decode_mem
+                        [buf_off + decode_buffer_size - n as usize + 3 * i] =
+                        sum0.round() as i32;
+
+                    let mut sum1 = 0.0f32;
+                    for j in 0..16 {
+                        sum1 += 3.0
+                            * self.plc_pcm[i + j + 1] as f32
+                            * Self::SINC_FILTER[3 * j + 2];
+                    }
+                    self.decode_mem
+                        [buf_off + decode_buffer_size - n as usize + 3 * i + 1] =
+                        sum1.round() as i32;
+
+                    let mut sum2 = 0.0f32;
+                    for j in 0..16 {
+                        sum2 += 3.0
+                            * self.plc_pcm[i + j + 1] as f32
+                            * Self::SINC_FILTER[3 * j + 1];
+                    }
+                    self.decode_mem
+                        [buf_off + decode_buffer_size - n as usize + 3 * i + 2] =
+                        sum2.round() as i32;
+                }
+
+                // Shift plc_pcm: consumed n/3 samples.
+                let consumed = (n / 3) as usize;
+                self.plc_pcm.copy_within(consumed..self.plc_fill, 0);
+                self.plc_fill -= consumed;
+
+                // De-emphasise the N samples we just wrote into channel 0.
+                let buf_start = buf_off + decode_buffer_size - n as usize;
+                for i in 0..n as usize {
+                    let tmp = self.decode_mem[buf_start + i] as f32;
+                    self.decode_mem[buf_start + i] =
+                        (tmp - Self::PREEMPHASIS * self.plc_preemphasis_mem).round()
+                            as i32;
+                    self.plc_preemphasis_mem = tmp;
+                }
+
+                // De-emphasise the overlap tail (speculative output that
+                // the next frame will blend into).
+                let mut overlap_mem = self.plc_preemphasis_mem;
+                let overlap_start = buf_off + decode_buffer_size;
+                for i in 0..overlap_usize {
+                    let tmp = self.decode_mem[overlap_start + i] as f32;
+                    self.decode_mem[overlap_start + i] =
+                        (tmp - Self::PREEMPHASIS * overlap_mem).round() as i32;
+                    overlap_mem = tmp;
+                }
+
+                // Mono neural PLC: mirror ch0 into ch1 for stereo.
+                if cc == 2 {
+                    let ch0_off = self.ch_off(0);
+                    let ch1_off = self.ch_off(1);
+                    let copy_len = decode_buffer_size + overlap_usize;
+                    debug_assert!(ch1_off >= ch0_off + copy_len);
+                    self.decode_mem
+                        .copy_within(ch0_off..ch0_off + copy_len, ch1_off);
+                }
+
+                // Cross-fade the first neural frame into the classical
+                // output using the MDCT window so we don't click.
+                if !last_neural {
+                    for c in 0..cc as usize {
+                        let off = self.ch_off(c) + decode_buffer_size - n as usize;
+                        for i in 0..overlap_usize {
+                            let w = mode.window[i] as f32 / 32768.0;
+                            let classical = buf_copy[c][i];
+                            let neural = self.decode_mem[off + i] as f32;
+                            self.decode_mem[off + i] =
+                                ((1.0 - w) * classical + w * neural).round() as i32;
+                        }
+                    }
+                }
+            }
 
             self.prefilter_and_fold = true;
         }
@@ -1134,6 +1424,14 @@ impl CeltDecoder {
         let big_m = 1 << lm;
         self.loss_duration = imin(10000, self.loss_duration + big_m);
         self.plc_duration = imin(10000, self.plc_duration + big_m);
+        // DRED carries real content (decoded FEC features) so it resets the
+        // loss bookkeeping: `plc_duration = 0` lets the next frame pick
+        // FRAME_NORMAL / periodic PLC cleanly, and `skip_plc = 0` re-enables
+        // the PLC path after a DRED frame.
+        if curr_frame_type == FRAME_DRED {
+            self.plc_duration = 0;
+            self.skip_plc = 0;
+        }
         self.last_frame_type = curr_frame_type;
     }
 
@@ -1216,8 +1514,8 @@ impl CeltDecoder {
             return Ok(frame_size);
         }
 
-        // Normal decode path: lpcnet is not used (only for PLC).
-        #[allow(clippy::let_unit_value)]
+        // Normal decode path: lpcnet is only consulted by decode_lost,
+        // so drop the reference here.
         let _ = lpcnet;
 
         // Check if there are at least two packets received consecutively before
@@ -1846,7 +2144,7 @@ mod tests {
     use super::*;
 
     fn plc_arg<'a>() -> DnnPlcArg<'a> {
-        ()
+        None
     }
 
     #[test]
@@ -1938,7 +2236,7 @@ mod tests {
         // Decode with NULL data should trigger PLC and produce silence-ish output
         let mut dec = CeltDecoder::new(48000, 1).unwrap();
         let mut pcm = vec![0i16; 960];
-        let lpcnet_arg: DnnPlcArg<'_> = ();
+        let lpcnet_arg: DnnPlcArg<'_> = None;
         let result = dec.decode_with_ec(None, &mut pcm, 960, None, false, lpcnet_arg);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 960);

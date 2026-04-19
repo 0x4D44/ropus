@@ -1147,24 +1147,50 @@ pub struct PLCNetState {
 // External module interfaces (PitchDNN, FARGAN)
 // ===========================================================================
 
-/// PitchDNN stub — always returns 0.0 (DNN not wired into the pipeline).
-#[derive(Clone, Debug, Default)]
+/// PitchDNN state — delegates to `super::pitchdnn::PitchDnnState` so the
+/// LPCNet encoder's feature extractor gets a real neural pitch estimate
+/// once weights are loaded.
+///
+/// Before weights are loaded, `compute()` returns 0.0. This mirrors the
+/// C reference's behaviour with `USE_WEIGHTS_FILE`: the model blob is
+/// mandatory for inference and `compute_pitchdnn` is only called after
+/// `pitchdnn_load_model` succeeds. Returning 0.0 here keeps
+/// `compute_frame_features` well-defined for tests that exercise the
+/// encoder before loading weights.
+#[derive(Clone, Debug)]
 pub struct PitchDNNState {
-    _initialized: bool,
+    inner: super::pitchdnn::PitchDnnState,
+    loaded: bool,
+}
+
+impl Default for PitchDNNState {
+    fn default() -> Self {
+        Self {
+            inner: super::pitchdnn::PitchDnnState::new_empty(),
+            loaded: false,
+        }
+    }
 }
 
 impl PitchDNNState {
     pub fn init(&mut self) {
-        self._initialized = true;
+        // `new_empty()` already produces the equivalent of C
+        // `pitchdnn_init` in the `USE_WEIGHTS_FILE` path.
     }
     pub fn load_model(&mut self, data: &[u8]) -> i32 {
-        match parse_weights(data) {
-            Ok(_) => 0,
+        match self.inner.load_model(data) {
+            Ok(()) => {
+                self.loaded = true;
+                0
+            }
             Err(e) => e,
         }
     }
-    pub fn compute(&mut self, _if_features: &[f32], _xcorr_features: &[f32]) -> f32 {
-        0.0
+    pub fn compute(&mut self, if_features: &[f32], xcorr_features: &[f32]) -> f32 {
+        if !self.loaded {
+            return 0.0;
+        }
+        self.inner.compute(if_features, xcorr_features)
     }
 }
 
@@ -1663,13 +1689,21 @@ impl LPCNetState {
         self.nnet.gru_b_state.fill(0.0);
     }
 
+    /// Parse-only stub. Returns `Ok` (0) when the blob is structurally
+    /// valid, `Err` (-1) otherwise. The arrays are discarded and
+    /// `self.model` stays at its default (zero) values.
+    ///
+    /// **Population is Stage 7b.1.5 scope.** The C reference's generated
+    /// `lpcnet_load_model` maps each weight record by name onto
+    /// `self.model.*` fields (feature_conv1, gru_a_*, mdense, ...) —
+    /// porting that mapping is mechanical but out of scope for 7b.1,
+    /// which ships the plumbing + honest gap. Callers must gate on a
+    /// `loaded` flag maintained at the enclosing state (e.g.
+    /// `LPCNetPLCState.loaded`) rather than treating `Ok(0)` as
+    /// "weights are live".
     pub fn load_model(&mut self, data: &[u8]) -> i32 {
         match parse_weights(data) {
-            Ok(_list) => {
-                // Model weight loading would populate self.model layers here.
-                // Requires generated weight names specific to the trained model.
-                0
-            }
+            Ok(_list) => 0,
             Err(_) => -1,
         }
     }
@@ -1952,8 +1986,21 @@ impl LPCNetPLCState {
         self.reset();
     }
 
+    /// Drop all dynamic state back to `Self::default()` equivalence.
+    ///
+    /// Crucially this resets **both** `self.enc` (via `LPCNetEncState::new()`
+    /// which wipes pitchdnn weights) **and** `self.fargan` (via
+    /// `FARGANState::init()`), plus forces `self.loaded = false`. The
+    /// previous implementation reset `enc` while leaving `fargan` and
+    /// `loaded` intact, which meant a post-reset `conceal()` would
+    /// synthesise against stale FARGAN weights but zeroed LPCNet /
+    /// PitchDNN weights — a silent-corruption path. Post-reset state
+    /// must match post-new state so callers have one invariant to
+    /// reason about.
     pub fn reset(&mut self) {
         self.enc = LPCNetEncState::new();
+        self.fargan.init();
+        self.loaded = false;
         self.pcm.fill(0.0);
         self.blend = 0;
         self.loss_count = 0;
@@ -1972,17 +2019,38 @@ impl LPCNetPLCState {
         self.plc_bak = [PLCNetState::default(), PLCNetState::default()];
     }
 
+    /// Parse the weight blob and run as much population as the current
+    /// port supports. Returns 0 when the blob format is valid (so CTL
+    /// callers get `Ok(())`); returns -1 on a malformed blob.
+    ///
+    /// **Stage 7b.1 honest-gap contract:** parsing succeeds but the
+    /// `self.model` (PLC GRUs + dense layers) and `self.enc.nnet`
+    /// layers are not populated — those name→field mappings land in
+    /// Stage 7b.1.5. `self.loaded` therefore stays `false` after this
+    /// call, which is the flag the SILK / CELT neural PLC paths gate
+    /// on. The result: neural PLC stays switched off and callers fall
+    /// through to the classical pitch/noise PLC without panicking or
+    /// silent-corrupting output against blank model layers.
+    ///
+    /// FARGAN is the one sub-network whose `load_model` actually
+    /// populates (`init_fargan` implements the name dispatch), so we
+    /// still call it to keep its state consistent with what a
+    /// populated C reference would hold after the same blob.
+    // TODO(stage-7b.1.5): flip `self.loaded = true` once
+    // `LPCNetState::load_model` populates model fields from the parsed
+    // arrays. At that point also verify every neural path still
+    // short-circuits cleanly when load_model was never called.
     pub fn load_model(&mut self, data: &[u8]) -> i32 {
         let ret = self.enc.load_model(data);
-        if ret == 0 {
-            let ret2 = self.fargan.load_model(data);
-            if ret2 == 0 {
-                self.loaded = true;
-                return 0;
-            }
+        if ret != 0 {
+            return ret;
+        }
+        let ret2 = self.fargan.load_model(data);
+        if ret2 != 0 {
             return ret2;
         }
-        ret
+        // Intentionally do NOT set `self.loaded = true`. See contract above.
+        0
     }
 
     pub fn fec_add(&mut self, features: Option<&[f32]>) {
@@ -2173,41 +2241,22 @@ impl LPCNetPLCState {
 }
 
 // ===========================================================================
-// Unit tests
+// Test support (shared with other modules' tests)
 // ===========================================================================
 
+/// Synthetic weight blobs used by unit tests in this crate. Kept
+/// inside the crate behind `#[cfg(test)]` — real weights live in
+/// `reference/dnn/*_data.c` and are loaded by the harness.
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod test_support {
     use crate::dnn::core;
 
-    fn patterned_pcm(seed: i32) -> [i16; FRAME_SIZE] {
-        let mut pcm = [0i16; FRAME_SIZE];
-        for (i, sample) in pcm.iter_mut().enumerate() {
-            let v = ((i as i32 * 137 + seed * 29) % 32000) - 16000;
-            *sample = v as i16;
-        }
-        pcm
-    }
-
-    fn patterned_frame(seed: i32) -> [f32; FRAME_SIZE] {
-        let pcm = patterned_pcm(seed);
-        let mut input = [0.0f32; FRAME_SIZE];
-        for (dst, src) in input.iter_mut().zip(pcm) {
-            *dst = src as f32 / 32768.0;
-        }
-        input
-    }
-
-    fn zero_linear(nb_inputs: usize, nb_outputs: usize) -> LinearLayer {
-        LinearLayer {
-            nb_inputs,
-            nb_outputs,
-            ..Default::default()
-        }
-    }
-
-    fn append_weight_record(blob: &mut Vec<u8>, name: &str, weight_type: i32, payload_len: usize) {
+    fn append_weight_record(
+        blob: &mut Vec<u8>,
+        name: &str,
+        weight_type: i32,
+        payload_len: usize,
+    ) {
         let mut record = vec![0u8; core::WEIGHT_BLOCK_SIZE + payload_len];
         record[4..8].copy_from_slice(&core::WEIGHT_BLOB_VERSION.to_ne_bytes());
         record[8..12].copy_from_slice(&weight_type.to_ne_bytes());
@@ -2218,7 +2267,7 @@ mod tests {
         blob.extend_from_slice(&record);
     }
 
-    fn append_float_record(blob: &mut Vec<u8>, name: &str, count: usize) {
+    pub(crate) fn append_float_record(blob: &mut Vec<u8>, name: &str, count: usize) {
         append_weight_record(blob, name, core::WEIGHT_TYPE_FLOAT, count * 4);
     }
 
@@ -2226,7 +2275,10 @@ mod tests {
         append_weight_record(blob, name, core::WEIGHT_TYPE_INT8, count);
     }
 
-    fn make_pitchdnn_weight_blob() -> Vec<u8> {
+    /// A synthetic (zeroed) PitchDNN weight blob — enough records for
+    /// `init_pitchdnn` to consider the model loaded. Useful for tests
+    /// that need a successful `load_model` without real learned weights.
+    pub(crate) fn make_pitchdnn_weight_blob() -> Vec<u8> {
         let mut blob = Vec::new();
 
         for name in [
@@ -2379,11 +2431,56 @@ mod tests {
         append_float_record(blob, "sig_net_sig_dense_out_scale", 40);
     }
 
-    fn make_plc_weight_blob() -> Vec<u8> {
+    /// A full PLC weight blob combining the PitchDNN + FARGAN records
+    /// so `LPCNetPLCState::load_model` returns `Ok(())`.
+    pub(crate) fn make_plc_weight_blob() -> Vec<u8> {
         let mut blob = make_pitchdnn_weight_blob();
         append_fargan_zero_weight_records(&mut blob);
         blob
     }
+}
+
+// ===========================================================================
+// Unit tests
+// ===========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn patterned_pcm(seed: i32) -> [i16; FRAME_SIZE] {
+        let mut pcm = [0i16; FRAME_SIZE];
+        for (i, sample) in pcm.iter_mut().enumerate() {
+            let v = ((i as i32 * 137 + seed * 29) % 32000) - 16000;
+            *sample = v as i16;
+        }
+        pcm
+    }
+
+    fn patterned_frame(seed: i32) -> [f32; FRAME_SIZE] {
+        let pcm = patterned_pcm(seed);
+        let mut input = [0.0f32; FRAME_SIZE];
+        for (dst, src) in input.iter_mut().zip(pcm) {
+            *dst = src as f32 / 32768.0;
+        }
+        input
+    }
+
+    fn zero_linear(nb_inputs: usize, nb_outputs: usize) -> LinearLayer {
+        LinearLayer {
+            nb_inputs,
+            nb_outputs,
+            ..Default::default()
+        }
+    }
+
+    // Reuse the blob builders from the sibling `test_support` module so
+    // there is one source of truth for the synthetic weights layout.
+    // `append_float_record` is re-exported for tests that write lone ad-hoc
+    // records (e.g. a single "demo" float).
+    use super::test_support::{
+        append_float_record, make_pitchdnn_weight_blob, make_plc_weight_blob,
+    };
 
     #[test]
     fn test_kiss99_srand_and_rand() {
@@ -3236,7 +3333,12 @@ mod tests {
         let blob = make_plc_weight_blob();
         let mut plc = LPCNetPLCState::new();
         assert_eq!(plc.load_model(&blob), 0);
-        assert!(plc.loaded);
+        // Stage 7b.1 honest-gap: `load_model` parses but doesn't populate
+        // model fields, so the public `loaded` flag stays `false`. To
+        // exercise `conceal()` end-to-end (which `debug_assert!`s
+        // `loaded`) we flip it manually. Post-7b.1.5 this manual flip
+        // can be dropped — `load_model` will own the invariant.
+        plc.loaded = true;
 
         for i in 0..PLC_BUF_SIZE {
             plc.pcm[i] = ((i % 29) as f32 - 14.0) / 32.0;
@@ -3660,6 +3762,10 @@ mod tests {
             let blob = make_plc_weight_blob();
             let mut plc = LPCNetPLCState::new();
             assert_eq!(plc.load_model(&blob), 0);
+            // Stage 7b.1 honest-gap: flip `loaded` manually to unlock
+            // `conceal()`'s debug_assert; 7b.1.5 will make `load_model`
+            // own this invariant once model fields are populated.
+            plc.loaded = true;
             plc.blend = 1; // skip while-loop body inside conceal
             plc.analysis_pos = 0; // so analysis_pos < FRAME_SIZE at the tail check
             plc.analysis_gap = false;
@@ -3684,6 +3790,8 @@ mod tests {
             let blob = make_plc_weight_blob();
             let mut plc = LPCNetPLCState::new();
             assert_eq!(plc.load_model(&blob), 0);
+            // Stage 7b.1 honest-gap — see sibling test.
+            plc.loaded = true;
             for i in 0..PLC_BUF_SIZE {
                 plc.pcm[i] = ((i % 17) as f32 - 8.0) / 64.0;
             }
@@ -3706,6 +3814,8 @@ mod tests {
             let blob = make_plc_weight_blob();
             let mut plc = LPCNetPLCState::new();
             assert_eq!(plc.load_model(&blob), 0);
+            // Stage 7b.1 honest-gap — see sibling test.
+            plc.loaded = true;
             for i in 0..PLC_BUF_SIZE {
                 plc.pcm[i] = ((i % 13) as f32 - 6.0) / 64.0;
             }
