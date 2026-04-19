@@ -59,13 +59,24 @@
 #define OPUS_GET_PREDICTION_DISABLED_REQUEST       4043
 #define OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST  4046
 #define OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST  4047
+#define OPUS_GET_IN_DTX_REQUEST                    4049
+#define OPUS_SET_IGNORE_EXTENSIONS_REQUEST         4058
+#define OPUS_GET_IGNORE_EXTENSIONS_REQUEST         4059
 
 #define OPUS_MULTISTREAM_GET_ENCODER_STATE_REQUEST 5120
 #define OPUS_MULTISTREAM_GET_DECODER_STATE_REQUEST 5122
 
+/* From celt/celt.h — multistream-internal CTLs forwarded into CELT.
+ * LFE takes an int, ENERGY_MASK takes an int pointer (celt_glog *). */
+#define OPUS_SET_LFE_REQUEST                       10024
+#define OPUS_SET_ENERGY_MASK_REQUEST               10026
+
 /* From opus_private.h:172 — private encoder CTL used by test_opus_encode.c
  * (MODE_SILK_ONLY | MODE_HYBRID | MODE_CELT_ONLY | OPUS_AUTO). */
 #define OPUS_SET_FORCE_MODE_REQUEST                11002
+/* Semi-obsolete voice/music ratio hint (opus_private.h), `-1..=100`. */
+#define OPUS_SET_VOICE_RATIO_REQUEST               11018
+#define OPUS_GET_VOICE_RATIO_REQUEST               11019
 
 typedef uint32_t opus_uint32;
 
@@ -79,6 +90,7 @@ extern int mdopus_encoder_ctl_reset(OpusEncoder *st);
 extern int mdopus_encoder_ctl_set_int(OpusEncoder *st, int request, int value);
 extern int mdopus_encoder_ctl_get_int(OpusEncoder *st, int request, int *out);
 extern int mdopus_encoder_ctl_get_uint32(OpusEncoder *st, int request, opus_uint32 *out);
+extern int mdopus_encoder_ctl_set_energy_mask(OpusEncoder *st, const int *ptr);
 
 extern int mdopus_decoder_ctl_reset(OpusDecoder *st);
 extern int mdopus_decoder_ctl_set_int(OpusDecoder *st, int request, int value);
@@ -90,6 +102,7 @@ extern int mdopus_ms_encoder_ctl_set_int(OpusMSEncoder *st, int request, int val
 extern int mdopus_ms_encoder_ctl_get_int(OpusMSEncoder *st, int request, int *out);
 extern int mdopus_ms_encoder_ctl_get_uint32(OpusMSEncoder *st, int request, opus_uint32 *out);
 extern int mdopus_ms_encoder_ctl_get_encoder_state(OpusMSEncoder *st, int stream_id, OpusEncoder **out);
+extern int mdopus_ms_encoder_ctl_set_energy_mask(OpusMSEncoder *st, const int *ptr);
 
 extern int mdopus_ms_decoder_ctl_reset(OpusMSDecoder *st);
 extern int mdopus_ms_decoder_ctl_set_int(OpusMSDecoder *st, int request, int value);
@@ -129,6 +142,8 @@ int opus_encoder_ctl(OpusEncoder *st, int request, ...)
         case OPUS_SET_PREDICTION_DISABLED_REQUEST:
         case OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST:
         case OPUS_SET_FORCE_MODE_REQUEST:
+        case OPUS_SET_VOICE_RATIO_REQUEST:
+        case OPUS_SET_LFE_REQUEST:
             ret = mdopus_encoder_ctl_set_int(st, request, va_arg(ap, int));
             break;
 
@@ -149,7 +164,9 @@ int opus_encoder_ctl(OpusEncoder *st, int request, ...)
         case OPUS_GET_LSB_DEPTH_REQUEST:
         case OPUS_GET_EXPERT_FRAME_DURATION_REQUEST:
         case OPUS_GET_PREDICTION_DISABLED_REQUEST:
-        case OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST: {
+        case OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST:
+        case OPUS_GET_VOICE_RATIO_REQUEST:
+        case OPUS_GET_IN_DTX_REQUEST: {
             int *out = va_arg(ap, int *);
             if (out == (void *)0) {
                 ret = OPUS_BAD_ARG;
@@ -166,6 +183,19 @@ int opus_encoder_ctl(OpusEncoder *st, int request, ...)
             } else {
                 ret = mdopus_encoder_ctl_get_uint32(st, request, out);
             }
+            break;
+        }
+
+        /* Multistream-internal: energy mask is a pointer in the C ABI
+         * (celt_glog *, which is `int` in the fixed-point build). The
+         * reference API does not include a length — callers in
+         * opus_multistream_encoder.c size the buffer as `21 * channels`
+         * (L993/L1008). Rust reads the channel count from the encoder
+         * state and sizes the slice internally, so stereo (42) and mono
+         * (21) sub-encoders are handled correctly. */
+        case OPUS_SET_ENERGY_MASK_REQUEST: {
+            const int *ptr = va_arg(ap, const int *);
+            ret = mdopus_encoder_ctl_set_energy_mask(st, ptr);
             break;
         }
 
@@ -194,6 +224,7 @@ int opus_decoder_ctl(OpusDecoder *st, int request, ...)
 
         case OPUS_SET_GAIN_REQUEST:
         case OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST:
+        case OPUS_SET_IGNORE_EXTENSIONS_REQUEST:
             ret = mdopus_decoder_ctl_set_int(st, request, va_arg(ap, int));
             break;
 
@@ -202,7 +233,8 @@ int opus_decoder_ctl(OpusDecoder *st, int request, ...)
         case OPUS_GET_PITCH_REQUEST:
         case OPUS_GET_GAIN_REQUEST:
         case OPUS_GET_LAST_PACKET_DURATION_REQUEST:
-        case OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST: {
+        case OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST:
+        case OPUS_GET_IGNORE_EXTENSIONS_REQUEST: {
             int *out = va_arg(ap, int *);
             if (out == (void *)0) {
                 ret = OPUS_BAD_ARG;
@@ -262,6 +294,7 @@ int opus_multistream_encoder_ctl(OpusMSEncoder *st, int request, ...)
         case OPUS_SET_PREDICTION_DISABLED_REQUEST:
         case OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST:
         case OPUS_SET_FORCE_MODE_REQUEST:
+        case OPUS_SET_LFE_REQUEST:
             ret = mdopus_ms_encoder_ctl_set_int(st, request, va_arg(ap, int));
             break;
 
@@ -310,6 +343,16 @@ int opus_multistream_encoder_ctl(OpusMSEncoder *st, int request, ...)
             } else {
                 ret = mdopus_ms_encoder_ctl_get_encoder_state(st, stream_id, out);
             }
+            break;
+        }
+
+        /* MS-level energy mask: Rust sizes the slice as
+         * `21 * layout.nb_channels` internally and fans out per sub-encoder
+         * using layout-aware slicing (matches encode-time distribution in
+         * `opus_multistream_encoder.c` L989-1014). */
+        case OPUS_SET_ENERGY_MASK_REQUEST: {
+            const int *ptr = va_arg(ap, const int *);
+            ret = mdopus_ms_encoder_ctl_set_energy_mask(st, ptr);
             break;
         }
 

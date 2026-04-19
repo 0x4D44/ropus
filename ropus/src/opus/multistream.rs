@@ -1380,6 +1380,75 @@ impl OpusMSEncoder {
         OPUS_OK
     }
 
+    /// `OPUS_SET_LFE` — routed to the designated LFE sub-encoder only.
+    /// Matches `opus_multistream_encoder.c` init-time pattern (L498-507):
+    /// only the stream at `lfe_stream` is flagged LFE. Returns `OPUS_BAD_ARG`
+    /// when no LFE stream exists (mapping family != 1 or channels < 6).
+    pub fn set_lfe(&mut self, value: i32) -> i32 {
+        if self.lfe_stream < 0 || (self.lfe_stream as usize) >= self.encoders.len() {
+            return OPUS_BAD_ARG;
+        }
+        self.encoders[self.lfe_stream as usize].set_lfe(value)
+    }
+
+    /// `OPUS_SET_ENERGY_MASK` — per-band surround mask, sized
+    /// `21 * layout.nb_channels`. Fans out per sub-encoder by slicing the
+    /// caller's buffer with `get_left_channel`/`get_right_channel` (coupled)
+    /// or `get_mono_channel` (mono) — matches the encode-time distribution in
+    /// `opus_multistream_encoder.c` L989-1014. `mask = None` clears.
+    pub fn set_energy_mask(&mut self, mask: Option<&[i32]>) -> i32 {
+        match mask {
+            None => {
+                for enc in &mut self.encoders {
+                    let r = enc.set_energy_mask(None);
+                    if r != OPUS_OK {
+                        return r;
+                    }
+                }
+                OPUS_OK
+            }
+            Some(buf) => {
+                let expected = 21 * self.layout.nb_channels as usize;
+                if buf.len() < expected {
+                    return OPUS_BAD_ARG;
+                }
+                for s in 0..self.encoders.len() {
+                    let stream = s as i32;
+                    if stream < self.layout.nb_coupled_streams {
+                        // Coupled: assemble a 42-entry slice (left | right).
+                        let left = get_left_channel(&self.layout, stream, -1);
+                        let right = get_right_channel(&self.layout, stream, -1);
+                        if left < 0 || right < 0 {
+                            return OPUS_BAD_ARG;
+                        }
+                        let mut sub = Vec::with_capacity(42);
+                        sub.extend_from_slice(&buf[(21 * left as usize)..(21 * left as usize + 21)]);
+                        sub.extend_from_slice(
+                            &buf[(21 * right as usize)..(21 * right as usize + 21)],
+                        );
+                        let r = self.encoders[s].set_energy_mask(Some(&sub));
+                        if r != OPUS_OK {
+                            return r;
+                        }
+                    } else {
+                        // `get_mono_channel` expects the absolute stream
+                        // index (matches encode-time call at L1161).
+                        let chan = get_mono_channel(&self.layout, stream, -1);
+                        if chan < 0 {
+                            return OPUS_BAD_ARG;
+                        }
+                        let sub = &buf[(21 * chan as usize)..(21 * chan as usize + 21)];
+                        let r = self.encoders[s].set_energy_mask(Some(sub));
+                        if r != OPUS_OK {
+                            return r;
+                        }
+                    }
+                }
+                OPUS_OK
+            }
+        }
+    }
+
     pub fn set_application(&mut self, v: i32) -> i32 {
         self.application = v;
         for enc in &mut self.encoders {
@@ -1432,6 +1501,13 @@ impl OpusMSEncoder {
     }
     pub fn nb_coupled_streams(&self) -> i32 {
         self.layout.nb_coupled_streams
+    }
+    /// Total number of output channels in the configured layout, including
+    /// any muted channels (mapping == 255). This is the value callers must
+    /// use to size a PCM frame slice — *not* `nb_streams + nb_coupled_streams`,
+    /// which only counts the physically-routed channels.
+    pub fn nb_channels(&self) -> i32 {
+        self.layout.nb_channels
     }
 }
 
@@ -1717,6 +1793,13 @@ impl OpusMSDecoder {
     }
     pub fn nb_coupled_streams(&self) -> i32 {
         self.layout.nb_coupled_streams
+    }
+    /// Total number of output channels in the configured layout, including
+    /// any muted channels (mapping == 255). This is the value callers must
+    /// use to size a PCM frame slice — *not* `nb_streams + nb_coupled_streams`,
+    /// which only counts the physically-routed channels.
+    pub fn nb_channels(&self) -> i32 {
+        self.layout.nb_channels
     }
 }
 
@@ -2198,6 +2281,37 @@ mod tests {
         layout.mapping[0] = 0;
         layout.mapping[1] = 255; // muted
         assert!(validate_layout(&layout));
+    }
+
+    /// Regression: the test-suite `MSdec_err` configuration
+    /// (`opus_multistream_decoder_create(48000, 3, 2, 0, {0,1,255})`) has
+    /// `nb_channels == 3` but only 2 physically routed channels. Callers
+    /// sizing the output PCM buffer must use `nb_channels()`, not
+    /// `nb_streams() + nb_coupled_streams()`, or they will truncate the
+    /// buffer and panic inside `copy_channel_out_short` when it writes the
+    /// muted channel at stride `nb_channels`.
+    #[test]
+    fn test_ms_decoder_nb_channels_reports_total_layout_channels() {
+        let mapping = [0u8, 1, 255];
+        let dec = OpusMSDecoder::new(48000, 3, 2, 0, &mapping).unwrap();
+        assert_eq!(dec.nb_channels(), 3);
+        assert_eq!(dec.nb_streams(), 2);
+        assert_eq!(dec.nb_coupled_streams(), 0);
+        // Critical invariant for external FFI callers: nb_channels is the
+        // PCM-slice width, and it is NOT always equal to streams+coupled.
+        assert_ne!(
+            dec.nb_channels(),
+            dec.nb_streams() + dec.nb_coupled_streams()
+        );
+
+        let enc = OpusMSEncoder::new(48000, 3, 2, 0, &mapping, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.nb_channels(), 3);
+        assert_eq!(enc.nb_streams(), 2);
+        assert_eq!(enc.nb_coupled_streams(), 0);
+        assert_ne!(
+            enc.nb_channels(),
+            enc.nb_streams() + enc.nb_coupled_streams()
+        );
     }
 
     #[test]

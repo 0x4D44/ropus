@@ -56,11 +56,28 @@ const OPUS_SET_PREDICTION_DISABLED_REQUEST: c_int = 4042;
 const OPUS_GET_PREDICTION_DISABLED_REQUEST: c_int = 4043;
 const OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST: c_int = 4046;
 const OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST: c_int = 4047;
+const OPUS_GET_IN_DTX_REQUEST: c_int = 4049;
+const OPUS_SET_IGNORE_EXTENSIONS_REQUEST: c_int = 4058;
+const OPUS_GET_IGNORE_EXTENSIONS_REQUEST: c_int = 4059;
 
 // From `reference/src/opus_private.h:172` — private CTL the conformance
 // test_opus_encode.c exercises directly. Routed into `OpusEncoder::set_force_mode`
 // (validation lives there; maps `OPUS_AUTO | MODE_SILK_ONLY | MODE_HYBRID | MODE_CELT_ONLY`).
 const OPUS_SET_FORCE_MODE_REQUEST: c_int = 11002;
+
+// From `reference/src/opus_private.h` — semi-obsolete voice/music ratio
+// hint (`-1..=100`, `-1` = auto). Just stored, no behavioural coupling.
+const OPUS_SET_VOICE_RATIO_REQUEST: c_int = 11018;
+const OPUS_GET_VOICE_RATIO_REQUEST: c_int = 11019;
+
+// From `reference/celt/celt.h` — multistream-internal CTLs forwarded into
+// CELT. `OPUS_SET_LFE` flags a channel as low-frequency-effects (int value);
+// `OPUS_SET_ENERGY_MASK` passes a per-band mask as a pointer (dispatched
+// directly from `ctl_shim.c` via `mdopus_encoder_ctl_set_energy_mask`, not
+// via `mdopus_encoder_ctl_set_int`).
+const OPUS_SET_LFE_REQUEST: c_int = 10024;
+#[allow(dead_code)]
+const OPUS_SET_ENERGY_MASK_REQUEST: c_int = 10026;
 
 const OPUS_AUTO: c_int = -1000;
 
@@ -118,6 +135,12 @@ pub unsafe extern "C" fn mdopus_encoder_ctl_set_int(
                 }
                 enc.set_phase_inversion_disabled(value)
             }
+            // Validation lives inside `set_voice_ratio` (rejects outside
+            // `-1..=100`, matching `opus_encoder.c`).
+            OPUS_SET_VOICE_RATIO_REQUEST => enc.set_voice_ratio(value),
+            // Multistream-internal: flag a channel as LFE. `set_lfe` stores
+            // the flag and forwards to CELT unless the app is RESTRICTED_SILK.
+            OPUS_SET_LFE_REQUEST => enc.set_lfe(value),
             // Private CTL from `opus_private.h` — validation happens inside
             // ropus's `set_force_mode` (returns `OPUS_BAD_ARG` for anything
             // outside `OPUS_AUTO | MODE_SILK_ONLY | MODE_HYBRID | MODE_CELT_ONLY`).
@@ -159,10 +182,39 @@ pub unsafe extern "C" fn mdopus_encoder_ctl_get_int(
             OPUS_GET_EXPERT_FRAME_DURATION_REQUEST => enc.get_expert_frame_duration(),
             OPUS_GET_PREDICTION_DISABLED_REQUEST => enc.get_prediction_disabled(),
             OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST => enc.get_phase_inversion_disabled(),
+            OPUS_GET_VOICE_RATIO_REQUEST => enc.get_voice_ratio(),
+            OPUS_GET_IN_DTX_REQUEST => enc.get_in_dtx(),
             _ => return OPUS_UNIMPLEMENTED,
         };
         unsafe { *out = value };
         OPUS_OK
+    })
+}
+
+/// Typed pointer-argument dispatcher for encoder CTLs.
+///
+/// Currently handles `OPUS_SET_ENERGY_MASK` only (a `celt_glog *` / `int *`
+/// pointer in the reference ABI — multistream-internal, passes a per-band
+/// energy mask through to the CELT encoder). The reference C API does not
+/// encode a length: callers in `opus_multistream_encoder.c` always size the
+/// buffer as `21 * channels` (L993/L1008). We replicate that here by reading
+/// the channel count from the encoder state — the single source of truth.
+/// A null `ptr` clears the mask (matches `st->energy_masking = NULL`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_encoder_ctl_set_energy_mask(
+    st: *mut OpusEncoder,
+    ptr: *const c_int,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        let Some(enc) = (unsafe { crate::encoder::handle_to_encoder(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        if ptr.is_null() {
+            return enc.set_energy_mask(None);
+        }
+        let len = (21 * enc.channels) as usize;
+        let slice: &[c_int] = unsafe { std::slice::from_raw_parts(ptr, len) };
+        enc.set_energy_mask(Some(slice))
     })
 }
 
@@ -227,6 +279,14 @@ pub unsafe extern "C" fn mdopus_decoder_ctl_set_int(
                 dec.set_phase_inversion_disabled(value != 0);
                 OPUS_OK
             }
+            OPUS_SET_IGNORE_EXTENSIONS_REQUEST => {
+                // Mirrors `opus_decoder.c`: value must be 0 or 1.
+                if !(0..=1).contains(&value) {
+                    return OPUS_BAD_ARG;
+                }
+                dec.set_ignore_extensions(value != 0);
+                OPUS_OK
+            }
             _ => OPUS_UNIMPLEMENTED,
         }
     })
@@ -253,6 +313,9 @@ pub unsafe extern "C" fn mdopus_decoder_ctl_get_int(
             OPUS_GET_LAST_PACKET_DURATION_REQUEST => dec.get_last_packet_duration(),
             OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST => {
                 if dec.get_phase_inversion_disabled() { 1 } else { 0 }
+            }
+            OPUS_GET_IGNORE_EXTENSIONS_REQUEST => {
+                if dec.get_ignore_extensions() { 1 } else { 0 }
             }
             _ => return OPUS_UNIMPLEMENTED,
         };
@@ -368,8 +431,38 @@ pub unsafe extern "C" fn mdopus_ms_encoder_ctl_set_int(
                 }
                 ms.set_force_mode(value)
             }
+            // Multistream-internal: LFE is routed to the designated LFE
+            // sub-encoder only (matches `opus_multistream_encoder.c`
+            // init-time pattern L498-507). Returns `OPUS_BAD_ARG` when no
+            // LFE stream exists (mapping family != 1 or channels < 6).
+            OPUS_SET_LFE_REQUEST => ms.set_lfe(value),
             _ => OPUS_UNIMPLEMENTED,
         }
+    })
+}
+
+/// Typed pointer-argument dispatcher for MS encoder CTLs. Currently handles
+/// `OPUS_SET_ENERGY_MASK` (sized `21 * layout.nb_channels`, fanned out per
+/// sub-encoder via layout-aware slicing — matches encode-time behaviour at
+/// `opus_multistream_encoder.c` L989-1014). A null `ptr` clears the mask
+/// on every sub-encoder.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_ms_encoder_ctl_set_energy_mask(
+    st: *mut OpusMSEncoder,
+    ptr: *const c_int,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        let Some(ms) = (unsafe { crate::ms_encoder::handle_to_ms_encoder(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        if ptr.is_null() {
+            return ms.set_energy_mask(None);
+        }
+        // `OpusMSEncoder::set_energy_mask` validates slice length against
+        // `21 * nb_channels`. Size the slice accordingly here.
+        let len = (21 * ms.nb_channels()) as usize;
+        let slice: &[c_int] = unsafe { std::slice::from_raw_parts(ptr, len) };
+        ms.set_energy_mask(Some(slice))
     })
 }
 

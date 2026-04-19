@@ -236,6 +236,15 @@ pub struct OpusEncoder {
     lfe: i32,
     use_dtx: i32,
     fec_config: i32,
+    /// `OPUS_SET_ENERGY_MASK` — per-band masking from surround/MS analysis.
+    /// `None` when unset (matches C `st->energy_masking == NULL` default).
+    /// Read at encode time by (1) L2057 HB_gain gate, (2) L2329 stereo-width
+    /// reduction gate. The L2069/L2091 surround-masking rate adjustment path
+    /// is not yet ported; see TODO in `encode_native`.
+    ///
+    /// Sized `21 * channels` when populated (42 bytes stereo, 21 mono),
+    /// matching `opus_multistream_encoder.c` L993/L1008.
+    energy_masking: Option<Vec<i32>>,
 
     // --- Resettable state ---
     stream_channels: i32,
@@ -1019,6 +1028,7 @@ impl OpusEncoder {
             lfe: 0,
             use_dtx: 0,
             fec_config: 0,
+            energy_masking: None,
             stream_channels: channels,
             hybrid_stereo_width_q14: 1 << 14,
             variable_hp_smth2_q15: silk_lshift(silk_lin2log(60), 8),
@@ -2019,12 +2029,20 @@ impl OpusEncoder {
                         self.silk_mode.lbrr_coded,
                         self.stream_channels,
                     );
-                    // HB gain attenuation — always computed in hybrid mode.
+                    // HB gain attenuation — skipped when the surround encoder
+                    // has supplied an energy mask (matches `opus_encoder.c`
+                    // L2057 `if (!st->energy_masking)`).
                     // C: HB_gain = Q15ONE - SHR32(celt_exp2(-celt_rate * QCONST16(1.f/1024, 10)), 1)
                     // QCONST16(1.f/1024, 10) = round(1/1024 * 2^10) = 1, so argument is -celt_rate
-                    let celt_rate = total_bit_rate - self.silk_mode.bit_rate;
-                    hb_gain = Q15ONE - shr32(celt_exp2(-celt_rate), 1);
-                    hb_gain = imax(0, hb_gain);
+                    if self.energy_masking.is_none() {
+                        let celt_rate = total_bit_rate - self.silk_mode.bit_rate;
+                        hb_gain = Q15ONE - shr32(celt_exp2(-celt_rate), 1);
+                        hb_gain = imax(0, hb_gain);
+                    }
+                    // TODO(energy_masking): port `opus_encoder.c` L2069-2108
+                    // — when `energy_masking && use_vbr && !lfe`, adjust
+                    // `silk_mode.bit_rate` based on per-band surround masking
+                    // depth. Not yet ported.
                 } else {
                     self.silk_mode.bit_rate = total_bit_rate;
                 }
@@ -2324,8 +2342,12 @@ impl OpusEncoder {
                         16384 - 2048 * (32000 - equiv_rate) / (equiv_rate - 14000);
                 }
             }
-            // Apply stereo width reduction (at low bitrates)
-            if self.channels == 2
+            // Apply stereo width reduction (at low bitrates). Skipped when
+            // the surround encoder has supplied an energy mask — the mask
+            // already captures channel balance (matches `opus_encoder.c`
+            // L2329 `if( !st->energy_masking && st->channels == 2 )`).
+            if self.energy_masking.is_none()
+                && self.channels == 2
                 && ((self.hybrid_stereo_width_q14 as i32) < (1 << 14)
                     || self.silk_mode.stereo_width_q14 < (1 << 14))
             {
@@ -2953,6 +2975,64 @@ impl OpusEncoder {
 
     pub fn get_voice_ratio(&self) -> i32 {
         self.voice_ratio
+    }
+
+    /// `OPUS_GET_IN_DTX` — report whether the encoder is currently in a DTX
+    /// suppression run. Mirrors `opus_encoder.c` case `OPUS_GET_IN_DTX_REQUEST`:
+    /// if SILK is active (any non-CELT-only mode), read SILK's no-speech
+    /// counter; otherwise check the CELT-side DTX duration counter.
+    pub fn get_in_dtx(&self) -> i32 {
+        if self.use_dtx == 0 {
+            return 0;
+        }
+        // SILK branch — reference uses `st->silk_mode.useDTX` && `st->prev_mode`
+        // non-CELT. We approximate: if SILK encoder exists and we were last in
+        // a SILK-involving mode, use SILK's no_speech_counter.
+        if self.silk_mode.use_dtx != 0
+            && self.prev_mode != 0
+            && self.prev_mode != MODE_CELT_ONLY
+        {
+            if let Some(ref silk) = self.silk_enc {
+                return (silk.state_fxx[0].s_cmn.no_speech_counter
+                    >= NB_SPEECH_FRAMES_BEFORE_DTX) as i32;
+            }
+        }
+        // CELT/non-SILK branch: threshold on nb_no_activity_ms_Q1
+        // (ms are in Q1 units, i.e. half-milliseconds).
+        (self.nb_no_activity_ms_q1 >= NB_SPEECH_FRAMES_BEFORE_DTX * 20 * 2) as i32
+    }
+
+    /// `OPUS_SET_LFE` — multistream-internal helper: flag the active channel as
+    /// the LFE channel. Forwards to the CELT encoder unless the application is
+    /// RESTRICTED_SILK (matches `opus_encoder.c` case `OPUS_SET_LFE_REQUEST`).
+    pub fn set_lfe(&mut self, value: i32) -> i32 {
+        self.lfe = value;
+        if self.application != OPUS_APPLICATION_RESTRICTED_SILK {
+            if let Some(ref mut celt) = self.celt_enc {
+                return celt.ctl(CeltEncoderCtl::SetLfe(value));
+            }
+        }
+        OPUS_OK
+    }
+
+    /// `OPUS_SET_ENERGY_MASK` — multistream-internal helper: pass a per-band
+    /// energy mask through to the CELT encoder and store it on the parent
+    /// `OpusEncoder` so encode-time branches can gate on its presence.
+    /// `mask` is `None` to clear, or `Some(slice)` with one entry per CELT
+    /// band, `21 * channels` total (42 for stereo, 21 for mono). Mirrors
+    /// `opus_encoder.c` case `OPUS_SET_ENERGY_MASK_REQUEST` (L3291-3297):
+    /// sets `st->energy_masking` and forwards to CELT unless RESTRICTED_SILK.
+    pub fn set_energy_mask(&mut self, mask: Option<&[i32]>) -> i32 {
+        // Reference always stores the pointer on `st->energy_masking`
+        // (L3294), regardless of application. The RESTRICTED_SILK guard only
+        // skips the CELT forwarding (L3295-3296).
+        self.energy_masking = mask.map(|m| m.to_vec());
+        if self.application != OPUS_APPLICATION_RESTRICTED_SILK {
+            if let Some(ref mut celt) = self.celt_enc {
+                celt.energy_mask = mask.map(|m| m.to_vec());
+            }
+        }
+        OPUS_OK
     }
 
     pub fn set_force_mode(&mut self, mode: i32) -> i32 {
@@ -4931,6 +5011,87 @@ mod tests {
         assert_eq!(enc.get_dtx(), 1);
         assert_eq!(enc.set_dtx(-1), OPUS_BAD_ARG);
         assert_eq!(enc.set_dtx(2), OPUS_BAD_ARG);
+    }
+
+    /// End-to-end DTX: after ~200ms of silence the encoder should report
+    /// `get_in_dtx() == 1`. Drives the state machine through `encode()`
+    /// rather than poking private counter fields.
+    #[test]
+    fn test_ctl_get_in_dtx_drives_through_encode() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        // Use a low-complexity CELT-only configuration so the SILK branch
+        // isn't the path under test; verify the counter-based branch.
+        assert_eq!(enc.set_force_mode(MODE_CELT_ONLY), OPUS_OK);
+        assert_eq!(enc.set_bitrate(32000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(enc.set_dtx(1), OPUS_OK);
+        assert_eq!(enc.get_in_dtx(), 0);
+
+        // Seed peak_signal_energy with active audio, otherwise DTX never
+        // triggers on pure silence (it would classify every frame as active).
+        let pcm_active = patterned_pcm_i16(960, 1, 2101);
+        let mut packet = vec![0u8; 1500];
+        let cap = packet.len() as i32;
+        let _ = enc.encode(&pcm_active, 960, &mut packet, cap).unwrap();
+
+        // Encode silence frames. After NB_SPEECH_FRAMES_BEFORE_DTX = 10 frames
+        // of silence (20ms each = 200ms), `nb_no_activity_ms_q1` should pass
+        // the threshold and `get_in_dtx()` should flip to 1.
+        let silence = [0i16; 960];
+        let mut flipped = false;
+        for _ in 0..20 {
+            let _ = enc.encode(&silence, 960, &mut packet, cap).unwrap();
+            if enc.get_in_dtx() == 1 {
+                flipped = true;
+                break;
+            }
+        }
+        assert!(
+            flipped,
+            "expected get_in_dtx() to report 1 after sustained silence"
+        );
+    }
+
+    /// `OPUS_SET_LFE` roundtrip: flag propagates to parent and CELT.
+    #[test]
+    fn test_ctl_set_lfe_roundtrip() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_lfe(1), OPUS_OK);
+        assert_eq!(enc.lfe, 1);
+        if let Some(ref celt) = enc.celt_enc {
+            assert_eq!(celt.lfe, 1);
+        } else {
+            panic!("celt_enc missing");
+        }
+        assert_eq!(enc.set_lfe(0), OPUS_OK);
+        assert_eq!(enc.lfe, 0);
+        if let Some(ref celt) = enc.celt_enc {
+            assert_eq!(celt.lfe, 0);
+        }
+    }
+
+    /// `OPUS_SET_ENERGY_MASK` roundtrip: both the parent `energy_masking`
+    /// field (gates encode-time branches at L2057/L2329) and the CELT-side
+    /// copy must be populated, and cleared on `None`.
+    #[test]
+    fn test_ctl_set_energy_mask_roundtrip() {
+        let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
+        let mask: Vec<i32> = vec![-1000; 42];
+        assert_eq!(enc.set_energy_mask(Some(&mask)), OPUS_OK);
+        // Parent state (gates encode-time branches — L2057/L2329) must be
+        // populated alongside the CELT-side copy.
+        assert_eq!(enc.energy_masking.as_deref(), Some(mask.as_slice()));
+        if let Some(ref celt) = enc.celt_enc {
+            assert_eq!(celt.energy_mask.as_deref(), Some(mask.as_slice()));
+        } else {
+            panic!("celt_enc missing");
+        }
+        // Clear — both the parent field and CELT's copy.
+        assert_eq!(enc.set_energy_mask(None), OPUS_OK);
+        assert!(enc.energy_masking.is_none());
+        if let Some(ref celt) = enc.celt_enc {
+            assert!(celt.energy_mask.is_none());
+        }
     }
 
     #[test]
