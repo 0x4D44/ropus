@@ -63,6 +63,11 @@
 #define OPUS_SET_IGNORE_EXTENSIONS_REQUEST         4058
 #define OPUS_GET_IGNORE_EXTENSIONS_REQUEST         4059
 
+/* DNN weight-loading CTL (opus_defines.h:174). Takes two args:
+ * const unsigned char *data, opus_int32 len. Writes-only (xiph's GET
+ * counterpart at 4053 is commented out). */
+#define OPUS_SET_DNN_BLOB_REQUEST                  4052
+
 #define OPUS_MULTISTREAM_GET_ENCODER_STATE_REQUEST 5120
 #define OPUS_MULTISTREAM_GET_DECODER_STATE_REQUEST 5122
 
@@ -105,6 +110,7 @@ extern int mdopus_decoder_ctl_reset(OpusDecoder *st);
 extern int mdopus_decoder_ctl_set_int(OpusDecoder *st, int request, int value);
 extern int mdopus_decoder_ctl_get_int(OpusDecoder *st, int request, int *out);
 extern int mdopus_decoder_ctl_get_uint32(OpusDecoder *st, int request, opus_uint32 *out);
+extern int mdopus_decoder_ctl_set_dnn_blob(OpusDecoder *st, const unsigned char *data, int len);
 
 extern int mdopus_ms_encoder_ctl_reset(OpusMSEncoder *st);
 extern int mdopus_ms_encoder_ctl_set_int(OpusMSEncoder *st, int request, int value);
@@ -245,6 +251,7 @@ int opus_decoder_ctl(OpusDecoder *st, int request, ...)
         case OPUS_SET_GAIN_REQUEST:
         case OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST:
         case OPUS_SET_IGNORE_EXTENSIONS_REQUEST:
+        case OPUS_SET_COMPLEXITY_REQUEST:
             ret = mdopus_decoder_ctl_set_int(st, request, va_arg(ap, int));
             break;
 
@@ -254,7 +261,8 @@ int opus_decoder_ctl(OpusDecoder *st, int request, ...)
         case OPUS_GET_GAIN_REQUEST:
         case OPUS_GET_LAST_PACKET_DURATION_REQUEST:
         case OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST:
-        case OPUS_GET_IGNORE_EXTENSIONS_REQUEST: {
+        case OPUS_GET_IGNORE_EXTENSIONS_REQUEST:
+        case OPUS_GET_COMPLEXITY_REQUEST: {
             int *out = va_arg(ap, int *);
             if (out == (void *)0) {
                 ret = OPUS_BAD_ARG;
@@ -271,6 +279,19 @@ int opus_decoder_ctl(OpusDecoder *st, int request, ...)
             } else {
                 ret = mdopus_decoder_ctl_get_uint32(st, request, out);
             }
+            break;
+        }
+
+        /* DNN blob: two args (pointer + length). Mirrors xiph's
+         * `opus_decoder.c:1218` gated on USE_WEIGHTS_FILE + ENABLE_DEEP_PLC —
+         * we always route the CTL; the Rust side's `set_dnn_blob` is a
+         * Stage 7a placeholder returning OPUS_UNIMPLEMENTED (= -5) until
+         * Stage 7b ports the real `LPCNetPLCState::load_model`. */
+        /* TODO(stage-7b): replace with LPCNetPLCState::load_model */
+        case OPUS_SET_DNN_BLOB_REQUEST: {
+            const unsigned char *data = va_arg(ap, const unsigned char *);
+            int len = va_arg(ap, int);
+            ret = mdopus_decoder_ctl_set_dnn_blob(st, data, len);
             break;
         }
 

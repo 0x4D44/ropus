@@ -1438,6 +1438,30 @@ impl OpusDecoder {
         self.ignore_extensions = ignore;
     }
 
+    /// Load DNN model weights for neural PLC / OSCE.
+    ///
+    /// Mirrors the C reference's `OPUS_SET_DNN_BLOB_REQUEST` CTL
+    /// (`reference/src/opus_decoder.c:1218` — `lpcnet_plc_load_model` +
+    /// `silk_LoadOSCEModels`).
+    ///
+    /// **Stage 7a placeholder:** the DNN integration itself
+    /// (`LPCNetPLCState` field, neural PLC dispatch) is not yet wired
+    /// into this tree — that's Stage 7b's scope. This method exists so
+    /// the capi CTL dispatcher has a symbol to route against; the body
+    /// deliberately returns `Err(OPUS_UNIMPLEMENTED)` so that any
+    /// caller (Rust or C) that invokes the CTL before 7b lands gets a
+    /// loud, well-defined failure rather than a silent no-op that
+    /// later looks like "weights loaded but PLC is classical".
+    ///
+    /// Stage 7b replaces the body with real weight loading and flips
+    /// the paired unit test.
+    // TODO(stage-7b): replace with LPCNetPLCState::load_model
+    pub fn set_dnn_blob(&mut self, _data: &[u8]) -> Result<(), i32> {
+        // Stage 7a: signature-only. Real weight parsing lands in 7b when
+        // `LPCNetPLCState::load_model` is ported from 6822dd6.
+        Err(OPUS_UNIMPLEMENTED)
+    }
+
     /// Get the number of samples in a packet at this decoder's sample rate.
     pub fn get_nb_samples(&self, packet: &[u8]) -> Result<i32, i32> {
         opus_packet_get_nb_samples(packet, self.fs)
@@ -3006,6 +3030,42 @@ mod tests {
         assert!(dec.get_ignore_extensions());
         dec.set_ignore_extensions(false);
         assert!(!dec.get_ignore_extensions());
+    }
+
+    // Intentional overlap with set_complexity_range_and_getter (line ~4285):
+    // this covers the CTL dispatch layer; the other covers the method directly.
+    /// Round-trip test mirroring the SET→GET path exercised by
+    /// `mdopus_decoder_ctl_{set,get}_int` for `OPUS_SET/GET_COMPLEXITY_REQUEST`.
+    /// Validates the CTL surface wired in capi/src/ctl.rs maps 1:1 onto the
+    /// Rust decoder's `set_complexity` / `get_complexity`.
+    #[test]
+    fn test_decoder_ctl_complexity_roundtrip() {
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        assert_eq!(dec.get_complexity(), 0);
+        for v in [0, 5, 10] {
+            assert!(dec.set_complexity(v).is_ok());
+            assert_eq!(dec.get_complexity(), v);
+        }
+        // Out-of-range rejected (matches encoder's validation, which the
+        // decoder CTL dispatcher forwards to this method unchanged).
+        assert!(dec.set_complexity(-1).is_err());
+        assert!(dec.set_complexity(11).is_err());
+    }
+
+    /// Exercises the Stage 7a placeholder `OpusDecoder::set_dnn_blob`. The
+    /// method is write-only (no GET) and the real weight-loading impl
+    /// lands in Stage 7b — so for now the contract is "signature exists,
+    /// always returns `Err(OPUS_UNIMPLEMENTED)`". This makes accidental
+    /// early use visible (OpusTest / CLI will see `-5`) rather than a
+    /// silent `Ok(())` that looks indistinguishable from a real load.
+    #[test]
+    fn test_decoder_ctl_set_dnn_blob_placeholder() {
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        // Stage 7a placeholder: the method is wired through the CTL shim but the
+        // backing LPCNet weight loader is not yet in place. Stage 7b replaces both
+        // the body and this assertion.
+        assert_eq!(dec.set_dnn_blob(&[]), Err(OPUS_UNIMPLEMENTED));
+        assert_eq!(dec.set_dnn_blob(&[0u8; 16]), Err(OPUS_UNIMPLEMENTED));
     }
 
     #[test]

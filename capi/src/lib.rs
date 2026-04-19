@@ -79,10 +79,9 @@ pub const OPUS_ALLOC_FAIL: i32 = -7;
 // The CTL surface exercised by the xiph conformance tests (encoder, decoder,
 // and multistream variants) is dispatched by `ctl_shim.c` into typed Rust
 // entry points in `ctl.rs`. Unknown requests land on the default arm and
-// return `OPUS_UNIMPLEMENTED`; that includes the DNN/DRED/OSCE/QEXT and
-// `IGNORE_EXTENSIONS` families (which track deferred DNN/OSCE work) plus a
-// handful of niche requests the conformance suite doesn't touch
-// (`VOICE_RATIO`, `IN_DTX`, `LFE`, `ENERGY_MASK`, decoder-side `COMPLEXITY`).
+// return `OPUS_UNIMPLEMENTED`; that includes the DRED/OSCE/QEXT families plus
+// a handful of niche requests the conformance suite doesn't touch
+// (`VOICE_RATIO`, `IN_DTX`, `LFE`, `ENERGY_MASK`).
 // `OPUS_RESET_STATE` is the only code re-exported at crate scope because
 // other modules refer to it by name (see the generation-bump docs in
 // encoder.rs / decoder.rs).

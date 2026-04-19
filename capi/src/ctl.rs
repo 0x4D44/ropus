@@ -62,6 +62,16 @@ const OPUS_GET_IN_DTX_REQUEST: c_int = 4049;
 const OPUS_SET_IGNORE_EXTENSIONS_REQUEST: c_int = 4058;
 const OPUS_GET_IGNORE_EXTENSIONS_REQUEST: c_int = 4059;
 
+// DNN weight loading CTL (xiph: `reference/include/opus_defines.h:174`).
+// Public in the xiph header. Writes-only (no paired GET — xiph's 4053 is
+// commented out at `opus_defines.h:175`). Dispatched through a dedicated
+// pointer-argument entry point (`mdopus_decoder_ctl_set_dnn_blob`) from
+// `ctl_shim.c` because the CTL takes `const unsigned char *, opus_int32`
+// rather than a scalar; this constant is for documentation symmetry
+// (the shim has its own `#define` of the same value).
+#[allow(dead_code)]
+const OPUS_SET_DNN_BLOB_REQUEST: c_int = 4052;
+
 // From `reference/src/opus_private.h:172` — private CTL the conformance
 // test_opus_encode.c exercises directly. Routed into `OpusEncoder::set_force_mode`
 // (validation lives there; maps `OPUS_AUTO | MODE_SILK_ONLY | MODE_HYBRID | MODE_CELT_ONLY`).
@@ -301,6 +311,14 @@ pub unsafe extern "C" fn mdopus_decoder_ctl_set_int(
                 dec.set_ignore_extensions(value != 0);
                 OPUS_OK
             }
+            // Decoder-side complexity: validation (`0..=10`) lives inside
+            // `OpusDecoder::set_complexity`; it forwards the value into the
+            // embedded CELT decoder as well, matching the encoder side's
+            // CTL semantics.
+            OPUS_SET_COMPLEXITY_REQUEST => match dec.set_complexity(value) {
+                Ok(()) => OPUS_OK,
+                Err(e) => e,
+            },
             _ => OPUS_UNIMPLEMENTED,
         }
     })
@@ -331,10 +349,44 @@ pub unsafe extern "C" fn mdopus_decoder_ctl_get_int(
             OPUS_GET_IGNORE_EXTENSIONS_REQUEST => {
                 if dec.get_ignore_extensions() { 1 } else { 0 }
             }
+            OPUS_GET_COMPLEXITY_REQUEST => dec.get_complexity(),
             _ => return OPUS_UNIMPLEMENTED,
         };
         unsafe { *out = value };
         OPUS_OK
+    })
+}
+
+/// Typed pointer-argument dispatcher for decoder CTLs. Currently handles
+/// `OPUS_SET_DNN_BLOB_REQUEST(const unsigned char *data, opus_int32 len)`
+/// — the reference validates `len >= 0 && data != NULL` and then delegates
+/// to `lpcnet_plc_load_model` + `silk_LoadOSCEModels`
+/// (`reference/src/opus_decoder.c:1218`). We fold both checks into a
+/// `from_raw_parts` of the slice and forward to `OpusDecoder::set_dnn_blob`,
+/// which is a Stage 7a placeholder (always `Err(OPUS_UNIMPLEMENTED)`).
+/// Real loading lands with the rest of the DNN wiring in 7b.
+// TODO(stage-7b): replace with LPCNetPLCState::load_model
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mdopus_decoder_ctl_set_dnn_blob(
+    st: *mut OpusDecoder,
+    data: *const c_uchar,
+    len: c_int,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if data.is_null() || len < 0 {
+            return OPUS_BAD_ARG;
+        }
+        let Some(dec) = (unsafe { crate::decoder::handle_to_decoder(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        // SAFETY: `data` is a caller-provided buffer of at least `len`
+        // bytes (the xiph CTL contract). Zero-length is permitted — the
+        // raw pointer must be non-null per the check above.
+        let slice: &[u8] = unsafe { std::slice::from_raw_parts(data, len as usize) };
+        match dec.set_dnn_blob(slice) {
+            Ok(()) => OPUS_OK,
+            Err(e) => e,
+        }
     })
 }
 
@@ -914,4 +966,27 @@ pub unsafe extern "C" fn mdopus_proj_decoder_ctl_get_uint32(
             _ => OPUS_UNIMPLEMENTED,
         }
     })
+}
+
+// ---------------------------------------------------------------------------
+// CTL-constant pinning tests
+// ---------------------------------------------------------------------------
+//
+// The CTL request codes are part of the stable libopus ABI and are also
+// hard-coded in `ctl_shim.c` as `#define`s. We cannot cross-check the
+// Rust constant against the C `#define` from Rust without FFI, so we
+// pin the Rust side against the canonical numeric literal here —
+// catches hand-edit drift on the Rust constant. If a drift happens in
+// `ctl_shim.c`, the conformance tests (which go end-to-end via the C
+// shim) will surface it as an `OPUS_UNIMPLEMENTED` at runtime.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opus_set_dnn_blob_request_has_canonical_value() {
+        // Matches `reference/include/opus_defines.h:174` verbatim.
+        assert_eq!(OPUS_SET_DNN_BLOB_REQUEST, 4052);
+    }
 }

@@ -202,6 +202,48 @@ fn main() {
         "src/mlp_data.c",
     ];
 
+    // --- DNN sources (DEEP_PLC only — DRED/OSCE are Stage 8 scope).
+    //
+    // Authoritative list lives in `reference/lpcnet_sources.mk` under
+    // `DEEP_PLC_SOURCES`. Keep this in sync if xiph pins a new commit.
+    // SIMD-specialised variants under `dnn/x86/` and `dnn/arm/` stay out:
+    // the harness builds platform-independent only.
+    //
+    // NOT FED INTO THE BUILD (Stage 7a spike conclusion). Upstream xiph
+    // explicitly forbids `--enable-fixed-point` + `--enable-deep-plc`
+    // (`reference/configure.ac:973` AC_MSG_ERROR); the restriction is
+    // not a CI gap, it's enforced at configure time. A Stage 7a spike
+    // examined the "dual cc::Build" workaround (Option C: compile DNN
+    // sources with float, core with fixed) and found it unsafe: DNN's
+    // `freq.c` defines and consumes a `kiss_fft_state kfft` and calls
+    // `opus_fft(&kfft, ...)` which macro-expands to `opus_fft_c` in
+    // fixed-point-compiled `celt/kiss_fft.c`. Cross-TU struct-layout
+    // and `kiss_fft_scalar` type disagreement → silent memory corruption.
+    // Every DNN source transitively pulls `kiss_fft.h` via `freq.h`.
+    //
+    // A future cleaner path (Option B: vendor a patched lpcnet_tables.c
+    // with scale_shift seeded from scale, plus a second harness binary
+    // in float mode, or a full float-mode comparison build) is deferred
+    // to Stage 7b. Stage 7a lands only the CTL plumbing.
+    //
+    // Note the `_data.c` files carry the runtime weight arrays; they come
+    // from the xiph weights tarball (unpacked under `reference/dnn/`).
+    let _dnn_sources = [
+        "dnn/burg.c",
+        "dnn/freq.c",
+        "dnn/fargan.c",
+        "dnn/fargan_data.c",
+        "dnn/lpcnet_enc.c",
+        "dnn/lpcnet_plc.c",
+        "dnn/lpcnet_tables.c",
+        "dnn/nnet.c",
+        "dnn/nnet_default.c",
+        "dnn/plc_data.c",
+        "dnn/parse_lpcnet_weights.c",
+        "dnn/pitchdnn.c",
+        "dnn/pitchdnn_data.c",
+    ];
+
     let mut build = cc::Build::new();
 
     build
@@ -214,6 +256,11 @@ fn main() {
         .include(ref_dir.join("silk/fixed"))
         .include(&ref_dir) // for src/ internal headers
         .include(ref_dir.join("src"))
+        // Include path for dnn/*.h headers (e.g. lpcnet_plc.h). Harmless
+        // when no DNN source file is compiled — kept wired for the Stage
+        // 7b follow-up that revisits DEEP_PLC integration in a
+        // float-mode or dual-binary harness (see `_dnn_sources` below).
+        .include(ref_dir.join("dnn"))
         // Defines
         .define("HAVE_CONFIG_H", "1")
         .define("OPUS_BUILD", None);
@@ -273,6 +320,13 @@ fn main() {
     for src in &opus_sources {
         build.file(ref_dir.join(src));
     }
+    // `_dnn_sources` is intentionally left out of the build until the
+    // FIXED_POINT vs. DEEP_PLC struct-init incompatibility is resolved
+    // (see the commentary on `_dnn_sources` above). Uncomment this loop
+    // when re-enabling.
+    // for src in &_dnn_sources {
+    //     build.file(ref_dir.join(src));
+    // }
 
     // Debug helper for direct function comparisons
     build.file(harness_dir.join("debug_helper.c"));

@@ -31,7 +31,28 @@
 #define OPUS_X86_MAY_HAVE_SSE4_1 1
 #define CPU_INFO_BY_C 1
 
-/* Disable DNN/ML features (not needed for core codec comparison) */
+/* DNN / ML features.
+ *
+ * ENABLE_DEEP_PLC stays OFF here. Upstream xiph explicitly prohibits the
+ * combination with fixed-point: `reference/configure.ac:973` aborts
+ * autotools with `AC_MSG_ERROR([--enable-fixed-point cannot be used with
+ * --enable-deep-plc, --enable-dred, and --enable-osce.])`. It's not a CI
+ * gap — it's an enforced incompatibility.
+ *
+ * The Stage 7a follow-up (see wrk_journals 2026-04-19) investigated a
+ * dual-cc::Build workaround ("Option C": DNN sources compiled float,
+ * core compiled fixed). The spike found that DNN's `freq.c:245,262`
+ * calls `opus_fft(&kfft, ...)` which macro-expands to `opus_fft_c(...)`
+ * defined in `celt/kiss_fft.c`. If that function is compiled with
+ * FIXED_POINT=1 while `kfft` is defined in a float-compiled
+ * `dnn/lpcnet_tables.c`, the struct layouts disagree
+ * (`kiss_fft_state` has an extra `scale_shift` under FIXED_POINT,
+ * and `kiss_fft_scalar` changes from `float` to `opus_int32`).
+ * Cross-TU ABI mismatch → silent memory corruption. Every DNN source
+ * transitively includes `kiss_fft.h` via `freq.h`, so the FIXED_POINT
+ * view cannot be scoped out. Option C is NOT viable; a cleaner
+ * workaround (e.g. vendored patched `lpcnet_tables.c` + float-mode
+ * harness, or a second harness binary) is deferred to Stage 7b. */
 /* #undef ENABLE_DEEP_PLC */
 /* #undef ENABLE_DRED */
 /* #undef ENABLE_OSCE */
