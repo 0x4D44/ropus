@@ -94,9 +94,9 @@ impl OpusTags {
 
         let mut comments = Vec::with_capacity(comment_count);
         for i in 0..comment_count {
-            let len = read_u32_le(data, &mut pos).ok_or_else(|| {
-                anyhow!("OpusTags truncated before length of comment #{i}")
-            })? as usize;
+            let len = read_u32_le(data, &mut pos)
+                .ok_or_else(|| anyhow!("OpusTags truncated before length of comment #{i}"))?
+                as usize;
             if len > data.len().saturating_sub(pos) {
                 bail!(
                     "OpusTags comment #{i} length {} overruns packet ({} bytes remaining)",
@@ -241,12 +241,8 @@ pub fn read_page_granules<R: Read + Seek>(
             buf[pos + 12],
             buf[pos + 13],
         ]);
-        let serial = u32::from_le_bytes([
-            buf[pos + 14],
-            buf[pos + 15],
-            buf[pos + 16],
-            buf[pos + 17],
-        ]);
+        let serial =
+            u32::from_le_bytes([buf[pos + 14], buf[pos + 15], buf[pos + 16], buf[pos + 17]]);
         let nseg = buf[pos + 26] as usize;
         let lacing_end = pos + 27 + nseg;
         if lacing_end > buf.len() {
@@ -532,10 +528,7 @@ mod tests {
         bytes.extend_from_slice(&0u32.to_le_bytes()); // zero comments
         let err = OpusTags::parse(&bytes).expect_err("must reject non-UTF-8 vendor");
         let msg = format!("{err:#}");
-        assert!(
-            msg.contains("UTF-8"),
-            "expected UTF-8 error, got: {msg}"
-        );
+        assert!(msg.contains("UTF-8"), "expected UTF-8 error, got: {msg}");
     }
 
     #[test]

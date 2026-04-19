@@ -137,8 +137,7 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
     //    resampler sees the post-mix channel count; the encoder, OpusHead,
     //    and resampler all need to agree.
     let (samples, channels) = if opts.downmix_to_mono && channels > 1 {
-        let mixed = downmix_to_mono(&samples, channels)
-            .context("downmixing stereo to mono")?;
+        let mixed = downmix_to_mono(&samples, channels).context("downmixing stereo to mono")?;
         report!("downmix  {} ch -> 1 ch", channels);
         (mixed, 1usize)
     } else {
@@ -150,8 +149,7 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         samples
     } else {
         report!("resample {} Hz -> {} Hz", sample_rate, OPUS_SR);
-        resample(&samples, sample_rate, OPUS_SR, channels)
-            .context("resampling to 48 kHz")?
+        resample(&samples, sample_rate, OPUS_SR, channels).context("resampling to 48 kHz")?
     };
     report!(
         "resampled {} samples @ 48 kHz",
@@ -222,9 +220,8 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         // Stat first and reject oversize files *before* reading them into
         // memory. Avoids a 5 GiB allocation on obvious user error (dropped-in
         // video file, etc.) and gives a clear message instead of OOM.
-        let meta = std::fs::metadata(pic_path).with_context(|| {
-            format!("reading picture metadata {}", pic_path.display())
-        })?;
+        let meta = std::fs::metadata(pic_path)
+            .with_context(|| format!("reading picture metadata {}", pic_path.display()))?;
         if meta.len() > MAX_PICTURE_BYTES {
             bail!(
                 "picture file {} is {} bytes; refusing > {} bytes (use a smaller cover image)",
@@ -240,9 +237,8 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         }
         let format = detect_format(&data)
             .with_context(|| format!("detecting picture format for {}", pic_path.display()))?;
-        let block = build_picture_block(format, &data).with_context(|| {
-            format!("building picture block for {}", pic_path.display())
-        })?;
+        let block = build_picture_block(format, &data)
+            .with_context(|| format!("building picture block for {}", pic_path.display()))?;
         let b64 = base64_encode(&block);
         comments.insert(0, format!("METADATA_BLOCK_PICTURE={b64}"));
         report!(
@@ -287,12 +283,7 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
             PacketWriteEndInfo::NormalPacket
         };
         writer
-            .write_packet(
-                packet_buf[..n].to_vec(),
-                serial,
-                end_info,
-                samples_written,
-            )
+            .write_packet(packet_buf[..n].to_vec(), serial, end_info, samples_written)
             .context("writing Opus data page")?;
         packet_count += 1;
     }

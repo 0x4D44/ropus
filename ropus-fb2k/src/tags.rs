@@ -48,9 +48,7 @@ impl ParsedTags {
     /// Iterate `(KEY, VALUE)` pairs in input order, skipping filtered keys.
     /// Keys are uppercased per vorbis_comment convention.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.comments
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
+        self.comments.iter().map(|(k, v)| (k.as_str(), v.as_str()))
     }
 }
 
@@ -328,20 +326,13 @@ mod tests {
 
     #[test]
     fn parses_vendor_and_comments() {
-        let bytes = build(
-            "ropus-cli",
-            &["ARTIST=Alice", "title=Bob", "DATE=2026"],
-        );
+        let bytes = build("ropus-cli", &["ARTIST=Alice", "title=Bob", "DATE=2026"]);
         let parsed = parse(&bytes).expect("valid");
         assert_eq!(parsed.vendor, "ropus-cli");
         let kv: Vec<(&str, &str)> = parsed.iter().collect();
         assert_eq!(
             kv,
-            vec![
-                ("ARTIST", "Alice"),
-                ("TITLE", "Bob"),
-                ("DATE", "2026"),
-            ]
+            vec![("ARTIST", "Alice"), ("TITLE", "Bob"), ("DATE", "2026"),]
         );
     }
 
@@ -448,8 +439,8 @@ mod tests {
     #[test]
     fn extract_rg_legacy_overrides_r128() {
         let parsed = tags_from(&[
-            ("R128_TRACK_GAIN", "-1280"),           // -5 dB R128 → 0 dB RG
-            ("REPLAYGAIN_TRACK_GAIN", "-6.75 dB"),  // wins the override
+            ("R128_TRACK_GAIN", "-1280"),          // -5 dB R128 → 0 dB RG
+            ("REPLAYGAIN_TRACK_GAIN", "-6.75 dB"), // wins the override
         ]);
         let rg = extract_replaygain(&parsed);
         assert!((rg.track_gain - (-6.75)).abs() < 1e-3);
@@ -495,7 +486,10 @@ mod tests {
         assert!(parse_r128_gain(&extreme).is_none(), "i32::MIN must reject");
 
         let extreme_pos = i32::MAX.to_string();
-        assert!(parse_r128_gain(&extreme_pos).is_none(), "i32::MAX must reject");
+        assert!(
+            parse_r128_gain(&extreme_pos).is_none(),
+            "i32::MAX must reject"
+        );
 
         // Values just outside the ±127 dB window also reject. 127 dB
         // plus the +5 dB RG offset pre-subtraction: raw = (122 dB) * 256

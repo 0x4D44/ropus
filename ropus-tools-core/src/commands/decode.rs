@@ -68,9 +68,7 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
                 rate * 1000
             );
         }
-        bail!(
-            "--rate {rate} out of range (accepted: {MIN_OUTPUT_RATE}..={MAX_OUTPUT_RATE} Hz)"
-        );
+        bail!("--rate {rate} out of range (accepted: {MIN_OUTPUT_RATE}..={MAX_OUTPUT_RATE} Hz)");
     }
 
     // Resolve the output path. `-` and "input is stdin with no explicit -o"
@@ -130,8 +128,8 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
             .context("reading stdin into buffer")?;
         PacketReader::new(Box::new(Cursor::new(buf)))
     } else {
-        let file = File::open(&opts.input)
-            .with_context(|| format!("opening {}", opts.input.display()))?;
+        let file =
+            File::open(&opts.input).with_context(|| format!("opening {}", opts.input.display()))?;
         PacketReader::new(Box::new(BufReader::new(file)))
     };
 
@@ -194,8 +192,7 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
     // were in effect.
     report!(
         "format   {}",
-        (if opts.float { "f32" } else { "i16" })
-            .bright_white()
+        (if opts.float { "f32" } else { "i16" }).bright_white()
     );
     if opts.gain_db != 0.0 {
         report!(
@@ -408,8 +405,7 @@ where
         body(&mut w)?;
         w.flush()?;
     } else {
-        let f = File::create(output)
-            .with_context(|| format!("creating {}", output.display()))?;
+        let f = File::create(output).with_context(|| format!("creating {}", output.display()))?;
         let mut w = BufWriter::new(f);
         body(&mut w)?;
         w.flush()?;
@@ -426,32 +422,27 @@ fn write_output_samples(
     raw: bool,
 ) -> Result<()> {
     match (data, raw) {
-        (OutputData::I16(samples), true) => {
-            with_output_sink(output, output_is_stdout, |w| {
-                for s in samples {
-                    w.write_all(&s.to_le_bytes())?;
-                }
-                Ok(())
-            })
-        }
+        (OutputData::I16(samples), true) => with_output_sink(output, output_is_stdout, |w| {
+            for s in samples {
+                w.write_all(&s.to_le_bytes())?;
+            }
+            Ok(())
+        }),
         (OutputData::I16(samples), false) => {
             if output_is_stdout {
                 with_output_sink(output, true, |w| {
-                    write_wav_pcm16_to(w, samples, sample_rate, channels)
-                        .context("writing WAV")
+                    write_wav_pcm16_to(w, samples, sample_rate, channels).context("writing WAV")
                 })
             } else {
                 write_wav_pcm16(output, samples, sample_rate, channels).context("writing WAV")
             }
         }
-        (OutputData::Float(samples), true) => {
-            with_output_sink(output, output_is_stdout, |w| {
-                for s in samples {
-                    w.write_all(&s.to_le_bytes())?;
-                }
-                Ok(())
-            })
-        }
+        (OutputData::Float(samples), true) => with_output_sink(output, output_is_stdout, |w| {
+            for s in samples {
+                w.write_all(&s.to_le_bytes())?;
+            }
+            Ok(())
+        }),
         (OutputData::Float(samples), false) => {
             if output_is_stdout {
                 with_output_sink(output, true, |w| {

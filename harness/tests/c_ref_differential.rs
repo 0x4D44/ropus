@@ -22,11 +22,7 @@ use std::os::raw::c_int;
 // Minimal FFI declarations for the C reference (linked via harness/build.rs as
 // the `opus_ref` static library).
 unsafe extern "C" {
-    fn opus_decoder_create(
-        fs: i32,
-        channels: c_int,
-        error: *mut c_int,
-    ) -> *mut std::ffi::c_void;
+    fn opus_decoder_create(fs: i32, channels: c_int, error: *mut c_int) -> *mut std::ffi::c_void;
     fn opus_decode(
         st: *mut std::ffi::c_void,
         data: *const u8,
@@ -167,8 +163,7 @@ fn test_lpc_inverse_pred_gain_matches_c_reference() {
     for (name, coeffs) in patterns {
         let order = coeffs.len().min(16);
         let rust_result = silk_lpc_inverse_pred_gain(&coeffs[..order], order);
-        let c_result =
-            unsafe { silk_LPC_inverse_pred_gain_c(coeffs.as_ptr(), order as c_int) };
+        let c_result = unsafe { silk_LPC_inverse_pred_gain_c(coeffs.as_ptr(), order as c_int) };
         if rust_result != c_result {
             eprintln!(
                 "MISMATCH {name}: rust={rust_result}, c={c_result}, \
@@ -352,8 +347,8 @@ fn test_bug5_encode_8khz_stereo_71kbps_matches_c_reference() {
         enc
     };
 
-    let mut rust_enc = OpusEncoder::new(sample_rate, channels, application)
-        .expect("Rust encoder create failed");
+    let mut rust_enc =
+        OpusEncoder::new(sample_rate, channels, application).expect("Rust encoder create failed");
     rust_enc.set_bitrate(bitrate);
     rust_enc.set_vbr(0);
     rust_enc.set_complexity(complexity);
@@ -514,8 +509,7 @@ fn test_fuzz_decode_scan_all_configs() {
                     };
                     let max_frame = 5760;
                     let mut rust_pcm = vec![0i16; max_frame as usize * ch as usize];
-                    let rust_ret =
-                        rust_dec.decode(Some(&packet), &mut rust_pcm, max_frame, false);
+                    let rust_ret = rust_dec.decode(Some(&packet), &mut rust_pcm, max_frame, false);
 
                     // C decode
                     let c_ret = c_ref_decode(&packet, sr, ch);
@@ -652,10 +646,8 @@ fn test_encoder_final_range_matches_decoder_on_celt_to_silk_redundancy() {
         let silence_samples = (sr as usize / 1000) * 60;
         for (i, s) in music.iter_mut().enumerate().skip(silence_samples) {
             // Pseudo-melody bitfield from test_opus_encode.c:71
-            let v_base = ((j.wrapping_mul(
-                (j >> 12) ^ ((j >> 10 | j >> 12) & 26 & (j >> 7)),
-            )) & 128)
-                + 128;
+            let v_base =
+                ((j.wrapping_mul((j >> 12) ^ ((j >> 10 | j >> 12) & 26 & (j >> 7)))) & 128) + 128;
             let mut v: i32 = v_base << 15;
             rng = rng
                 .wrapping_mul(6364136223846793005)
@@ -727,7 +719,10 @@ fn test_encoder_final_range_matches_decoder_on_celt_to_silk_redundancy() {
                 &mut c_dec_rng as *mut u32,
             )
         };
-        assert_eq!(rc, 0, "iter {iter}: C OPUS_GET_FINAL_RANGE ctl failed: {rc}");
+        assert_eq!(
+            rc, 0,
+            "iter {iter}: C OPUS_GET_FINAL_RANGE ctl failed: {rc}"
+        );
 
         assert_eq!(
             enc_rng, rust_dec_rng,
@@ -794,10 +789,8 @@ fn test_encoder_final_range_matches_decoder_on_silk_to_celt_redundancy() {
         let mut j: i32 = 0;
         let mut rng: u64 = 0x1234_5678_9ABC_DEF0;
         for (i, s) in music.iter_mut().enumerate() {
-            let v_base = ((j.wrapping_mul(
-                (j >> 12) ^ ((j >> 10 | j >> 12) & 26 & (j >> 7)),
-            )) & 128)
-                + 128;
+            let v_base =
+                ((j.wrapping_mul((j >> 12) ^ ((j >> 10 | j >> 12) & 26 & (j >> 7)))) & 128) + 128;
             let mut v: i32 = v_base << 15;
             rng = rng
                 .wrapping_mul(6364136223846793005)
@@ -829,8 +822,7 @@ fn test_encoder_final_range_matches_decoder_on_silk_to_celt_redundancy() {
         let mut out = vec![0u8; max_packet as usize];
         let len = enc
             .encode(pcm, frame_size, &mut out, max_packet)
-            .unwrap_or_else(|e| panic!("{tag}: encode failed: {e}"))
-            as usize;
+            .unwrap_or_else(|e| panic!("{tag}: encode failed: {e}")) as usize;
         let pkt = &out[..len];
         let enc_rng = enc.get_final_range();
 
@@ -921,9 +913,7 @@ fn test_encoder_final_range_matches_decoder_on_silk_to_celt_redundancy() {
 // to_celt=true — writing a SILK→CELT redundancy tail in HYBRID mode.
 #[test]
 fn test_encoder_final_range_matches_decoder_on_hybrid_silk_to_celt_redundancy() {
-    use ropus::opus::decoder::{
-        MODE_CELT_ONLY, MODE_HYBRID, OPUS_BANDWIDTH_FULLBAND,
-    };
+    use ropus::opus::decoder::{MODE_CELT_ONLY, MODE_HYBRID, OPUS_BANDWIDTH_FULLBAND};
 
     let sr: i32 = 48000;
     let ch: i32 = 2;
@@ -956,10 +946,8 @@ fn test_encoder_final_range_matches_decoder_on_hybrid_silk_to_celt_redundancy() 
         let mut j: i32 = 0;
         let mut rng: u64 = 0xcafe_f00d_dead_beef;
         for (i, s) in music.iter_mut().enumerate() {
-            let v_base = ((j.wrapping_mul(
-                (j >> 12) ^ ((j >> 10 | j >> 12) & 26 & (j >> 7)),
-            )) & 128)
-                + 128;
+            let v_base =
+                ((j.wrapping_mul((j >> 12) ^ ((j >> 10 | j >> 12) & 26 & (j >> 7)))) & 128) + 128;
             let mut v: i32 = v_base << 15;
             rng = rng
                 .wrapping_mul(6364136223846793005)
@@ -990,8 +978,7 @@ fn test_encoder_final_range_matches_decoder_on_hybrid_silk_to_celt_redundancy() 
         let mut out = vec![0u8; max_packet as usize];
         let len = enc
             .encode(pcm, frame_size, &mut out, max_packet)
-            .unwrap_or_else(|e| panic!("{tag}: encode failed: {e}"))
-            as usize;
+            .unwrap_or_else(|e| panic!("{tag}: encode failed: {e}")) as usize;
         let pkt = &out[..len];
         let enc_rng = enc.get_final_range();
 
@@ -1133,10 +1120,8 @@ fn test_encoder_final_range_matches_decoder_on_multiframe_silk_to_celt_redundanc
         let mut j: i32 = 0;
         let mut rng: u64 = 0x0BAD_C0DE_1337_D00D;
         for (i, s) in music.iter_mut().enumerate() {
-            let v_base = ((j.wrapping_mul(
-                (j >> 12) ^ ((j >> 10 | j >> 12) & 26 & (j >> 7)),
-            )) & 128)
-                + 128;
+            let v_base =
+                ((j.wrapping_mul((j >> 12) ^ ((j >> 10 | j >> 12) & 26 & (j >> 7)))) & 128) + 128;
             let mut v: i32 = v_base << 15;
             rng = rng
                 .wrapping_mul(6364136223846793005)
@@ -1167,8 +1152,7 @@ fn test_encoder_final_range_matches_decoder_on_multiframe_silk_to_celt_redundanc
         let mut out = vec![0u8; max_packet as usize];
         let len = enc
             .encode(pcm, frame_size, &mut out, max_packet)
-            .unwrap_or_else(|e| panic!("{tag}: encode failed: {e}"))
-            as usize;
+            .unwrap_or_else(|e| panic!("{tag}: encode failed: {e}")) as usize;
         let pkt = &out[..len];
         let enc_rng = enc.get_final_range();
 
@@ -1306,9 +1290,8 @@ fn test_encoder_final_range_matches_decoder_on_hybrid_cvbr_min_packet_floor() {
         let mut jj: i32 = 0;
         let mut rng: u64 = 0xFEED_FACE_DEAD_BEEF;
         for (i, s) in music.iter_mut().enumerate() {
-            let v_base = ((jj.wrapping_mul(
-                (jj >> 12) ^ ((jj >> 10 | jj >> 12) & 26 & (jj >> 7)),
-            )) & 128)
+            let v_base = ((jj.wrapping_mul((jj >> 12) ^ ((jj >> 10 | jj >> 12) & 26 & (jj >> 7))))
+                & 128)
                 + 128;
             let mut v: i32 = v_base << 15;
             rng = rng
@@ -1445,7 +1428,11 @@ fn test_encoder_toc_matches_reference_on_below_threshold_2p5ms_frame() {
         opus_encoder_ctl(c_enc, OPUS_SET_VBR_REQUEST, 1i32);
         opus_encoder_ctl(c_enc, OPUS_SET_COMPLEXITY_REQUEST, 8i32);
         opus_encoder_ctl(c_enc, OPUS_SET_FORCE_CHANNELS_REQUEST, 1i32);
-        opus_encoder_ctl(c_enc, OPUS_SET_MAX_BANDWIDTH_REQUEST, OPUS_BANDWIDTH_FULLBAND);
+        opus_encoder_ctl(
+            c_enc,
+            OPUS_SET_MAX_BANDWIDTH_REQUEST,
+            OPUS_BANDWIDTH_FULLBAND,
+        );
         opus_encoder_ctl(
             c_enc,
             OPUS_SET_EXPERT_FRAME_DURATION_REQUEST,
@@ -1538,7 +1525,10 @@ fn test_24bit_decode_matches_c_reference_mono() {
     };
     let (c_sample_count, c_pcm24) = c_n;
 
-    assert_eq!(rust_n, c_sample_count, "decode24 mono: sample count mismatch");
+    assert_eq!(
+        rust_n, c_sample_count,
+        "decode24 mono: sample count mismatch"
+    );
     let n_samples = (rust_n as usize) * (ch as usize);
     assert_eq!(
         &rust_pcm24[..n_samples],
@@ -1605,7 +1595,9 @@ fn test_24bit_decode_left_shift_8_invariant() {
 
     let mut dec16 = OpusDecoder::new(sr, ch).unwrap();
     let mut pcm16 = vec![0i16; max_frame as usize];
-    let n16 = dec16.decode(Some(&packet), &mut pcm16, max_frame, false).unwrap();
+    let n16 = dec16
+        .decode(Some(&packet), &mut pcm16, max_frame, false)
+        .unwrap();
 
     let mut dec24 = OpusDecoder::new(sr, ch).unwrap();
     let mut pcm24 = vec![0i32; max_frame as usize];
@@ -1694,7 +1686,10 @@ fn test_24bit_decode_plc_matches_c_reference() {
         (n, c_pcm24)
     };
 
-    assert_eq!(rust_n, c_sample_count, "decode24 PLC: sample count mismatch");
+    assert_eq!(
+        rust_n, c_sample_count,
+        "decode24 PLC: sample count mismatch"
+    );
     let n_samples = (rust_n as usize) * (ch as usize);
     assert_eq!(
         &rust_pcm24[..n_samples],
@@ -1940,7 +1935,7 @@ fn rust_downmix_float(
     // CELT_SIG_SCALE << SIG_SHIFT = 32768 * 4096 = 134_217_728.
     // Matches `FLOAT2SIG(x)` in `float_cast.h:166-172` under FIXED_POINT.
     const FLOAT2SIG_MULT: f32 = 134_217_728.0; // 32768 << 12
-    const SIG_CLAMP_MAX: f32 = 268_435_456.0;  // 65536 << 12
+    const SIG_CLAMP_MAX: f32 = 268_435_456.0; // 65536 << 12
     const SIG_CLAMP_MIN: f32 = -268_435_456.0;
     #[inline(always)]
     fn float2sig(x: f32) -> i32 {
@@ -2019,7 +2014,10 @@ fn test_analysis_run_matches_c_reference() {
     let celt_mode_ptr: *mut std::ffi::c_void = unsafe {
         let mut err: c_int = 0;
         let p = opus_custom_mode_create(FS, FRAME_SIZE as c_int, &mut err);
-        assert!(!p.is_null() && err == 0, "opus_custom_mode_create err={err}");
+        assert!(
+            !p.is_null() && err == 0,
+            "opus_custom_mode_create err={err}"
+        );
         p
     };
 
@@ -2109,13 +2107,15 @@ fn test_analysis_run_matches_c_reference() {
                 c_info.tonality_slope.to_bits(),
                 rust_info.tonality_slope.to_bits(),
                 "frame {f}: tonality_slope bit-diff (c={}, rust={})",
-                c_info.tonality_slope, rust_info.tonality_slope
+                c_info.tonality_slope,
+                rust_info.tonality_slope
             );
             assert_eq!(
                 c_info.activity_probability.to_bits(),
                 rust_info.activity_probability.to_bits(),
                 "frame {f}: activity_probability bit-diff (c={}, rust={})",
-                c_info.activity_probability, rust_info.activity_probability
+                c_info.activity_probability,
+                rust_info.activity_probability
             );
             assert_eq!(
                 c_info.bandwidth, rust_info.bandwidth,
@@ -2205,7 +2205,10 @@ fn diag_inmem_after_downmix() {
     println!("c_state.inmem[0..20]   = {:?}", &c_state.inmem[0..20]);
     println!("rust_state.inmem[0..20] = {:?}", &rust_state.inmem[0..20]);
     println!("c_state.inmem[240..260]   = {:?}", &c_state.inmem[240..260]);
-    println!("rust_state.inmem[240..260] = {:?}", &rust_state.inmem[240..260]);
+    println!(
+        "rust_state.inmem[240..260] = {:?}",
+        &rust_state.inmem[240..260]
+    );
     let mut first_diff: Option<usize> = None;
     for i in 0..c_state.inmem.len() {
         if c_state.inmem[i] != rust_state.inmem[i] {
@@ -2217,10 +2220,15 @@ fn diag_inmem_after_downmix() {
     // Compare downmix_state too
     println!("c_state.downmix_state = {:?}", c_state.downmix_state);
     println!("rust_state.downmix_state = {:?}", rust_state.downmix_state);
-    println!("c_state.hp_ener_accum = {} ({:08x})", c_state.hp_ener_accum, c_state.hp_ener_accum.to_bits());
+    println!(
+        "c_state.hp_ener_accum = {} ({:08x})",
+        c_state.hp_ener_accum,
+        c_state.hp_ener_accum.to_bits()
+    );
     println!(
         "rust_state.hp_ener_accum = {} ({:08x})",
-        rust_state.hp_ener_accum, rust_state.hp_ener_accum.to_bits()
+        rust_state.hp_ener_accum,
+        rust_state.hp_ener_accum.to_bits()
     );
     println!("c_state.mem_fill = {}", c_state.mem_fill);
     println!("rust_state.mem_fill = {}", rust_state.mem_fill);
@@ -2425,7 +2433,10 @@ fn test_analysis_run_matches_c_reference_long() {
     let celt_mode_ptr: *mut std::ffi::c_void = unsafe {
         let mut err: c_int = 0;
         let p = opus_custom_mode_create(FS, FRAME_SIZE as c_int, &mut err);
-        assert!(!p.is_null() && err == 0, "opus_custom_mode_create err={err}");
+        assert!(
+            !p.is_null() && err == 0,
+            "opus_custom_mode_create err={err}"
+        );
         p
     };
 
@@ -2551,7 +2562,8 @@ fn test_analysis_run_matches_c_reference_long() {
                 c_info.music_prob.to_bits(),
                 rust_info.music_prob.to_bits(),
                 "frame {f}: music_prob bit-diff (c={}, rust={})",
-                c_info.music_prob, rust_info.music_prob
+                c_info.music_prob,
+                rust_info.music_prob
             );
         }
     }
@@ -2596,12 +2608,9 @@ fn test_analysis_run_matches_c_reference_real_music() {
     let mut pos = 12;
     let mut pcm_bytes: &[u8] = &[];
     while pos + 8 <= data.len() {
-        let chunk_size = u32::from_le_bytes([
-            data[pos + 4],
-            data[pos + 5],
-            data[pos + 6],
-            data[pos + 7],
-        ]) as usize;
+        let chunk_size =
+            u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
+                as usize;
         if &data[pos..pos + 4] == b"data" {
             pcm_bytes = &data[pos + 8..pos + 8 + chunk_size];
             break;
@@ -2733,16 +2742,14 @@ fn test_analysis_run_matches_c_reference_real_music() {
         }
 
         // AnalysisInfo fields
-        assert_eq!(
-            c_info.valid, rust_info.valid,
-            "frame {f}: valid mismatch"
-        );
+        assert_eq!(c_info.valid, rust_info.valid, "frame {f}: valid mismatch");
         if c_info.valid == 1 {
             assert_eq!(
                 c_info.music_prob.to_bits(),
                 rust_info.music_prob.to_bits(),
                 "frame {f}: music_prob bit-diff (c={}, rust={})",
-                c_info.music_prob, rust_info.music_prob
+                c_info.music_prob,
+                rust_info.music_prob
             );
             assert_eq!(
                 c_info.bandwidth, rust_info.bandwidth,
@@ -2766,7 +2773,11 @@ fn diag_print_field_offsets() {
     macro_rules! off {
         ($name:ident) => {{
             let p = &st.$name as *const _ as usize;
-            (stringify!($name), p - base, std::mem::size_of_val(&st.$name))
+            (
+                stringify!($name),
+                p - base,
+                std::mem::size_of_val(&st.$name),
+            )
         }};
     }
     let fields: Vec<(&'static str, usize, usize)> = vec![
@@ -2803,9 +2814,15 @@ fn diag_print_field_offsets() {
         off!(downmix_state),
         off!(info),
     ];
-    println!("TonalityAnalysisState layout (total {} bytes):", std::mem::size_of::<TonalityAnalysisState>());
+    println!(
+        "TonalityAnalysisState layout (total {} bytes):",
+        std::mem::size_of::<TonalityAnalysisState>()
+    );
     for (name, off, size) in &fields {
-        println!("  0x{off:06x}..0x{:06x} ({size:6} bytes) {name}", off + size);
+        println!(
+            "  0x{off:06x}..0x{:06x} ({size:6} bytes) {name}",
+            off + size
+        );
     }
 }
 
@@ -3030,12 +3047,9 @@ fn diag_celt_encoder_state_divergence_music() {
     let mut pos = 12;
     let mut pcm_bytes: &[u8] = &[];
     while pos + 8 <= data.len() {
-        let chunk_size = u32::from_le_bytes([
-            data[pos + 4],
-            data[pos + 5],
-            data[pos + 6],
-            data[pos + 7],
-        ]) as usize;
+        let chunk_size =
+            u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
+                as usize;
         if &data[pos..pos + 4] == b"data" {
             pcm_bytes = &data[pos + 8..pos + 8 + chunk_size];
             break;
@@ -3072,14 +3086,17 @@ fn diag_celt_encoder_state_divergence_music() {
         enc
     };
 
-    let mut rust_enc =
-        OpusEncoder::new(sample_rate, channels, application).expect("rust enc");
+    let mut rust_enc = OpusEncoder::new(sample_rate, channels, application).expect("rust enc");
     rust_enc.set_bitrate(BITRATE);
     rust_enc.set_vbr(0);
     rust_enc.set_complexity(COMPLEXITY);
 
     // Accumulator fields to compare each frame. Field name must match the
     // `CeltEncoderStateExt` Rust struct and C trace extractor.
+    // preemph_mem_e[] is intentionally excluded — see the comment on the
+    // comparison block below for why. tapset_decision / rng are not surfaced
+    // by the C-side trace extractor today, so no meaningful comparison is
+    // possible; fold them in when the C helper grows those outputs.
     struct CState {
         stereo_saving: i32,
         hf_average: i32,
@@ -3090,14 +3107,11 @@ fn diag_celt_encoder_state_divergence_music() {
         vbr_drift: i32,
         vbr_offset: i32,
         vbr_count: i32,
-        preemph_mem_e: [i32; 2],
         preemph_mem_d: [i32; 2],
         delayed_intra: i32,
         tonal_average: i32,
         last_coded_bands: i32,
-        tapset_decision: i32,
         spread_decision: i32,
-        rng: u32,
         consec_transient: i32,
     }
 
@@ -3158,6 +3172,7 @@ fn diag_celt_encoder_state_divergence_music() {
                 &mut consec_transient,
             );
         }
+        let _ = (pme0, pme1); // preemph_mem_e intentionally excluded from comparison.
         CState {
             stereo_saving,
             hf_average,
@@ -3168,14 +3183,11 @@ fn diag_celt_encoder_state_divergence_music() {
             vbr_drift,
             vbr_offset,
             vbr_count,
-            preemph_mem_e: [pme0, pme1],
             preemph_mem_d: [pmd0, pmd1],
             delayed_intra,
             tonal_average,
             last_coded_bands,
-            tapset_decision: 0, // Not extracted; reserved for future use.
             spread_decision,
-            rng: 0, // Not extracted; reserved for future use.
             consec_transient,
         }
     };
@@ -3191,14 +3203,11 @@ fn diag_celt_encoder_state_divergence_music() {
             vbr_drift: snap.vbr_drift,
             vbr_offset: snap.vbr_offset,
             vbr_count: snap.vbr_count,
-            preemph_mem_e: snap.preemph_mem_e,
             preemph_mem_d: snap.preemph_mem_d,
             delayed_intra: snap.delayed_intra,
             tonal_average: snap.tonal_average,
             last_coded_bands: snap.last_coded_bands,
-            tapset_decision: snap.tapset_decision,
             spread_decision: snap.spread_decision,
-            rng: snap.rng,
             consec_transient: snap.consec_transient,
         }
     }
@@ -3213,8 +3222,13 @@ fn diag_celt_encoder_state_divergence_music() {
         // Encode in C.
         let c_out_len = unsafe {
             let mut out = vec![0u8; 4000];
-            let n =
-                opus_encode(c_enc, frame_pcm.as_ptr(), frame_size, out.as_mut_ptr(), 4000);
+            let n = opus_encode(
+                c_enc,
+                frame_pcm.as_ptr(),
+                frame_size,
+                out.as_mut_ptr(),
+                4000,
+            );
             assert!(n > 0, "C encode failed frame={f} ret={n}");
             n
         };
@@ -3300,10 +3314,7 @@ fn diag_celt_encoder_state_divergence_music() {
         macro_rules! check_opus {
             ($c:expr, $r:expr, $name:literal) => {
                 if $c != $r {
-                    let msg = format!(
-                        "frame {:3}: opus.{:<18} C={:12} R={:12}",
-                        f, $name, $c, $r
-                    );
+                    let msg = format!("frame {:3}: opus.{:<18} C={:12} R={:12}", f, $name, $c, $r);
                     eprintln!("{msg}");
                     if first_divergence.is_none() {
                         first_divergence = Some((f, msg));
@@ -3439,3 +3450,99 @@ fn test_silk_plc_first_subframes_match_c_reference() {
     );
 }
 
+// -----------------------------------------------------------------------------
+// Bug D (commit ed1d751): SILK budget-bust handler in opus encoder.
+// -----------------------------------------------------------------------------
+//
+// At very low bitrate (6001 bps, 8 kHz, 20 ms, cx=3) and harsh full-scale
+// input, the SILK rate-distortion loop overshoots the range-encoder budget.
+// C writes a 1-byte PLC-style payload (data[1]=0, ret=1, rangeFinal=0) and
+// lets opus_packet_pad reshape as code-3 + padding. Before the fix Rust's
+// outer bust branch was empty with an inverted gate — it shipped the
+// over-the-limit stream verbatim, producing a TOC mismatch (Rust 0x08 vs
+// C 0x0B) on every bust frame.
+//
+// This differential test runs both encoders at the bust-regime config on
+// a harsh deterministic PCM stream. Reverting the fix at
+// `src/opus/encoder.rs` causes Rust's TOC to drift from C's on the first
+// bust-triggering frame.
+
+#[test]
+fn test_bug_d_silk_budget_bust_matches_c_reference() {
+    let sample_rate: i32 = 8000;
+    let channels: i32 = 1;
+    let application: i32 = 2048; // OPUS_APPLICATION_VOIP
+    let bitrate: i32 = 6001; // just above the 6000 minimum — tight CBR budget
+    let complexity: i32 = 3; // low complexity — SILK RD loop can't stay inside 104 bits
+    let frame_size: i32 = sample_rate / 50; // 20 ms = 160 samples
+
+    // Full-amplitude LCG-based noise. At ~±32k this keeps abs_avg in the
+    // ±15k range the root-cause note describes, which is what drives SILK
+    // to blow its budget.
+    let total_samples = frame_size as usize * channels as usize;
+    let mut pcm = vec![0i16; total_samples];
+    let mut rng: u64 = 0x0047_5552_F00D_BEEF;
+
+    let c_enc = unsafe {
+        let mut error: c_int = 0;
+        let enc = opus_encoder_create(sample_rate, channels, application, &mut error);
+        assert!(
+            !enc.is_null() && error == 0,
+            "C encoder create failed: {error}"
+        );
+        opus_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, bitrate);
+        opus_encoder_ctl(enc, OPUS_SET_VBR_REQUEST, 0 as c_int); // CBR triggers the bust path
+        opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY_REQUEST, complexity);
+        enc
+    };
+
+    let mut rust_enc =
+        OpusEncoder::new(sample_rate, channels, application).expect("Rust encoder create failed");
+    rust_enc.set_bitrate(bitrate);
+    rust_enc.set_vbr(0);
+    rust_enc.set_complexity(complexity);
+
+    // Encode 12 frames — the original Bug D repro hit frame 1 of 9; a short
+    // run covers warm-up plus several active bust-prone frames.
+    let num_frames = 12;
+    for frame_idx in 0..num_frames {
+        for s in pcm.iter_mut() {
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            // Force near-saturated input so SILK consistently over-codes.
+            let v = (rng >> 33) as i32;
+            *s = v.clamp(-30000, 30000) as i16;
+        }
+
+        let c_out = unsafe {
+            let mut out = vec![0u8; 4000];
+            let ret = opus_encode(c_enc, pcm.as_ptr(), frame_size, out.as_mut_ptr(), 4000);
+            assert!(ret > 0, "C encode failed on frame {frame_idx}: {ret}");
+            out.truncate(ret as usize);
+            out
+        };
+
+        let mut rust_out = vec![0u8; 4000];
+        let rust_len = rust_enc
+            .encode(&pcm, frame_size, &mut rust_out, 4000)
+            .unwrap_or_else(|e| panic!("Rust encode failed on frame {frame_idx}: {e}"))
+            as usize;
+
+        assert_eq!(
+            rust_len,
+            c_out.len(),
+            "Frame {frame_idx}: output length mismatch Rust={rust_len} C={} \
+             — Bug D: SILK budget-bust handler regression",
+            c_out.len()
+        );
+        assert_eq!(
+            &rust_out[..rust_len],
+            &c_out[..],
+            "Frame {frame_idx}: byte mismatch — Bug D: SILK budget-bust \
+             handler missing or gate inverted (opus encoder outer scope)"
+        );
+    }
+
+    unsafe { opus_encoder_destroy(c_enc) };
+}

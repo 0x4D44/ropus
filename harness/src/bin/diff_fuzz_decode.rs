@@ -16,7 +16,7 @@
 mod bindings;
 
 use ropus::opus::decoder::{
-    opus_packet_get_nb_frames, opus_packet_get_samples_per_frame, OpusDecoder,
+    OpusDecoder, opus_packet_get_nb_frames, opus_packet_get_samples_per_frame,
 };
 use std::fs;
 use std::os::raw::c_int;
@@ -42,12 +42,13 @@ fn compare_celt_state(
     let mut cto: i32 = 0;
     unsafe {
         bindings::debug_get_celt_postfilter(
-            c_dec,
-            &mut cp, &mut cpo, &mut cg, &mut cgo, &mut ct, &mut cto,
+            c_dec, &mut cp, &mut cpo, &mut cg, &mut cgo, &mut ct, &mut cto,
         );
     }
     if (rp, rpo, rg, rgo, rt, rto) != (cp, cpo, cg, cgo, ct, cto) {
-        println!("    {label}: postfilter rust=({rp},{rpo},{rg},{rgo},{rt},{rto}) c=({cp},{cpo},{cg},{cgo},{ct},{cto})");
+        println!(
+            "    {label}: postfilter rust=({rp},{rpo},{rg},{rgo},{rt},{rto}) c=({cp},{cpo},{cg},{cgo},{ct},{cto})"
+        );
         all_match = false;
     }
 
@@ -66,14 +67,19 @@ fn compare_celt_state(
     let r_be = rust.debug_get_old_band_e();
     let max_be = r_be.len() as i32;
     let mut c_be = vec![0i32; max_be as usize];
-    let n_be = unsafe {
-        bindings::debug_get_celt_old_band_e(c_dec, c_be.as_mut_ptr(), max_be)
-    };
+    let n_be = unsafe { bindings::debug_get_celt_old_band_e(c_dec, c_be.as_mut_ptr(), max_be) };
     let n_be = n_be as usize;
     if r_be[..n_be] != c_be[..n_be] {
         // Find first diff
-        let i = r_be[..n_be].iter().zip(c_be[..n_be].iter()).position(|(a, b)| a != b);
-        println!("    {label}: old_band_e first diff at {i:?} (len Rust={}, C={})", r_be.len(), n_be);
+        let i = r_be[..n_be]
+            .iter()
+            .zip(c_be[..n_be].iter())
+            .position(|(a, b)| a != b);
+        println!(
+            "    {label}: old_band_e first diff at {i:?} (len Rust={}, C={})",
+            r_be.len(),
+            n_be
+        );
         if let Some(idx) = i {
             let lo = idx.saturating_sub(1);
             let hi = (idx + 4).min(n_be);
@@ -95,12 +101,18 @@ fn compare_celt_state(
     };
     let n_le = n_le as usize;
     if r_le[..n_le] != c_le[..n_le] {
-        let i = r_le[..n_le].iter().zip(c_le[..n_le].iter()).position(|(a, b)| a != b);
+        let i = r_le[..n_le]
+            .iter()
+            .zip(c_le[..n_le].iter())
+            .position(|(a, b)| a != b);
         println!("    {label}: old_log_e first diff at {i:?}");
         all_match = false;
     }
     if r_le2[..n_le] != c_le2[..n_le] {
-        let i = r_le2[..n_le].iter().zip(c_le2[..n_le].iter()).position(|(a, b)| a != b);
+        let i = r_le2[..n_le]
+            .iter()
+            .zip(c_le2[..n_le].iter())
+            .position(|(a, b)| a != b);
         println!("    {label}: old_log_e2 first diff at {i:?}");
         all_match = false;
     }
@@ -111,23 +123,34 @@ fn compare_celt_state(
     let r_mem = rust.debug_get_decode_mem(0, mem_count);
     let mut c_mem = vec![0i32; mem_count];
     unsafe {
-        bindings::debug_get_celt_decode_mem(
-            c_dec,
-            0,
-            mem_count as c_int,
-            c_mem.as_mut_ptr(),
-        );
+        bindings::debug_get_celt_decode_mem(c_dec, 0, mem_count as c_int, c_mem.as_mut_ptr());
     }
     if r_mem != c_mem {
-        let i = r_mem.iter().zip(c_mem.iter()).position(|(a, b)| a != b).unwrap();
-        let last = r_mem.iter().zip(c_mem.iter()).rposition(|(a, b)| a != b).unwrap();
-        let n_diff = r_mem.iter().zip(c_mem.iter()).filter(|(a, b)| a != b).count();
+        let i = r_mem
+            .iter()
+            .zip(c_mem.iter())
+            .position(|(a, b)| a != b)
+            .unwrap();
+        let last = r_mem
+            .iter()
+            .zip(c_mem.iter())
+            .rposition(|(a, b)| a != b)
+            .unwrap();
+        let n_diff = r_mem
+            .iter()
+            .zip(c_mem.iter())
+            .filter(|(a, b)| a != b)
+            .count();
         println!("    {label}: decode_mem diff: first={i} last={last} n_diff={n_diff}/{mem_count}");
         let lo = i.saturating_sub(2);
         let hi = (i + 6).min(mem_count);
         for j in lo..hi {
-            println!("       [{j:5}] rust={:10} c={:10}{}", r_mem[j], c_mem[j],
-                if r_mem[j] != c_mem[j] { " *" } else { "" });
+            println!(
+                "       [{j:5}] rust={:10} c={:10}{}",
+                r_mem[j],
+                c_mem[j],
+                if r_mem[j] != c_mem[j] { " *" } else { "" }
+            );
         }
         all_match = false;
     }
@@ -207,7 +230,7 @@ fn parse_code3_vbr_sizes(packet: &[u8]) -> Option<(Vec<i32>, usize)> {
         sizes[i] = sz;
         last_size -= bytes + sz;
     }
-    if last_size < 0 || last_size > 1275 {
+    if !(0..=1275).contains(&last_size) {
         return None;
     }
     sizes[count - 1] = last_size;
@@ -340,10 +363,7 @@ fn split_decode(
                 .zip(c_buf[..n].iter())
                 .position(|(a, b)| a != b)
                 .unwrap();
-            format!(
-                " first_div@{idx} rust={} c={}",
-                rust_buf[idx], c_buf[idx]
-            )
+            format!(" first_div@{idx} rust={} c={}", rust_buf[idx], c_buf[idx])
         };
         println!(
             "    [{i:2}] sz={sz:3} n={r_n:3} {tag}{}{}",
@@ -530,7 +550,14 @@ fn analyze(path: &Path) {
                     let p1 = synth_code0_packet(toc, &first_payload);
                     let _ = rd.decode(Some(&p1), &mut rb, spf, false);
                     let _ = unsafe {
-                        bindings::opus_decode(cd, p1.as_ptr(), p1.len() as i32, cb.as_mut_ptr(), spf, 0)
+                        bindings::opus_decode(
+                            cd,
+                            p1.as_ptr(),
+                            p1.len() as i32,
+                            cb.as_mut_ptr(),
+                            spf,
+                            0,
+                        )
                     };
                     let n = spf as usize * channels as usize;
                     let neq = rb[..n] == cb[..n];
@@ -540,7 +567,14 @@ fn analyze(path: &Path) {
                     let plc1 = vec![toc & !0x3];
                     let _ = rd.decode(Some(&plc1), &mut rb, spf, false);
                     let _ = unsafe {
-                        bindings::opus_decode(cd, plc1.as_ptr(), plc1.len() as i32, cb.as_mut_ptr(), spf, 0)
+                        bindings::opus_decode(
+                            cd,
+                            plc1.as_ptr(),
+                            plc1.len() as i32,
+                            cb.as_mut_ptr(),
+                            spf,
+                            0,
+                        )
                     };
                     let neq = rb[..n] == cb[..n];
                     println!("  after PLC1     : pcm_eq={neq}");
@@ -549,13 +583,17 @@ fn analyze(path: &Path) {
                     let p2 = synth_code0_packet(toc, &last_payload);
                     let _ = rd.decode(Some(&p2), &mut rb, spf, false);
                     let _ = unsafe {
-                        bindings::opus_decode(cd, p2.as_ptr(), p2.len() as i32, cb.as_mut_ptr(), spf, 0)
+                        bindings::opus_decode(
+                            cd,
+                            p2.as_ptr(),
+                            p2.len() as i32,
+                            cb.as_mut_ptr(),
+                            spf,
+                            0,
+                        )
                     };
                     let neq = rb[..n] == cb[..n];
-                    let first_diff = rb[..n]
-                        .iter()
-                        .zip(cb[..n].iter())
-                        .position(|(a, b)| a != b);
+                    let first_diff = rb[..n].iter().zip(cb[..n].iter()).position(|(a, b)| a != b);
                     println!("  after p2 normal: pcm_eq={neq} first_diff_idx={first_diff:?}");
                     let _ = compare_celt_state("AFTER_P2", &rd, cd, 21);
                     unsafe { bindings::opus_decoder_destroy(cd) };

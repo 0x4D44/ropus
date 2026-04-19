@@ -148,11 +148,7 @@ fn try_build_blob(
             .arg(driver)
             .arg(format!("/Fo{}", obj_path.display()));
     } else {
-        compile
-            .arg("-c")
-            .arg(driver)
-            .arg("-o")
-            .arg(&obj_path);
+        compile.arg("-c").arg(driver).arg("-o").arg(&obj_path);
     }
     let status = compile
         .status()
@@ -188,8 +184,7 @@ fn try_build_blob(
     }
 
     // Sanity-check the blob grew.
-    let meta = fs::metadata(blob_path)
-        .map_err(|e| format!("stat {}: {e}", blob_path.display()))?;
+    let meta = fs::metadata(blob_path).map_err(|e| format!("stat {}: {e}", blob_path.display()))?;
     if meta.len() == 0 {
         return Err(format!(
             "{} was written as an empty file — the generator couldn't locate any arrays",

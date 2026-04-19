@@ -23,7 +23,9 @@ use std::ptr;
 
 use ropus::opus::multistream::{OpusProjectionDecoder, OpusProjectionEncoder};
 
-use crate::{OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, OPUS_OK, OPUS_UNIMPLEMENTED, ffi_guard, state_free};
+use crate::{
+    OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, OPUS_OK, OPUS_UNIMPLEMENTED, ffi_guard, state_free,
+};
 
 const PROJ_ENCODER_HANDLE_MAGIC: u64 = 0x4D44_4F50_5553_5045; // "MDOPUSPE"
 const PROJ_DECODER_HANDLE_MAGIC: u64 = 0x4D44_4F50_5553_5044; // "MDOPUSPD"
@@ -236,7 +238,7 @@ pub unsafe extern "C" fn opus_projection_ambisonics_encoder_get_size(
     _mapping_family: c_int,
 ) -> c_int {
     ffi_guard!(0, {
-        if channels < 1 || channels > 255 {
+        if !(1..=255).contains(&channels) {
             return 0;
         }
         proj_enc_size_for(channels)
@@ -349,8 +351,7 @@ pub unsafe extern "C" fn opus_projection_encode(
             return OPUS_BAD_ARG;
         };
         let pcm_slice = unsafe { std::slice::from_raw_parts(pcm, n_samples) };
-        let out_slice =
-            unsafe { std::slice::from_raw_parts_mut(data, max_data_bytes as usize) };
+        let out_slice = unsafe { std::slice::from_raw_parts_mut(data, max_data_bytes as usize) };
         match enc.encode(pcm_slice, frame_size, out_slice, max_data_bytes) {
             Ok(n) => n,
             Err(e) => e,
@@ -408,8 +409,7 @@ pub unsafe extern "C" fn opus_projection_encode_float(
         };
         let pcm_float = unsafe { std::slice::from_raw_parts(pcm, n_samples) };
         let pcm_i16: Vec<i16> = pcm_float.iter().map(|&s| float_to_int16_sat(s)).collect();
-        let out_slice =
-            unsafe { std::slice::from_raw_parts_mut(data, max_data_bytes as usize) };
+        let out_slice = unsafe { std::slice::from_raw_parts_mut(data, max_data_bytes as usize) };
         match enc.encode(&pcm_i16, frame_size, out_slice, max_data_bytes) {
             Ok(n) => n,
             Err(e) => e,
@@ -431,8 +431,7 @@ pub unsafe extern "C" fn opus_projection_decoder_get_size(
         if streams < 1
             || coupled_streams < 0
             || coupled_streams > streams
-            || channels < 1
-            || channels > 255
+            || !(1..=255).contains(&channels)
         {
             return 0;
         }
@@ -457,9 +456,8 @@ pub unsafe extern "C" fn opus_projection_decoder_create(
             }
             return ptr::null_mut();
         }
-        let bytes = unsafe {
-            std::slice::from_raw_parts(demixing_matrix, demixing_matrix_size as usize)
-        };
+        let bytes =
+            unsafe { std::slice::from_raw_parts(demixing_matrix, demixing_matrix_size as usize) };
         match OpusProjectionDecoder::new(
             fs,
             channels,
@@ -502,9 +500,8 @@ pub unsafe extern "C" fn opus_projection_decoder_init(
         if st.is_null() || demixing_matrix.is_null() || demixing_matrix_size < 0 {
             return OPUS_BAD_ARG;
         }
-        let bytes = unsafe {
-            std::slice::from_raw_parts(demixing_matrix, demixing_matrix_size as usize)
-        };
+        let bytes =
+            unsafe { std::slice::from_raw_parts(demixing_matrix, demixing_matrix_size as usize) };
         match OpusProjectionDecoder::new(
             fs,
             channels,

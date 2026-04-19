@@ -224,12 +224,7 @@ unsafe extern "C" {
     pub fn ec_dec_icdf(this: *mut ec_dec, icdf: *const c_uchar, ftb: c_uint) -> c_int;
 
     // Laplace-distribution entropy coder (DRED)
-    pub fn ec_laplace_encode_p0(
-        this: *mut ec_enc,
-        value: c_int,
-        p0: u16,
-        decay: u16,
-    );
+    pub fn ec_laplace_encode_p0(this: *mut ec_enc, value: c_int, p0: u16, decay: u16);
     pub fn ec_laplace_decode_p0(this: *mut ec_dec, p0: u16, decay: u16) -> c_int;
 
     // Repacketizer
@@ -653,10 +648,7 @@ unsafe extern "C" {
         seed: *mut opus_int32,
     );
 
-    pub fn debug_silk_trace_get_prev_nlsf(
-        dec: *mut OpusDecoder,
-        prev_nlsf_q15: *mut opus_int16,
-    );
+    pub fn debug_silk_trace_get_prev_nlsf(dec: *mut OpusDecoder, prev_nlsf_q15: *mut opus_int16);
 
     pub fn debug_silk_trace_get_exc(
         dec: *mut OpusDecoder,

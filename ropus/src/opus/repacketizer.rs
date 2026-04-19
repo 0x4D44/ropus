@@ -3664,7 +3664,10 @@ mod tests {
             let original_len = pkt.len() as i32;
             buf[..pkt.len()].copy_from_slice(&pkt);
             // len == new_len → OPUS_OK immediately
-            assert_eq!(opus_packet_pad(&mut buf, original_len, original_len), OPUS_OK);
+            assert_eq!(
+                opus_packet_pad(&mut buf, original_len, original_len),
+                OPUS_OK
+            );
         }
 
         #[test]
@@ -3735,12 +3738,7 @@ mod tests {
             let new_len = combined.len() as i32 + 20;
             let mut buf = vec![0u8; (new_len + 16) as usize];
             buf[..combined.len()].copy_from_slice(&combined);
-            let r = opus_multistream_packet_pad(
-                &mut buf,
-                combined.len() as i32,
-                new_len,
-                2,
-            );
+            let r = opus_multistream_packet_pad(&mut buf, combined.len() as i32, new_len, 2);
             assert_eq!(r, OPUS_OK);
 
             let unp = opus_multistream_packet_unpad(&mut buf, new_len, 2);
@@ -3761,8 +3759,14 @@ mod tests {
         #[test]
         fn multistream_pad_rejects_shrink_and_zero() {
             let mut buf = [0u8; 16];
-            assert_eq!(opus_multistream_packet_pad(&mut buf, 0, 10, 1), OPUS_BAD_ARG);
-            assert_eq!(opus_multistream_packet_pad(&mut buf, 10, 5, 1), OPUS_BAD_ARG);
+            assert_eq!(
+                opus_multistream_packet_pad(&mut buf, 0, 10, 1),
+                OPUS_BAD_ARG
+            );
+            assert_eq!(
+                opus_multistream_packet_pad(&mut buf, 10, 5, 1),
+                OPUS_BAD_ARG
+            );
         }
 
         #[test]
@@ -3821,7 +3825,10 @@ mod tests {
             // Len == 0 → invalid
             assert!(parse_packet(&[], 0, false).is_err());
             // len < 0 → bad arg
-            assert!(matches!(parse_packet(&[0x08u8, 0xAA], -1, false), Err(OPUS_BAD_ARG)));
+            assert!(matches!(
+                parse_packet(&[0x08u8, 0xAA], -1, false),
+                Err(OPUS_BAD_ARG)
+            ));
             // Code 1 with odd remaining (self_delimited=false)
             assert!(parse_packet(&[0x09u8, 0xAA], 2, false).is_err());
         }
@@ -3982,7 +3989,8 @@ mod tests {
         #[test]
         fn extensions_generate_bad_args() {
             // nb_frames > MAX_FRAMES → OPUS_BAD_ARG
-            let ret = opus_packet_extensions_generate(None, 256, &[], (MAX_FRAMES + 1) as i32, false);
+            let ret =
+                opus_packet_extensions_generate(None, 256, &[], (MAX_FRAMES + 1) as i32, false);
             assert_eq!(ret, OPUS_BAD_ARG);
 
             // extension with frame out of range
@@ -4032,8 +4040,18 @@ mod tests {
             rp.cat(&b, b.len() as i32);
 
             let payload = [0xABu8];
-            let ext0 = OpusExtensionData { id: 33, frame: 0, data: &payload, len: 1 };
-            let ext1 = OpusExtensionData { id: 33, frame: 1, data: &payload, len: 1 };
+            let ext0 = OpusExtensionData {
+                id: 33,
+                frame: 0,
+                data: &payload,
+                len: 1,
+            };
+            let ext1 = OpusExtensionData {
+                id: 33,
+                frame: 1,
+                data: &payload,
+                len: 1,
+            };
 
             let mut out = vec![0u8; 2048];
             let n = rp.out_range_impl(0, 2, &mut out, 2048, false, false, &[ext0, ext1]);
@@ -4047,7 +4065,12 @@ mod tests {
             let mut buf = vec![0u8; 512];
             buf[..pkt.len()].copy_from_slice(&pkt);
             let payload = [0x22u8];
-            let ext = OpusExtensionData { id: 33, frame: 0, data: &payload, len: 1 };
+            let ext = OpusExtensionData {
+                id: 33,
+                frame: 0,
+                data: &payload,
+                len: 1,
+            };
             let target = pkt.len() as i32 + 30;
             let ret = opus_packet_pad_impl(&mut buf, pkt.len() as i32, target, true, &[ext]);
             assert!(ret > 0, "pad_impl with caller extension returned {ret}");
@@ -4059,10 +4082,30 @@ mod tests {
         fn extension_generate_repeat_mechanism_multi_frame() {
             // Same extension applied to all frames → exercises the repeat branch.
             let payload = [0xABu8];
-            let ext0 = OpusExtensionData { id: 33, frame: 0, data: &payload, len: 1 };
-            let ext1 = OpusExtensionData { id: 33, frame: 1, data: &payload, len: 1 };
-            let ext2 = OpusExtensionData { id: 33, frame: 2, data: &payload, len: 1 };
-            let ext3 = OpusExtensionData { id: 33, frame: 3, data: &payload, len: 1 };
+            let ext0 = OpusExtensionData {
+                id: 33,
+                frame: 0,
+                data: &payload,
+                len: 1,
+            };
+            let ext1 = OpusExtensionData {
+                id: 33,
+                frame: 1,
+                data: &payload,
+                len: 1,
+            };
+            let ext2 = OpusExtensionData {
+                id: 33,
+                frame: 2,
+                data: &payload,
+                len: 1,
+            };
+            let ext3 = OpusExtensionData {
+                id: 33,
+                frame: 3,
+                data: &payload,
+                len: 1,
+            };
             let exts = [ext0, ext1, ext2, ext3];
 
             let size = opus_packet_extensions_generate(None, 256, &exts, 4, false);
@@ -4089,8 +4132,18 @@ mod tests {
             // Extensions on frames 0 and 2 — forces separator emission (line 886).
             let p = [0x11u8];
             let exts = [
-                OpusExtensionData { id: 5, frame: 0, data: &p, len: 1 },
-                OpusExtensionData { id: 5, frame: 2, data: &p, len: 1 },
+                OpusExtensionData {
+                    id: 5,
+                    frame: 0,
+                    data: &p,
+                    len: 1,
+                },
+                OpusExtensionData {
+                    id: 5,
+                    frame: 2,
+                    data: &p,
+                    len: 1,
+                },
             ];
             let size = opus_packet_extensions_generate(None, 256, &exts, 3, false);
             assert!(size > 0);
@@ -4112,8 +4165,18 @@ mod tests {
             // diff == 1 branch (line 886)
             let p = [0x11u8];
             let exts = [
-                OpusExtensionData { id: 5, frame: 0, data: &p, len: 1 },
-                OpusExtensionData { id: 5, frame: 1, data: &p, len: 1 },
+                OpusExtensionData {
+                    id: 5,
+                    frame: 0,
+                    data: &p,
+                    len: 1,
+                },
+                OpusExtensionData {
+                    id: 5,
+                    frame: 1,
+                    data: &p,
+                    len: 1,
+                },
             ];
             let size = opus_packet_extensions_generate(None, 256, &exts, 2, false);
             let mut buf = vec![0u8; size as usize];

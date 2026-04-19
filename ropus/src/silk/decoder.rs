@@ -802,8 +802,16 @@ fn silk_decode_parameters(
     // feedback and produces 1-2 orders of magnitude divergence in
     // `sLPC_Q14_buf` after a single recovery frame (stage 7b.3 diagnostic).
     if dec.loss_cnt > 0 {
-        silk_bwexpander(&mut dec_ctrl.pred_coef_q12[0], lpc_order, BWE_AFTER_LOSS_Q16);
-        silk_bwexpander(&mut dec_ctrl.pred_coef_q12[1], lpc_order, BWE_AFTER_LOSS_Q16);
+        silk_bwexpander(
+            &mut dec_ctrl.pred_coef_q12[0],
+            lpc_order,
+            BWE_AFTER_LOSS_Q16,
+        );
+        silk_bwexpander(
+            &mut dec_ctrl.pred_coef_q12[1],
+            lpc_order,
+            BWE_AFTER_LOSS_Q16,
+        );
     }
 
     // 7. Voiced frame processing
@@ -1507,8 +1515,7 @@ fn silk_cng(
     // Generate CNG during loss
     if dec.loss_cnt > 0 {
         // Compute CNG gain subtracting PLC energy (C: CNG.c lines 133-144)
-        let mut gain_q16 =
-            silk_smulww(dec.s_plc.rand_scale_q14 as i32, dec.s_plc.prev_gain_q16[1]);
+        let mut gain_q16 = silk_smulww(dec.s_plc.rand_scale_q14 as i32, dec.s_plc.prev_gain_q16[1]);
         let cng_smth = dec.s_cng.cng_smth_gain_q16;
         if gain_q16 >= (1 << 21) || cng_smth > (1 << 23) {
             // High-gain path: use SMULTT to avoid overflow
@@ -2635,8 +2642,7 @@ pub fn silk_decode(
     {
         decoder.s_stereo.pred_prev_q13 = [0; 2];
         decoder.s_stereo.s_side = [0; 2];
-        decoder.channel_state[1].resampler_state =
-            decoder.channel_state[0].resampler_state.clone();
+        decoder.channel_state[1].resampler_state = decoder.channel_state[0].resampler_state.clone();
     }
 
     // Decode stereo predictor (opus_int32 in C; narrowed only on write back
@@ -2712,11 +2718,7 @@ pub fn silk_decode(
                 CODE_CONDITIONALLY
             };
 
-            let ch_lpcnet: DnnPlcArg<'_> = if n == 0 {
-                lpcnet.as_deref_mut()
-            } else {
-                None
-            };
+            let ch_lpcnet: DnnPlcArg<'_> = if n == 0 { lpcnet.as_deref_mut() } else { None };
 
             let mut n_out = 0;
             // C reference decodes into &samplesOut1_tmp[n][2] — offset by 2
@@ -4481,7 +4483,10 @@ mod tests {
         assert_eq!(dec.lag_prev, 100);
         assert_eq!(dec.last_gain_index, 10);
         assert!(dec.first_frame_after_reset);
-        assert_eq!(dec.resampler_state.resampler_function, USE_SILK_RESAMPLER_IIR_FIR);
+        assert_eq!(
+            dec.resampler_state.resampler_function,
+            USE_SILK_RESAMPLER_IIR_FIR
+        );
         assert_eq!(dec.resampler_state.fs_in_khz, 8);
         assert_eq!(dec.resampler_state.fs_out_khz, 48);
         assert_eq!(dec.resampler_state.batch_size, 80);
@@ -4496,7 +4501,10 @@ mod tests {
         assert_eq!(dec.subfr_length, 60);
         assert_eq!(dec.lpc_order, 10);
         assert_eq!(dec.ltp_mem_length, 240);
-        assert_eq!(dec.resampler_state.resampler_function, USE_SILK_RESAMPLER_IIR_FIR);
+        assert_eq!(
+            dec.resampler_state.resampler_function,
+            USE_SILK_RESAMPLER_IIR_FIR
+        );
         assert_eq!(dec.resampler_state.fs_in_khz, 12);
         assert_eq!(dec.resampler_state.fs_out_khz, 48);
         assert_eq!(dec.resampler_state.batch_size, 120);
@@ -4511,7 +4519,10 @@ mod tests {
         assert_eq!(dec.subfr_length, 80);
         assert_eq!(dec.lpc_order, 16);
         assert_eq!(dec.ltp_mem_length, 320);
-        assert_eq!(dec.resampler_state.resampler_function, USE_SILK_RESAMPLER_IIR_FIR);
+        assert_eq!(
+            dec.resampler_state.resampler_function,
+            USE_SILK_RESAMPLER_IIR_FIR
+        );
         assert_eq!(dec.resampler_state.fs_in_khz, 16);
         assert_eq!(dec.resampler_state.fs_out_khz, 48);
         assert_eq!(dec.resampler_state.batch_size, 160);
@@ -4554,7 +4565,10 @@ mod tests {
         silk_resampler_private_up2_hq(&mut state, &mut out, &input, 8);
         assert_eq!(
             out,
-            [60, 571, 2544, 6818, 11778, 12605, 5950, -3750, -6942, -1029, 4927, 2681, -3119, -3000, 1901, 2830]
+            [
+                60, 571, 2544, 6818, 11778, 12605, 5950, -3750, -6942, -1029, 4927, 2681, -3119,
+                -3000, 1901, 2830
+            ]
         );
         assert_eq!(state, [0, 3315, -2903886, -3, 112836, -17247130]);
     }
@@ -4571,7 +4585,9 @@ mod tests {
         silk_resampler_private_down_fir(&mut rs, &mut out, &input, 480);
         assert_eq!(
             &out[..16],
-            &[0, -11, 114, 2589, 163, -263, 288, -255, 223, -193, 166, -142, 120, -102, 85, -71]
+            &[
+                0, -11, 114, 2589, 163, -263, 288, -255, 223, -193, 166, -142, 120, -102, 85, -71
+            ]
         );
     }
 
@@ -4613,7 +4629,9 @@ mod tests {
         silk_cng_reset(&mut dec);
         assert_eq!(
             &dec.s_cng.cng_smth_nlsf_q15[..10],
-            &[2978, 5956, 8934, 11912, 14890, 17868, 20846, 23824, 26802, 29780]
+            &[
+                2978, 5956, 8934, 11912, 14890, 17868, 20846, 23824, 26802, 29780
+            ]
         );
         assert_eq!(dec.s_cng.rand_seed, 3176576);
         assert_eq!(dec.s_cng.cng_smth_gain_q16, 0);
@@ -4627,7 +4645,10 @@ mod tests {
         silk_cng_reset(&mut dec2);
         assert_eq!(
             &dec2.s_cng.cng_smth_nlsf_q15[..16],
-            &[1927, 3854, 5781, 7708, 9635, 11562, 13489, 15416, 17343, 19270, 21197, 23124, 25051, 26978, 28905, 30832]
+            &[
+                1927, 3854, 5781, 7708, 9635, 11562, 13489, 15416, 17343, 19270, 21197, 23124,
+                25051, 26978, 28905, 30832
+            ]
         );
     }
 
@@ -4659,10 +4680,7 @@ mod tests {
         let sum_pulses = [7i32];
         silk_decode_signs(&mut rc, &mut pulses, 16, TYPE_VOICED, 0, &sum_pulses);
 
-        assert_eq!(
-            pulses,
-            [-3, 0, 1, 2, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-        );
+        assert_eq!(pulses, [-3, 0, 1, 2, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     }
 
     #[test]
@@ -4687,31 +4705,28 @@ mod tests {
         // Feed a fixed byte sequence to the range decoder and pin the deterministic
         // output of silk_decode_pulses. This exercises: rate level decoding, shell
         // block count, shell coder tree splits, and sign assignment.
-        let buf = [0xA5u8, 0x3C, 0x7E, 0x11, 0x55, 0xD0, 0x88, 0x42,
-                   0xFF, 0x01, 0x9B, 0xC3, 0x67, 0xAA, 0xDE, 0x0F,
-                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let buf = [
+            0xA5u8, 0x3C, 0x7E, 0x11, 0x55, 0xD0, 0x88, 0x42, 0xFF, 0x01, 0x9B, 0xC3, 0x67, 0xAA,
+            0xDE, 0x0F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+        ];
         let mut rc = RangeDecoder::new(&buf);
         let mut pulses = [0i16; 16];
         silk_decode_pulses(&mut rc, &mut pulses, 0, 0, 16);
-        assert_eq!(
-            pulses,
-            [-3, 0, -1, 0, 0, 0, 0, 0, 0, 0, -1, -2, 0, 0, 0, 0]
-        );
+        assert_eq!(pulses, [-3, 0, -1, 0, 0, 0, 0, 0, 0, 0, -1, -2, 0, 0, 0, 0]);
     }
 
     #[test]
     fn test_pin_decode_indices_exact() {
         // Feed a fixed byte buffer and pin all decoded index fields.
         // Configured for 8kHz NB, 4 subframes, non-VAD, independent coding.
-        let buf = [0x80u8, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01,
-                   0xAA, 0x55, 0xCC, 0x33, 0xEE, 0x77, 0xBB, 0xDD,
-                   0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
-                   0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00,
-                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let buf = [
+            0x80u8, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01, 0xAA, 0x55, 0xCC, 0x33, 0xEE, 0x77,
+            0xBB, 0xDD, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC,
+            0xDD, 0xEE, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
         let mut rc = RangeDecoder::new(&buf);
         let mut dec = SilkDecoderState::new();
         dec.nb_subfr = MAX_NB_SUBFR;
@@ -4783,10 +4798,10 @@ mod tests {
         ctrl.pitch_l = [80, 80, 80, 120];
 
         for i in 0..LTP_ORDER {
-            ctrl.ltp_coef_q14[3 * LTP_ORDER + i] = 100;  // subframe 3: total = 500
+            ctrl.ltp_coef_q14[3 * LTP_ORDER + i] = 100; // subframe 3: total = 500
             ctrl.ltp_coef_q14[2 * LTP_ORDER + i] = 2000; // subframe 2: total = 10000
-            ctrl.ltp_coef_q14[1 * LTP_ORDER + i] = 500;  // subframe 1: total = 2500
-            ctrl.ltp_coef_q14[0 * LTP_ORDER + i] = 300;  // subframe 0: total = 1500
+            ctrl.ltp_coef_q14[1 * LTP_ORDER + i] = 500; // subframe 1: total = 2500
+            ctrl.ltp_coef_q14[0 * LTP_ORDER + i] = 300; // subframe 0: total = 1500
         }
         ctrl.gains_q16 = [65536, 65536, 65536, 65536];
         ctrl.pred_coef_q12 = [[0; MAX_LPC_ORDER]; 2];
@@ -4802,8 +4817,11 @@ mod tests {
         assert_ne!(dec.s_plc.ltp_coef_q14[LTP_ORDER / 2], 0);
         for i in 0..LTP_ORDER {
             if i != LTP_ORDER / 2 {
-                assert_eq!(dec.s_plc.ltp_coef_q14[i], 0,
-                    "Non-center tap {} should be zero", i);
+                assert_eq!(
+                    dec.s_plc.ltp_coef_q14[i], 0,
+                    "Non-center tap {} should be zero",
+                    i
+                );
             }
         }
     }
@@ -4830,9 +4848,11 @@ mod tests {
         let center = dec.s_plc.ltp_coef_q14[LTP_ORDER / 2] as i32;
         let scale_q10 = (V_PITCH_GAIN_START_MIN_Q14 << 10) / imax(target_gain, 1);
         let expected = silk_smulbb(target_gain, scale_q10) >> 10;
-        assert_eq!(center, expected as i16 as i32,
+        assert_eq!(
+            center, expected as i16 as i32,
             "Center tap should use scaling, not simple clamping. Got {}, expected {}",
-            center, expected);
+            center, expected
+        );
     }
 
     #[test]
@@ -4857,8 +4877,10 @@ mod tests {
         let center = dec.s_plc.ltp_coef_q14[LTP_ORDER / 2] as i32;
         let scale_q14 = (V_PITCH_GAIN_START_MAX_Q14 << 14) / imax(target_gain, 1);
         let expected = silk_smulbb(target_gain, scale_q14) >> 14;
-        assert_eq!(center, expected as i16 as i32,
-            "Center tap should use scaling for above-max gain");
+        assert_eq!(
+            center, expected as i16 as i32,
+            "Center tap should use scaling for above-max gain"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -4870,9 +4892,11 @@ mod tests {
         let diff = 100000i32;
         let smulwb_result = silk_smulwb_i32(diff, CNG_GAIN_SMTH_Q16);
         let full_result = ((diff as i64 * CNG_GAIN_SMTH_Q16 as i64) >> 16) as i32;
-        assert_eq!(smulwb_result, full_result,
+        assert_eq!(
+            smulwb_result, full_result,
             "For CNG_GAIN_SMTH_Q16={}, smulwb and full multiply should agree",
-            CNG_GAIN_SMTH_Q16);
+            CNG_GAIN_SMTH_Q16
+        );
     }
 
     #[test]
@@ -4883,9 +4907,11 @@ mod tests {
         let correct_lhs = silk_smulww(cng_smth, CNG_GAIN_SMTH_THRESHOLD_Q16);
         let buggy_rhs = ((gains_q16 as i64 * CNG_GAIN_SMTH_THRESHOLD_Q16 as i64) >> 16) as i32;
 
-        assert_ne!(correct_lhs, buggy_rhs,
+        assert_ne!(
+            correct_lhs, buggy_rhs,
             "LHS and RHS computations should differ: correct_lhs={}, buggy_rhs={}",
-            correct_lhs, buggy_rhs);
+            correct_lhs, buggy_rhs
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -4907,11 +4933,16 @@ mod tests {
 
         let buggy_gain_q10 = cng_smth >> 6;
 
-        assert_ne!(expected_gain_q10, buggy_gain_q10,
-            "CNG gain should account for PLC energy subtraction");
-        assert!(expected_gain_q10 < buggy_gain_q10,
+        assert_ne!(
+            expected_gain_q10, buggy_gain_q10,
+            "CNG gain should account for PLC energy subtraction"
+        );
+        assert!(
+            expected_gain_q10 < buggy_gain_q10,
             "Corrected CNG gain ({}) should be less than smoothed gain ({})",
-            expected_gain_q10, buggy_gain_q10);
+            expected_gain_q10,
+            buggy_gain_q10
+        );
     }
 
     #[test]
@@ -4926,7 +4957,10 @@ mod tests {
         let cng_sq = silk_smultt(cng_smth, cng_smth);
         let diff_val = cng_sq - shl32(gain_sq, 5);
         let result = silk_lshift32(silk_sqrt_approx(diff_val), 16);
-        assert!(result > 0, "High-gain CNG path should produce positive result");
+        assert!(
+            result > 0,
+            "High-gain CNG path should produce positive result"
+        );
     }
 
     // =======================================================================
@@ -4959,11 +4993,7 @@ mod tests {
             }
         }
 
-        fn make_ctrl(
-            n_channels: usize,
-            fs_khz: i32,
-            payload_size_ms: i32,
-        ) -> SilkDecControl {
+        fn make_ctrl(n_channels: usize, fs_khz: i32, payload_size_ms: i32) -> SilkDecControl {
             SilkDecControl {
                 n_channels_api: n_channels,
                 n_channels_internal: n_channels,
@@ -4987,8 +5017,7 @@ mod tests {
             n: usize,
             new_packet: bool,
         ) {
-            let out_len = 48 * (ctrl.payload_size_ms as usize)
-                * ctrl.n_channels_api;
+            let out_len = 48 * (ctrl.payload_size_ms as usize) * ctrl.n_channels_api;
             let mut out = vec![0i16; out_len];
             let mut n_out = 0usize;
             let rc_buf = [0x80u8];
@@ -4999,8 +5028,14 @@ mod tests {
             for _ in 0..n {
                 let mut rc = RangeDecoder::new(&rc_buf);
                 let _ = silk_decode(
-                    decoder, ctrl, FLAG_PACKET_LOST, false,
-                    &mut rc, &mut out, &mut n_out, lpc_arg(),
+                    decoder,
+                    ctrl,
+                    FLAG_PACKET_LOST,
+                    false,
+                    &mut rc,
+                    &mut out,
+                    &mut n_out,
+                    lpc_arg(),
                 );
             }
         }
@@ -5095,7 +5130,7 @@ mod tests {
         fn test_bc_plc_conceal_with_short_nbsubfr() {
             let mut dec = SilkDecoderState::new();
             silk_decoder_set_fs(&mut dec, 8, 48_000);
-            dec.nb_subfr = 2;  // 10ms configuration
+            dec.nb_subfr = 2; // 10ms configuration
             dec.subfr_length = 40;
             dec.frame_length = 80;
             dec.loss_cnt = 0;
@@ -5142,13 +5177,7 @@ mod tests {
                     for fl in &[40usize, 80, 160, 320] {
                         let mut rc = RangeDecoder::new(&buf);
                         let mut pulses = vec![0i16; fl + 16];
-                        silk_decode_pulses(
-                            &mut rc,
-                            &mut pulses,
-                            signal_type,
-                            quant_offset,
-                            *fl,
-                        );
+                        silk_decode_pulses(&mut rc, &mut pulses, signal_type, quant_offset, *fl);
                     }
                 }
             }
@@ -5238,9 +5267,7 @@ mod tests {
         fn test_bc_stereo_decode_pred_sweep() {
             // Use the top-of-file encode_icdf_stream helper from super.
             for ix0 in [0u32, 10, 24] {
-                let buf = super::encode_icdf_stream(&[
-                    (ix0, &SILK_STEREO_PRED_JOINT_ICDF),
-                ]);
+                let buf = super::encode_icdf_stream(&[(ix0, &SILK_STEREO_PRED_JOINT_ICDF)]);
                 let mut rc = RangeDecoder::new(&buf);
                 let mut pred = [0i32; 2];
                 silk_stereo_decode_pred(&mut rc, &mut pred);
@@ -5267,7 +5294,7 @@ mod tests {
         ) -> Vec<u8> {
             use crate::celt::range_coder::RangeEncoder as RangeEnc;
             use crate::silk::encoder::{
-                silk_encode, silk_init_encoder_top, SilkEncControlStruct, SilkEncoder,
+                SilkEncControlStruct, SilkEncoder, silk_encode, silk_init_encoder_top,
             };
 
             let mut enc = SilkEncoder::new();
@@ -5300,10 +5327,14 @@ mod tests {
             let mut prefill_enc = RangeEnc::new(&mut prefill_payload);
             let mut n_prefill = 0i32;
             let _ = silk_encode(
-                &mut enc, &mut ctrl,
+                &mut enc,
+                &mut ctrl,
                 &samples[..samples_per_channel / 2 * n_channels],
                 (samples_per_channel / 2) as i32,
-                &mut prefill_enc, &mut n_prefill, 1, 0,
+                &mut prefill_enc,
+                &mut n_prefill,
+                1,
+                0,
             );
 
             // Real encode
@@ -5313,8 +5344,14 @@ mod tests {
                 let mut range_enc = RangeEnc::new(&mut payload);
                 let mut n_bytes = 0i32;
                 let _ = silk_encode(
-                    &mut enc, &mut ctrl, &samples, samples_per_frame,
-                    &mut range_enc, &mut n_bytes, 0, 1,
+                    &mut enc,
+                    &mut ctrl,
+                    &samples,
+                    samples_per_frame,
+                    &mut range_enc,
+                    &mut n_bytes,
+                    0,
+                    1,
                 );
                 range_enc.done();
             }
@@ -5335,8 +5372,14 @@ mod tests {
             let mut out = vec![0i16; 960];
             let mut n_out = 0usize;
             let _ = silk_decode(
-                &mut decoder, &mut ctrl, FLAG_DECODE_NORMAL, true,
-                &mut rc, &mut out, &mut n_out, lpc_arg(),
+                &mut decoder,
+                &mut ctrl,
+                FLAG_DECODE_NORMAL,
+                true,
+                &mut rc,
+                &mut out,
+                &mut n_out,
+                lpc_arg(),
             );
         }
 
@@ -5351,8 +5394,14 @@ mod tests {
             let mut out = vec![0i16; 960];
             let mut n_out = 0usize;
             let _ = silk_decode(
-                &mut decoder, &mut ctrl, FLAG_DECODE_NORMAL, true,
-                &mut rc, &mut out, &mut n_out, lpc_arg(),
+                &mut decoder,
+                &mut ctrl,
+                FLAG_DECODE_NORMAL,
+                true,
+                &mut rc,
+                &mut out,
+                &mut n_out,
+                lpc_arg(),
             );
         }
 
@@ -5367,8 +5416,14 @@ mod tests {
             let mut out = vec![0i16; 1920];
             let mut n_out = 0usize;
             let _ = silk_decode(
-                &mut decoder, &mut ctrl, FLAG_DECODE_NORMAL, true,
-                &mut rc, &mut out, &mut n_out, lpc_arg(),
+                &mut decoder,
+                &mut ctrl,
+                FLAG_DECODE_NORMAL,
+                true,
+                &mut rc,
+                &mut out,
+                &mut n_out,
+                lpc_arg(),
             );
         }
 
@@ -5390,8 +5445,14 @@ mod tests {
             let mut out = vec![0i16; 960];
             let mut n_out = 0usize;
             let _ = silk_decode(
-                &mut decoder, &mut ctrl, FLAG_DECODE_NORMAL, true,
-                &mut rc, &mut out, &mut n_out, lpc_arg(),
+                &mut decoder,
+                &mut ctrl,
+                FLAG_DECODE_NORMAL,
+                true,
+                &mut rc,
+                &mut out,
+                &mut n_out,
+                lpc_arg(),
             );
         }
 
@@ -5410,8 +5471,14 @@ mod tests {
                 let mut out = vec![0i16; 1920];
                 let mut n_out = 0usize;
                 let _ = silk_decode(
-                    &mut decoder, &mut ctrl, FLAG_DECODE_NORMAL, true,
-                    &mut rc, &mut out, &mut n_out, lpc_arg(),
+                    &mut decoder,
+                    &mut ctrl,
+                    FLAG_DECODE_NORMAL,
+                    true,
+                    &mut rc,
+                    &mut out,
+                    &mut n_out,
+                    lpc_arg(),
                 );
             }
 
@@ -5423,8 +5490,14 @@ mod tests {
             let mut out = vec![0i16; 1920];
             let mut n_out = 0usize;
             let _ = silk_decode(
-                &mut decoder, &mut ctrl, FLAG_DECODE_NORMAL, true,
-                &mut rc, &mut out, &mut n_out, lpc_arg(),
+                &mut decoder,
+                &mut ctrl,
+                FLAG_DECODE_NORMAL,
+                true,
+                &mut rc,
+                &mut out,
+                &mut n_out,
+                lpc_arg(),
             );
         }
 
@@ -5451,8 +5524,14 @@ mod tests {
                 let mut out = vec![0i16; 3840];
                 let mut n_out = 0usize;
                 let _ = silk_decode(
-                    &mut decoder, &mut ctrl, FLAG_DECODE_NORMAL, true,
-                    &mut rc, &mut out, &mut n_out, lpc_arg(),
+                    &mut decoder,
+                    &mut ctrl,
+                    FLAG_DECODE_NORMAL,
+                    true,
+                    &mut rc,
+                    &mut out,
+                    &mut n_out,
+                    lpc_arg(),
                 );
             }
         }
@@ -5477,8 +5556,14 @@ mod tests {
             let mut n_out = 0usize;
             // LBRR decode against a prepared decoder — tolerate any return.
             let _ = silk_decode(
-                &mut decoder, &mut ctrl, FLAG_DECODE_LBRR, false,
-                &mut rc, &mut out, &mut n_out, lpc_arg(),
+                &mut decoder,
+                &mut ctrl,
+                FLAG_DECODE_LBRR,
+                false,
+                &mut rc,
+                &mut out,
+                &mut n_out,
+                lpc_arg(),
             );
         }
 
@@ -5501,8 +5586,14 @@ mod tests {
             let mut out = vec![0i16; 1920];
             let mut n_out = 0usize;
             let _ = silk_decode(
-                &mut decoder, &mut ctrl, FLAG_DECODE_LBRR, false,
-                &mut rc, &mut out, &mut n_out, lpc_arg(),
+                &mut decoder,
+                &mut ctrl,
+                FLAG_DECODE_LBRR,
+                false,
+                &mut rc,
+                &mut out,
+                &mut n_out,
+                lpc_arg(),
             );
         }
 

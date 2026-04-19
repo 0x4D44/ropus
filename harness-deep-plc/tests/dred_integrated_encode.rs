@@ -27,12 +27,12 @@ use std::path::PathBuf;
 use ropus::dnn::dred::DRED_MAX_FRAMES;
 use ropus::dnn::embedded_weights::WEIGHTS_BLOB;
 use ropus::opus::dred::OpusDREDDecoder;
-use ropus::opus::encoder::OpusEncoder;
 use ropus::opus::encoder::OPUS_APPLICATION_VOIP as ROPUS_APP_VOIP;
+use ropus::opus::encoder::OpusEncoder;
 
 use ropus_harness_deep_plc::{
-    ropus_test_c_dred_parse, ropus_test_c_encoder_encode, ropus_test_c_encoder_free,
-    ropus_test_c_encoder_new, OPUS_APPLICATION_VOIP,
+    OPUS_APPLICATION_VOIP, ropus_test_c_dred_parse, ropus_test_c_encoder_encode,
+    ropus_test_c_encoder_free, ropus_test_c_encoder_new,
 };
 
 // ---------------------------------------------------------------------------
@@ -60,12 +60,8 @@ fn read_wav(path: &PathBuf) -> Wav {
     let mut pcm: Vec<i16> = Vec::new();
     while pos + 8 <= data.len() {
         let id = &data[pos..pos + 4];
-        let sz = u32::from_le_bytes([
-            data[pos + 4],
-            data[pos + 5],
-            data[pos + 6],
-            data[pos + 7],
-        ]) as usize;
+        let sz = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
+            as usize;
         if id == b"fmt " {
             channels = u16::from_le_bytes([data[pos + 10], data[pos + 11]]);
             sample_rate = u32::from_le_bytes([
@@ -107,9 +103,7 @@ fn vectors_path(name: &str) -> PathBuf {
 
 fn weights_or_skip(tag: &str) -> bool {
     if WEIGHTS_BLOB.is_empty() {
-        eprintln!(
-            "{tag}: WEIGHTS_BLOB empty — skipping. Run `cargo run -p fetch-assets -- all`."
-        );
+        eprintln!("{tag}: WEIGHTS_BLOB empty — skipping. Run `cargo run -p fetch-assets -- all`.");
         return false;
     }
     true
@@ -139,7 +133,10 @@ fn encode_rust_frames(samples: &[i16], channels: i32, num_frames: usize) -> Vec<
     for i in 0..num_frames {
         let start = i * frame_stride;
         let end = start + frame_stride;
-        assert!(end <= samples.len(), "wav too short for {num_frames} frames");
+        assert!(
+            end <= samples.len(),
+            "wav too short for {num_frames} frames"
+        );
         let frame = &samples[start..end];
         let mut packet = vec![0u8; MAX_PACKET];
         let nb = enc
@@ -154,7 +151,12 @@ fn encode_rust_frames(samples: &[i16], channels: i32, num_frames: usize) -> Vec<
 // Encode with the C reference (via shim) — mirror of `encode_rust_frames`.
 fn encode_c_frames(samples: &[i16], channels: i32, num_frames: usize) -> Vec<Vec<u8>> {
     let enc = unsafe {
-        ropus_test_c_encoder_new(TARGET_FS, channels, OPUS_APPLICATION_VOIP, DRED_DURATION_2_5MS)
+        ropus_test_c_encoder_new(
+            TARGET_FS,
+            channels,
+            OPUS_APPLICATION_VOIP,
+            DRED_DURATION_2_5MS,
+        )
     };
     assert!(!enc.is_null(), "ropus_test_c_encoder_new returned NULL");
     let mut out = Vec::with_capacity(num_frames);
@@ -162,7 +164,10 @@ fn encode_c_frames(samples: &[i16], channels: i32, num_frames: usize) -> Vec<Vec
     for i in 0..num_frames {
         let start = i * frame_stride;
         let end = start + frame_stride;
-        assert!(end <= samples.len(), "wav too short for {num_frames} frames");
+        assert!(
+            end <= samples.len(),
+            "wav too short for {num_frames} frames"
+        );
         let frame = &samples[start..end];
         let mut packet = vec![0u8; MAX_PACKET];
         let nb = unsafe {
@@ -227,9 +232,14 @@ fn rust_encoded_packets_parse_on_c_reference() {
         );
         per_frame_nb_latents.push(nb_latents);
         if ret >= 0 && nb_latents >= 1 {
-            assert!(process_stage >= 1, "process_stage must be >= 1 on parsed DRED");
-            assert!(nb_latents as usize <= DRED_MAX_FRAMES,
-                    "nb_latents {nb_latents} exceeds DRED_MAX_FRAMES");
+            assert!(
+                process_stage >= 1,
+                "process_stage must be >= 1 on parsed DRED"
+            );
+            assert!(
+                nb_latents as usize <= DRED_MAX_FRAMES,
+                "nb_latents {nb_latents} exceeds DRED_MAX_FRAMES"
+            );
             found = true;
         }
     }
@@ -318,7 +328,10 @@ fn rust_encoder_decoder_dred_roundtrip() {
         // proving the full parse → process chain closes. Matches the
         // 8.7 round-trip test's contract.
         let ret = decoder.process(&mut dred);
-        assert_eq!(ret, 0, "process should succeed on parsed packet (frame {i})");
+        assert_eq!(
+            ret, 0,
+            "process should succeed on parsed packet (frame {i})"
+        );
         assert_eq!(dred.process_stage, 2);
         // At least one feature must be nonzero on a live signal frame.
         let any_nonzero = dred.fec_features.iter().any(|f| *f != 0.0);

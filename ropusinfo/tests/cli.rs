@@ -136,8 +136,7 @@ fn info_extended_lists_per_packet_toc() {
         return;
     }
 
-    let (stdout, _stderr, code) =
-        run_ropusinfo(&["--extended", opus.to_str().expect("path utf8")]);
+    let (stdout, _stderr, code) = run_ropusinfo(&["--extended", opus.to_str().expect("path utf8")]);
     assert_eq!(code, 0, "exit code 0 expected, got {code}");
 
     assert!(
@@ -166,11 +165,19 @@ fn info_extended_lists_per_packet_toc() {
         .unwrap_or_else(|| panic!("extended output missing `#0000:` line; got:\n{stdout}"));
 
     let known_modes = [
-        "SILK-NB", "SILK-MB", "SILK-WB",
-        "Hybrid-SWB", "Hybrid-FB",
-        "CELT-NB", "CELT-WB", "CELT-SWB", "CELT-FB",
+        "SILK-NB",
+        "SILK-MB",
+        "SILK-WB",
+        "Hybrid-SWB",
+        "Hybrid-FB",
+        "CELT-NB",
+        "CELT-WB",
+        "CELT-SWB",
+        "CELT-FB",
     ];
-    let has_known_mode = known_modes.iter().any(|m| line0.contains(&format!("mode={m}")));
+    let has_known_mode = known_modes
+        .iter()
+        .any(|m| line0.contains(&format!("mode={m}")));
     assert!(
         has_known_mode,
         "packet 0 TOC line missing `mode=<known-label>`; got: `{line0}`"
@@ -190,11 +197,8 @@ fn info_query_duration_returns_bare_number() {
         return;
     }
 
-    let (stdout, _stderr, code) = run_ropusinfo(&[
-        "--query",
-        "duration",
-        opus.to_str().expect("path utf8"),
-    ]);
+    let (stdout, _stderr, code) =
+        run_ropusinfo(&["--query", "duration", opus.to_str().expect("path utf8")]);
     assert_eq!(code, 0, "exit code 0 expected, got {code}");
 
     // Only one line, and it parses as a float. No banner, no key prefix, no
@@ -271,11 +275,8 @@ fn info_query_unknown_key_exits_2() {
         return;
     }
 
-    let (_stdout, stderr, code) = run_ropusinfo(&[
-        "--query",
-        "gargle",
-        opus.to_str().expect("path utf8"),
-    ]);
+    let (_stdout, stderr, code) =
+        run_ropusinfo(&["--query", "gargle", opus.to_str().expect("path utf8")]);
     assert_eq!(code, 2, "unknown key must exit 2, got {code}");
     assert!(
         stderr.contains("unknown query key"),

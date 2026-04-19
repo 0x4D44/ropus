@@ -196,7 +196,7 @@ pub unsafe extern "C" fn opus_multistream_surround_encoder_get_size(
     _mapping_family: c_int,
 ) -> c_int {
     ffi_guard!(0, {
-        if channels < 1 || channels > 255 {
+        if !(1..=255).contains(&channels) {
             return 0;
         }
         ms_size_for(channels.max(1))
@@ -214,15 +214,21 @@ pub unsafe extern "C" fn opus_multistream_encoder_create(
     error: *mut c_int,
 ) -> *mut OpusMSEncoder {
     ffi_guard!(ptr::null_mut(), {
-        if mapping.is_null() || channels < 1 || channels > 255 {
+        if mapping.is_null() || !(1..=255).contains(&channels) {
             if !error.is_null() {
                 unsafe { *error = OPUS_BAD_ARG };
             }
             return ptr::null_mut();
         }
         let mapping_slice = unsafe { std::slice::from_raw_parts(mapping, channels as usize) };
-        match OpusMSEncoder::new(fs, channels, streams, coupled_streams, mapping_slice, application)
-        {
+        match OpusMSEncoder::new(
+            fs,
+            channels,
+            streams,
+            coupled_streams,
+            mapping_slice,
+            application,
+        ) {
             Ok(ms) => {
                 let mut boxed = Box::new(ms);
                 let sub_handles = build_sub_handles(&mut boxed);
@@ -306,12 +312,18 @@ pub unsafe extern "C" fn opus_multistream_encoder_init(
     application: c_int,
 ) -> c_int {
     ffi_guard!(OPUS_INTERNAL_ERROR, {
-        if st.is_null() || mapping.is_null() || channels < 1 || channels > 255 {
+        if st.is_null() || mapping.is_null() || !(1..=255).contains(&channels) {
             return OPUS_BAD_ARG;
         }
         let mapping_slice = unsafe { std::slice::from_raw_parts(mapping, channels as usize) };
-        match OpusMSEncoder::new(fs, channels, streams, coupled_streams, mapping_slice, application)
-        {
+        match OpusMSEncoder::new(
+            fs,
+            channels,
+            streams,
+            coupled_streams,
+            mapping_slice,
+            application,
+        ) {
             Ok(ms) => {
                 let mut boxed = Box::new(ms);
                 let sub_handles = build_sub_handles(&mut boxed);
@@ -322,11 +334,7 @@ pub unsafe extern "C" fn opus_multistream_encoder_init(
                 // SAFETY: caller provided at least our advertised size (16KB
                 // per stream). We only write the 24-byte handle prefix.
                 unsafe {
-                    ptr::write_bytes(
-                        st as *mut u8,
-                        0,
-                        std::mem::size_of::<OpusMSEncoderHandle>(),
-                    );
+                    ptr::write_bytes(st as *mut u8, 0, std::mem::size_of::<OpusMSEncoderHandle>());
                     install_handle(st as *mut OpusMSEncoderHandle, inner);
                 }
                 OPUS_OK
@@ -365,11 +373,7 @@ pub unsafe extern "C" fn opus_multistream_surround_encoder_init(
                     sub_handles,
                 }));
                 unsafe {
-                    ptr::write_bytes(
-                        st as *mut u8,
-                        0,
-                        std::mem::size_of::<OpusMSEncoderHandle>(),
-                    );
+                    ptr::write_bytes(st as *mut u8, 0, std::mem::size_of::<OpusMSEncoderHandle>());
                     install_handle(st as *mut OpusMSEncoderHandle, inner);
                 }
                 OPUS_OK
@@ -414,8 +418,7 @@ pub unsafe extern "C" fn opus_multistream_encode(
             return OPUS_BAD_ARG;
         };
         let pcm_slice = unsafe { std::slice::from_raw_parts(pcm, n_samples) };
-        let out_slice =
-            unsafe { std::slice::from_raw_parts_mut(data, max_data_bytes as usize) };
+        let out_slice = unsafe { std::slice::from_raw_parts_mut(data, max_data_bytes as usize) };
         match ms.encode(pcm_slice, frame_size, out_slice, max_data_bytes) {
             Ok(n) => n,
             Err(e) => e,

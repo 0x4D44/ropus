@@ -403,11 +403,7 @@ pub unsafe extern "C" fn opus_decode_float(
 // ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn opus_packet_pad(
-    data: *mut c_uchar,
-    len: i32,
-    new_len: i32,
-) -> c_int {
+pub unsafe extern "C" fn opus_packet_pad(data: *mut c_uchar, len: i32, new_len: i32) -> c_int {
     ffi_guard!(OPUS_INTERNAL_ERROR, {
         if data.is_null() || len < 0 || new_len < 0 {
             return OPUS_BAD_ARG;
@@ -447,10 +443,7 @@ pub unsafe extern "C" fn opus_packet_get_bandwidth(data: *const c_uchar) -> c_in
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn opus_packet_get_samples_per_frame(
-    data: *const c_uchar,
-    fs: i32,
-) -> c_int {
+pub unsafe extern "C" fn opus_packet_get_samples_per_frame(data: *const c_uchar, fs: i32) -> c_int {
     ffi_guard!(OPUS_BAD_ARG, {
         if data.is_null() {
             return OPUS_BAD_ARG;
@@ -472,10 +465,7 @@ pub unsafe extern "C" fn opus_packet_get_nb_channels(data: *const c_uchar) -> c_
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn opus_packet_get_nb_frames(
-    packet: *const c_uchar,
-    len: i32,
-) -> c_int {
+pub unsafe extern "C" fn opus_packet_get_nb_frames(packet: *const c_uchar, len: i32) -> c_int {
     ffi_guard!(OPUS_BAD_ARG, {
         if packet.is_null() || len < 1 {
             return OPUS_BAD_ARG;
@@ -581,12 +571,7 @@ pub(crate) fn alloc_sub_handle_for(target: *mut OpusDecoder) -> *mut OpusDecoder
 /// Like the reference, returns silently on degenerate inputs
 /// (`N<1`, `C<1`, or any null pointer).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn opus_pcm_soft_clip(
-    x: *mut f32,
-    n: c_int,
-    c: c_int,
-    declip_mem: *mut f32,
-) {
+pub unsafe extern "C" fn opus_pcm_soft_clip(x: *mut f32, n: c_int, c: c_int, declip_mem: *mut f32) {
     let _: () = ffi_guard!((), {
         if x.is_null() || declip_mem.is_null() || n < 1 || c < 1 {
             return;

@@ -796,15 +796,55 @@ impl CeltDecoder {
     /// native rate) and 16 kHz (LPCNet operating rate). Values are drawn
     /// from the C reference (`celt_decoder.c:629`, `SINC_FILTER`).
     const SINC_FILTER: [f32; 49] = [
-        4.2931e-05, -0.000190293, -0.000816132, -0.000637162, 0.00141662,
-        0.00354764, 0.00184368, -0.00428274, -0.00856105, -0.0034003,
-        0.00930201, 0.0159616, 0.00489785, -0.0169649, -0.0259484, -0.00596856,
-        0.0286551, 0.0405872, 0.00649994, -0.0509284, -0.0716655, -0.00665212,
-        0.134336, 0.278927, 0.339995, 0.278927, 0.134336, -0.00665212,
-        -0.0716655, -0.0509284, 0.00649994, 0.0405872, 0.0286551, -0.00596856,
-        -0.0259484, -0.0169649, 0.00489785, 0.0159616, 0.00930201, -0.0034003,
-        -0.00856105, -0.00428274, 0.00184368, 0.00354764, 0.00141662,
-        -0.000637162, -0.000816132, -0.000190293, 4.2931e-05,
+        4.2931e-05,
+        -0.000190293,
+        -0.000816132,
+        -0.000637162,
+        0.00141662,
+        0.00354764,
+        0.00184368,
+        -0.00428274,
+        -0.00856105,
+        -0.0034003,
+        0.00930201,
+        0.0159616,
+        0.00489785,
+        -0.0169649,
+        -0.0259484,
+        -0.00596856,
+        0.0286551,
+        0.0405872,
+        0.00649994,
+        -0.0509284,
+        -0.0716655,
+        -0.00665212,
+        0.134336,
+        0.278927,
+        0.339995,
+        0.278927,
+        0.134336,
+        -0.00665212,
+        -0.0716655,
+        -0.0509284,
+        0.00649994,
+        0.0405872,
+        0.0286551,
+        -0.00596856,
+        -0.0259484,
+        -0.0169649,
+        0.00489785,
+        0.0159616,
+        0.00930201,
+        -0.0034003,
+        -0.00856105,
+        -0.00428274,
+        0.00184368,
+        0.00354764,
+        0.00141662,
+        -0.000637162,
+        -0.000816132,
+        -0.000190293,
+        4.2931e-05,
     ];
 
     /// CELT's standard preemphasis coefficient (matches C `dnn/freq.h`
@@ -855,8 +895,7 @@ impl CeltDecoder {
         self.plc_preemphasis_mem = buf48k[decode_buffer_size - 1];
 
         // 48 kHz → 16 kHz (3:1 decimation) with the sinc filter.
-        let offset =
-            decode_buffer_size - Self::SINC_ORDER - 1 - 3 * (plc_update_samples - 1);
+        let offset = decode_buffer_size - Self::SINC_ORDER - 1 - 3 * (plc_update_samples - 1);
         let mut buf16k = vec![0i16; plc_update_samples];
         for i in 0..plc_update_samples {
             let mut sum = 0.0f32;
@@ -1047,17 +1086,16 @@ impl CeltDecoder {
             let mut fade: i32 = Q15ONE;
             let pitch_index;
 
-            let curr_neural =
-                curr_frame_type == FRAME_PLC_NEURAL || curr_frame_type == FRAME_DRED;
-            let last_neural = self.last_frame_type == FRAME_PLC_NEURAL
-                || self.last_frame_type == FRAME_DRED;
+            let curr_neural = curr_frame_type == FRAME_PLC_NEURAL || curr_frame_type == FRAME_DRED;
+            let last_neural =
+                self.last_frame_type == FRAME_PLC_NEURAL || self.last_frame_type == FRAME_DRED;
 
             // Pitch search: skip if continuing a neural or periodic PLC
             // run (C: `last_frame_type == FRAME_PLC_PERIODIC`, extended
             // in the DEEP_PLC path to also cover neural-to-neural
             // continuations so we preserve the previous fade value).
-            let skip_pitch_search = self.last_frame_type == FRAME_PLC_PERIODIC
-                || (last_neural && curr_neural);
+            let skip_pitch_search =
+                self.last_frame_type == FRAME_PLC_PERIODIC || (last_neural && curr_neural);
 
             if !skip_pitch_search {
                 pitch_index = self.plc_pitch_search();
@@ -1292,9 +1330,7 @@ impl CeltDecoder {
             // filter, and either replace the classical output outright
             // (continuing neural run) or cross-fade into it over the MDCT
             // overlap region (first neural frame).
-            if curr_neural
-                && let Some(ref mut lpcnet_ref) = lpcnet
-            {
+            if curr_neural && let Some(ref mut lpcnet_ref) = lpcnet {
                 let decode_buffer_size = DECODE_BUFFER_SIZE as usize;
                 let overlap_usize = overlap as usize;
 
@@ -1310,8 +1346,7 @@ impl CeltDecoder {
 
                 // Fill plc_pcm with enough 16 kHz samples to produce
                 // (n + overlap) output at 48 kHz.
-                let samples_needed_16k =
-                    ((n + Self::SINC_ORDER as i32 + overlap) / 3) as usize;
+                let samples_needed_16k = ((n + Self::SINC_ORDER as i32 + overlap) / 3) as usize;
                 if !last_neural {
                     self.plc_fill = 0;
                 }
@@ -1321,8 +1356,7 @@ impl CeltDecoder {
                             .resize(self.plc_fill + Self::LPCNET_FRAME_SIZE, 0);
                     }
                     lpcnet_ref.conceal(
-                        &mut self.plc_pcm
-                            [self.plc_fill..self.plc_fill + Self::LPCNET_FRAME_SIZE],
+                        &mut self.plc_pcm[self.plc_fill..self.plc_fill + Self::LPCNET_FRAME_SIZE],
                     );
                     self.plc_fill += Self::LPCNET_FRAME_SIZE;
                 }
@@ -1336,32 +1370,23 @@ impl CeltDecoder {
                 for i in 0..resamp_len {
                     let mut sum0 = 0.0f32;
                     for j in 0..17 {
-                        sum0 += 3.0
-                            * self.plc_pcm[i + j] as f32
-                            * Self::SINC_FILTER[3 * j];
+                        sum0 += 3.0 * self.plc_pcm[i + j] as f32 * Self::SINC_FILTER[3 * j];
                     }
-                    self.decode_mem
-                        [buf_off + decode_buffer_size - n as usize + 3 * i] =
+                    self.decode_mem[buf_off + decode_buffer_size - n as usize + 3 * i] =
                         sum0.round() as i32;
 
                     let mut sum1 = 0.0f32;
                     for j in 0..16 {
-                        sum1 += 3.0
-                            * self.plc_pcm[i + j + 1] as f32
-                            * Self::SINC_FILTER[3 * j + 2];
+                        sum1 += 3.0 * self.plc_pcm[i + j + 1] as f32 * Self::SINC_FILTER[3 * j + 2];
                     }
-                    self.decode_mem
-                        [buf_off + decode_buffer_size - n as usize + 3 * i + 1] =
+                    self.decode_mem[buf_off + decode_buffer_size - n as usize + 3 * i + 1] =
                         sum1.round() as i32;
 
                     let mut sum2 = 0.0f32;
                     for j in 0..16 {
-                        sum2 += 3.0
-                            * self.plc_pcm[i + j + 1] as f32
-                            * Self::SINC_FILTER[3 * j + 1];
+                        sum2 += 3.0 * self.plc_pcm[i + j + 1] as f32 * Self::SINC_FILTER[3 * j + 1];
                     }
-                    self.decode_mem
-                        [buf_off + decode_buffer_size - n as usize + 3 * i + 2] =
+                    self.decode_mem[buf_off + decode_buffer_size - n as usize + 3 * i + 2] =
                         sum2.round() as i32;
                 }
 
@@ -1375,8 +1400,7 @@ impl CeltDecoder {
                 for i in 0..n as usize {
                     let tmp = self.decode_mem[buf_start + i] as f32;
                     self.decode_mem[buf_start + i] =
-                        (tmp - Self::PREEMPHASIS * self.plc_preemphasis_mem).round()
-                            as i32;
+                        (tmp - Self::PREEMPHASIS * self.plc_preemphasis_mem).round() as i32;
                     self.plc_preemphasis_mem = tmp;
                 }
 
@@ -2716,15 +2740,15 @@ mod tests {
         comb_filter(
             &mut buf,
             buf_off,
-            40,  // t0
-            40,  // t1
-            120, // n
+            40,    // t0
+            40,    // t1
+            120,   // n
             16384, // g0
             16384, // g1
-            0,   // tapset0
-            0,   // tapset1
+            0,     // tapset0
+            0,     // tapset1
             mode.window,
-            4,   // overlap
+            4, // overlap
         );
 
         // Pin first 10 output samples, around comb feedback at index 40, and last 5
@@ -2767,7 +2791,7 @@ mod tests {
             0,     // tapset0
             1,     // tapset1
             mode.window,
-            4,     // overlap
+            4, // overlap
         );
 
         // Pin the overlap region (first 4 samples) and a few after
@@ -2799,7 +2823,7 @@ mod tests {
             0,     // tapset0
             0,     // tapset1
             mode.window,
-            4,     // overlap
+            4, // overlap
         );
 
         assert_eq!(
@@ -2833,7 +2857,7 @@ mod tests {
             0,     // tapset0
             0,     // tapset1
             mode.window,
-            4,     // overlap
+            4, // overlap
         );
 
         // Pin 5 samples from the constant region (indices 10..15 in processing window)
@@ -2873,7 +2897,9 @@ mod tests {
 
         assert_eq!(
             &pcm[..],
-            &[1i16, 3, 5, 9, 12, 16, 21, 26, 31, 36, 42, 48, 53, 59, 66, 72, 78, 84, 91, 97]
+            &[
+                1i16, 3, 5, 9, 12, 16, 21, 26, 31, 36, 42, 48, 53, 59, 66, 72, 78, 84, 91, 97
+            ]
         );
         assert_eq!(mem, [337792, 0]);
     }
@@ -2889,7 +2915,10 @@ mod tests {
 
         deemphasis(&inp_slices, &mut pcm, 10, 1, 1, &coef, &mut mem, true);
 
-        assert_eq!(&pcm[..], &[101i16, 103, 105, 109, 112, 116, 121, 126, 131, 136]);
+        assert_eq!(
+            &pcm[..],
+            &[101i16, 103, 105, 109, 112, 116, 121, 126, 131, 136]
+        );
     }
 
     #[test]
@@ -2988,8 +3017,8 @@ mod tests {
             1, // c (stream channels)
             1, // cc (output channels)
             false,
-            0, // lm
-            1, // downsample
+            0,     // lm
+            1,     // downsample
             false, // silence
         );
 
@@ -3039,14 +3068,8 @@ mod tests {
             let buf_len = compressed.len() as i32;
             for f in 0..frames {
                 let pcm = gen_noise(frame_size as usize, channels as usize, f as i32);
-                let n = celt_encode_with_ec(
-                    &mut enc,
-                    &pcm,
-                    frame_size,
-                    &mut compressed,
-                    buf_len,
-                    None,
-                );
+                let n =
+                    celt_encode_with_ec(&mut enc, &pcm, frame_size, &mut compressed, buf_len, None);
                 assert!(n > 0, "encode returned {n}");
                 let res = dec.decode_with_ec(
                     Some(&compressed[..n as usize]),
@@ -3087,9 +3110,7 @@ mod tests {
                     }
                 }
                 let buf_len = compressed.len() as i32;
-                let n = celt_encode_with_ec(
-                    &mut enc, &pcm, 960, &mut compressed, buf_len, None,
-                );
+                let n = celt_encode_with_ec(&mut enc, &pcm, 960, &mut compressed, buf_len, None);
                 assert!(n > 0);
                 let res = dec.decode_with_ec(
                     Some(&compressed[..n as usize]),
@@ -3136,9 +3157,7 @@ mod tests {
             }
 
             let buf_len = compressed.len() as i32;
-            let n = celt_encode_with_ec(
-                &mut enc, &pcm, 960, &mut compressed, buf_len, None,
-            );
+            let n = celt_encode_with_ec(&mut enc, &pcm, 960, &mut compressed, buf_len, None);
             assert!(n > 0);
             let res = dec.decode_with_ec(
                 Some(&compressed[..n as usize]),
@@ -3202,9 +3221,7 @@ mod tests {
             for f in 0..2 {
                 let pcm = gen_noise(960, 2, f);
                 let buf_len = compressed.len() as i32;
-                let n = celt_encode_with_ec(
-                    &mut enc, &pcm, 960, &mut compressed, buf_len, None,
-                );
+                let n = celt_encode_with_ec(&mut enc, &pcm, 960, &mut compressed, buf_len, None);
                 assert!(n > 0);
                 let res = dec.decode_with_ec(
                     Some(&compressed[..n as usize]),
@@ -3234,9 +3251,7 @@ mod tests {
             let pcm = gen_noise(960, 1, 1);
 
             let buf_len = compressed.len() as i32;
-            let n = celt_encode_with_ec(
-                &mut enc, &pcm, 960, &mut compressed, buf_len, None,
-            );
+            let n = celt_encode_with_ec(&mut enc, &pcm, 960, &mut compressed, buf_len, None);
             assert!(n > 0);
             let res = dec.decode_with_ec(
                 Some(&compressed[..n as usize]),

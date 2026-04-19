@@ -344,10 +344,18 @@ pub unsafe extern "C" fn mdopus_decoder_ctl_get_int(
             OPUS_GET_GAIN_REQUEST => dec.get_gain(),
             OPUS_GET_LAST_PACKET_DURATION_REQUEST => dec.get_last_packet_duration(),
             OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST => {
-                if dec.get_phase_inversion_disabled() { 1 } else { 0 }
+                if dec.get_phase_inversion_disabled() {
+                    1
+                } else {
+                    0
+                }
             }
             OPUS_GET_IGNORE_EXTENSIONS_REQUEST => {
-                if dec.get_ignore_extensions() { 1 } else { 0 }
+                if dec.get_ignore_extensions() {
+                    1
+                } else {
+                    0
+                }
             }
             OPUS_GET_COMPLEXITY_REQUEST => dec.get_complexity(),
             _ => return OPUS_UNIMPLEMENTED,
@@ -559,14 +567,14 @@ pub unsafe extern "C" fn mdopus_ms_encoder_ctl_get_int(
                 .get_encoder(0)
                 .map(|e| e.get_vbr_constraint())
                 .unwrap_or(0),
-            OPUS_GET_BANDWIDTH_REQUEST => {
-                ms.get_encoder(0).map(|e| e.get_bandwidth()).unwrap_or(0)
-            }
+            OPUS_GET_BANDWIDTH_REQUEST => ms.get_encoder(0).map(|e| e.get_bandwidth()).unwrap_or(0),
             OPUS_GET_MAX_BANDWIDTH_REQUEST => ms
                 .get_encoder(0)
                 .map(|e| e.get_max_bandwidth())
                 .unwrap_or(0),
-            OPUS_GET_INBAND_FEC_REQUEST => ms.get_encoder(0).map(|e| e.get_inband_fec()).unwrap_or(0),
+            OPUS_GET_INBAND_FEC_REQUEST => {
+                ms.get_encoder(0).map(|e| e.get_inband_fec()).unwrap_or(0)
+            }
             OPUS_GET_PACKET_LOSS_PERC_REQUEST => ms
                 .get_encoder(0)
                 .map(|e| e.get_packet_loss_perc())
@@ -766,9 +774,7 @@ pub unsafe extern "C" fn mdopus_ms_decoder_ctl_get_decoder_state(
 // Piece B scope touches it.
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mdopus_proj_encoder_ctl_reset(
-    st: *mut OpusProjectionEncoder,
-) -> c_int {
+pub unsafe extern "C" fn mdopus_proj_encoder_ctl_reset(st: *mut OpusProjectionEncoder) -> c_int {
     ffi_guard!(OPUS_INTERNAL_ERROR, {
         let Some(enc) = (unsafe { crate::projection::handle_to_proj_encoder(st) }) else {
             return OPUS_BAD_ARG;
@@ -886,9 +892,7 @@ pub unsafe extern "C" fn mdopus_proj_encoder_ctl_get_demixing_matrix(
 // requests route through the underlying multistream decoder's behaviour.
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mdopus_proj_decoder_ctl_reset(
-    st: *mut OpusProjectionDecoder,
-) -> c_int {
+pub unsafe extern "C" fn mdopus_proj_decoder_ctl_reset(st: *mut OpusProjectionDecoder) -> c_int {
     ffi_guard!(OPUS_INTERNAL_ERROR, {
         let Some(dec) = (unsafe { crate::projection::handle_to_proj_decoder(st) }) else {
             return OPUS_BAD_ARG;

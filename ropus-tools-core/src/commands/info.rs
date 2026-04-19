@@ -98,14 +98,11 @@ pub fn info(opts: InfoOptions) -> Result<()> {
 }
 
 fn collect_summary(input: &std::path::Path) -> Result<InfoSummary> {
-    let file =
-        File::open(input).with_context(|| format!("opening {}", input.display()))?;
+    let file = File::open(input).with_context(|| format!("opening {}", input.display()))?;
     let file_len = file.metadata().ok().map(|m| m.len()).unwrap_or(0);
     let mut reader = PacketReader::new(BufReader::new(file));
 
-    let head_pkt = reader
-        .read_packet()?
-        .ok_or_else(|| anyhow!("empty file"))?;
+    let head_pkt = reader.read_packet()?.ok_or_else(|| anyhow!("empty file"))?;
     let head = parse_opus_head(&head_pkt.data)?;
     // Capture the OpusHead's stream serial — this identifies the logical Opus
     // bitstream we care about in a multiplexed Ogg file.
@@ -173,8 +170,8 @@ fn collect_summary(input: &std::path::Path) -> Result<InfoSummary> {
     // for gap detection — cheap (a single sequential read).
     let mut gap_file = File::open(input)
         .with_context(|| format!("opening {} for granule-gap scan", input.display()))?;
-    let page_granules = read_page_granules(&mut gap_file, target_serial)
-        .context("scanning page granules")?;
+    let page_granules =
+        read_page_granules(&mut gap_file, target_serial).context("scanning page granules")?;
 
     Ok(InfoSummary {
         head,
@@ -191,10 +188,7 @@ fn collect_summary(input: &std::path::Path) -> Result<InfoSummary> {
 /// their muscle memory; deviations are only where ropus simply doesn't have
 /// the equivalent field.
 fn print_default_block(input: &std::path::Path, s: &InfoSummary) {
-    println!(
-        "Input File: {}",
-        input.display().to_string().cyan()
-    );
+    println!("Input File: {}", input.display().to_string().cyan());
     println!("Channels: {}", s.head.channels.to_string().bright_white());
     println!(
         "Sample rate (input): {} Hz",
@@ -277,10 +271,7 @@ fn print_extended(s: &InfoSummary) {
     } else {
         println!("Gaps:");
         for g in gaps {
-            println!(
-                "  gap: page={}, from={}, to={}",
-                g.page, g.from, g.to
-            );
+            println!("  gap: page={}, from={}, to={}", g.page, g.from, g.to);
         }
     }
 }
@@ -369,4 +360,3 @@ fn emit_query(s: &InfoSummary, key: &str) -> Result<()> {
     }
     Ok(())
 }
-

@@ -33,12 +33,8 @@ fn force_link() {
     black_box(mdopus_capi::opus_get_version_string as *const ());
 
     // Projection encoder
-    black_box(
-        mdopus_capi::projection::opus_projection_ambisonics_encoder_get_size as *const (),
-    );
-    black_box(
-        mdopus_capi::projection::opus_projection_ambisonics_encoder_create as *const (),
-    );
+    black_box(mdopus_capi::projection::opus_projection_ambisonics_encoder_get_size as *const ());
+    black_box(mdopus_capi::projection::opus_projection_ambisonics_encoder_create as *const ());
     black_box(mdopus_capi::projection::opus_projection_ambisonics_encoder_init as *const ());
     black_box(mdopus_capi::projection::opus_projection_encoder_destroy as *const ());
     black_box(mdopus_capi::projection::opus_projection_encode as *const ());
@@ -58,9 +54,7 @@ fn force_link() {
     black_box(mdopus_capi::ctl::mdopus_proj_encoder_ctl_set_int as *const ());
     black_box(mdopus_capi::ctl::mdopus_proj_encoder_ctl_get_int as *const ());
     black_box(mdopus_capi::ctl::mdopus_proj_encoder_ctl_get_uint32 as *const ());
-    black_box(
-        mdopus_capi::ctl::mdopus_proj_encoder_ctl_get_demixing_matrix as *const (),
-    );
+    black_box(mdopus_capi::ctl::mdopus_proj_encoder_ctl_get_demixing_matrix as *const ());
     black_box(mdopus_capi::ctl::mdopus_proj_decoder_ctl_reset as *const ());
     black_box(mdopus_capi::ctl::mdopus_proj_decoder_ctl_set_int as *const ());
     black_box(mdopus_capi::ctl::mdopus_proj_decoder_ctl_get_int as *const ());

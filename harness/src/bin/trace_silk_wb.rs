@@ -11,7 +11,7 @@
 mod bindings;
 
 use ropus::opus::decoder::{
-    opus_packet_get_nb_frames, opus_packet_get_samples_per_frame, OpusDecoder,
+    OpusDecoder, opus_packet_get_nb_frames, opus_packet_get_samples_per_frame,
 };
 use std::fs;
 use std::os::raw::c_int;
@@ -112,7 +112,13 @@ fn compare_indices(label: &str, rust: &RustSilkIndices, c: &RustSilkIndices) -> 
     macro_rules! cmp {
         ($field:ident) => {
             if rust.$field != c.$field {
-                println!("  {} MISMATCH {}: rust={:?} c={:?}", label, stringify!($field), rust.$field, c.$field);
+                println!(
+                    "  {} MISMATCH {}: rust={:?} c={:?}",
+                    label,
+                    stringify!($field),
+                    rust.$field,
+                    c.$field
+                );
                 ok = false;
             }
         };
@@ -136,23 +142,45 @@ fn compare_indices(label: &str, rust: &RustSilkIndices, c: &RustSilkIndices) -> 
 
 fn compare_i32_arrays(label: &str, name: &str, rust: &[i32], c: &[i32]) -> bool {
     let len = rust.len().min(c.len());
-    let first_diff = rust[..len].iter().zip(c[..len].iter()).position(|(a, b)| a != b);
+    let first_diff = rust[..len]
+        .iter()
+        .zip(c[..len].iter())
+        .position(|(a, b)| a != b);
     match first_diff {
         None => {
             println!("  {} {}: ALL MATCH ({} elements)", label, name, len);
             true
         }
         Some(i) => {
-            let n_diff = rust[..len].iter().zip(c[..len].iter()).filter(|(a, b)| a != b).count();
-            println!("  {} {} MISMATCH: first_diff@{} rust={} c={} (delta={}) [{} diffs of {}]",
-                label, name, i, rust[i], c[i], rust[i] as i64 - c[i] as i64, n_diff, len);
+            let n_diff = rust[..len]
+                .iter()
+                .zip(c[..len].iter())
+                .filter(|(a, b)| a != b)
+                .count();
+            println!(
+                "  {} {} MISMATCH: first_diff@{} rust={} c={} (delta={}) [{} diffs of {}]",
+                label,
+                name,
+                i,
+                rust[i],
+                c[i],
+                rust[i] as i64 - c[i] as i64,
+                n_diff,
+                len
+            );
             // Show context around first diff
             let lo = i.saturating_sub(2);
             let hi = (i + 6).min(len);
             for j in lo..hi {
                 let mark = if rust[j] != c[j] { " *" } else { "" };
-                println!("    [{:4}] rust={:12} c={:12} delta={:10}{}", j, rust[j], c[j],
-                    rust[j] as i64 - c[j] as i64, mark);
+                println!(
+                    "    [{:4}] rust={:12} c={:12} delta={:10}{}",
+                    j,
+                    rust[j],
+                    c[j],
+                    rust[j] as i64 - c[j] as i64,
+                    mark
+                );
             }
             false
         }
@@ -161,22 +189,44 @@ fn compare_i32_arrays(label: &str, name: &str, rust: &[i32], c: &[i32]) -> bool 
 
 fn compare_i16_arrays(label: &str, name: &str, rust: &[i16], c: &[i16]) -> bool {
     let len = rust.len().min(c.len());
-    let first_diff = rust[..len].iter().zip(c[..len].iter()).position(|(a, b)| a != b);
+    let first_diff = rust[..len]
+        .iter()
+        .zip(c[..len].iter())
+        .position(|(a, b)| a != b);
     match first_diff {
         None => {
             println!("  {} {}: ALL MATCH ({} elements)", label, name, len);
             true
         }
         Some(i) => {
-            let n_diff = rust[..len].iter().zip(c[..len].iter()).filter(|(a, b)| a != b).count();
-            println!("  {} {} MISMATCH: first_diff@{} rust={} c={} (delta={}) [{} diffs of {}]",
-                label, name, i, rust[i], c[i], rust[i] as i32 - c[i] as i32, n_diff, len);
+            let n_diff = rust[..len]
+                .iter()
+                .zip(c[..len].iter())
+                .filter(|(a, b)| a != b)
+                .count();
+            println!(
+                "  {} {} MISMATCH: first_diff@{} rust={} c={} (delta={}) [{} diffs of {}]",
+                label,
+                name,
+                i,
+                rust[i],
+                c[i],
+                rust[i] as i32 - c[i] as i32,
+                n_diff,
+                len
+            );
             let lo = i.saturating_sub(2);
             let hi = (i + 6).min(len);
             for j in lo..hi {
                 let mark = if rust[j] != c[j] { " *" } else { "" };
-                println!("    [{:4}] rust={:8} c={:8} delta={:6}{}", j, rust[j], c[j],
-                    rust[j] as i32 - c[j] as i32, mark);
+                println!(
+                    "    [{:4}] rust={:8} c={:8} delta={:6}{}",
+                    j,
+                    rust[j],
+                    c[j],
+                    rust[j] as i32 - c[j] as i32,
+                    mark
+                );
             }
             false
         }
@@ -194,8 +244,12 @@ fn phase1_compare_after_decode(packet: &[u8], sample_rate: i32, channels: i32) {
     let mut rust_dec = OpusDecoder::new(sample_rate, channels).unwrap();
     let max_pcm = MAX_FRAME as usize * channels as usize;
     let mut rust_pcm = vec![0i16; max_pcm];
-    let rust_n = rust_dec.decode(Some(packet), &mut rust_pcm, MAX_FRAME, false)
-        .unwrap_or_else(|e| { println!("Rust decode error: {}", e); -1 });
+    let rust_n = rust_dec
+        .decode(Some(packet), &mut rust_pcm, MAX_FRAME, false)
+        .unwrap_or_else(|e| {
+            println!("Rust decode error: {}", e);
+            -1
+        });
     rust_pcm.truncate(rust_n as usize * channels as usize);
 
     // --- C decode ---
@@ -224,7 +278,11 @@ fn phase1_compare_after_decode(packet: &[u8], sample_rate: i32, channels: i32) {
     if rust_pcm.len() == c_pcm.len() {
         compare_i16_arrays("PCM", "output", &rust_pcm, &c_pcm);
     } else {
-        println!("  PCM length mismatch: rust={} c={}", rust_pcm.len(), c_pcm.len());
+        println!(
+            "  PCM length mismatch: rust={} c={}",
+            rust_pcm.len(),
+            c_pcm.len()
+        );
     }
 
     // --- Compare post-decode SILK state ---
@@ -239,7 +297,9 @@ fn phase1_compare_after_decode(packet: &[u8], sample_rate: i32, channels: i32) {
     // Compare prevNLSF_Q15
     let r_prev_nlsf = &rust_dec.debug_silk_dec().channel_state[0].prev_nlsf_q15;
     let mut c_prev_nlsf = [0i16; 16];
-    unsafe { bindings::debug_silk_trace_get_prev_nlsf(c_dec, c_prev_nlsf.as_mut_ptr()); }
+    unsafe {
+        bindings::debug_silk_trace_get_prev_nlsf(c_dec, c_prev_nlsf.as_mut_ptr());
+    }
     compare_i16_arrays("STATE", "prevNLSF_Q15", r_prev_nlsf, &c_prev_nlsf);
 
     // Compare persistent state
@@ -276,13 +336,27 @@ fn phase1_compare_after_decode(packet: &[u8], sample_rate: i32, channels: i32) {
         );
     }
 
-    println!("  STATE config: fs_khz=R:{}/C:{} nb_subfr=R:{}/C:{} frame_len=R:{}/C:{} subfr_len=R:{}/C:{} lpc_order=R:{}/C:{} ltp_mem=R:{}/C:{}",
-        r_ch.fs_khz, c_fs_khz, r_ch.nb_subfr, c_nb_subfr as usize,
-        r_ch.frame_length, c_frame_length as usize, r_ch.subfr_length, c_subfr_length as usize,
-        r_ch.lpc_order, c_lpc_order as usize, r_ch.ltp_mem_length, c_ltp_mem_length as usize);
+    println!(
+        "  STATE config: fs_khz=R:{}/C:{} nb_subfr=R:{}/C:{} frame_len=R:{}/C:{} subfr_len=R:{}/C:{} lpc_order=R:{}/C:{} ltp_mem=R:{}/C:{}",
+        r_ch.fs_khz,
+        c_fs_khz,
+        r_ch.nb_subfr,
+        c_nb_subfr as usize,
+        r_ch.frame_length,
+        c_frame_length as usize,
+        r_ch.subfr_length,
+        c_subfr_length as usize,
+        r_ch.lpc_order,
+        c_lpc_order as usize,
+        r_ch.ltp_mem_length,
+        c_ltp_mem_length as usize
+    );
 
     if r_ch.prev_gain_q16 != c_prev_gain_q16 {
-        println!("  STATE prev_gain_Q16 MISMATCH: rust={} c={}", r_ch.prev_gain_q16, c_prev_gain_q16);
+        println!(
+            "  STATE prev_gain_Q16 MISMATCH: rust={} c={}",
+            r_ch.prev_gain_q16, c_prev_gain_q16
+        );
     } else {
         println!("  STATE prev_gain_Q16: MATCH ({})", r_ch.prev_gain_q16);
     }
@@ -290,7 +364,10 @@ fn phase1_compare_after_decode(packet: &[u8], sample_rate: i32, channels: i32) {
     compare_i32_arrays("STATE", "sLPC_Q14_buf", &r_ch.s_lpc_q14_buf, &c_slpc_buf);
 
     if r_ch.lag_prev != c_lag_prev {
-        println!("  STATE lag_prev MISMATCH: rust={} c={}", r_ch.lag_prev, c_lag_prev);
+        println!(
+            "  STATE lag_prev MISMATCH: rust={} c={}",
+            r_ch.lag_prev, c_lag_prev
+        );
     } else {
         println!("  STATE lag_prev: MATCH ({})", r_ch.lag_prev);
     }
@@ -298,16 +375,27 @@ fn phase1_compare_after_decode(packet: &[u8], sample_rate: i32, channels: i32) {
     // Compare excitation buffer
     let frame_len = r_ch.frame_length;
     let mut c_exc = vec![0i32; frame_len];
-    unsafe { bindings::debug_silk_trace_get_exc(c_dec, c_exc.as_mut_ptr(), frame_len as i32); }
-    compare_i32_arrays("STATE", "exc_Q14[0..frame_len]", &r_ch.exc_q14[..frame_len], &c_exc);
+    unsafe {
+        bindings::debug_silk_trace_get_exc(c_dec, c_exc.as_mut_ptr(), frame_len as i32);
+    }
+    compare_i32_arrays(
+        "STATE",
+        "exc_Q14[0..frame_len]",
+        &r_ch.exc_q14[..frame_len],
+        &c_exc,
+    );
 
     // Compare outBuf
     let outbuf_len = r_ch.out_buf.len();
     let mut c_outbuf = vec![0i16; outbuf_len];
-    unsafe { bindings::debug_silk_trace_get_outbuf(c_dec, c_outbuf.as_mut_ptr(), outbuf_len as i32); }
+    unsafe {
+        bindings::debug_silk_trace_get_outbuf(c_dec, c_outbuf.as_mut_ptr(), outbuf_len as i32);
+    }
     compare_i16_arrays("STATE", "outBuf", &r_ch.out_buf, &c_outbuf);
 
-    unsafe { bindings::opus_decoder_destroy(c_dec); }
+    unsafe {
+        bindings::opus_decoder_destroy(c_dec);
+    }
 }
 
 // Phase 2 and 3 removed — Phase 1 identified the root cause.
@@ -348,8 +436,12 @@ fn phase2_traced_decode(packet: &[u8], sample_rate: i32, channels: i32) {
     let mut tmp_pcm = vec![0i16; MAX_FRAME as usize * channels as usize];
     let init_n = unsafe {
         bindings::opus_decode(
-            c_dec, packet.as_ptr(), packet.len() as i32,
-            tmp_pcm.as_mut_ptr(), MAX_FRAME, 0,
+            c_dec,
+            packet.as_ptr(),
+            packet.len() as i32,
+            tmp_pcm.as_mut_ptr(),
+            MAX_FRAME,
+            0,
         )
     };
     println!("  C init decode: {} samples", init_n);
@@ -359,13 +451,22 @@ fn phase2_traced_decode(packet: &[u8], sample_rate: i32, channels: i32) {
     let mut c_frame_len: i32 = 0;
     let mut c_n_frames_decoded: i32 = 0;
     unsafe {
-        bindings::debug_silk_trace_get_config(c_dec, &mut c_fs_khz, &mut c_frame_len, &mut c_n_frames_decoded);
+        bindings::debug_silk_trace_get_config(
+            c_dec,
+            &mut c_fs_khz,
+            &mut c_frame_len,
+            &mut c_n_frames_decoded,
+        );
     }
-    println!("  C SILK state: fs_kHz={} frame_length={} n_frames_decoded={}",
-        c_fs_khz, c_frame_len, c_n_frames_decoded);
+    println!(
+        "  C SILK state: fs_kHz={} frame_length={} n_frames_decoded={}",
+        c_fs_khz, c_frame_len, c_n_frames_decoded
+    );
 
     // Now reset the SILK state and replay with tracing
-    unsafe { bindings::debug_silk_trace_reset(c_dec); }
+    unsafe {
+        bindings::debug_silk_trace_reset(c_dec);
+    }
 
     let frame_len = c_frame_len as usize;
     let mut c_gains_q16 = [0i32; 4];
@@ -398,7 +499,8 @@ fn phase2_traced_decode(packet: &[u8], sample_rate: i32, channels: i32) {
     // Now do the same on Rust side by decoding normally
     let mut rust_dec = OpusDecoder::new(sample_rate, channels).unwrap();
     let mut rust_pcm = vec![0i16; MAX_FRAME as usize * channels as usize];
-    let rust_n = rust_dec.decode(Some(packet), &mut rust_pcm, MAX_FRAME, false)
+    let rust_n = rust_dec
+        .decode(Some(packet), &mut rust_pcm, MAX_FRAME, false)
         .unwrap_or(-1);
     rust_pcm.truncate(rust_n as usize * channels as usize);
     println!("  Rust decode: {} samples", rust_n);
@@ -416,7 +518,8 @@ fn phase2_traced_decode(packet: &[u8], sample_rate: i32, channels: i32) {
     // Create a fresh Rust decoder and drive the SILK decode manually
     let mut rust_dec2 = OpusDecoder::new(sample_rate, channels).unwrap();
     let mut rust_pcm2 = vec![0i16; MAX_FRAME as usize * channels as usize];
-    let _rust_n2 = rust_dec2.decode(Some(packet), &mut rust_pcm2, MAX_FRAME, false)
+    let _rust_n2 = rust_dec2
+        .decode(Some(packet), &mut rust_pcm2, MAX_FRAME, false)
         .unwrap_or(-1);
 
     // The Rust decoder stores indices after decode
@@ -452,8 +555,12 @@ fn phase2_traced_decode(packet: &[u8], sample_rate: i32, channels: i32) {
 
     // The C traced PCM should match the initial C decode
     // (Both started from fresh state, same packet)
-    compare_i16_arrays("VERIFY", "C_traced_pcm vs C_normal_pcm",
-        &c_pcm, &tmp_pcm[..frame_len]);
+    compare_i16_arrays(
+        "VERIFY",
+        "C_traced_pcm vs C_normal_pcm",
+        &c_pcm,
+        &tmp_pcm[..frame_len],
+    );
 
     // === Now the main comparison: Rust vs C ===
     println!("\n  --- Comparing Rust vs C (post-decode state) ---");
@@ -469,7 +576,9 @@ fn phase2_traced_decode(packet: &[u8], sample_rate: i32, channels: i32) {
 
     // 3. Compare exc_Q14 (written by the excitation computation in decode_core)
     let mut c_traced_exc = vec![0i32; frame_len];
-    unsafe { bindings::debug_silk_trace_get_exc(c_dec, c_traced_exc.as_mut_ptr(), frame_len as i32); }
+    unsafe {
+        bindings::debug_silk_trace_get_exc(c_dec, c_traced_exc.as_mut_ptr(), frame_len as i32);
+    }
     let r_exc = &rust_dec2.debug_silk_dec().channel_state[0].exc_q14[..frame_len];
     compare_i32_arrays("TRACED", "exc_Q14", r_exc, &c_traced_exc);
 
@@ -479,10 +588,20 @@ fn phase2_traced_decode(packet: &[u8], sample_rate: i32, channels: i32) {
     unsafe {
         let mut dummy = [0i32; 1];
         bindings::debug_silk_trace_get_persistent_state(
-            c_dec, &mut dummy[0], c_slpc.as_mut_ptr(),
-            &mut dummy[0], &mut dummy[0], &mut dummy[0], &mut dummy[0],
-            &mut dummy[0], &mut dummy[0], &mut dummy[0], &mut dummy[0],
-            &mut dummy[0], &mut dummy[0], &mut dummy[0],
+            c_dec,
+            &mut dummy[0],
+            c_slpc.as_mut_ptr(),
+            &mut dummy[0],
+            &mut dummy[0],
+            &mut dummy[0],
+            &mut dummy[0],
+            &mut dummy[0],
+            &mut dummy[0],
+            &mut dummy[0],
+            &mut dummy[0],
+            &mut dummy[0],
+            &mut dummy[0],
+            &mut dummy[0],
         );
     }
     compare_i32_arrays("TRACED", "sLPC_Q14_buf", r_slpc, &c_slpc);
@@ -490,20 +609,30 @@ fn phase2_traced_decode(packet: &[u8], sample_rate: i32, channels: i32) {
     // 5. Compare outBuf
     let r_outbuf = &rust_dec2.debug_silk_dec().channel_state[0].out_buf;
     let mut c_outbuf = vec![0i16; r_outbuf.len()];
-    unsafe { bindings::debug_silk_trace_get_outbuf(c_dec, c_outbuf.as_mut_ptr(), r_outbuf.len() as i32); }
+    unsafe {
+        bindings::debug_silk_trace_get_outbuf(c_dec, c_outbuf.as_mut_ptr(), r_outbuf.len() as i32);
+    }
     compare_i16_arrays("TRACED", "outBuf", r_outbuf, &c_outbuf);
 
     // 6. Compare prevNLSF_Q15
     let r_prev_nlsf = &rust_dec2.debug_silk_dec().channel_state[0].prev_nlsf_q15;
     let mut c_prev_nlsf = [0i16; 16];
-    unsafe { bindings::debug_silk_trace_get_prev_nlsf(c_dec, c_prev_nlsf.as_mut_ptr()); }
+    unsafe {
+        bindings::debug_silk_trace_get_prev_nlsf(c_dec, c_prev_nlsf.as_mut_ptr());
+    }
     compare_i16_arrays("TRACED", "prevNLSF_Q15", r_prev_nlsf, &c_prev_nlsf);
 
     // 7. Print C traced control values for reference
     println!("\n  --- C traced silk_decoder_control values ---");
     println!("  Gains_Q16: {:?}", &c_gains_q16[..]);
-    println!("  PredCoef_Q12[0]: {:?}", &c_pred_coef_0[..c_frame_len.min(16) as usize]);
-    println!("  PredCoef_Q12[1]: {:?}", &c_pred_coef_1[..c_frame_len.min(16) as usize]);
+    println!(
+        "  PredCoef_Q12[0]: {:?}",
+        &c_pred_coef_0[..c_frame_len.min(16) as usize]
+    );
+    println!(
+        "  PredCoef_Q12[1]: {:?}",
+        &c_pred_coef_1[..c_frame_len.min(16) as usize]
+    );
     println!("  pitchL: {:?}", &c_pitch_l[..]);
     println!("  LTPCoef_Q14: {:?}", &c_ltp_coef[..]);
     println!("  LTP_scale_Q14: {}", c_ltp_scale);
@@ -524,13 +653,26 @@ fn phase2_traced_decode(packet: &[u8], sample_rate: i32, channels: i32) {
     let lo = 168.min(frame_len);
     let hi = 185.min(frame_len);
     for i in lo..hi {
-        let r = if i < rust_pcm_silk.len() { rust_pcm_silk[i] } else { 0 };
+        let r = if i < rust_pcm_silk.len() {
+            rust_pcm_silk[i]
+        } else {
+            0
+        };
         let c = c_pcm[i];
         let mark = if r != c { " *" } else { "" };
-        println!("    xq[{:3}] rust={:6} c={:6} delta={:4}{}", i, r, c, r as i32 - c as i32, mark);
+        println!(
+            "    xq[{:3}] rust={:6} c={:6} delta={:4}{}",
+            i,
+            r,
+            c,
+            r as i32 - c as i32,
+            mark
+        );
     }
 
-    unsafe { bindings::opus_decoder_destroy(c_dec); }
+    unsafe {
+        bindings::opus_decoder_destroy(c_dec);
+    }
 }
 
 // =========================================================================
@@ -565,10 +707,18 @@ fn phase3_decode_core_trace(packet: &[u8], sample_rate: i32, channels: i32) {
     };
     let mut tmp_pcm = vec![0i16; MAX_FRAME as usize * channels as usize];
     unsafe {
-        bindings::opus_decode(c_dec, packet.as_ptr(), packet.len() as i32,
-                             tmp_pcm.as_mut_ptr(), MAX_FRAME, 0);
+        bindings::opus_decode(
+            c_dec,
+            packet.as_ptr(),
+            packet.len() as i32,
+            tmp_pcm.as_mut_ptr(),
+            MAX_FRAME,
+            0,
+        );
     }
-    unsafe { bindings::debug_silk_trace_reset(c_dec); }
+    unsafe {
+        bindings::debug_silk_trace_reset(c_dec);
+    }
 
     let silk_payload = &packet[1..];
     let mut c_gains = [0i32; 4];
@@ -582,10 +732,18 @@ fn phase3_decode_core_trace(packet: &[u8], sample_rate: i32, channels: i32) {
 
     let c_n = unsafe {
         bindings::debug_silk_traced_decode(
-            c_dec, silk_payload.as_ptr(), silk_payload.len() as i32, 0,
-            c_gains.as_mut_ptr(), c_pred0.as_mut_ptr(), c_pred1.as_mut_ptr(),
-            c_pitch.as_mut_ptr(), c_ltp.as_mut_ptr(), &mut c_ltp_scale,
-            c_pulses.as_mut_ptr(), c_pcm.as_mut_ptr(),
+            c_dec,
+            silk_payload.as_ptr(),
+            silk_payload.len() as i32,
+            0,
+            c_gains.as_mut_ptr(),
+            c_pred0.as_mut_ptr(),
+            c_pred1.as_mut_ptr(),
+            c_pitch.as_mut_ptr(),
+            c_ltp.as_mut_ptr(),
+            &mut c_ltp_scale,
+            c_pulses.as_mut_ptr(),
+            c_pcm.as_mut_ptr(),
         )
     };
     println!("  C traced: {} samples", c_n);
@@ -593,29 +751,44 @@ fn phase3_decode_core_trace(packet: &[u8], sample_rate: i32, channels: i32) {
     // Do the Rust decode
     let mut rust_dec = OpusDecoder::new(sample_rate, channels).unwrap();
     let mut rust_pcm = vec![0i16; MAX_FRAME as usize * channels as usize];
-    let rust_n = rust_dec.decode(Some(packet), &mut rust_pcm, MAX_FRAME, false).unwrap_or(-1);
+    let rust_n = rust_dec
+        .decode(Some(packet), &mut rust_pcm, MAX_FRAME, false)
+        .unwrap_or(-1);
     rust_pcm.truncate(rust_n as usize * channels as usize);
 
     let frame_len = c_n as usize;
     let r_ch = &rust_dec.debug_silk_dec().channel_state[0];
 
-    println!("  Rust: {} samples, frame_length={}", rust_n, r_ch.frame_length);
+    println!(
+        "  Rust: {} samples, frame_length={}",
+        rust_n, r_ch.frame_length
+    );
 
     // Compare exc_Q14 in detail around the divergence point
     let r_exc = &r_ch.exc_q14[..frame_len];
     let mut c_exc = vec![0i32; frame_len];
-    unsafe { bindings::debug_silk_trace_get_exc(c_dec, c_exc.as_mut_ptr(), frame_len as i32); }
+    unsafe {
+        bindings::debug_silk_trace_get_exc(c_dec, c_exc.as_mut_ptr(), frame_len as i32);
+    }
 
     // The excitation is the INPUT to the filter. If it matches, the filter diverges.
     let exc_match = r_exc == c_exc.as_slice();
-    println!("\n  exc_Q14 overall: {}", if exc_match { "EXACT MATCH" } else { "MISMATCH" });
+    println!(
+        "\n  exc_Q14 overall: {}",
+        if exc_match { "EXACT MATCH" } else { "MISMATCH" }
+    );
 
     if !exc_match {
         // Find first difference
         let first = r_exc.iter().zip(c_exc.iter()).position(|(a, b)| a != b);
         if let Some(i) = first {
-            println!("  exc_Q14 first diff at index {}: rust={} c={} delta={}",
-                i, r_exc[i], c_exc[i], r_exc[i] as i64 - c_exc[i] as i64);
+            println!(
+                "  exc_Q14 first diff at index {}: rust={} c={} delta={}",
+                i,
+                r_exc[i],
+                c_exc[i],
+                r_exc[i] as i64 - c_exc[i] as i64
+            );
         }
     }
 
@@ -628,10 +801,20 @@ fn phase3_decode_core_trace(packet: &[u8], sample_rate: i32, channels: i32) {
     unsafe {
         let mut d = [0i32; 1];
         bindings::debug_silk_trace_get_persistent_state(
-            c_dec, &mut d[0], c_slpc_state.as_mut_ptr(),
-            &mut d[0], &mut d[0], &mut d[0], &mut d[0],
-            &mut d[0], &mut d[0], &mut d[0], &mut d[0],
-            &mut d[0], &mut d[0], &mut d[0],
+            c_dec,
+            &mut d[0],
+            c_slpc_state.as_mut_ptr(),
+            &mut d[0],
+            &mut d[0],
+            &mut d[0],
+            &mut d[0],
+            &mut d[0],
+            &mut d[0],
+            &mut d[0],
+            &mut d[0],
+            &mut d[0],
+            &mut d[0],
+            &mut d[0],
         );
     }
     println!("\n  sLPC_Q14_buf (end-of-frame LPC state):");
@@ -656,17 +839,34 @@ fn phase3_decode_core_trace(packet: &[u8], sample_rate: i32, channels: i32) {
     // Print the C traced control values for subframe 2
     let lpc_order = r_ch.lpc_order;
     println!("\n  Subframe k=2 parameters:");
-    println!("    Gain_Q16[2] = {} (Gain_Q10 = {})", c_gains[2], c_gains[2] >> 6);
-    println!("    PredCoef_Q12[1][0..{}] = {:?}", lpc_order, &c_pred1[..lpc_order]);
+    println!(
+        "    Gain_Q16[2] = {} (Gain_Q10 = {})",
+        c_gains[2],
+        c_gains[2] >> 6
+    );
+    println!(
+        "    PredCoef_Q12[1][0..{}] = {:?}",
+        lpc_order,
+        &c_pred1[..lpc_order]
+    );
     println!("    pitchL[2] = {}", c_pitch[2]);
     println!("    signal_type = {}", {
         let mut st: i32 = 0;
         unsafe {
             let mut d = [0i32; 4];
             bindings::debug_silk_trace_get_indices(
-                c_dec, &mut st, &mut d[0], d.as_mut_ptr(), d.as_mut_ptr(),
-                &mut d[0], &mut d[0], &mut d[0], &mut d[0], d.as_mut_ptr(),
-                &mut d[0], &mut d[0],
+                c_dec,
+                &mut st,
+                &mut d[0],
+                d.as_mut_ptr(),
+                d.as_mut_ptr(),
+                &mut d[0],
+                &mut d[0],
+                &mut d[0],
+                &mut d[0],
+                d.as_mut_ptr(),
+                &mut d[0],
+                &mut d[0],
             );
         }
         st
@@ -694,13 +894,18 @@ fn phase3_decode_core_trace(packet: &[u8], sample_rate: i32, channels: i32) {
     let ltp_mem = r_ch.ltp_mem_length;
     let r_outbuf = &r_ch.out_buf;
     let mut c_outbuf = vec![0i16; r_outbuf.len()];
-    unsafe { bindings::debug_silk_trace_get_outbuf(c_dec, c_outbuf.as_mut_ptr(), r_outbuf.len() as i32); }
+    unsafe {
+        bindings::debug_silk_trace_get_outbuf(c_dec, c_outbuf.as_mut_ptr(), r_outbuf.len() as i32);
+    }
 
     // The output samples are stored at the END of outBuf after the memmove.
     // outBuf layout after update: [shifted old data | new_frame_output]
     // where new_frame_output starts at index (ltp_mem_length - frame_length)
     let out_start = ltp_mem - frame_len;
-    println!("\n  outBuf around divergence (offset {} in outBuf = sample 173):", out_start + 173);
+    println!(
+        "\n  outBuf around divergence (offset {} in outBuf = sample 173):",
+        out_start + 173
+    );
     let idx_base = out_start + 168;
     let idx_end = (out_start + 185).min(r_outbuf.len());
     for i in idx_base..idx_end {
@@ -708,11 +913,20 @@ fn phase3_decode_core_trace(packet: &[u8], sample_rate: i32, channels: i32) {
         let c = c_outbuf[i];
         let sample_num = i - out_start;
         let mark = if r != c { " *" } else { "" };
-        println!("    outBuf[{}] (sample {:3}) rust={:6} c={:6} delta={:4}{}",
-            i, sample_num, r, c, r as i32 - c as i32, mark);
+        println!(
+            "    outBuf[{}] (sample {:3}) rust={:6} c={:6} delta={:4}{}",
+            i,
+            sample_num,
+            r,
+            c,
+            r as i32 - c as i32,
+            mark
+        );
     }
 
-    unsafe { bindings::opus_decoder_destroy(c_dec); }
+    unsafe {
+        bindings::opus_decoder_destroy(c_dec);
+    }
 }
 
 // =========================================================================
@@ -742,7 +956,10 @@ fn main() {
     let channels: i32 = if bytes[1] & 1 == 0 { 1 } else { 2 };
     let packet = &bytes[2..];
 
-    println!("Header: sr_byte=0x{:02x} sr={} ch={}", bytes[0], sample_rate, channels);
+    println!(
+        "Header: sr_byte=0x{:02x} sr={} ch={}",
+        bytes[0], sample_rate, channels
+    );
     println!("Packet: {} bytes, TOC=0x{:02x}", packet.len(), packet[0]);
 
     let toc = packet[0];
@@ -775,7 +992,9 @@ fn main() {
     println!();
     println!("  In Rust (decoder.rs silk_decode_parameters line 750-775):");
     println!("    let indices = dec.indices.clone();  // clone, not reference");
-    println!("    let interp_coef = if dec.first_frame_after_reset {{ 4 }} else {{ indices.nlsf_interp_coef_q2 }};");
+    println!(
+        "    let interp_coef = if dec.first_frame_after_reset {{ 4 }} else {{ indices.nlsf_interp_coef_q2 }};"
+    );
     println!("  The local variable interp_coef=4 is used for NLSF interpolation correctly,");
     println!("  but dec.indices.nlsf_interp_coef_q2 is NEVER updated.");
     println!();
@@ -789,7 +1008,9 @@ fn main() {
     println!();
     println!("  FIX: In silk_decode_parameters, after the interp_coef computation,");
     println!("  write back: dec.indices.nlsf_interp_coef_q2 = interp_coef as i8;");
-    println!("  (or specifically: if dec.first_frame_after_reset {{ dec.indices.nlsf_interp_coef_q2 = 4; }})");
+    println!(
+        "  (or specifically: if dec.first_frame_after_reset {{ dec.indices.nlsf_interp_coef_q2 = 4; }})"
+    );
     println!();
     println!("  This only affects WB (order 16) because NB/MB (order 10) uses nb_subfr=2,");
     println!("  and the subframe k=2 re-whitening path is never reached with only 2 subframes.");

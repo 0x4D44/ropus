@@ -32,8 +32,8 @@ use ropus::dnn::embedded_weights::WEIGHTS_BLOB;
 
 use ropus_harness_deep_plc::{
     ropus_test_dred_rdovae_dec_init_states, ropus_test_dred_rdovae_decode_qframe,
-    ropus_test_rdovae_dec_state_free, ropus_test_rdovae_dec_state_new,
-    ropus_test_rdovaedec_free, ropus_test_rdovaedec_new,
+    ropus_test_rdovae_dec_state_free, ropus_test_rdovae_dec_state_new, ropus_test_rdovaedec_free,
+    ropus_test_rdovaedec_new,
 };
 
 /// How many consecutive frames to push through before declaring divergence
@@ -311,11 +311,7 @@ fn decode_qframe_diff_quantised_inputs() {
 
     // Seed both decoders from the same quantised state.
     unsafe {
-        ropus_test_dred_rdovae_dec_init_states(
-            c_dec_state,
-            c_dec_model,
-            quantised_state.as_ptr(),
-        );
+        ropus_test_dred_rdovae_dec_init_states(c_dec_state, c_dec_model, quantised_state.as_ptr());
     }
     rust_dec_state.init_states(&rust_dec_model, &quantised_state);
 
@@ -337,12 +333,7 @@ fn decode_qframe_diff_quantised_inputs() {
         }
         let mut latents = [0.0f32; DRED_LATENT_DIM];
         let mut _state = [0.0f32; DRED_STATE_DIM];
-        rust_enc_state.encode_dframe(
-            &rust_enc_model,
-            &mut latents,
-            &mut _state,
-            &frame_input,
-        );
+        rust_enc_state.encode_dframe(&rust_enc_model, &mut latents, &mut _state, &frame_input);
 
         // Quantise the latents through the encoder's deadzone pipeline
         // at quantiser level matching the actual `compute_quantizer`

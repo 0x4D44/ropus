@@ -217,8 +217,7 @@ pub unsafe extern "C" fn opus_encode(
             return OPUS_BAD_ARG;
         };
         let pcm_slice = unsafe { std::slice::from_raw_parts(pcm, n_samples) };
-        let out_slice =
-            unsafe { std::slice::from_raw_parts_mut(data, max_data_bytes as usize) };
+        let out_slice = unsafe { std::slice::from_raw_parts_mut(data, max_data_bytes as usize) };
         match enc.encode(pcm_slice, frame_size, out_slice, max_data_bytes) {
             Ok(n) => n,
             Err(e) => e,
@@ -270,8 +269,7 @@ pub unsafe extern "C" fn opus_encode_float(
             return OPUS_BAD_ARG;
         };
         let pcm_slice = unsafe { std::slice::from_raw_parts(pcm, n_samples) };
-        let out_slice =
-            unsafe { std::slice::from_raw_parts_mut(data, max_data_bytes as usize) };
+        let out_slice = unsafe { std::slice::from_raw_parts_mut(data, max_data_bytes as usize) };
         match enc.encode_float(pcm_slice, frame_size, out_slice, max_data_bytes) {
             Ok(n) => n,
             Err(e) => e,

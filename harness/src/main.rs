@@ -8920,11 +8920,7 @@ mod coverage_smoke_tests {
     /// `CARGO_MANIFEST_DIR` set to `harness/`, so the workspace-root
     /// `tests/vectors/` directory lives at `../tests/vectors/` from here.
     fn vector_path(name: &str) -> String {
-        format!(
-            "{}/../tests/vectors/{}",
-            env!("CARGO_MANIFEST_DIR"),
-            name
-        )
+        format!("{}/../tests/vectors/{}", env!("CARGO_MANIFEST_DIR"), name)
     }
 
     #[test]
@@ -9921,11 +9917,10 @@ fn cmd_repro_bug_a() {
     // Crash packet from fuzz_crashes/crash_67b601097a4dc027.bin
     // First 2 bytes are fuzz config (sr_idx=0 → 8kHz, ch_byte=0x04 → mono)
     let crash_data: &[u8] = &[
-        0x00, 0x04, 0x83, 0xdd, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x07, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x77, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x7d, 0x7d, 0x72, 0x7d, 0x7d, 0x7d, 0x7d,
-        0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d,
+        0x00, 0x04, 0x83, 0xdd, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x04, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x77, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7d, 0x7d, 0x72, 0x7d,
+        0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d, 0x7d,
         0x7d, 0x00,
     ];
 
@@ -9935,13 +9930,24 @@ fn cmd_repro_bug_a() {
     let max_frame = 5760;
 
     println!("=== Bug A Repro: CELT code-3 multi-frame PLC ===");
-    println!("Packet: {} bytes, sr={}, ch={}", packet.len(), sample_rate, channels);
-    println!("TOC=0x{:02x}: config={}, code={}", packet[0], (packet[0] >> 3) & 0x1F, packet[0] & 3);
+    println!(
+        "Packet: {} bytes, sr={}, ch={}",
+        packet.len(),
+        sample_rate,
+        channels
+    );
+    println!(
+        "TOC=0x{:02x}: config={}, code={}",
+        packet[0],
+        (packet[0] >> 3) & 0x1F,
+        packet[0] & 3
+    );
 
     // --- Rust decode ---
     let mut rust_dec = RustDecoder::new(sample_rate, channels).expect("Rust decoder");
     let mut rust_pcm = vec![0i16; max_frame as usize * channels as usize];
-    let rust_samples = rust_dec.decode(Some(packet), &mut rust_pcm, max_frame, false)
+    let rust_samples = rust_dec
+        .decode(Some(packet), &mut rust_pcm, max_frame, false)
         .expect("Rust decode failed");
     rust_pcm.truncate(rust_samples as usize * channels as usize);
 
@@ -9965,7 +9971,11 @@ fn cmd_repro_bug_a() {
         pcm
     };
 
-    println!("Rust: {} samples, C: {} samples", rust_pcm.len(), c_pcm.len());
+    println!(
+        "Rust: {} samples, C: {} samples",
+        rust_pcm.len(),
+        c_pcm.len()
+    );
     assert_eq!(rust_pcm.len(), c_pcm.len(), "Sample count mismatch!");
 
     // Find first divergence
@@ -9990,9 +10000,19 @@ fn cmd_repro_bug_a() {
         Some(idx) => {
             let frame_idx = idx / 20; // 20 samples per CELT frame at 8kHz
             println!("DIVERGENCE at sample {} (frame {}):", idx, frame_idx);
-            println!("  Rust[{}] = {}, C[{}] = {}, diff = {}",
-                idx, rust_pcm[idx], idx, c_pcm[idx], rust_pcm[idx] as i32 - c_pcm[idx] as i32);
-            println!("  Total differing samples: {} / {}", diff_count, rust_pcm.len());
+            println!(
+                "  Rust[{}] = {}, C[{}] = {}, diff = {}",
+                idx,
+                rust_pcm[idx],
+                idx,
+                c_pcm[idx],
+                rust_pcm[idx] as i32 - c_pcm[idx] as i32
+            );
+            println!(
+                "  Total differing samples: {} / {}",
+                diff_count,
+                rust_pcm.len()
+            );
             println!("  Max absolute diff: {}", max_diff);
 
             // Show all diverging samples with frame boundaries
@@ -10001,8 +10021,10 @@ fn cmd_repro_bug_a() {
                 let d = rust_pcm[i] as i32 - c_pcm[i] as i32;
                 if d != 0 {
                     let frame = i / 20;
-                    println!("    [{}] (frame {}) rust={:6}, c={:6}, diff={:4}",
-                        i, frame, rust_pcm[i], c_pcm[i], d);
+                    println!(
+                        "    [{}] (frame {}) rust={:6}, c={:6}, diff={:4}",
+                        i, frame, rust_pcm[i], c_pcm[i], d
+                    );
                 }
             }
 
@@ -10013,7 +10035,10 @@ fn cmd_repro_bug_a() {
             for i in start..end {
                 let d = rust_pcm[i] as i32 - c_pcm[i] as i32;
                 let marker = if d != 0 { " <--" } else { "" };
-                println!("    [{}] rust={:6}, c={:6}, diff={:4}{}", i, rust_pcm[i], c_pcm[i], d, marker);
+                println!(
+                    "    [{}] rust={:6}, c={:6}, diff={:4}{}",
+                    i, rust_pcm[i], c_pcm[i], d, marker
+                );
             }
 
             // Also dump decode_mem state for debugging
@@ -10021,16 +10046,16 @@ fn cmd_repro_bug_a() {
             let preemph = rust_dec.debug_get_preemph_mem();
             println!("    preemph_mem_d = {:?}", preemph);
             let pf = rust_dec.debug_get_postfilter();
-            println!("    postfilter: period={}/{}, gain={}/{}, tapset={}/{}",
-                pf.0, pf.1, pf.2, pf.3, pf.4, pf.5);
+            println!(
+                "    postfilter: period={}/{}, gain={}/{}, tapset={}/{}",
+                pf.0, pf.1, pf.2, pf.3, pf.4, pf.5
+            );
         }
     }
 }
 
 fn cmd_repro_bug_b() {
-    use ropus::opus::encoder::{
-        OpusEncoder as RustEncoder, OPUS_APPLICATION_VOIP,
-    };
+    use ropus::opus::encoder::{OPUS_APPLICATION_VOIP, OpusEncoder as RustEncoder};
 
     let sample_rate = 8000i32;
     let channels = 1i32;
@@ -10041,29 +10066,49 @@ fn cmd_repro_bug_b() {
     let num_frames = 10;
 
     println!("=== Bug B Repro: Encoder multiframe divergence ===");
-    println!("sr={}, ch={}, app={}, br={}, cx={}, frames={}",
-        sample_rate, channels, application, bitrate, complexity, num_frames);
+    println!(
+        "sr={}, ch={}, app={}, br={}, cx={}, frames={}",
+        sample_rate, channels, application, bitrate, complexity, num_frames
+    );
 
     // Try several PCM patterns
     let patterns: Vec<(&str, Box<dyn Fn(usize) -> i16>)> = vec![
         ("silence", Box::new(|_| 0i16)),
-        ("sine440", Box::new(|i| {
-            let t = i as f64 / sample_rate as f64;
-            (f64::sin(2.0 * std::f64::consts::PI * 440.0 * t) * 16000.0) as i16
-        })),
-        ("noise_low", Box::new(|i| {
-            // Simple deterministic pseudo-noise
-            let x = (i as u32).wrapping_mul(1103515245).wrapping_add(12345);
-            ((x >> 16) as i16) / 8
-        })),
-        ("noise_full", Box::new(|i| {
-            let x = (i as u32).wrapping_mul(1103515245).wrapping_add(12345);
-            (x >> 16) as i16
-        })),
-        ("impulse", Box::new(|i| if i % 160 == 0 { 32767 } else { 0 })),
-        ("sawtooth", Box::new(|i| ((i % 160) as i32 * 400 - 32000) as i16)),
+        (
+            "sine440",
+            Box::new(|i| {
+                let t = i as f64 / sample_rate as f64;
+                (f64::sin(2.0 * std::f64::consts::PI * 440.0 * t) * 16000.0) as i16
+            }),
+        ),
+        (
+            "noise_low",
+            Box::new(|i| {
+                // Simple deterministic pseudo-noise
+                let x = (i as u32).wrapping_mul(1103515245).wrapping_add(12345);
+                ((x >> 16) as i16) / 8
+            }),
+        ),
+        (
+            "noise_full",
+            Box::new(|i| {
+                let x = (i as u32).wrapping_mul(1103515245).wrapping_add(12345);
+                (x >> 16) as i16
+            }),
+        ),
+        (
+            "impulse",
+            Box::new(|i| if i % 160 == 0 { 32767 } else { 0 }),
+        ),
+        (
+            "sawtooth",
+            Box::new(|i| ((i % 160) as i32 * 400 - 32000) as i16),
+        ),
         ("dc_offset", Box::new(|_| 1000i16)),
-        ("alternating", Box::new(|i| if i % 2 == 0 { 10000 } else { -10000 })),
+        (
+            "alternating",
+            Box::new(|i| if i % 2 == 0 { 10000 } else { -10000 }),
+        ),
     ];
 
     let mut any_fail = false;
@@ -10093,15 +10138,22 @@ fn cmd_repro_bug_b() {
             let enc = bindings::opus_encoder_create(sample_rate, channels, application, &mut error);
             assert!(!enc.is_null() && error == 0);
             bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
-            bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_VBR_REQUEST, 0 as std::os::raw::c_int);
+            bindings::opus_encoder_ctl(
+                enc,
+                bindings::OPUS_SET_VBR_REQUEST,
+                0 as std::os::raw::c_int,
+            );
             bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, complexity);
 
             let mut results = Vec::new();
             for frame in &pcm_frames {
                 let mut out = vec![0u8; 4000];
                 let ret = bindings::opus_encode(
-                    enc, (*frame).as_ptr(), frame_size,
-                    out.as_mut_ptr(), 4000 as bindings::opus_int32,
+                    enc,
+                    (*frame).as_ptr(),
+                    frame_size,
+                    out.as_mut_ptr(),
+                    4000 as bindings::opus_int32,
                 );
                 assert!(ret > 0, "C encode failed: {}", ret);
                 out.truncate(ret as usize);
@@ -10120,15 +10172,33 @@ fn cmd_repro_bug_b() {
                     diverged = true;
                     any_fail = true;
                 }
-                println!("    frame {}: Rust {} bytes = {:?}", i, r.len(), &r[..r.len().min(20)]);
-                println!("    frame {}: C    {} bytes = {:?}", i, c.len(), &c[..c.len().min(20)]);
+                println!(
+                    "    frame {}: Rust {} bytes = {:?}",
+                    i,
+                    r.len(),
+                    &r[..r.len().min(20)]
+                );
+                println!(
+                    "    frame {}: C    {} bytes = {:?}",
+                    i,
+                    c.len(),
+                    &c[..c.len().min(20)]
+                );
                 // Show TOC byte analysis
                 if !r.is_empty() && !c.is_empty() {
                     let r_toc = r[0];
                     let c_toc = c[0];
-                    println!("    TOC: Rust=0x{:02x} (config={}, s={}, code={}), C=0x{:02x} (config={}, s={}, code={})",
-                        r_toc, (r_toc >> 3) & 0x1F, (r_toc >> 2) & 1, r_toc & 3,
-                        c_toc, (c_toc >> 3) & 0x1F, (c_toc >> 2) & 1, c_toc & 3);
+                    println!(
+                        "    TOC: Rust=0x{:02x} (config={}, s={}, code={}), C=0x{:02x} (config={}, s={}, code={})",
+                        r_toc,
+                        (r_toc >> 3) & 0x1F,
+                        (r_toc >> 2) & 1,
+                        r_toc & 3,
+                        c_toc,
+                        (c_toc >> 3) & 0x1F,
+                        (c_toc >> 2) & 1,
+                        c_toc & 3
+                    );
                 }
             }
         }
@@ -10138,15 +10208,22 @@ fn cmd_repro_bug_b() {
     }
 
     // Also try many random seeds with the exact crash parameters
-    println!("\n  Testing random PCM inputs (1000 seeds x {} frames)...", num_frames);
+    println!(
+        "\n  Testing random PCM inputs (1000 seeds x {} frames)...",
+        num_frames
+    );
     let mut random_fails = 0;
     for seed in 0u32..1000 {
         let total_samples = frame_size as usize * num_frames;
-        let pcm: Vec<i16> = (0..total_samples).map(|i| {
-            let x = (i as u32).wrapping_add(seed.wrapping_mul(65537))
-                .wrapping_mul(1103515245).wrapping_add(12345);
-            (x >> 16) as i16
-        }).collect();
+        let pcm: Vec<i16> = (0..total_samples)
+            .map(|i| {
+                let x = (i as u32)
+                    .wrapping_add(seed.wrapping_mul(65537))
+                    .wrapping_mul(1103515245)
+                    .wrapping_add(12345);
+                (x >> 16) as i16
+            })
+            .collect();
         let pcm_frames: Vec<&[i16]> = pcm.chunks_exact(frame_size as usize).collect();
 
         // Rust encode
@@ -10168,14 +10245,21 @@ fn cmd_repro_bug_b() {
             let enc = bindings::opus_encoder_create(sample_rate, channels, application, &mut error);
             assert!(!enc.is_null() && error == 0);
             bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
-            bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_VBR_REQUEST, 0 as std::os::raw::c_int);
+            bindings::opus_encoder_ctl(
+                enc,
+                bindings::OPUS_SET_VBR_REQUEST,
+                0 as std::os::raw::c_int,
+            );
             bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, complexity);
             let mut results = Vec::new();
             for frame in &pcm_frames {
                 let mut out = vec![0u8; 4000];
                 let ret = bindings::opus_encode(
-                    enc, (*frame).as_ptr(), frame_size,
-                    out.as_mut_ptr(), 4000 as bindings::opus_int32,
+                    enc,
+                    (*frame).as_ptr(),
+                    frame_size,
+                    out.as_mut_ptr(),
+                    4000 as bindings::opus_int32,
                 );
                 assert!(ret > 0);
                 out.truncate(ret as usize);

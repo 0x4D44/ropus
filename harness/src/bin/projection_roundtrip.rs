@@ -398,7 +398,13 @@ fn run_fixture(path: &Path, bitrate: i32) -> FixtureResult {
         r_pcm.fill(0);
         let c_ret = c_dec.decode(r_slice, &mut c_pcm, frame_size);
         let r_ret = r_dec
-            .decode(Some(r_slice), r_slice.len() as i32, &mut r_pcm, frame_size, false)
+            .decode(
+                Some(r_slice),
+                r_slice.len() as i32,
+                &mut r_pcm,
+                frame_size,
+                false,
+            )
             .expect("ropus: decode");
         assert_eq!(
             c_ret, r_ret as c_int,

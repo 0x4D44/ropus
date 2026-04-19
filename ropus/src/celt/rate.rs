@@ -958,9 +958,9 @@ mod tests {
         assert_eq!(
             vals,
             [
-                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 26,
-                28, 30, 32, 36, 40, 44, 48, 52, 56, 60, 64, 72, 80, 88, 96, 104, 112, 120, 128,
-                144, 160, 176, 192, 208, 224, 240,
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24, 26, 28,
+                30, 32, 36, 40, 44, 48, 52, 56, 60, 64, 72, 80, 88, 96, 104, 112, 120, 128, 144,
+                160, 176, 192, 208, 224, 240,
             ]
         );
     }
@@ -987,16 +987,28 @@ mod tests {
         let mode = mode_create(48000, 960).expect("static mode");
         let budgets = [0, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 
-        let b0: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 0, 0, b)).collect();
+        let b0: Vec<i32> = budgets
+            .iter()
+            .map(|&b| bits2pulses(mode, 0, 0, b))
+            .collect();
         assert_eq!(b0, [0, 1, 40, 40, 40, 40, 40, 40, 40, 40]);
 
-        let b10: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 10, 0, b)).collect();
+        let b10: Vec<i32> = budgets
+            .iter()
+            .map(|&b| bits2pulses(mode, 10, 0, b))
+            .collect();
         assert_eq!(b10, [0, 0, 1, 4, 31, 40, 40, 40, 40, 40]);
 
-        let b15: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 15, 0, b)).collect();
+        let b15: Vec<i32> = budgets
+            .iter()
+            .map(|&b| bits2pulses(mode, 15, 0, b))
+            .collect();
         assert_eq!(b15, [0, 0, 1, 1, 3, 10, 35, 35, 35, 35]);
 
-        let b20: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 20, 0, b)).collect();
+        let b20: Vec<i32> = budgets
+            .iter()
+            .map(|&b| bits2pulses(mode, 20, 0, b))
+            .collect();
         assert_eq!(b20, [0, 0, 0, 1, 2, 4, 9, 9, 9, 9]);
     }
 
@@ -1006,16 +1018,28 @@ mod tests {
         let mode = mode_create(48000, 960).expect("static mode");
         let budgets = [0, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 
-        let b0: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 0, 2, b)).collect();
+        let b0: Vec<i32> = budgets
+            .iter()
+            .map(|&b| bits2pulses(mode, 0, 2, b))
+            .collect();
         assert_eq!(b0, [0, 0, 1, 1, 4, 22, 40, 40, 40, 40]);
 
-        let b10: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 10, 2, b)).collect();
+        let b10: Vec<i32> = budgets
+            .iter()
+            .map(|&b| bits2pulses(mode, 10, 2, b))
+            .collect();
         assert_eq!(b10, [0, 0, 0, 1, 2, 7, 25, 25, 25, 25]);
 
-        let b15: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 15, 2, b)).collect();
+        let b15: Vec<i32> = budgets
+            .iter()
+            .map(|&b| bits2pulses(mode, 15, 2, b))
+            .collect();
         assert_eq!(b15, [0, 0, 0, 1, 2, 3, 9, 9, 9, 9]);
 
-        let b20: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 20, 2, b)).collect();
+        let b20: Vec<i32> = budgets
+            .iter()
+            .map(|&b| bits2pulses(mode, 20, 2, b))
+            .collect();
         assert_eq!(b20, [0, 0, 0, 1, 1, 2, 5, 5, 5, 5]);
     }
 
@@ -1025,13 +1049,22 @@ mod tests {
         let mode = mode_create(48000, 960).expect("static mode");
         let budgets = [0, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 
-        let b0: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 0, 3, b)).collect();
+        let b0: Vec<i32> = budgets
+            .iter()
+            .map(|&b| bits2pulses(mode, 0, 3, b))
+            .collect();
         assert_eq!(b0, [0, 0, 0, 1, 2, 7, 25, 25, 25, 25]);
 
-        let b10: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 10, 3, b)).collect();
+        let b10: Vec<i32> = budgets
+            .iter()
+            .map(|&b| bits2pulses(mode, 10, 3, b))
+            .collect();
         assert_eq!(b10, [0, 0, 0, 1, 2, 4, 12, 12, 12, 12]);
 
-        let b20: Vec<i32> = budgets.iter().map(|&b| bits2pulses(mode, 20, 3, b)).collect();
+        let b20: Vec<i32> = budgets
+            .iter()
+            .map(|&b| bits2pulses(mode, 20, 3, b))
+            .collect();
         assert_eq!(b20, [0, 0, 0, 0, 1, 2, 4, 4, 4, 4]);
     }
 
@@ -1048,13 +1081,20 @@ mod tests {
 
         // band=10, lm=0: wider band, max_q=40
         let b10: Vec<i32> = (0..=15).map(|q| pulses2bits(mode, 10, 0, q)).collect();
-        assert_eq!(b10, [0, 16, 24, 29, 32, 35, 37, 39, 40, 42, 43, 44, 45, 46, 47, 48]);
+        assert_eq!(
+            b10,
+            [
+                0, 16, 24, 29, 32, 35, 37, 39, 40, 42, 43, 44, 45, 46, 47, 48
+            ]
+        );
 
         // band=15, lm=0: wider still, max_q=35
         let b15: Vec<i32> = (0..=15).map(|q| pulses2bits(mode, 15, 0, q)).collect();
         assert_eq!(
             b15,
-            [0, 29, 50, 66, 79, 90, 100, 108, 115, 121, 127, 133, 137, 142, 146, 150]
+            [
+                0, 29, 50, 66, 79, 90, 100, 108, 115, 121, 127, 133, 137, 142, 146, 150
+            ]
         );
 
         // band=20, lm=0: widest band, max_q=9
@@ -1068,12 +1108,19 @@ mod tests {
         let mode = mode_create(48000, 960).expect("static mode");
 
         let b0: Vec<i32> = (0..=15).map(|q| pulses2bits(mode, 0, 2, q)).collect();
-        assert_eq!(b0, [0, 24, 40, 52, 61, 68, 74, 80, 84, 88, 92, 95, 98, 101, 103, 106]);
+        assert_eq!(
+            b0,
+            [
+                0, 24, 40, 52, 61, 68, 74, 80, 84, 88, 92, 95, 98, 101, 103, 106
+            ]
+        );
 
         let b10: Vec<i32> = (0..=15).map(|q| pulses2bits(mode, 10, 2, q)).collect();
         assert_eq!(
             b10,
-            [0, 32, 56, 76, 92, 106, 118, 129, 139, 147, 155, 162, 169, 175, 181, 186]
+            [
+                0, 32, 56, 76, 92, 106, 118, 129, 139, 147, 155, 162, 169, 175, 181, 186
+            ]
         );
 
         let b15: Vec<i32> = (0..=9).map(|q| pulses2bits(mode, 15, 2, q)).collect();
@@ -1089,7 +1136,10 @@ mod tests {
         let mode = mode_create(48000, 960).expect("static mode");
 
         let b10: Vec<i32> = (0..=12).map(|q| pulses2bits(mode, 10, 3, q)).collect();
-        assert_eq!(b10, [0, 40, 72, 100, 124, 145, 165, 183, 199, 215, 229, 242, 254]);
+        assert_eq!(
+            b10,
+            [0, 40, 72, 100, 124, 145, 165, 183, 199, 215, 229, 242, 254]
+        );
 
         let b15: Vec<i32> = (0..=6).map(|q| pulses2bits(mode, 15, 3, q)).collect();
         assert_eq!(b15, [0, 53, 98, 138, 175, 209, 241]);
@@ -1107,7 +1157,13 @@ mod tests {
         lm: i32,
         end: i32,
         offsets: &[i32; NB_EBANDS],
-    ) -> (i32, i32, [i32; NB_EBANDS], [i32; NB_EBANDS], [i32; NB_EBANDS]) {
+    ) -> (
+        i32,
+        i32,
+        [i32; NB_EBANDS],
+        [i32; NB_EBANDS],
+        [i32; NB_EBANDS],
+    ) {
         let mode = mode_create(48000, 960).expect("static mode");
         let cap = [4096i32; NB_EBANDS];
         let mut buf = [0u8; 256];
@@ -1148,7 +1204,15 @@ mod tests {
         total: i32,
         alloc_trim: i32,
         lm: i32,
-    ) -> (i32, i32, i32, i32, [i32; NB_EBANDS], [i32; NB_EBANDS], [i32; NB_EBANDS]) {
+    ) -> (
+        i32,
+        i32,
+        i32,
+        i32,
+        [i32; NB_EBANDS],
+        [i32; NB_EBANDS],
+        [i32; NB_EBANDS],
+    ) {
         let mode = mode_create(48000, 960).expect("static mode");
         let offsets = [0i32; NB_EBANDS];
         let cap = [4096i32; NB_EBANDS];
@@ -1183,7 +1247,15 @@ mod tests {
             end,
             end,
         );
-        (coded, intensity, dual_stereo, balance, pulses, ebits, priority)
+        (
+            coded,
+            intensity,
+            dual_stereo,
+            balance,
+            pulses,
+            ebits,
+            priority,
+        )
     }
 
     #[test]
@@ -1197,12 +1269,21 @@ mod tests {
         assert_eq!(balance, 0);
         assert_eq!(
             pulses,
-            [8, 8, 8, 8, 8, 8, 8, 8, 25, 21, 17, 13, 20, 0, 0, 0, 0, 0, 0, 0, 0]
+            [
+                8, 8, 8, 8, 8, 8, 8, 8, 25, 21, 17, 13, 20, 0, 0, 0, 0, 0, 0, 0, 0
+            ]
         );
-        assert_eq!(ebits, [1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            ebits,
+            [
+                1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0
+            ]
+        );
         assert_eq!(
             priority,
-            [0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1]
+            [
+                0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1
+            ]
         );
     }
 
@@ -1217,12 +1298,21 @@ mod tests {
         assert_eq!(balance, 0);
         assert_eq!(
             pulses,
-            [8, 8, 8, 8, 8, 8, 8, 8, 41, 37, 34, 31, 65, 58, 52, 73, 64, 77, 99, 81, 0]
+            [
+                8, 8, 8, 8, 8, 8, 8, 8, 41, 37, 34, 31, 65, 58, 52, 73, 64, 77, 99, 81, 0
+            ]
         );
-        assert_eq!(ebits, [2, 3, 2, 2, 2, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]);
+        assert_eq!(
+            ebits,
+            [
+                2, 3, 2, 2, 2, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0
+            ]
+        );
         assert_eq!(
             priority,
-            [0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 0, 1]
+            [
+                0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 1, 1, 0, 1, 1, 0, 0, 1
+            ]
         );
     }
 
@@ -1237,12 +1327,21 @@ mod tests {
         assert_eq!(balance, 0);
         assert_eq!(
             pulses,
-            [8, 8, 8, 8, 8, 8, 8, 8, 67, 64, 62, 67, 162, 157, 152, 236, 229, 306, 460, 616, 614]
+            [
+                8, 8, 8, 8, 8, 8, 8, 8, 67, 64, 62, 67, 162, 157, 152, 236, 229, 306, 460, 616, 614
+            ]
         );
-        assert_eq!(ebits, [4, 5, 5, 5, 4, 5, 5, 5, 5, 5, 5, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3]);
+        assert_eq!(
+            ebits,
+            [
+                4, 5, 5, 5, 4, 5, 5, 5, 5, 5, 5, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3
+            ]
+        );
         assert_eq!(
             priority,
-            [0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]
+            [
+                0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0
+            ]
         );
     }
 
@@ -1257,9 +1356,16 @@ mod tests {
         assert_eq!(balance, 0);
         assert_eq!(
             pulses,
-            [8, 8, 8, 8, 8, 8, 8, 8, 45, 50, 47, 44, 97, 89, 84, 124, 116, 149, 212, 260, 195]
+            [
+                8, 8, 8, 8, 8, 8, 8, 8, 45, 50, 47, 44, 97, 89, 84, 124, 116, 149, 212, 260, 195
+            ]
         );
-        assert_eq!(ebits, [3, 4, 3, 3, 3, 3, 2, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2]);
+        assert_eq!(
+            ebits,
+            [
+                3, 4, 3, 3, 3, 3, 2, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2
+            ]
+        );
     }
 
     // --- clt_compute_allocation: stereo ---
@@ -1276,12 +1382,21 @@ mod tests {
         assert_eq!(balance, 0);
         assert_eq!(
             pulses,
-            [16, 16, 16, 16, 16, 16, 16, 16, 50, 44, 38, 31, 47, 34, 0, 0, 0, 0, 0, 0, 0]
+            [
+                16, 16, 16, 16, 16, 16, 16, 16, 50, 44, 38, 31, 47, 34, 0, 0, 0, 0, 0, 0, 0
+            ]
         );
-        assert_eq!(ebits, [1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            ebits,
+            [
+                1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0
+            ]
+        );
         assert_eq!(
             priority,
-            [0, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1]
+            [
+                0, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1
+            ]
         );
     }
 
@@ -1297,9 +1412,17 @@ mod tests {
         assert_eq!(balance, 0);
         assert_eq!(
             pulses,
-            [16, 16, 16, 16, 16, 16, 16, 16, 99, 98, 92, 86, 194, 180, 169, 252, 235, 298, 416, 510, 375]
+            [
+                16, 16, 16, 16, 16, 16, 16, 16, 99, 98, 92, 86, 194, 180, 169, 252, 235, 298, 416,
+                510, 375
+            ]
         );
-        assert_eq!(ebits, [3, 3, 4, 3, 3, 2, 3, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2]);
+        assert_eq!(
+            ebits,
+            [
+                3, 3, 4, 3, 3, 2, 3, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2
+            ]
+        );
     }
 
     // --- clt_compute_allocation: alloc_trim sweep ---
@@ -1314,18 +1437,32 @@ mod tests {
         assert_eq!(coded0, 20);
         assert_eq!(
             pulses0,
-            [8, 8, 8, 8, 8, 8, 8, 8, 32, 30, 28, 26, 58, 53, 50, 73, 68, 88, 122, 124, 0]
+            [
+                8, 8, 8, 8, 8, 8, 8, 8, 32, 30, 28, 26, 58, 53, 50, 73, 68, 88, 122, 124, 0
+            ]
         );
-        assert_eq!(ebits0, [1, 1, 2, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1]);
+        assert_eq!(
+            ebits0,
+            [
+                1, 1, 2, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1
+            ]
+        );
 
         let (coded10, _, pulses10, ebits10, _) =
             run_mono_alloc(1000, 10, 0, NB_EBANDS as i32, &offsets);
         assert_eq!(coded10, 20);
         assert_eq!(
             pulses10,
-            [8, 8, 8, 8, 8, 8, 8, 8, 42, 35, 39, 35, 70, 60, 52, 69, 57, 62, 69, 58, 0]
+            [
+                8, 8, 8, 8, 8, 8, 8, 8, 42, 35, 39, 35, 70, 60, 52, 69, 57, 62, 69, 58, 0
+            ]
         );
-        assert_eq!(ebits10, [3, 4, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]);
+        assert_eq!(
+            ebits10,
+            [
+                3, 4, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0
+            ]
+        );
     }
 
     // --- clt_compute_allocation: LM sweep ---
@@ -1340,33 +1477,52 @@ mod tests {
         assert_eq!(coded0, 21);
         assert_eq!(
             pulses0,
-            [8, 8, 8, 8, 8, 8, 8, 8, 45, 50, 47, 44, 97, 89, 84, 124, 116, 149, 212, 260, 195]
+            [
+                8, 8, 8, 8, 8, 8, 8, 8, 45, 50, 47, 44, 97, 89, 84, 124, 116, 149, 212, 260, 195
+            ]
         );
-        assert_eq!(ebits0, [3, 4, 3, 3, 3, 3, 2, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2]);
+        assert_eq!(
+            ebits0,
+            [
+                3, 4, 3, 3, 3, 3, 2, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2
+            ]
+        );
 
         let (coded1, _, pulses1, ebits1, _) =
             run_mono_alloc(2000, 5, 1, NB_EBANDS as i32, &offsets);
         assert_eq!(coded1, 20);
         assert_eq!(
             pulses1,
-            [47, 51, 47, 44, 40, 37, 34, 39, 74, 68, 71, 65, 121, 108, 105, 136, 120, 144, 185, 152, 0]
+            [
+                47, 51, 47, 44, 40, 37, 34, 39, 74, 68, 71, 65, 121, 108, 105, 136, 120, 144, 185,
+                152, 0
+            ]
         );
-        assert_eq!(ebits1, [3, 2, 2, 2, 2, 2, 2, 1, 2, 2, 1, 1, 2, 2, 1, 2, 2, 2, 2, 2, 1]);
+        assert_eq!(
+            ebits1,
+            [
+                3, 2, 2, 2, 2, 2, 2, 1, 2, 2, 1, 1, 2, 2, 1, 2, 2, 2, 2, 2, 1
+            ]
+        );
 
-        let (coded2, _, pulses2, _, _) =
-            run_mono_alloc(2000, 5, 2, NB_EBANDS as i32, &offsets);
+        let (coded2, _, pulses2, _, _) = run_mono_alloc(2000, 5, 2, NB_EBANDS as i32, &offsets);
         assert_eq!(coded2, 17);
         assert_eq!(
             pulses2,
-            [97, 91, 85, 79, 70, 73, 68, 63, 117, 107, 105, 93, 163, 137, 123, 147, 110, 0, 0, 0, 0]
+            [
+                97, 91, 85, 79, 70, 73, 68, 63, 117, 107, 105, 93, 163, 137, 123, 147, 110, 0, 0,
+                0, 0
+            ]
         );
 
-        let (coded3, _, pulses3, _, _) =
-            run_mono_alloc(2000, 5, 3, NB_EBANDS as i32, &offsets);
+        let (coded3, _, pulses3, _, _) = run_mono_alloc(2000, 5, 3, NB_EBANDS as i32, &offsets);
         assert_eq!(coded3, 15);
         assert_eq!(
             pulses3,
-            [155, 141, 128, 113, 111, 101, 93, 84, 152, 134, 124, 105, 169, 117, 73, 0, 0, 0, 0, 0, 0]
+            [
+                155, 141, 128, 113, 111, 101, 93, 84, 152, 134, 124, 105, 169, 117, 73, 0, 0, 0, 0,
+                0, 0
+            ]
         );
     }
 
@@ -1381,17 +1537,31 @@ mod tests {
         assert_eq!(coded, 13);
         assert_eq!(
             pulses,
-            [8, 8, 8, 8, 8, 8, 8, 8, 39, 35, 40, 37, 69, 0, 0, 0, 0, 0, 0, 0, 0]
+            [
+                8, 8, 8, 8, 8, 8, 8, 8, 39, 35, 40, 37, 69, 0, 0, 0, 0, 0, 0, 0, 0
+            ]
         );
-        assert_eq!(ebits, [3, 2, 3, 2, 3, 1, 2, 2, 2, 2, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            ebits,
+            [
+                3, 2, 3, 2, 3, 1, 2, 2, 2, 2, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0
+            ]
+        );
 
         let (coded2, _, pulses2, ebits2, _) = run_mono_alloc(1000, 5, 0, 13, &offsets);
         assert_eq!(coded2, 13);
         assert_eq!(
             pulses2,
-            [8, 8, 8, 8, 8, 8, 8, 8, 69, 66, 64, 69, 156, 0, 0, 0, 0, 0, 0, 0, 0]
+            [
+                8, 8, 8, 8, 8, 8, 8, 8, 69, 66, 64, 69, 156, 0, 0, 0, 0, 0, 0, 0, 0
+            ]
         );
-        assert_eq!(ebits2, [4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 4, 5, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            ebits2,
+            [
+                4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 4, 5, 0, 0, 0, 0, 0, 0, 0, 0
+            ]
+        );
     }
 
     // --- clt_compute_allocation: dynalloc offsets ---
@@ -1411,12 +1581,21 @@ mod tests {
         assert_eq!(balance, 0);
         assert_eq!(
             pulses,
-            [8, 8, 8, 8, 8, 8, 8, 8, 79, 46, 44, 41, 92, 85, 79, 118, 110, 140, 199, 250, 173]
+            [
+                8, 8, 8, 8, 8, 8, 8, 8, 79, 46, 44, 41, 92, 85, 79, 118, 110, 140, 199, 250, 173
+            ]
         );
-        assert_eq!(ebits, [3, 4, 3, 5, 2, 7, 2, 2, 7, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]);
+        assert_eq!(
+            ebits,
+            [
+                3, 4, 3, 5, 2, 7, 2, 2, 7, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2
+            ]
+        );
         assert_eq!(
             priority,
-            [0, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1]
+            [
+                0, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1
+            ]
         );
     }
 
@@ -1427,8 +1606,7 @@ mod tests {
         // Very small budgets -- mostly just 1 coded band.
         let offsets = [0i32; NB_EBANDS];
 
-        let (coded0, _, pulses0, ebits0, _) =
-            run_mono_alloc(0, 5, 0, NB_EBANDS as i32, &offsets);
+        let (coded0, _, pulses0, ebits0, _) = run_mono_alloc(0, 5, 0, NB_EBANDS as i32, &offsets);
         assert_eq!(coded0, 1);
         assert_eq!(pulses0, [0; NB_EBANDS]);
         assert_eq!(ebits0, [0; NB_EBANDS]);
@@ -1437,7 +1615,9 @@ mod tests {
         assert_eq!(coded8, 1);
         assert_eq!(
             pulses8,
-            [8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+            [
+                8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ]
         );
 
         let (coded16, _, pulses16, ebits16, _) =
@@ -1445,11 +1625,15 @@ mod tests {
         assert_eq!(coded16, 1);
         assert_eq!(
             pulses16,
-            [8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+            [
+                8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ]
         );
         assert_eq!(
             ebits16,
-            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+            [
+                1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ]
         );
 
         let (coded64, _, pulses64, ebits64, _) =
@@ -1457,11 +1641,15 @@ mod tests {
         assert_eq!(coded64, 1);
         assert_eq!(
             pulses64,
-            [8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+            [
+                8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ]
         );
         assert_eq!(
             ebits64,
-            [2, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+            [
+                2, 1, 1, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ]
         );
     }
 
@@ -1487,11 +1675,25 @@ mod tests {
         let enc_coded = {
             let mut enc = RangeEncoder::new(&mut buf);
             let c = clt_compute_allocation(
-                mode, 0, end, &offsets, &cap, 5,
-                &mut enc_intensity, &mut enc_dual_stereo,
-                2000, &mut enc_balance,
-                &mut enc_pulses, &mut enc_ebits, &mut enc_priority,
-                2, 0, &mut enc, true, end, end,
+                mode,
+                0,
+                end,
+                &offsets,
+                &cap,
+                5,
+                &mut enc_intensity,
+                &mut enc_dual_stereo,
+                2000,
+                &mut enc_balance,
+                &mut enc_pulses,
+                &mut enc_ebits,
+                &mut enc_priority,
+                2,
+                0,
+                &mut enc,
+                true,
+                end,
+                end,
             );
             enc.done();
             c
@@ -1511,11 +1713,25 @@ mod tests {
         let mut dec_balance = 0;
         let mut dec = RangeDecoder::new(&buf);
         let dec_coded = clt_compute_allocation(
-            mode, 0, end, &offsets, &cap, 5,
-            &mut dec_intensity, &mut dec_dual_stereo,
-            2000, &mut dec_balance,
-            &mut dec_pulses, &mut dec_ebits, &mut dec_priority,
-            2, 0, &mut dec, false, end, end,
+            mode,
+            0,
+            end,
+            &offsets,
+            &cap,
+            5,
+            &mut dec_intensity,
+            &mut dec_dual_stereo,
+            2000,
+            &mut dec_balance,
+            &mut dec_pulses,
+            &mut dec_ebits,
+            &mut dec_priority,
+            2,
+            0,
+            &mut dec,
+            false,
+            end,
+            end,
         );
 
         // Both must match exactly
@@ -1561,11 +1777,25 @@ mod tests {
             let enc_coded = {
                 let mut enc = RangeEncoder::new(&mut buf);
                 let c_ = clt_compute_allocation(
-                    mode, start, end, offsets, &cap, alloc_trim,
-                    &mut enc_intensity, &mut enc_dual_stereo,
-                    total, &mut enc_balance,
-                    &mut enc_pulses, &mut enc_ebits, &mut enc_priority,
-                    c, lm, &mut enc, true, prev, signal_bandwidth,
+                    mode,
+                    start,
+                    end,
+                    offsets,
+                    &cap,
+                    alloc_trim,
+                    &mut enc_intensity,
+                    &mut enc_dual_stereo,
+                    total,
+                    &mut enc_balance,
+                    &mut enc_pulses,
+                    &mut enc_ebits,
+                    &mut enc_priority,
+                    c,
+                    lm,
+                    &mut enc,
+                    true,
+                    prev,
+                    signal_bandwidth,
                 );
                 enc.done();
                 c_
@@ -1580,11 +1810,25 @@ mod tests {
 
             let mut dec = RangeDecoder::new(&buf);
             let dec_coded = clt_compute_allocation(
-                mode, start, end, offsets, &cap, alloc_trim,
-                &mut dec_intensity, &mut dec_dual_stereo,
-                total, &mut dec_balance,
-                &mut dec_pulses, &mut dec_ebits, &mut dec_priority,
-                c, lm, &mut dec, false, prev, signal_bandwidth,
+                mode,
+                start,
+                end,
+                offsets,
+                &cap,
+                alloc_trim,
+                &mut dec_intensity,
+                &mut dec_dual_stereo,
+                total,
+                &mut dec_balance,
+                &mut dec_pulses,
+                &mut dec_ebits,
+                &mut dec_priority,
+                c,
+                lm,
+                &mut dec,
+                false,
+                prev,
+                signal_bandwidth,
             );
             (enc_coded, dec_coded)
         }
@@ -1614,9 +1858,8 @@ mod tests {
             let end = NB_EBANDS as i32;
             for sig_bw in &[0i32, 5, 10, 15, 20, end] {
                 for prev in &[0i32, 5, 10, 17, end] {
-                    let (enc_c, dec_c) = roundtrip_alloc(
-                        2000, 5, 0, 2, 0, end, *sig_bw, *prev, &offsets, 4096,
-                    );
+                    let (enc_c, dec_c) =
+                        roundtrip_alloc(2000, 5, 0, 2, 0, end, *sig_bw, *prev, &offsets, 4096);
                     assert_eq!(enc_c, dec_c, "sig_bw={sig_bw} prev={prev}");
                 }
             }
@@ -1629,9 +1872,8 @@ mod tests {
             let offsets = [0i32; NB_EBANDS];
             let end = NB_EBANDS as i32;
             for caps in &[8i32, 32, 128, 512, 4096] {
-                let (enc_c, dec_c) = roundtrip_alloc(
-                    1500, 5, 0, 2, 0, end, end, end, &offsets, *caps,
-                );
+                let (enc_c, dec_c) =
+                    roundtrip_alloc(1500, 5, 0, 2, 0, end, end, end, &offsets, *caps);
                 assert_eq!(enc_c, dec_c, "caps={caps}");
             }
         }
@@ -1646,16 +1888,13 @@ mod tests {
             let end = NB_EBANDS as i32;
             // Sweep around the LOG2_FRAC_TABLE[21]=36 intensity_rsv boundary.
             for total in 0..=60i32 {
-                let (_e, _d) = roundtrip_alloc(
-                    total, 5, 0, 2, 0, end, end, end, &offsets, 4096,
-                );
+                let (_e, _d) = roundtrip_alloc(total, 5, 0, 2, 0, end, end, end, &offsets, 4096);
             }
             // Also sweep narrower stereo windows: intensity_rsv scales with end-start.
             for end in 2..=10i32 {
                 for total in 0..=30i32 {
-                    let (_e, _d) = roundtrip_alloc(
-                        total, 5, 0, 2, 0, end, end, end, &offsets, 4096,
-                    );
+                    let (_e, _d) =
+                        roundtrip_alloc(total, 5, 0, 2, 0, end, end, end, &offsets, 4096);
                 }
             }
         }
@@ -1708,9 +1947,16 @@ mod tests {
                 for trim in [0i32, 3, 5, 7, 10].iter() {
                     for lm in [0i32, 1, 2, 3].iter() {
                         let (enc_c, dec_c) = roundtrip_alloc(
-                            total, *trim, *lm, 1,
-                            0, NB_EBANDS as i32, NB_EBANDS as i32, NB_EBANDS as i32,
-                            &offsets, 4096,
+                            total,
+                            *trim,
+                            *lm,
+                            1,
+                            0,
+                            NB_EBANDS as i32,
+                            NB_EBANDS as i32,
+                            NB_EBANDS as i32,
+                            &offsets,
+                            4096,
                         );
                         assert_eq!(enc_c, dec_c, "total={total} trim={trim} lm={lm}");
                     }

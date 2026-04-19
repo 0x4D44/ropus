@@ -87,14 +87,17 @@ pub fn build_opus_fixture_audio_source(
     let mut encoder = Encoder::builder(48_000, Channels::Stereo, Application::Audio)
         .build()
         .expect("encoder builds");
-    let pre_skip = recorded_pre_skip.unwrap_or_else(|| {
-        u16::try_from(encoder.lookahead()).expect("lookahead fits u16")
-    });
+    let pre_skip = recorded_pre_skip
+        .unwrap_or_else(|| u16::try_from(encoder.lookahead()).expect("lookahead fits u16"));
 
     let mut encoded: Vec<Vec<u8>> = Vec::with_capacity(audio_packets);
     for i in 0..audio_packets {
         let pcm = pcm_for(i);
-        assert_eq!(pcm.len(), 960 * 2, "pcm_for must return a 20 ms stereo frame");
+        assert_eq!(
+            pcm.len(),
+            960 * 2,
+            "pcm_for must return a 20 ms stereo frame"
+        );
         let mut packet = vec![0u8; 4000];
         let n = encoder.encode(&pcm, &mut packet).expect("encode pcm");
         packet.truncate(n);
@@ -176,12 +179,7 @@ pub fn surround_family_fixture() -> Vec<u8> {
     let mut head = build_opus_head(2, 48_000, 312);
     head[18] = 1;
     writer
-        .write_packet(
-            head,
-            FIXTURE_STREAM_SERIAL,
-            PacketWriteEndInfo::EndPage,
-            0,
-        )
+        .write_packet(head, FIXTURE_STREAM_SERIAL, PacketWriteEndInfo::EndPage, 0)
         .unwrap();
     writer
         .write_packet(
@@ -378,19 +376,15 @@ pub fn open_from_bytes(bytes: Vec<u8>) -> (MemIo, *mut RopusFb2kReader) {
 pub fn open_from_bytes_info_only(bytes: Vec<u8>) -> (MemIo, *mut RopusFb2kReader) {
     let io = MemIo::new(bytes);
     let fb2k_io = io.io();
-    let handle = unsafe {
-        ropus_fb2k::ropus_fb2k_open(&fb2k_io, ropus_fb2k::ROPUS_FB2K_OPEN_INFO_ONLY)
-    };
+    let handle =
+        unsafe { ropus_fb2k::ropus_fb2k_open(&fb2k_io, ropus_fb2k::ROPUS_FB2K_OPEN_INFO_ONLY) };
     (io, handle)
 }
 
 /// Open a stream whose underlying IO advertises no `seek` callback, mimicking
 /// a live HTTP source. `open` must still succeed (HLD §4.3 permits zero
 /// duration); `total_samples` / `nominal_bitrate` should reflect the absence.
-pub fn open_from_bytes_without_seek(
-    bytes: Vec<u8>,
-    flags: u32,
-) -> (MemIo, *mut RopusFb2kReader) {
+pub fn open_from_bytes_without_seek(bytes: Vec<u8>, flags: u32) -> (MemIo, *mut RopusFb2kReader) {
     let io = MemIo::new(bytes).without_seek();
     let fb2k_io = io.io();
     let handle = unsafe { ropus_fb2k::ropus_fb2k_open(&fb2k_io, flags) };
@@ -424,8 +418,12 @@ extern "C" fn tag_collect_cb(ctx: *mut c_void, key: *const c_char, value: *const
     // SAFETY: `ctx` was initialised above to point at a `Vec<(String,String)>`;
     // `key` and `value` are valid NUL-terminated C strings per the ABI contract.
     let caps = unsafe { &mut *(ctx as *mut Vec<(String, String)>) };
-    let k = unsafe { CStr::from_ptr(key) }.to_string_lossy().into_owned();
-    let v = unsafe { CStr::from_ptr(value) }.to_string_lossy().into_owned();
+    let k = unsafe { CStr::from_ptr(key) }
+        .to_string_lossy()
+        .into_owned();
+    let v = unsafe { CStr::from_ptr(value) }
+        .to_string_lossy()
+        .into_owned();
     caps.push((k, v));
 }
 

@@ -434,8 +434,8 @@ pub fn silk_lpc_analysis_filter(out: &mut [i16], s: &[i16], a_q12: &[i16], len: 
     for ix in d..len {
         let mut out32_q12: u32 = (uc!(s, ix - 1) as i32 * uc!(a_q12, 0) as i32) as u32;
         for j in 1..d {
-            out32_q12 = out32_q12
-                .wrapping_add((uc!(s, ix - 1 - j) as i32 * uc!(a_q12, j) as i32) as u32);
+            out32_q12 =
+                out32_q12.wrapping_add((uc!(s, ix - 1 - j) as i32 * uc!(a_q12, j) as i32) as u32);
         }
         // Subtract prediction: s[ix]<<12 - accumulated, with wrapping
         let out32_q12 = ((uc!(s, ix) as i32 as u32) << 12).wrapping_sub(out32_q12) as i32;
@@ -1804,7 +1804,10 @@ mod tests {
             let input = 1i32 << k;
             let result = silk_lin2log(input);
             let expected = k * 128;
-            assert!((result - expected).abs() <= 2, "lin2log power-of-2 mismatch at k={k}");
+            assert!(
+                (result - expected).abs() <= 2,
+                "lin2log power-of-2 mismatch at k={k}"
+            );
         }
     }
 
@@ -1933,7 +1936,10 @@ mod tests {
         // 1/100 in Q30 = 10737418 (approximately)
         let result = silk_inverse32_var_q(100, 30);
         let expected = ((1i64 << 30) / 100) as i32;
-        assert!((result - expected).abs() <= expected / 20 + 2, "1/100 in Q30 mismatch");
+        assert!(
+            (result - expected).abs() <= expected / 20 + 2,
+            "1/100 in Q30 mismatch"
+        );
     }
 
     #[test]
@@ -1954,7 +1960,10 @@ mod tests {
         // 1/3 in Q16 = 21845
         let result = silk_div32_var_q(1, 3, 16);
         let expected = ((1i64 << 16) / 3) as i32;
-        assert!((result - expected).abs() <= expected / 10 + 2, "1/3 in Q16 mismatch");
+        assert!(
+            (result - expected).abs() <= expected / 10 + 2,
+            "1/3 in Q16 mismatch"
+        );
     }
 
     // ===================================================================
@@ -1976,7 +1985,10 @@ mod tests {
         // Approximate: within a few percent
         for &(input, expected) in &[(1, 1), (4, 2), (16, 4), (256, 16)] {
             let result = silk_sqrt_approx(input);
-            assert!((result - expected).abs() <= expected / 4 + 1, "sqrt_approx mismatch");
+            assert!(
+                (result - expected).abs() <= expected / 4 + 1,
+                "sqrt_approx mismatch"
+            );
         }
     }
 
@@ -2792,7 +2804,10 @@ mod tests {
     #[test]
     fn test_pin_sum_sqr_shift_i32_exact() {
         // Catches return (1,1), * vs +, && vs ||, > vs >=, >>= vs <<= (lines 388-396)
-        assert_eq!(silk_sum_sqr_shift_i32(&[100, 200, 300, 400, 500], 0), (550000, 0));
+        assert_eq!(
+            silk_sum_sqr_shift_i32(&[100, 200, 300, 400, 500], 0),
+            (550000, 0)
+        );
     }
 
     #[test]
@@ -2910,6 +2925,82 @@ mod tests {
         assert_eq!(silk_smultt(0x7FFF0000u32 as i32, 0x00020000), 0x7FFF * 2);
         assert_eq!(silk_smultt(0, 0x10000), 0);
         assert_eq!(silk_smultt(0x10000, 0), 0);
+    }
+
+    // =======================================================================
+    // Fuzz-campaign regressions (campaign 8)
+    // Each test guards the invariant a specific fix established, so reverting
+    // the fix flips the test to failing even without the original fuzz input.
+    // =======================================================================
+
+    /// Bug E/F/G/H/J (commit 8715e87): silk_rshift_round must not overflow
+    /// when `a` is near i32::MAX. The pre-fix form `(a + (1<<(shift-1))) >> shift`
+    /// wraps around i32::MAX and flips the sign of the result.
+    #[test]
+    fn test_silk_rshift_round_no_overflow_at_i32_max() {
+        // The exact pair captured during NSQ bisect: silk_RSHIFT_ROUND(i32::MAX, 4).
+        // Correct result is +134217728; the buggy naive form produced -134217728.
+        assert_eq!(silk_rshift_round(i32::MAX, 4), 134_217_728);
+        assert_eq!(silk_rshift_round_fn(i32::MAX, 4), 134_217_728);
+
+        // shift == 1 uses its own branch; verify it too.
+        assert_eq!(silk_rshift_round(i32::MAX, 1), 1_073_741_824);
+
+        // shift >= 2 near the upper edge with different shift magnitudes.
+        assert_eq!(silk_rshift_round(i32::MAX - 1, 2), (i32::MAX / 4) + 1);
+        assert_eq!(silk_rshift_round(i32::MAX, 31), 1);
+
+        // Negative `a` near i32::MIN is the symmetric case — must not overflow either.
+        assert_eq!(silk_rshift_round(i32::MIN, 4), -(i32::MIN / -16));
+    }
+
+    /// Bug E/F/G/H/J (commit 8715e87): silk_rshift_round64 shares the same
+    /// fix pattern and must not overflow near i64::MAX.
+    #[test]
+    fn test_silk_rshift_round64_no_overflow_at_i64_max() {
+        // Correct: (i64::MAX >> 3 + 1) >> 1 = (i64::MAX/8 + 1) / 2.
+        let expected: i64 = ((i64::MAX >> 3) + 1) >> 1;
+        assert_eq!(silk_rshift_round64(i64::MAX, 4), expected);
+        assert_eq!(silk_rshift_round64(i64::MAX, 1), (i64::MAX >> 1) + 1);
+    }
+
+    /// Bug I (commit 0d3bd0e): silk_smla{wb,wt,bb,ww} must use wrapping_add
+    /// to match C's signed-overflow-wraps semantics. The pre-fix form panicked
+    /// with "attempt to add with overflow" when invoked with values that make
+    /// `a + (b*c)>>16` cross i32::MAX.
+    #[test]
+    fn test_silk_smlawb_wraps_instead_of_panicking() {
+        // Pick values where a + ((b*c)>>16) overflows i32.
+        // b=1<<30, c=4 -> (b as i64 * c) >> 16 = 2^32 >> 16 truncated -> big positive.
+        // a = i32::MAX means the add crosses the boundary.
+        let a = i32::MAX;
+        let b = 1 << 30;
+        let c: i16 = 4;
+        let product = ((b as i64 * c as i64) >> 16) as i32;
+        let expected = a.wrapping_add(product);
+        assert_eq!(silk_smlawb(a, b, c), expected);
+
+        // Same shape for smlawt (c is shifted right by 16 internally).
+        // Picking c so (c >> 16) = 4 -> c = 4<<16.
+        let c32: i32 = 4 << 16;
+        let product_t = ((b as i64 * ((c32 >> 16) as i64)) >> 16) as i32;
+        assert_eq!(silk_smlawt(a, b, c32), a.wrapping_add(product_t));
+
+        // smlabb: a + (i16)b * (i16)c, wrapping.
+        // Pick b, c with i16 halves = 32767 each → product = 32767^2 = 1_073_676_289.
+        // a = i32::MAX - 100 → expected wraps.
+        let a = i32::MAX - 100;
+        let b = 32767_i32;
+        let c = 32767_i32;
+        let product_bb = (b as i16 as i32).wrapping_mul(c as i16 as i32);
+        assert_eq!(silk_smlabb(a, b, c), a.wrapping_add(product_bb));
+
+        // smlaww: a + (b * c) >> 16. Same overflow-on-add case as smlawb.
+        let a = i32::MAX;
+        let b = 1 << 30;
+        let c = 1 << 16;
+        let product_ww = ((b as i64 * c as i64) >> 16) as i32;
+        assert_eq!(silk_smlaww(a, b, c), a.wrapping_add(product_ww));
     }
 
     // =======================================================================
@@ -3074,8 +3165,9 @@ mod tests {
         #[test]
         fn test_bc_nlsf_stabilize_extreme_packing() {
             // All at the top
-            let mut nlsf: [i16; 10] = [32000, 32100, 32200, 32300, 32400,
-                                       32500, 32600, 32700, 32750, 32767];
+            let mut nlsf: [i16; 10] = [
+                32000, 32100, 32200, 32300, 32400, 32500, 32600, 32700, 32750, 32767,
+            ];
             silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
             for i in 1..10 {
                 assert!(nlsf[i] >= nlsf[i - 1]);
@@ -3089,8 +3181,9 @@ mod tests {
             }
 
             // Decreasing input (violates monotonicity everywhere)
-            let mut nlsf: [i16; 10] = [30000, 27000, 24000, 21000, 18000,
-                                       15000, 12000, 9000, 6000, 3000];
+            let mut nlsf: [i16; 10] = [
+                30000, 27000, 24000, 21000, 18000, 15000, 12000, 9000, 6000, 3000,
+            ];
             silk_nlsf_stabilize(&mut nlsf, &SILK_NLSF_DELTA_MIN_NB_MB_Q15, 10);
             for i in 1..10 {
                 assert!(nlsf[i] >= nlsf[i - 1]);

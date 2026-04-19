@@ -2879,11 +2879,9 @@ fn celt_encode_core(
     }
 
     // Minimum allowed bytes
-    let mut min_allowed = ((enc_ref.tell_frac() as i32 + total_boost_enc
-        + (1 << (BITRES + 3))
-        - 1)
-        >> (BITRES + 3))
-        + 2;
+    let mut min_allowed =
+        ((enc_ref.tell_frac() as i32 + total_boost_enc + (1 << (BITRES + 3)) - 1) >> (BITRES + 3))
+            + 2;
     // Take into account the 37 bits we need to have left in the packet to
     // signal a redundant frame in hybrid mode. Creating a shorter packet
     // would create an entropy coder desync between the encoder (which wrote
@@ -4153,7 +4151,7 @@ mod tests {
         celt_preemphasis(&pcm, 0, &mut inp, 0, 8, 1, 1, &coef, &mut mem, 0);
 
         // Sample-level outputs unchanged; only `mem` scaling differs.
-        assert_eq!(inp[0], 4096000);  // 1000 << 12 = 4096000, mem was 0
+        assert_eq!(inp[0], 4096000); // 1000 << 12 = 4096000, mem was 0
         assert_eq!(inp[1], 4710375);
         assert_eq!(inp[2], 5324750);
         assert_eq!(inp[3], 5939125);
@@ -4179,14 +4177,14 @@ mod tests {
         celt_preemphasis(&pcm, 0, &mut inp, 0, 8, 1, 2, &coef, &mut mem, 0);
 
         // Even indices get real samples, odd indices get zero-inserted
-        assert_eq!(inp[0], 4096000);    // 1000 << 12, mem=0
-        assert_eq!(inp[1], -3481625);   // 0 - coef * 4096000 (old mem after iter 0)
-        assert_eq!(inp[2], 8192000);    // 2000 << 12, mem was 0 (post zero-insert)
-        assert_eq!(inp[3], -6963250);   // 0 - coef * 8192000
-        assert_eq!(inp[4], 12288000);   // 3000 << 12
-        assert_eq!(inp[5], -10444875);  // 0 - coef * 12288000
-        assert_eq!(inp[6], 16384000);   // 4000 << 12
-        assert_eq!(inp[7], -13926500);  // 0 - coef * 16384000
+        assert_eq!(inp[0], 4096000); // 1000 << 12, mem=0
+        assert_eq!(inp[1], -3481625); // 0 - coef * 4096000 (old mem after iter 0)
+        assert_eq!(inp[2], 8192000); // 2000 << 12, mem was 0 (post zero-insert)
+        assert_eq!(inp[3], -6963250); // 0 - coef * 8192000
+        assert_eq!(inp[4], 12288000); // 3000 << 12
+        assert_eq!(inp[5], -10444875); // 0 - coef * 12288000
+        assert_eq!(inp[6], 16384000); // 4000 << 12
+        assert_eq!(inp[7], -13926500); // 0 - coef * 16384000
         // Final m = MULT16_32_Q15(coef0, 0) = 0 (last iter's x is a zero-insert)
         assert_eq!(mem, 0);
     }
@@ -4227,22 +4225,22 @@ mod tests {
         let result = compute_vbr(
             mode,
             &analysis,
-            6400,               // base_target
-            3,                  // lm
-            64000,              // bitrate
-            0,                  // last_coded_bands
-            1,                  // c (mono)
-            0,                  // intensity
-            0,                  // constrained_vbr
-            0,                  // stereo_saving
-            0,                  // tot_boost
-            0,                  // tf_estimate
-            0,                  // pitch_change
+            6400,              // base_target
+            3,                 // lm
+            64000,             // bitrate
+            0,                 // last_coded_bands
+            1,                 // c (mono)
+            0,                 // intensity
+            0,                 // constrained_vbr
+            0,                 // stereo_saving
+            0,                 // tot_boost
+            0,                 // tf_estimate
+            0,                 // pitch_change
             qconst16(0.5, 15), // max_depth
-            0,                  // lfe
-            false,              // has_surround_mask
-            0,                  // surround_masking
-            0,                  // temporal_vbr
+            0,                 // lfe
+            false,             // has_surround_mask
+            0,                 // surround_masking
+            0,                 // temporal_vbr
         );
         // Mono VBR target with default parameters
         assert_eq!(result, 1493);
@@ -4255,22 +4253,22 @@ mod tests {
         let result = compute_vbr(
             mode,
             &analysis,
-            6400,               // base_target
-            3,                  // lm
-            64000,              // bitrate
-            0,                  // last_coded_bands
-            2,                  // c (stereo)
-            10,                 // intensity
-            1,                  // constrained_vbr
-            128,                // stereo_saving (Q8)
-            0,                  // tot_boost
-            0,                  // tf_estimate
-            0,                  // pitch_change
+            6400,              // base_target
+            3,                 // lm
+            64000,             // bitrate
+            0,                 // last_coded_bands
+            2,                 // c (stereo)
+            10,                // intensity
+            1,                 // constrained_vbr
+            128,               // stereo_saving (Q8)
+            0,                 // tot_boost
+            0,                 // tf_estimate
+            0,                 // pitch_change
             qconst16(0.5, 15), // max_depth
-            0,                  // lfe
-            false,              // has_surround_mask
-            0,                  // surround_masking
-            0,                  // temporal_vbr
+            0,                 // lfe
+            false,             // has_surround_mask
+            0,                 // surround_masking
+            0,                 // temporal_vbr
         );
         // Stereo with intensity=10, constrained VBR, stereo savings
         assert_eq!(result, 3068);
@@ -4285,16 +4283,21 @@ mod tests {
         let mut weak_transient = false;
 
         let is_transient = transient_analysis(
-            &input, 960, 1,
-            &mut tf_estimate, &mut tf_chan,
-            false, &mut weak_transient,
-            0, 0,
+            &input,
+            960,
+            1,
+            &mut tf_estimate,
+            &mut tf_chan,
+            false,
+            &mut weak_transient,
+            0,
+            0,
         );
         // Silence: no transient, all outputs zero
-        assert_eq!(is_transient, false);
+        assert!(!is_transient);
         assert_eq!(tf_estimate, 0);
         assert_eq!(tf_chan, 0);
-        assert_eq!(weak_transient, false);
+        assert!(!weak_transient);
     }
 
     #[test]
@@ -4309,16 +4312,21 @@ mod tests {
         let mut weak_transient = false;
 
         let is_transient = transient_analysis(
-            &input, 960, 1,
-            &mut tf_estimate, &mut tf_chan,
-            false, &mut weak_transient,
-            0, 0,
+            &input,
+            960,
+            1,
+            &mut tf_estimate,
+            &mut tf_chan,
+            false,
+            &mut weak_transient,
+            0,
+            0,
         );
         // Sharp impulse: detected as transient
-        assert_eq!(is_transient, true);
+        assert!(is_transient);
         assert_eq!(tf_estimate, 16262);
         assert_eq!(tf_chan, 0);
-        assert_eq!(weak_transient, false);
+        assert!(!weak_transient);
     }
 
     #[test]
@@ -4327,8 +4335,8 @@ mod tests {
         let constant_signal: Vec<i16> = vec![1000; 200];
         let mut lpc = [0i32; 2];
         let fail = tone_lpc(&constant_signal, 200, 10, &mut lpc);
-        assert_eq!(fail, true);   // degenerate: den <= shr32(r00*r11, 10)
-        assert_eq!(lpc[0], 0);   // LPC untouched on failure
+        assert!(fail); // degenerate: den <= shr32(r00*r11, 10)
+        assert_eq!(lpc[0], 0); // LPC untouched on failure
         assert_eq!(lpc[1], 0);
 
         // Test 2: cosine signal (period=30, delay=5) -> non-degenerate
@@ -4340,20 +4348,19 @@ mod tests {
         }
         let mut lpc2 = [0i32; 2];
         let fail2 = tone_lpc(&cosine_signal, 200, 5, &mut lpc2);
-        assert_eq!(fail2, false);            // success
-        assert_eq!(lpc2[0], 536870782);      // near Q29(1.0) = 536870912
-        assert_eq!(lpc2[1], -536870783);     // near -Q29(1.0)
+        assert!(!fail2); // success
+        assert_eq!(lpc2[0], 536870782); // near Q29(1.0) = 536870912
+        assert_eq!(lpc2[1], -536870783); // near -Q29(1.0)
 
         // Test 3: cosine (period=40, delay=7) -> non-degenerate, different LPC
         let mut cosine3: Vec<i16> = vec![0; 200];
         let period3 = 40.0f64;
         for i in 0..200 {
-            cosine3[i] =
-                (1000.0 * (2.0 * std::f64::consts::PI * i as f64 / period3).cos()) as i16;
+            cosine3[i] = (1000.0 * (2.0 * std::f64::consts::PI * i as f64 / period3).cos()) as i16;
         }
         let mut lpc3 = [0i32; 2];
         let fail3 = tone_lpc(&cosine3, 200, 7, &mut lpc3);
-        assert_eq!(fail3, false);
+        assert!(!fail3);
         assert_eq!(lpc3[0], 487471184);
         assert_eq!(lpc3[1], -536870452);
     }
@@ -4369,8 +4376,8 @@ mod tests {
             let mut out = vec![0i16; frame_size * channels];
             let sr = 48000.0;
             for i in 0..frame_size {
-                let s = (8000.0 * (2.0 * std::f64::consts::PI * freq_hz * i as f64 / sr).sin())
-                    as i16;
+                let s =
+                    (8000.0 * (2.0 * std::f64::consts::PI * freq_hz * i as f64 / sr).sin()) as i16;
                 for c in 0..channels {
                     out[i * channels + c] = s;
                 }
@@ -4437,7 +4444,10 @@ mod tests {
             assert_eq!(enc.ctl(CeltEncoderCtl::SetPacketLossPerc(0)), OPUS_OK);
             assert_eq!(enc.ctl(CeltEncoderCtl::SetPacketLossPerc(100)), OPUS_OK);
             assert_eq!(enc.loss_rate, 100);
-            assert_eq!(enc.ctl(CeltEncoderCtl::SetPacketLossPerc(101)), OPUS_BAD_ARG);
+            assert_eq!(
+                enc.ctl(CeltEncoderCtl::SetPacketLossPerc(101)),
+                OPUS_BAD_ARG
+            );
         }
 
         #[test]
@@ -4501,9 +4511,15 @@ mod tests {
             assert_eq!(enc.ctl(CeltEncoderCtl::SetLsbDepth(24)), OPUS_OK);
             assert_eq!(enc.lsb_depth, 24);
             assert_eq!(enc.ctl(CeltEncoderCtl::SetLsbDepth(0)), OPUS_BAD_ARG);
-            assert_eq!(enc.ctl(CeltEncoderCtl::SetPhaseInversionDisabled(0)), OPUS_OK);
+            assert_eq!(
+                enc.ctl(CeltEncoderCtl::SetPhaseInversionDisabled(0)),
+                OPUS_OK
+            );
             assert_eq!(enc.disable_inv, 0);
-            assert_eq!(enc.ctl(CeltEncoderCtl::SetPhaseInversionDisabled(-1)), OPUS_BAD_ARG);
+            assert_eq!(
+                enc.ctl(CeltEncoderCtl::SetPhaseInversionDisabled(-1)),
+                OPUS_BAD_ARG
+            );
         }
 
         #[test]
@@ -4553,11 +4569,15 @@ mod tests {
             let mut tf_chan = 0;
             let mut weak = false;
             let _ = transient_analysis(
-                &input, 960, 1,
-                &mut tf_estimate, &mut tf_chan,
+                &input,
+                960,
+                1,
+                &mut tf_estimate,
+                &mut tf_chan,
                 true, // allow weak
                 &mut weak,
-                0, 0,
+                0,
+                0,
             );
             // Just make sure no panic and branch gets exercised
             let _ = weak;
@@ -4574,9 +4594,13 @@ mod tests {
             let mut tf_chan = 0;
             let mut weak = false;
             let is_trans = transient_analysis(
-                &input, 960, 1,
-                &mut tf_estimate, &mut tf_chan,
-                false, &mut weak,
+                &input,
+                960,
+                1,
+                &mut tf_estimate,
+                &mut tf_chan,
+                false,
+                &mut weak,
                 qconst16(0.001, 13), // very low tone_freq
                 qconst32(0.999, 29), // strong toneishness
             );
@@ -4921,7 +4945,9 @@ mod tests {
                 let _ = tone_lpc(&s, 400, delay, &mut lpc);
             }
             // Negative cosine — flips sign direction
-            let mut s2: Vec<i16> = (0..400).map(|i| -((25000.0 * (i as f64 * 0.04).cos()) as i16)).collect();
+            let s2: Vec<i16> = (0..400)
+                .map(|i| -((25000.0 * (i as f64 * 0.04).cos()) as i16))
+                .collect();
             for delay in [3, 6, 12] {
                 let _ = tone_lpc(&s2, 400, delay, &mut lpc);
             }
@@ -5132,7 +5158,9 @@ mod tests {
             enc.bitrate = 64_000;
             enc.clip = 1;
             // Clip-inducing input (values near i16 limits)
-            let pcm: Vec<i16> = (0..960).map(|i| if i & 1 == 0 { 32767 } else { -32768 }).collect();
+            let pcm: Vec<i16> = (0..960)
+                .map(|i| if i & 1 == 0 { 32767 } else { -32768 })
+                .collect();
             let ret = encode_frame(&mut enc, &pcm, 960, 128);
             assert!(ret > 0);
         }
@@ -5143,7 +5171,9 @@ mod tests {
             enc.vbr = 1;
             enc.bitrate = 64_000;
             enc.clip = 0;
-            let pcm: Vec<i16> = (0..960).map(|i| if i & 1 == 0 { 32767 } else { -32768 }).collect();
+            let pcm: Vec<i16> = (0..960)
+                .map(|i| if i & 1 == 0 { 32767 } else { -32768 })
+                .collect();
             let ret = encode_frame(&mut enc, &pcm, 960, 128);
             assert!(ret > 0);
         }
@@ -5154,7 +5184,9 @@ mod tests {
             enc.vbr = 1;
             enc.bitrate = 128_000;
             enc.clip = 1;
-            let pcm: Vec<i16> = (0..960 * 2).map(|i| if i % 5 < 3 { 32767 } else { -30000 }).collect();
+            let pcm: Vec<i16> = (0..960 * 2)
+                .map(|i| if i % 5 < 3 { 32767 } else { -30000 })
+                .collect();
             let ret = encode_frame(&mut enc, &pcm, 960, 256);
             assert!(ret > 0);
         }

@@ -106,7 +106,10 @@ impl Read for CallbackReader {
         // rejects a `None` read callback, so unwrap here is infallible. We
         // pass a valid buffer of known length; the callback may write up to
         // `buf.len()` bytes and returns the count (>=0) or -1 on error.
-        let read = self.io.read.expect("CallbackReader invariant: read is Some");
+        let read = self
+            .io
+            .read
+            .expect("CallbackReader invariant: read is Some");
         let n = read(self.io.ctx, buf.as_mut_ptr(), buf.len());
         if n < 0 {
             return Err(io::Error::other("read callback failed"));

@@ -101,9 +101,17 @@ fn exp_rotation1(x: &mut [i32], len: usize, stride: usize, c: i32, s: i32) {
             let x1 = uc!(x, i);
             let x2 = uc!(x, i + stride);
             // new x2 = c*x2 + s*x1
-            uc_set!(x, i + stride, extract16(pshr32(mac16_16(mult16_16(c, x2), s, x1), 15)));
+            uc_set!(
+                x,
+                i + stride,
+                extract16(pshr32(mac16_16(mult16_16(c, x2), s, x1), 15))
+            );
             // new x1 = c*x1 - s*x2
-            uc_set!(x, i,          extract16(pshr32(mac16_16(mult16_16(c, x1), ms, x2), 15)));
+            uc_set!(
+                x,
+                i,
+                extract16(pshr32(mac16_16(mult16_16(c, x1), ms, x2), 15))
+            );
         }
     }
 
@@ -112,8 +120,16 @@ fn exp_rotation1(x: &mut [i32], len: usize, stride: usize, c: i32, s: i32) {
         for i in (0..len - 2 * stride).rev() {
             let x1 = uc!(x, i);
             let x2 = uc!(x, i + stride);
-            uc_set!(x, i + stride, extract16(pshr32(mac16_16(mult16_16(c, x2), s, x1), 15)));
-            uc_set!(x, i,          extract16(pshr32(mac16_16(mult16_16(c, x1), ms, x2), 15)));
+            uc_set!(
+                x,
+                i + stride,
+                extract16(pshr32(mac16_16(mult16_16(c, x2), s, x1), 15))
+            );
+            uc_set!(
+                x,
+                i,
+                extract16(pshr32(mac16_16(mult16_16(c, x1), ms, x2), 15))
+            );
         }
     }
 
@@ -188,7 +204,11 @@ fn normalise_residual(iy: &[i32], x: &mut [i32], n: usize, ryy: i32, gain: i32) 
     let t = vshr32(ryy, 2 * (k - 7) - 15);
     let g = mult32_32_q31(celt_rsqrt_norm32(t), gain);
     for i in 0..n {
-        uc_set!(x, i, vshr32(mult16_32_q15(uc!(iy, i), g), k + 15 - NORM_SHIFT));
+        uc_set!(
+            x,
+            i,
+            vshr32(mult16_32_q15(uc!(iy, i), g), k + 15 - NORM_SHIFT)
+        );
     }
 }
 
@@ -814,7 +834,10 @@ mod tests {
             }
             let mut buf = vec![0u8; 256];
             let mut enc = RangeEncoder::new(&mut buf);
-            let _ = alg_quant(&mut enc, &mut x, n, k, 3 /* AGGRESSIVE */, 1, gain, true);
+            let _ = alg_quant(
+                &mut enc, &mut x, n, k, 3, /* AGGRESSIVE */
+                1, gain, true,
+            );
             enc.done();
             assert!(!enc.error());
         }

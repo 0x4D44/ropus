@@ -73,7 +73,12 @@ fn main() {
     // "src/" (our own stubs) and relative to `repo_root` otherwise (for
     // reference upstream sources like `reference/src/mapping_matrix.c`).
     let tests: &[(SrcDir, &str, &str, &[&str])] = &[
-        (SrcDir::Tests, "test_opus_padding.c", "test_opus_padding", &[]),
+        (
+            SrcDir::Tests,
+            "test_opus_padding.c",
+            "test_opus_padding",
+            &[],
+        ),
         (SrcDir::Tests, "test_opus_decode.c", "test_opus_decode", &[]),
         (SrcDir::Tests, "test_opus_api.c", "test_opus_api", &[]),
         (
@@ -82,7 +87,12 @@ fn main() {
             "test_opus_encode",
             &["reference/tests/opus_encode_regressions.c"],
         ),
-        (SrcDir::Tests, "test_opus_extensions.c", "test_opus_extensions", &[]),
+        (
+            SrcDir::Tests,
+            "test_opus_extensions.c",
+            "test_opus_extensions",
+            &[],
+        ),
         // Piece A — IETF vectors via opus_demo + opus_compare.
         //
         // `opus_demo.c` pulls in DRED symbols unconditionally; we replace
@@ -228,10 +238,7 @@ fn main() {
         build.compile(stem);
         println!("cargo:rerun-if-changed={}", src_path.display());
         for extra in *extras {
-            println!(
-                "cargo:rerun-if-changed={}",
-                resolve_extra(extra).display()
-            );
+            println!("cargo:rerun-if-changed={}", resolve_extra(extra).display());
         }
     }
 

@@ -23,7 +23,7 @@ use std::fs;
 use std::os::raw::c_void;
 use std::path::PathBuf;
 
-use ropus::dnn::dred::{DREDEnc, DRED_MAX_DATA_SIZE, DRED_MAX_FRAMES};
+use ropus::dnn::dred::{DRED_MAX_DATA_SIZE, DRED_MAX_FRAMES, DREDEnc};
 use ropus::dnn::embedded_weights::WEIGHTS_BLOB;
 
 use ropus_harness_deep_plc::{
@@ -64,12 +64,8 @@ fn read_wav(path: &PathBuf) -> Wav {
 
     while pos + 8 <= data.len() {
         let id = &data[pos..pos + 4];
-        let sz = u32::from_le_bytes([
-            data[pos + 4],
-            data[pos + 5],
-            data[pos + 6],
-            data[pos + 7],
-        ]) as usize;
+        let sz = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
+            as usize;
         if id == b"fmt " {
             channels = u16::from_le_bytes([data[pos + 10], data[pos + 11]]);
             sample_rate = u32::from_le_bytes([
@@ -270,9 +266,7 @@ fn dred_encode_silk_frame_bytes_match_c_reference() {
                     n as i32,
                 );
             }
-            if let Some((idx, cv, rv)) =
-                first_f32_divergent(&c_in, &r_enc.input_buffer[..n])
-            {
+            if let Some((idx, cv, rv)) = first_f32_divergent(&c_in, &r_enc.input_buffer[..n]) {
                 panic!(
                     "frame {fi}: input_buffer drift at index {idx}: C={cv} Rust={rv} — \
                      resampler / quantisation differs"
@@ -326,11 +320,7 @@ fn dred_encode_silk_frame_bytes_match_c_reference() {
         if c_fill > 0 {
             let mut c_lat = vec![0.0f32; 25];
             unsafe {
-                ropus_test_dredenc_copy_latents(
-                    c_enc as *const c_void,
-                    c_lat.as_mut_ptr(),
-                    25,
-                );
+                ropus_test_dredenc_copy_latents(c_enc as *const c_void, c_lat.as_mut_ptr(), 25);
             }
             let r_lat = &r_enc.latents_buffer[..25];
             if let Some((idx, cv, rv)) = first_f32_divergent(&c_lat, r_lat) {
@@ -342,11 +332,7 @@ fn dred_encode_silk_frame_bytes_match_c_reference() {
             // Also spot-check state bank.
             let mut c_state = vec![0.0f32; 50];
             unsafe {
-                ropus_test_dredenc_copy_state(
-                    c_enc as *const c_void,
-                    c_state.as_mut_ptr(),
-                    50,
-                );
+                ropus_test_dredenc_copy_state(c_enc as *const c_void, c_state.as_mut_ptr(), 50);
             }
             let r_state = &r_enc.state_buffer[..50];
             if let Some((idx, cv, rv)) = first_f32_divergent(&c_state, r_state) {

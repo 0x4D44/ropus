@@ -40,27 +40,38 @@ fn main() {
     let mut rust_pcm = vec![0i16; max_frame as usize * channels as usize];
     let mut c_pcm = vec![0i16; max_frame as usize * channels as usize];
 
-    let stop_after: usize = std::env::args().nth(3).map_or(usize::MAX, |s| s.parse().unwrap());
+    let stop_after: usize = std::env::args()
+        .nth(3)
+        .map_or(usize::MAX, |s| s.parse().unwrap());
     let mut off = 0usize;
     let mut frame_no = 0usize;
     while off + 8 <= buf.len() && frame_no <= stop_after {
-        let len_word = u32::from_be_bytes([buf[off], buf[off+1], buf[off+2], buf[off+3]]);
-        let fin_range_file = u32::from_be_bytes([buf[off+4], buf[off+5], buf[off+6], buf[off+7]]);
+        let len_word = u32::from_be_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
+        let fin_range_file =
+            u32::from_be_bytes([buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]]);
         off += 8;
         let _lost = (len_word & 0x80000000) != 0;
         let len = (len_word & 0x7FFFFFFF) as usize;
         if off + len > buf.len() {
             break;
         }
-        let data = &buf[off..off+len];
+        let data = &buf[off..off + len];
         off += len;
 
-        let rn = rust_dec.decode(Some(data), &mut rust_pcm, max_frame, false).unwrap();
+        let rn = rust_dec
+            .decode(Some(data), &mut rust_pcm, max_frame, false)
+            .unwrap();
         let rust_range = rust_dec.get_final_range();
 
         let cn = unsafe {
-            opus_decode(c_dec, data.as_ptr(), data.len() as i32,
-                        c_pcm.as_mut_ptr(), max_frame, 0)
+            opus_decode(
+                c_dec,
+                data.as_ptr(),
+                data.len() as i32,
+                c_pcm.as_mut_ptr(),
+                max_frame,
+                0,
+            )
         };
         let mut c_range: u32 = 0;
         unsafe {
@@ -68,7 +79,10 @@ fn main() {
         }
 
         if rn != cn {
-            println!("frame {}: sample counts differ: rust={} c={}", frame_no, rn, cn);
+            println!(
+                "frame {}: sample counts differ: rust={} c={}",
+                frame_no, rn, cn
+            );
             break;
         }
 
@@ -81,7 +95,16 @@ fn main() {
         let stereo = (toc >> 2) & 1;
         let code = toc & 0x3;
         if frame_no >= 595 && frame_no <= 605 {
-            eprintln!("frame {}: len={} toc=0x{:02x} cfg={} stereo={} code={} rn={}", frame_no, data.len(), toc, cfg, stereo, code, rn);
+            eprintln!(
+                "frame {}: len={} toc=0x{:02x} cfg={} stereo={} code={} rn={}",
+                frame_no,
+                data.len(),
+                toc,
+                cfg,
+                stereo,
+                code,
+                rn
+            );
         }
         if !pcm_match || !range_match {
             println!(
@@ -93,14 +116,25 @@ fn main() {
             for i in 0..n_samples {
                 if rust_pcm[i] != c_pcm[i] {
                     first_diff = i;
-                    println!("  first diff at sample {}: rust={} c={}", i, rust_pcm[i], c_pcm[i]);
+                    println!(
+                        "  first diff at sample {}: rust={} c={}",
+                        i, rust_pcm[i], c_pcm[i]
+                    );
                     break;
                 }
             }
-            println!("  frame_size={} channels={} first_diff_sample_pair={}", rn, channels, first_diff / channels as usize);
+            println!(
+                "  frame_size={} channels={} first_diff_sample_pair={}",
+                rn,
+                channels,
+                first_diff / channels as usize
+            );
             println!("  first 16 samples rust: {:?}", &rust_pcm[..16]);
             println!("  first 16 samples c:    {:?}", &c_pcm[..16]);
-            println!("  packet bytes[0..16] = {:02x?}", &data[..data.len().min(16)]);
+            println!(
+                "  packet bytes[0..16] = {:02x?}",
+                &data[..data.len().min(16)]
+            );
             println!("  packet len = {}", data.len());
             break;
         }
@@ -108,5 +142,7 @@ fn main() {
     }
     println!("Processed {} frames without divergence", frame_no);
 
-    unsafe { opus_decoder_destroy(c_dec); }
+    unsafe {
+        opus_decoder_destroy(c_dec);
+    }
 }

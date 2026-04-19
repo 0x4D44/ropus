@@ -154,11 +154,11 @@ struct Metrics {
     samples_total: usize,
     samples_differ: usize,
     max_abs_diff: i32,
-    sum_sq_err: f64,      // (r_dec - c_dec)^2
-    sum_sq_ref: f64,      // c_dec^2 (reference signal for differential SNR)
-    sum_sq_input: f64,    // input^2 (reference for codec-transparency SNR)
-    sum_sq_c_vs_input: f64,   // (c_dec - input_aligned)^2
-    sum_sq_r_vs_input: f64,   // (r_dec - input_aligned)^2
+    sum_sq_err: f64,        // (r_dec - c_dec)^2
+    sum_sq_ref: f64,        // c_dec^2 (reference signal for differential SNR)
+    sum_sq_input: f64,      // input^2 (reference for codec-transparency SNR)
+    sum_sq_c_vs_input: f64, // (c_dec - input_aligned)^2
+    sum_sq_r_vs_input: f64, // (r_dec - input_aligned)^2
     samples_vs_input: usize,
     max_abs_ref: i32,
     c_total_bytes: usize,
@@ -321,8 +321,13 @@ fn run_one(
 
     // --- Create encoders + decoders ---
     let mut err: c_int = 0;
-    let c_enc = unsafe { bindings::opus_encoder_create(sr, ch, bindings::OPUS_APPLICATION_AUDIO, &mut err) };
-    assert!(!c_enc.is_null() && err == bindings::OPUS_OK, "C enc create failed");
+    let c_enc = unsafe {
+        bindings::opus_encoder_create(sr, ch, bindings::OPUS_APPLICATION_AUDIO, &mut err)
+    };
+    assert!(
+        !c_enc.is_null() && err == bindings::OPUS_OK,
+        "C enc create failed"
+    );
     configure_c_encoder(c_enc, bitrate, complexity);
 
     let mut r_enc =
@@ -331,9 +336,15 @@ fn run_one(
     configure_rust_encoder(&mut r_enc, bitrate, complexity);
 
     let c_dec_a = unsafe { bindings::opus_decoder_create(sr, ch, &mut err) };
-    assert!(!c_dec_a.is_null() && err == bindings::OPUS_OK, "C dec A create failed");
+    assert!(
+        !c_dec_a.is_null() && err == bindings::OPUS_OK,
+        "C dec A create failed"
+    );
     let c_dec_b = unsafe { bindings::opus_decoder_create(sr, ch, &mut err) };
-    assert!(!c_dec_b.is_null() && err == bindings::OPUS_OK, "C dec B create failed");
+    assert!(
+        !c_dec_b.is_null() && err == bindings::OPUS_OK,
+        "C dec B create failed"
+    );
 
     let mut metrics = Metrics::new(label.to_string());
     let mut c_pkt = vec![0u8; max_packet];
@@ -407,7 +418,10 @@ fn run_one(
                 0,
             )
         };
-        assert_eq!(r_dec_len, frame_size as c_int, "Rust-packet decode wrong frame size");
+        assert_eq!(
+            r_dec_len, frame_size as c_int,
+            "Rust-packet decode wrong frame size"
+        );
 
         // Compare PCM
         let mut frame_differs = false;
@@ -486,7 +500,10 @@ fn run_one(
 
 fn main() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let vectors = PathBuf::from(manifest_dir).join("..").join("tests").join("vectors");
+    let vectors = PathBuf::from(manifest_dir)
+        .join("..")
+        .join("tests")
+        .join("vectors");
 
     // Same profile as ropus-compare encode defaults (which produced the
     // 94.9% music / 98.6% speech byte-exact headline).
@@ -502,7 +519,10 @@ fn main() {
     let music = vectors.join("music_48k_stereo.wav");
     let speech = vectors.join("speech_48k_mono.wav");
 
-    let cases = [("music (48 kHz stereo)", music), ("speech (48 kHz mono)", speech)];
+    let cases = [
+        ("music (48 kHz stereo)", music),
+        ("speech (48 kHz mono)", speech),
+    ];
 
     for (label, path) in cases {
         if !path.exists() {
@@ -514,7 +534,10 @@ fn main() {
         m.report(duration_s);
     }
 
-    println!("\nProfile: {} bps CBR, complexity {}, 20 ms, AUDIO, FB", bitrate, complexity);
+    println!(
+        "\nProfile: {} bps CBR, complexity {}, 20 ms, AUDIO, FB",
+        bitrate, complexity
+    );
     println!("Each Rust packet is decoded by an independent C reference decoder,");
     println!("so state drift is isolated from the Rust decoder path.");
 }

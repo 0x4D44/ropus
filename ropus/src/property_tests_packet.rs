@@ -2,9 +2,9 @@
 // Uses proptest to verify TOC byte parsing, frame counts, bandwidth, and channel consistency.
 
 use crate::opus::decoder::{
+    OPUS_BANDWIDTH_FULLBAND, OPUS_BANDWIDTH_NARROWBAND, OPUS_INVALID_PACKET,
     opus_packet_get_bandwidth, opus_packet_get_nb_channels, opus_packet_get_nb_frames,
-    opus_packet_get_nb_samples, opus_packet_get_samples_per_frame, OPUS_BANDWIDTH_FULLBAND,
-    OPUS_BANDWIDTH_NARROWBAND, OPUS_INVALID_PACKET,
+    opus_packet_get_nb_samples, opus_packet_get_samples_per_frame,
 };
 use proptest::prelude::*;
 

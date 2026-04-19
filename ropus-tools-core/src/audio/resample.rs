@@ -33,7 +33,9 @@ pub fn resample(
     }
 
     // Deinterleave into per-channel planar buffers.
-    let mut planar: Vec<Vec<f32>> = (0..channels).map(|_| Vec::with_capacity(frames_in)).collect();
+    let mut planar: Vec<Vec<f32>> = (0..channels)
+        .map(|_| Vec::with_capacity(frames_in))
+        .collect();
     for frame in interleaved.chunks_exact(channels) {
         for (ch, s) in frame.iter().enumerate() {
             planar[ch].push(*s);
@@ -68,7 +70,11 @@ pub fn resample(
     let warmup_in = (resampler_delay as f64 / ratio).ceil() as usize;
     let needed_in = frames_in + warmup_in;
     let rem = needed_in % chunk;
-    let total_in = if rem == 0 { needed_in } else { needed_in + (chunk - rem) };
+    let total_in = if rem == 0 {
+        needed_in
+    } else {
+        needed_in + (chunk - rem)
+    };
     let pad = total_in - frames_in;
     if pad > 0 {
         for ch in &mut planar {

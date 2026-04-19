@@ -228,11 +228,9 @@ fn scan_file(path: &Path, fingerprints: &[Fingerprint]) -> Option<Finding> {
     }
 
     // Fast filter: only process packets matching at least one target signature.
-    let fp_match = fingerprints.iter().find(|fp| {
-        fp.sr == sample_rate
-            && fp.ch == channels
-            && fp.pkt_len == packet.len()
-    });
+    let fp_match = fingerprints
+        .iter()
+        .find(|fp| fp.sr == sample_rate && fp.ch == channels && fp.pkt_len == packet.len());
     // We still do a full decode even if no target match, to surface other divergences.
 
     let rust_ret = rust_decode(packet, sample_rate, channels);
@@ -321,12 +319,11 @@ fn scan_file(path: &Path, fingerprints: &[Fingerprint]) -> Option<Finding> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let mut corpus_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fuzz/corpus/fuzz_decode");
+    let mut corpus_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fuzz/corpus/fuzz_decode");
     let mut copy_to: Option<PathBuf> = None;
-    let mut fingerprints_path: Option<PathBuf> = Some(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tools/fuzz_decode_panics.json"),
-    );
+    let mut fingerprints_path: Option<PathBuf> =
+        Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tools/fuzz_decode_panics.json"));
 
     let mut i = 1;
     while i < args.len() {
@@ -456,7 +453,10 @@ fn main() {
     }
 
     println!("\n=== Findings ===");
-    println!("{} file(s) produced diverging PCM or matched fingerprint", findings.len());
+    println!(
+        "{} file(s) produced diverging PCM or matched fingerprint",
+        findings.len()
+    );
     for f in &findings {
         let tag = f
             .matched_target
@@ -490,11 +490,19 @@ fn main() {
         let tag = format!("F1{}", ['a', 'b', 'c', 'd'][i]);
         let matching: Vec<_> = findings
             .iter()
-            .filter(|f| f.matched_target == Some(i) || f.matched_fingerprint.as_deref() == Some(tag.as_str()))
+            .filter(|f| {
+                f.matched_target == Some(i)
+                    || f.matched_fingerprint.as_deref() == Some(tag.as_str())
+            })
             .collect();
         println!(
             "{} (sr={} ch={} pkt_len={} samples={}): {} seed(s)",
-            tag, tgt.0, tgt.1, tgt.2, tgt.3, matching.len()
+            tag,
+            tgt.0,
+            tgt.1,
+            tgt.2,
+            tgt.3,
+            matching.len()
         );
         for f in matching {
             println!("    - {}", f.path.file_name().unwrap().to_string_lossy());
@@ -506,21 +514,22 @@ fn main() {
             eprintln!("cannot create {}: {}", dst_dir.display(), e);
             std::process::exit(1);
         }
-        println!("\n=== Copying regression artifacts to {} ===", dst_dir.display());
+        println!(
+            "\n=== Copying regression artifacts to {} ===",
+            dst_dir.display()
+        );
         for (i, _tgt) in TARGETS.iter().enumerate() {
             let letter = ['a', 'b', 'c', 'd'][i];
             let tag = format!("F1{letter}");
             let matching: Vec<_> = findings
                 .iter()
-                .filter(|f| f.matched_target == Some(i) || f.matched_fingerprint.as_deref() == Some(tag.as_str()))
+                .filter(|f| {
+                    f.matched_target == Some(i)
+                        || f.matched_fingerprint.as_deref() == Some(tag.as_str())
+                })
                 .collect();
             for f in matching {
-                let hash = f
-                    .path
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string();
+                let hash = f.path.file_name().unwrap().to_string_lossy().to_string();
                 let short = hash.chars().take(12).collect::<String>();
                 let out_name = format!("finding1_{letter}_{short}.bin");
                 let out_path = dst_dir.join(&out_name);

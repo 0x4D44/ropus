@@ -1321,8 +1321,8 @@ mod tests {
     #[test]
     fn test_pin_rcp_norm32_exact() {
         // celt_rcp_norm32: 32-bit Newton refinement
-        assert_eq!(celt_rcp_norm32(1073741824), 2147483645);   // 1/0.5 Q30
-        assert_eq!(celt_rcp_norm32(1610612736), 1431655765);   // 1/0.75 Q30
+        assert_eq!(celt_rcp_norm32(1073741824), 2147483645); // 1/0.5 Q30
+        assert_eq!(celt_rcp_norm32(1610612736), 1431655765); // 1/0.75 Q30
         assert_eq!(celt_rcp_norm32(2000000000), 1152921505);
     }
 
@@ -1359,8 +1359,8 @@ mod tests {
     #[test]
     fn test_pin_log2_exact() {
         assert_eq!(celt_log2(1), -14336);
-        assert_eq!(celt_log2(16384), 0);       // log2(1.0 Q14) = 0
-        assert_eq!(celt_log2(32768), 1024);    // log2(2.0 Q14) = 1.0 Q10
+        assert_eq!(celt_log2(16384), 0); // log2(1.0 Q14) = 0
+        assert_eq!(celt_log2(32768), 1024); // log2(2.0 Q14) = 1.0 Q10
         assert_eq!(celt_log2(1000), -4131);
         assert_eq!(celt_log2(50000), 1648);
     }
@@ -1368,18 +1368,18 @@ mod tests {
     #[test]
     fn test_pin_exp2_exact() {
         assert_eq!(celt_exp2(0), 65532);
-        assert_eq!(celt_exp2(1024), 131064);   // 2^1.0 Q16
-        assert_eq!(celt_exp2(-1024), 32766);   // 2^-1.0 Q16
+        assert_eq!(celt_exp2(1024), 131064); // 2^1.0 Q16
+        assert_eq!(celt_exp2(-1024), 32766); // 2^-1.0 Q16
         assert_eq!(celt_exp2(500), 91928);
         assert_eq!(celt_exp2(5120), 2097024);
     }
 
     #[test]
     fn test_pin_frac_div32_exact() {
-        assert_eq!(frac_div32(500_000, 1_000_000), 1073741824);  // 0.5 Q31
-        assert_eq!(frac_div32(250_000, 1_000_000), 536870904);   // ~0.25 Q31
-        assert_eq!(frac_div32(333_333, 1_000_000), 715827160);   // ~1/3 Q31
-        assert_eq!(frac_div32(1, 1_000_000), 2144);              // tiny value
+        assert_eq!(frac_div32(500_000, 1_000_000), 1073741824); // 0.5 Q31
+        assert_eq!(frac_div32(250_000, 1_000_000), 536870904); // ~0.25 Q31
+        assert_eq!(frac_div32(333_333, 1_000_000), 715827160); // ~1/3 Q31
+        assert_eq!(frac_div32(1, 1_000_000), 2144); // tiny value
     }
 
     #[test]
@@ -1540,7 +1540,12 @@ mod tests {
                 let r = celt_rsqrt_norm(x);
                 assert!(r > 0);
             }
-            for x in [1_073_741_824i32, 1_500_000_000, 2_000_000_000, 2_147_483_647] {
+            for x in [
+                1_073_741_824i32,
+                1_500_000_000,
+                2_000_000_000,
+                2_147_483_647,
+            ] {
                 let r = celt_rsqrt_norm32(x);
                 assert!(r > 0);
             }

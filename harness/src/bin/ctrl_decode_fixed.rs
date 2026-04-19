@@ -102,9 +102,7 @@ fn main() {
     // Complexity < 5 to force classical SILK PLC in the float harness. The
     // fixed-point build has no DEEP_PLC regardless, so this knob only affects
     // the float side — we set it here too for uniformity.
-    let rc = unsafe {
-        bindings::opus_decoder_ctl(dec, OPUS_SET_COMPLEXITY_REQUEST, 4)
-    };
+    let rc = unsafe { bindings::opus_decoder_ctl(dec, OPUS_SET_COMPLEXITY_REQUEST, 4) };
     if rc != OPUS_OK {
         eprintln!("opus_decoder_ctl(OPUS_SET_COMPLEXITY, 4) failed: {rc}");
         process::exit(1);
@@ -150,14 +148,7 @@ fn main() {
         };
 
         let r = unsafe {
-            bindings::opus_decode(
-                dec,
-                data_ptr,
-                data_len,
-                scratch.as_mut_ptr(),
-                frame_size,
-                0,
-            )
+            bindings::opus_decode(dec, data_ptr, data_len, scratch.as_mut_ptr(), frame_size, 0)
         };
         if r < 0 {
             eprintln!("frame {i}: opus_decode PLC failed: {r}");

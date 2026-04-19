@@ -13,8 +13,7 @@
 /// Embedded weight blob. `&[]` when the build couldn't locate the
 /// reference DNN sources (e.g. crates.io consumers without a local
 /// `cargo run -p fetch-assets -- weights`).
-pub const WEIGHTS_BLOB: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/weights_blob.bin"));
+pub const WEIGHTS_BLOB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/weights_blob.bin"));
 
 /// Convenience: `true` iff `WEIGHTS_BLOB` has at least one record.
 /// Used by `OpusDecoder::new` to decide whether to auto-load weights.

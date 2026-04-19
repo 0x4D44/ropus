@@ -107,20 +107,16 @@ pub use api::{
 // re-exported for advanced users who need finer control than the typed facade
 // (`Encoder` / `Decoder` / `Application` / `Bitrate` / `Bandwidth` / `Signal`)
 // at the crate root provides; for most callers, prefer those typed wrappers.
-pub use opus::encoder::{
-    OpusEncoder,
-    OPUS_APPLICATION_VOIP, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
-    OPUS_SIGNAL_VOICE, OPUS_SIGNAL_MUSIC,
-    OPUS_AUTO, OPUS_BITRATE_MAX,
-};
 pub use opus::decoder::{
-    OpusDecoder,
-    OPUS_OK, OPUS_BAD_ARG, OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR,
-    OPUS_INVALID_PACKET, OPUS_UNIMPLEMENTED,
-    OPUS_BANDWIDTH_NARROWBAND, OPUS_BANDWIDTH_MEDIUMBAND, OPUS_BANDWIDTH_WIDEBAND,
-    OPUS_BANDWIDTH_SUPERWIDEBAND, OPUS_BANDWIDTH_FULLBAND,
+    OPUS_BAD_ARG, OPUS_BANDWIDTH_FULLBAND, OPUS_BANDWIDTH_MEDIUMBAND, OPUS_BANDWIDTH_NARROWBAND,
+    OPUS_BANDWIDTH_SUPERWIDEBAND, OPUS_BANDWIDTH_WIDEBAND, OPUS_BUFFER_TOO_SMALL,
+    OPUS_INTERNAL_ERROR, OPUS_INVALID_PACKET, OPUS_OK, OPUS_UNIMPLEMENTED, OpusDecoder,
 };
-pub use opus::multistream::{OpusMSEncoder, OpusMSDecoder};
+pub use opus::encoder::{
+    OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY, OPUS_APPLICATION_VOIP, OPUS_AUTO,
+    OPUS_BITRATE_MAX, OPUS_SIGNAL_MUSIC, OPUS_SIGNAL_VOICE, OpusEncoder,
+};
+pub use opus::multistream::{OpusMSDecoder, OpusMSEncoder};
 pub use opus::repacketizer::OpusRepacketizer;
 
 // Unchecked-indexing hot-path macros.
@@ -162,6 +158,6 @@ pub(crate) use uc_set;
 #[cfg(test)]
 mod coverage_tests;
 #[cfg(test)]
-mod property_tests_packet;
-#[cfg(test)]
 mod property_tests_codec;
+#[cfg(test)]
+mod property_tests_packet;

@@ -87,11 +87,7 @@ fn dred_ec_decode_matches_c_on_c_emitted_payload() {
         "C dredenc_new failed (weights blob probably absent)"
     );
     unsafe {
-        ropus_test_dredenc_set_state_buffer(
-            c_enc,
-            state_input.as_ptr(),
-            DRED_STATE_DIM as i32,
-        );
+        ropus_test_dredenc_set_state_buffer(c_enc, state_input.as_ptr(), DRED_STATE_DIM as i32);
         ropus_test_dredenc_set_latents_buffer(
             c_enc,
             latents_input.as_ptr(),
@@ -99,10 +95,10 @@ fn dred_ec_decode_matches_c_on_c_emitted_payload() {
         );
         ropus_test_dredenc_set_bookkeeping(
             c_enc,
-            0,                     /* latent_offset */
-            2 * NUM_CHUNKS + 2,    /* latents_buffer_fill — + slack chunk */
-            0,                     /* dred_offset */
-            0,                     /* last_extra_dred_offset */
+            0,                  /* latent_offset */
+            2 * NUM_CHUNKS + 2, /* latents_buffer_fill — + slack chunk */
+            0,                  /* dred_offset */
+            0,                  /* last_extra_dred_offset */
         );
     }
     let mut c_bytes = vec![0u8; DRED_MAX_DATA_SIZE];
@@ -119,7 +115,10 @@ fn dred_ec_decode_matches_c_on_c_emitted_payload() {
         )
     };
     unsafe { ropus_test_dredenc_free(c_enc) };
-    assert!(c_nbytes > 0, "C encoder produced 0 bytes — buffer fill wrong?");
+    assert!(
+        c_nbytes > 0,
+        "C encoder produced 0 bytes — buffer fill wrong?"
+    );
     c_bytes.truncate(c_nbytes as usize);
 
     // --- Rust side: same inputs, same encoder ---
@@ -163,8 +162,7 @@ fn dred_ec_decode_matches_c_on_c_emitted_payload() {
 
     // --- Decode via C ---
     let mut c_state = [0.0f32; DRED_STATE_DIM];
-    let mut c_latents =
-        [0.0f32; (DRED_NUM_REDUNDANCY_FRAMES / 2) * (DRED_LATENT_DIM + 1)];
+    let mut c_latents = [0.0f32; (DRED_NUM_REDUNDANCY_FRAMES / 2) * (DRED_LATENT_DIM + 1)];
     let mut c_nb_latents: i32 = 0;
     let mut c_process_stage: i32 = 0;
     let mut c_dred_offset: i32 = 0;

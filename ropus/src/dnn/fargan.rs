@@ -1433,9 +1433,11 @@ mod tests {
         let mut pcm_i16 = [0i16; LPCNET_FRAME_SIZE];
         let features = [0.0f32; NB_FEATURES];
         st.synthesize_int(&mut pcm_i16, &features);
+        // synthesize_int clamps to [-32767, 32767] (not i16::MIN), matching the
+        // C reference: pcm[i] = floor(.5 + MIN32(32767, MAX32(-32767, 32768*f))).
         assert!(
-            pcm_i16.iter().all(|&s| s >= i16::MIN && s <= i16::MAX),
-            "all samples should be within i16 range"
+            pcm_i16.iter().all(|&s| (-32767..=32767).contains(&s)),
+            "all samples should be within the clamped [-32767, 32767] range"
         );
     }
 

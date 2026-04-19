@@ -1,8 +1,8 @@
 //! Proptest-based property tests for the Opus encoder/decoder round-trip.
 
 use crate::opus::decoder::{
-    opus_packet_get_nb_frames, opus_packet_get_nb_samples, opus_packet_get_samples_per_frame,
     MODE_CELT_ONLY, MODE_HYBRID, MODE_SILK_ONLY, OPUS_BANDWIDTH_NARROWBAND, OPUS_OK, OpusDecoder,
+    opus_packet_get_nb_frames, opus_packet_get_nb_samples, opus_packet_get_samples_per_frame,
 };
 use crate::opus::encoder::{
     OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY, OPUS_APPLICATION_VOIP,
@@ -17,14 +17,14 @@ use proptest::prelude::*;
 
 fn canonical_configs() -> Vec<(i32, i32, i32, i32, Option<i32>)> {
     vec![
-        (8000, 1, OPUS_APPLICATION_VOIP, 160, Some(MODE_SILK_ONLY)),  // SILK NB mono 20ms
+        (8000, 1, OPUS_APPLICATION_VOIP, 160, Some(MODE_SILK_ONLY)), // SILK NB mono 20ms
         (16000, 2, OPUS_APPLICATION_VOIP, 320, Some(MODE_SILK_ONLY)), // SILK WB stereo 20ms
         (48000, 1, OPUS_APPLICATION_AUDIO, 960, Some(MODE_CELT_ONLY)), // CELT FB mono 20ms
         (48000, 2, OPUS_APPLICATION_AUDIO, 480, Some(MODE_CELT_ONLY)), // CELT FB stereo 10ms
-        (48000, 1, OPUS_APPLICATION_AUDIO, 960, Some(MODE_HYBRID)),   // Hybrid FB mono 20ms
-        (48000, 2, OPUS_APPLICATION_RESTRICTED_LOWDELAY, 240, None),  // Low-delay stereo 5ms
-        (48000, 1, OPUS_APPLICATION_AUDIO, 120, Some(MODE_CELT_ONLY)),  // CELT FB mono 2.5ms
-        (8000, 1, OPUS_APPLICATION_VOIP, 480, Some(MODE_SILK_ONLY)),    // SILK NB mono 60ms
+        (48000, 1, OPUS_APPLICATION_AUDIO, 960, Some(MODE_HYBRID)),  // Hybrid FB mono 20ms
+        (48000, 2, OPUS_APPLICATION_RESTRICTED_LOWDELAY, 240, None), // Low-delay stereo 5ms
+        (48000, 1, OPUS_APPLICATION_AUDIO, 120, Some(MODE_CELT_ONLY)), // CELT FB mono 2.5ms
+        (8000, 1, OPUS_APPLICATION_VOIP, 480, Some(MODE_SILK_ONLY)), // SILK NB mono 60ms
     ]
 }
 

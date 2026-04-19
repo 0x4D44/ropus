@@ -772,7 +772,11 @@ impl Decoder {
 }
 
 fn packet_arg(packet: &[u8]) -> Option<&[u8]> {
-    if packet.is_empty() { None } else { Some(packet) }
+    if packet.is_empty() {
+        None
+    } else {
+        Some(packet)
+    }
 }
 
 // ===========================================================================
@@ -794,7 +798,10 @@ mod tests {
         // Application
         assert_eq!(Application::Voip.as_c_int(), OPUS_APPLICATION_VOIP);
         assert_eq!(Application::Audio.as_c_int(), OPUS_APPLICATION_AUDIO);
-        assert_eq!(Application::RestrictedLowDelay.as_c_int(), OPUS_APPLICATION_RESTRICTED_LOWDELAY);
+        assert_eq!(
+            Application::RestrictedLowDelay.as_c_int(),
+            OPUS_APPLICATION_RESTRICTED_LOWDELAY
+        );
 
         // Bitrate
         assert_eq!(Bitrate::Auto.as_c_int(), OPUS_AUTO);
@@ -810,7 +817,10 @@ mod tests {
         assert_eq!(Bandwidth::Narrowband.as_c_int(), OPUS_BANDWIDTH_NARROWBAND);
         assert_eq!(Bandwidth::Mediumband.as_c_int(), OPUS_BANDWIDTH_MEDIUMBAND);
         assert_eq!(Bandwidth::Wideband.as_c_int(), OPUS_BANDWIDTH_WIDEBAND);
-        assert_eq!(Bandwidth::Superwideband.as_c_int(), OPUS_BANDWIDTH_SUPERWIDEBAND);
+        assert_eq!(
+            Bandwidth::Superwideband.as_c_int(),
+            OPUS_BANDWIDTH_SUPERWIDEBAND
+        );
         assert_eq!(Bandwidth::Fullband.as_c_int(), OPUS_BANDWIDTH_FULLBAND);
         assert_eq!(Bandwidth::Auto.as_c_int(), OPUS_AUTO);
 
@@ -837,32 +847,74 @@ mod tests {
     #[test]
     fn error_enums_from_code_round_trip() {
         // EncoderBuildError
-        assert_eq!(EncoderBuildError::from_code(OPUS_BAD_ARG), EncoderBuildError::BadArg);
-        assert_eq!(EncoderBuildError::from_code(OPUS_INTERNAL_ERROR), EncoderBuildError::Internal);
+        assert_eq!(
+            EncoderBuildError::from_code(OPUS_BAD_ARG),
+            EncoderBuildError::BadArg
+        );
+        assert_eq!(
+            EncoderBuildError::from_code(OPUS_INTERNAL_ERROR),
+            EncoderBuildError::Internal
+        );
         // Positive guard: 0 (OPUS_OK) and any other >=0 value land in Unknown.
-        assert_eq!(EncoderBuildError::from_code(0), EncoderBuildError::Unknown(0));
-        assert_eq!(EncoderBuildError::from_code(-99_999), EncoderBuildError::Unknown(-99_999));
+        assert_eq!(
+            EncoderBuildError::from_code(0),
+            EncoderBuildError::Unknown(0)
+        );
+        assert_eq!(
+            EncoderBuildError::from_code(-99_999),
+            EncoderBuildError::Unknown(-99_999)
+        );
 
         // EncodeError
         assert_eq!(EncodeError::from_code(OPUS_BAD_ARG), EncodeError::BadArg);
-        assert_eq!(EncodeError::from_code(OPUS_BUFFER_TOO_SMALL), EncodeError::BufferTooSmall);
-        assert_eq!(EncodeError::from_code(OPUS_INTERNAL_ERROR), EncodeError::Internal);
+        assert_eq!(
+            EncodeError::from_code(OPUS_BUFFER_TOO_SMALL),
+            EncodeError::BufferTooSmall
+        );
+        assert_eq!(
+            EncodeError::from_code(OPUS_INTERNAL_ERROR),
+            EncodeError::Internal
+        );
         assert_eq!(EncodeError::from_code(0), EncodeError::Unknown(0));
-        assert_eq!(EncodeError::from_code(-99_999), EncodeError::Unknown(-99_999));
+        assert_eq!(
+            EncodeError::from_code(-99_999),
+            EncodeError::Unknown(-99_999)
+        );
 
         // DecoderInitError
-        assert_eq!(DecoderInitError::from_code(OPUS_BAD_ARG), DecoderInitError::BadArg);
-        assert_eq!(DecoderInitError::from_code(OPUS_INTERNAL_ERROR), DecoderInitError::Internal);
+        assert_eq!(
+            DecoderInitError::from_code(OPUS_BAD_ARG),
+            DecoderInitError::BadArg
+        );
+        assert_eq!(
+            DecoderInitError::from_code(OPUS_INTERNAL_ERROR),
+            DecoderInitError::Internal
+        );
         assert_eq!(DecoderInitError::from_code(0), DecoderInitError::Unknown(0));
-        assert_eq!(DecoderInitError::from_code(-99_999), DecoderInitError::Unknown(-99_999));
+        assert_eq!(
+            DecoderInitError::from_code(-99_999),
+            DecoderInitError::Unknown(-99_999)
+        );
 
         // DecodeError
         assert_eq!(DecodeError::from_code(OPUS_BAD_ARG), DecodeError::BadArg);
-        assert_eq!(DecodeError::from_code(OPUS_BUFFER_TOO_SMALL), DecodeError::BufferTooSmall);
-        assert_eq!(DecodeError::from_code(OPUS_INTERNAL_ERROR), DecodeError::Internal);
-        assert_eq!(DecodeError::from_code(OPUS_INVALID_PACKET), DecodeError::InvalidPacket);
+        assert_eq!(
+            DecodeError::from_code(OPUS_BUFFER_TOO_SMALL),
+            DecodeError::BufferTooSmall
+        );
+        assert_eq!(
+            DecodeError::from_code(OPUS_INTERNAL_ERROR),
+            DecodeError::Internal
+        );
+        assert_eq!(
+            DecodeError::from_code(OPUS_INVALID_PACKET),
+            DecodeError::InvalidPacket
+        );
         assert_eq!(DecodeError::from_code(0), DecodeError::Unknown(0));
-        assert_eq!(DecodeError::from_code(-99_999), DecodeError::Unknown(-99_999));
+        assert_eq!(
+            DecodeError::from_code(-99_999),
+            DecodeError::Unknown(-99_999)
+        );
     }
 
     // ---- Encoder/decoder zero-input consistency ----
@@ -874,11 +926,17 @@ mod tests {
             .expect("encoder builds");
         let mut packet = [0u8; 4000];
         let enc_err = encoder.encode(&[], &mut packet);
-        assert!(enc_err.is_err(), "encode(&[], ...) must err, got {enc_err:?}");
+        assert!(
+            enc_err.is_err(),
+            "encode(&[], ...) must err, got {enc_err:?}"
+        );
 
         let mut decoder = Decoder::new(48_000, Channels::Mono).expect("decoder builds");
         let dec_err = decoder.decode(&[1u8], &mut [], DecodeMode::Normal);
-        assert!(dec_err.is_err(), "decode(.., &mut [], ..) must err, got {dec_err:?}");
+        assert!(
+            dec_err.is_err(),
+            "decode(.., &mut [], ..) must err, got {dec_err:?}"
+        );
     }
 
     // ---- Accessors round-trip the configuration ----
@@ -948,7 +1006,9 @@ mod tests {
             .expect("encoder builds");
         let pcm_in = vec![0i16; 960]; // 20 ms mono @ 48 kHz
         let mut packet = vec![0u8; 4000];
-        let n = encoder.encode(&pcm_in, &mut packet).expect("encode succeeds");
+        let n = encoder
+            .encode(&pcm_in, &mut packet)
+            .expect("encode succeeds");
         assert!(n > 0, "encode produced empty packet");
 
         let mut decoder = Decoder::new(48_000, Channels::Mono).expect("decoder builds");
@@ -963,8 +1023,8 @@ mod tests {
 
     #[test]
     fn decode_mode_as_decode_fec() {
-        assert_eq!(DecodeMode::Normal.as_decode_fec(), false);
-        assert_eq!(DecodeMode::Fec.as_decode_fec(), true);
+        assert!(!DecodeMode::Normal.as_decode_fec());
+        assert!(DecodeMode::Fec.as_decode_fec());
     }
 
     // ---- Encoder rejects off-by-one PCM lengths instead of leaking BadArg

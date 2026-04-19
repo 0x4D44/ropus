@@ -209,7 +209,6 @@ fn laplace_p0_decode_matches_c() {
             "c decode of c bytes diverges p0={p0} decay={decay}"
         );
     }
-
 }
 
 /// Stage 8.2: every DRED static quantisation table matches the C reference

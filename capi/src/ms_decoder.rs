@@ -189,7 +189,7 @@ pub unsafe extern "C" fn opus_multistream_decoder_create(
     error: *mut c_int,
 ) -> *mut OpusMSDecoder {
     ffi_guard!(ptr::null_mut(), {
-        if mapping.is_null() || channels < 1 || channels > 255 {
+        if mapping.is_null() || !(1..=255).contains(&channels) {
             if !error.is_null() {
                 unsafe { *error = OPUS_BAD_ARG };
             }
@@ -231,7 +231,7 @@ pub unsafe extern "C" fn opus_multistream_decoder_init(
     mapping: *const c_uchar,
 ) -> c_int {
     ffi_guard!(OPUS_INTERNAL_ERROR, {
-        if st.is_null() || mapping.is_null() || channels < 1 || channels > 255 {
+        if st.is_null() || mapping.is_null() || !(1..=255).contains(&channels) {
             return OPUS_BAD_ARG;
         }
         let mapping_slice = unsafe { std::slice::from_raw_parts(mapping, channels as usize) };
@@ -246,11 +246,7 @@ pub unsafe extern "C" fn opus_multistream_decoder_init(
                 // SAFETY: caller provided at least our advertised size (16KB
                 // per stream). We only write the 24-byte handle prefix.
                 unsafe {
-                    ptr::write_bytes(
-                        st as *mut u8,
-                        0,
-                        std::mem::size_of::<OpusMSDecoderHandle>(),
-                    );
+                    ptr::write_bytes(st as *mut u8, 0, std::mem::size_of::<OpusMSDecoderHandle>());
                     install_handle(st as *mut OpusMSDecoderHandle, inner);
                 }
                 OPUS_OK

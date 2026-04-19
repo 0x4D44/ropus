@@ -46,8 +46,7 @@ struct RawModeGuard;
 
 impl RawModeGuard {
     fn enable() -> Result<Self> {
-        crossterm::terminal::enable_raw_mode()
-            .context("enabling terminal raw mode")?;
+        crossterm::terminal::enable_raw_mode().context("enabling terminal raw mode")?;
         Ok(Self)
     }
 }
@@ -137,11 +136,7 @@ pub fn play(opts: PlayOptions) -> Result<()> {
                 // stderr so it sits above the next status-line repaint.
                 print!("\r\x1b[K");
                 let _ = std::io::stdout().flush();
-                eprintln!(
-                    "{} skipping {}: {e}",
-                    "warning:".yellow(),
-                    path.display()
-                );
+                eprintln!("{} skipping {}: {e}", "warning:".yellow(), path.display());
                 consecutive_errors += 1;
                 if consecutive_errors >= playlist_len {
                     bail!("all {playlist_len} tracks failed to decode");
@@ -165,16 +160,14 @@ pub fn play(opts: PlayOptions) -> Result<()> {
         let channels_u16 =
             u16::try_from(decoded.channels).map_err(|_| anyhow!("channel count overflow"))?;
         let duration = Duration::from_secs_f64(
-            decoded.samples.len() as f64
-                / decoded.channels as f64
-                / decoded.sample_rate as f64,
+            decoded.samples.len() as f64 / decoded.channels as f64 / decoded.sample_rate as f64,
         );
         let file_len = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
         let avg_kbps = compute_avg_kbps(file_len, duration.as_secs_f64());
         let display_name = resolve_display_name(&tags, path);
 
-        let sink = rodio::Sink::try_new(&handle)
-            .map_err(|e| anyhow!("creating sink failed: {e}"))?;
+        let sink =
+            rodio::Sink::try_new(&handle).map_err(|e| anyhow!("creating sink failed: {e}"))?;
         if let Some(v) = opts.volume {
             sink.set_volume(v.clamp(0.0, 1.0));
         }
@@ -460,7 +453,12 @@ fn run_track_noninteractive(
 ) {
     let total = duration.as_secs();
     let clock = if total >= 3600 {
-        format!("{}:{:02}:{:02}", total / 3600, (total % 3600) / 60, total % 60)
+        format!(
+            "{}:{:02}:{:02}",
+            total / 3600,
+            (total % 3600) / 60,
+            total % 60
+        )
     } else {
         format!("{}:{:02}", total / 60, total % 60)
     };
@@ -528,8 +526,7 @@ pub(crate) fn build_playlist(input: &Path) -> Result<Vec<PathBuf>> {
     if input.is_file() {
         return Ok(vec![input.to_path_buf()]);
     }
-    let entries =
-        fs::read_dir(input).with_context(|| format!("reading {}", input.display()))?;
+    let entries = fs::read_dir(input).with_context(|| format!("reading {}", input.display()))?;
     let mut files: Vec<PathBuf> = entries
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -590,14 +587,24 @@ pub(crate) fn format_status_line(
         // with `…` to fit the exact width.
         let prefix = format!("{glyph} {track}  ");
         let suffix = format!("  {pos_str} / {dur_str}");
-        let name = truncate_to_fit(display_name, cols, prefix.chars().count(), suffix.chars().count());
+        let name = truncate_to_fit(
+            display_name,
+            cols,
+            prefix.chars().count(),
+            suffix.chars().count(),
+        );
         return format!("{prefix}{name}{suffix}");
     }
 
     let bar = progress_bar(pos, dur);
     let prefix = format!("{glyph} {track}{loop_ind}  ");
     let suffix = format!("  [{bar}]  {pos_str} / {dur_str}  {avg_kbps:.0} kbps");
-    let name = truncate_to_fit(display_name, cols, prefix.chars().count(), suffix.chars().count());
+    let name = truncate_to_fit(
+        display_name,
+        cols,
+        prefix.chars().count(),
+        suffix.chars().count(),
+    );
     format!("{prefix}{name}{suffix}")
 }
 
@@ -830,10 +837,7 @@ mod tests {
             vendor: "v".into(),
             comments: vec!["TITLE=Solo".into()],
         };
-        assert_eq!(
-            resolve_display_name(&tags, Path::new("/x.opus")),
-            "Solo"
-        );
+        assert_eq!(resolve_display_name(&tags, Path::new("/x.opus")), "Solo");
     }
 
     #[test]
@@ -842,10 +846,7 @@ mod tests {
             vendor: "v".into(),
             comments: vec!["ARTIST=Solo".into()],
         };
-        assert_eq!(
-            resolve_display_name(&tags, Path::new("/x.opus")),
-            "Solo"
-        );
+        assert_eq!(resolve_display_name(&tags, Path::new("/x.opus")), "Solo");
     }
 
     #[test]
@@ -1190,7 +1191,10 @@ mod tests {
     fn compute_avg_kbps_standard_case() {
         // 128 kbps over 60s is 128_000 bits/s * 60 / 8 = 960_000 bytes.
         let kbps = compute_avg_kbps(960_000, 60.0);
-        assert!((kbps - 128.0).abs() < 0.01, "expected ~128 kbps, got {kbps}");
+        assert!(
+            (kbps - 128.0).abs() < 0.01,
+            "expected ~128 kbps, got {kbps}"
+        );
     }
 
     #[test]
@@ -1234,8 +1238,7 @@ mod tests {
 
     #[test]
     fn gain_db_nan_rejected() {
-        let err = validate_and_compute_gain(f32::NAN)
-            .expect_err("NaN must surface as an error");
+        let err = validate_and_compute_gain(f32::NAN).expect_err("NaN must surface as an error");
         let msg = format!("{err:#}").to_ascii_lowercase();
         assert!(msg.contains("finite"), "error should mention finite: {msg}");
     }
@@ -1260,10 +1263,8 @@ mod tests {
         // boundary arithmetic.
         assert!(validate_and_compute_gain(128.0).is_ok());
         assert!(validate_and_compute_gain(-128.0).is_ok());
-        let err_hi = validate_and_compute_gain(200.0)
-            .expect_err("200 dB above clamp must error");
-        let err_lo = validate_and_compute_gain(-200.0)
-            .expect_err("-200 dB below clamp must error");
+        let err_hi = validate_and_compute_gain(200.0).expect_err("200 dB above clamp must error");
+        let err_lo = validate_and_compute_gain(-200.0).expect_err("-200 dB below clamp must error");
         let msg_hi = format!("{err_hi:#}").to_ascii_lowercase();
         let msg_lo = format!("{err_lo:#}").to_ascii_lowercase();
         assert!(

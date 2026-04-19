@@ -18,8 +18,8 @@ mod bindings;
 use std::os::raw::c_int;
 
 use ropus::opus::encoder::{
-    OpusEncoder as RustOpusEncoder, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
-    OPUS_APPLICATION_VOIP,
+    OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY, OPUS_APPLICATION_VOIP,
+    OpusEncoder as RustOpusEncoder,
 };
 
 const SAMPLE_RATES: [i32; 5] = [8000, 12000, 16000, 24000, 48000];
@@ -484,7 +484,14 @@ fn compare_nlsf_indices(
 
     println!(
         "  NLSF diagnostic ch{} frame{}: C order={} sigtype={} interp={}, Rust order={} sigtype={} interp={}",
-        channel, frame_idx, c_order, c_signal_type, c_interp_coef, r_order, r_signal_type, r_interp_coef
+        channel,
+        frame_idx,
+        c_order,
+        c_signal_type,
+        c_interp_coef,
+        r_order,
+        r_signal_type,
+        r_interp_coef
     );
 
     let order = c_order.max(r_order) as usize;
@@ -518,12 +525,7 @@ fn compare_nlsf_indices(
     let mut c_hash: i32 = 0;
     let mut c_buflen: i32 = 0;
     unsafe {
-        bindings::debug_get_silk_xbuf_hash(
-            c_enc,
-            channel as c_int,
-            &mut c_hash,
-            &mut c_buflen,
-        );
+        bindings::debug_get_silk_xbuf_hash(c_enc, channel as c_int, &mut c_hash, &mut c_buflen);
     }
     // Rust input buffer hash
     let r_buf = &r_ch.s_cmn.input_buf;
@@ -538,7 +540,11 @@ fn compare_nlsf_indices(
         c_buflen,
         r_hash as u32,
         r_buflen,
-        if c_hash == r_hash { "MATCH" } else { "MISMATCH" }
+        if c_hash == r_hash {
+            "MATCH"
+        } else {
+            "MISMATCH"
+        }
     );
 }
 
@@ -559,7 +565,10 @@ fn main() {
             .map(|e| e.path())
             .filter(|p| {
                 p.file_name()
-                    .map(|n| n.to_string_lossy().contains("mf5_24k_stereo") || n.to_string_lossy().contains("mf10_24k_stereo"))
+                    .map(|n| {
+                        n.to_string_lossy().contains("mf5_24k_stereo")
+                            || n.to_string_lossy().contains("mf10_24k_stereo")
+                    })
                     .unwrap_or(false)
             })
             .collect()
@@ -634,8 +643,7 @@ fn main() {
         // --- Create C encoder ---
         let c_enc = unsafe {
             let mut error: c_int = 0;
-            let enc =
-                bindings::opus_encoder_create(sample_rate, channels, application, &mut error);
+            let enc = bindings::opus_encoder_create(sample_rate, channels, application, &mut error);
             if enc.is_null() || error != bindings::OPUS_OK {
                 eprintln!("SKIP: C opus_encoder_create failed with error {}", error);
                 continue;
@@ -760,7 +768,11 @@ fn main() {
             // always dump after every frame when in single-file mode so we
             // can find the first-diverging "untracked" field.
             if single_file_mode {
-                let match_tag = if bytes_match { "BYTES-OK" } else { "BYTES-DIFF" };
+                let match_tag = if bytes_match {
+                    "BYTES-OK"
+                } else {
+                    "BYTES-DIFF"
+                };
                 println!(
                     "[ext frame {} {}] Rust={}B C={}B",
                     frame_idx,

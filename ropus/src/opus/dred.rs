@@ -135,7 +135,10 @@ impl OpusDREDDecoder {
         match dred_find_payload(data) {
             FindPayload::Error(e) => Err(e),
             FindPayload::Missing => Ok(dred),
-            FindPayload::Found { payload, dred_frame_offset } => {
+            FindPayload::Found {
+                payload,
+                dred_frame_offset,
+            } => {
                 let offset = 100 * max_dred_samples / sampling_rate;
                 let min_feature_frames = (2 + offset).min(2 * DRED_NUM_REDUNDANCY_FRAMES as i32);
                 dred.ec_decode(payload, min_feature_frames, dred_frame_offset);
@@ -300,10 +303,7 @@ fn dred_find_payload(data: &[u8]) -> FindPayload<'_> {
     let mut toc: u8 = 0;
     let mut sizes = [0i16; MAX_FRAMES];
     let mut payload_offset: i32 = 0;
-    let mut padding = PaddingInfo {
-        offset: 0,
-        len: 0,
-    };
+    let mut padding = PaddingInfo { offset: 0, len: 0 };
     let ret = opus_packet_parse_impl_with_padding(
         data,
         data.len() as i32,
@@ -327,8 +327,7 @@ fn dred_find_payload(data: &[u8]) -> FindPayload<'_> {
     if pad_end > data.len() {
         return FindPayload::Missing;
     }
-    let mut iter =
-        OpusExtensionIterator::new(&data[pad_start..pad_end], padding.len, nb_frames);
+    let mut iter = OpusExtensionIterator::new(&data[pad_start..pad_end], padding.len, nb_frames);
     loop {
         let (r, ext) = iter.find(DRED_EXTENSION_ID as i32);
         if r < 0 {
@@ -381,9 +380,7 @@ mod tests {
         // directly), decodes, and runs `process` (which does need the
         // RDOVAE decoder weights).
         if WEIGHTS_BLOB.is_empty() {
-            eprintln!(
-                "opus::dred::tests: WEIGHTS_BLOB empty — skipping decoder round-trip test."
-            );
+            eprintln!("opus::dred::tests: WEIGHTS_BLOB empty — skipping decoder round-trip test.");
             return;
         }
 

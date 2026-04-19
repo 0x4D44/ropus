@@ -1449,7 +1449,9 @@ impl OpusMSEncoder {
                             return OPUS_BAD_ARG;
                         }
                         let mut sub = Vec::with_capacity(42);
-                        sub.extend_from_slice(&buf[(21 * left as usize)..(21 * left as usize + 21)]);
+                        sub.extend_from_slice(
+                            &buf[(21 * left as usize)..(21 * left as usize + 21)],
+                        );
                         sub.extend_from_slice(
                             &buf[(21 * right as usize)..(21 * right as usize + 21)],
                         );
@@ -3799,9 +3801,15 @@ mod tests {
 
         /// Encode + decode for small stream/coupled combos.
         fn round_trip(channels: i32, streams: i32, coupled: i32, mapping: &[u8]) {
-            let mut enc =
-                OpusMSEncoder::new(48000, channels, streams, coupled, mapping, OPUS_APPLICATION_AUDIO)
-                    .unwrap();
+            let mut enc = OpusMSEncoder::new(
+                48000,
+                channels,
+                streams,
+                coupled,
+                mapping,
+                OPUS_APPLICATION_AUDIO,
+            )
+            .unwrap();
             enc.set_bitrate(32000 * channels);
             let pcm = patterned_pcm_i16(960, channels as usize, 17);
             let mut pkt = vec![0u8; 8000];
@@ -4058,8 +4066,7 @@ mod tests {
             let n = enc.encode(&pcm, 960, &mut pkt, 8000).unwrap();
             assert!(n > 0);
 
-            let mut dec =
-                OpusMSDecoder::new(48000, 6, streams, coupled, &mapping[..6]).unwrap();
+            let mut dec = OpusMSDecoder::new(48000, 6, streams, coupled, &mapping[..6]).unwrap();
             let mut out = vec![0i16; 960 * 6];
             let r = dec
                 .decode(Some(&pkt[..n as usize]), n, &mut out, 960, false)
@@ -4076,8 +4083,7 @@ mod tests {
             let mut pkt = vec![0u8; 6000];
             let n = enc.encode(&pcm, 960, &mut pkt, 6000).unwrap();
             assert!(n > 0);
-            let mut dec =
-                OpusMSDecoder::new(48000, 6, streams, coupled, &mapping[..6]).unwrap();
+            let mut dec = OpusMSDecoder::new(48000, 6, streams, coupled, &mapping[..6]).unwrap();
             let mut out = vec![0i16; 960 * 6];
             assert_eq!(
                 dec.decode(Some(&pkt[..n as usize]), n, &mut out, 960, false)
@@ -4245,14 +4251,16 @@ mod tests {
         fn decode_multistream_packet_with_synthetic_streams() {
             // Build a multistream packet by concatenating a self-delimited
             // encoded sub-packet and a plain sub-packet.
-            let mut enc = crate::opus::encoder::OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+            let mut enc =
+                crate::opus::encoder::OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
             enc.set_bitrate(24000);
             let pcm = patterned_pcm_i16(960, 1, 200);
             let mut p1 = vec![0u8; 1500];
             let n1 = enc.encode(&pcm, 960, &mut p1, 1500).unwrap();
             p1.truncate(n1 as usize);
 
-            let mut enc2 = crate::opus::encoder::OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+            let mut enc2 =
+                crate::opus::encoder::OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
             enc2.set_bitrate(24000);
             let pcm2 = patterned_pcm_i16(960, 1, 201);
             let mut p2 = vec![0u8; 1500];
@@ -4272,13 +4280,7 @@ mod tests {
 
             let mut dec = OpusMSDecoder::new(48000, 2, 2, 0, &[0, 1]).unwrap();
             let mut out = vec![0i16; 960 * 2];
-            let _ = dec.decode(
-                Some(&combined),
-                combined.len() as i32,
-                &mut out,
-                960,
-                false,
-            );
+            let _ = dec.decode(Some(&combined), combined.len() as i32, &mut out, 960, false);
         }
 
         #[test]
@@ -4357,9 +4359,15 @@ mod tests {
         // We drive these via OpusMSDecoder::decode() with malformed packets.
 
         fn ms_try_decode(pkt: &[u8], streams: i32) {
-            let mut dec = OpusMSDecoder::new(48000, streams.max(1), streams, 0, &[0, 1, 2, 3][..streams.max(1) as usize])
-                .or_else(|_| OpusMSDecoder::new(48000, 1, 1, 0, &[0]))
-                .unwrap();
+            let mut dec = OpusMSDecoder::new(
+                48000,
+                streams.max(1),
+                streams,
+                0,
+                &[0, 1, 2, 3][..streams.max(1) as usize],
+            )
+            .or_else(|_| OpusMSDecoder::new(48000, 1, 1, 0, &[0]))
+            .unwrap();
             let mut out = vec![0i16; 48000 / 25 * 3 * streams.max(1) as usize];
             let _ = dec.decode(Some(pkt), pkt.len() as i32, &mut out, 48000 / 25 * 3, false);
         }

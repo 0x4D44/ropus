@@ -15,12 +15,16 @@ mod bindings;
 use std::os::raw::c_int;
 
 use ropus::opus::encoder::{
-    OpusEncoder as RustEncoder, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
-    OPUS_APPLICATION_VOIP,
+    OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY, OPUS_APPLICATION_VOIP,
+    OpusEncoder as RustEncoder,
 };
 
 const SAMPLE_RATES: [i32; 5] = [8000, 12000, 16000, 24000, 48000];
-const APPLICATIONS: [i32; 3] = [OPUS_APPLICATION_VOIP, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY];
+const APPLICATIONS: [i32; 3] = [
+    OPUS_APPLICATION_VOIP,
+    OPUS_APPLICATION_AUDIO,
+    OPUS_APPLICATION_RESTRICTED_LOWDELAY,
+];
 
 fn byte_to_bitrate(b0: u8, b1: u8) -> i32 {
     let raw = u16::from_le_bytes([b0, b1]) as i32;
@@ -36,7 +40,9 @@ fn compare_encode(
     pcm: &[i16],
     frame_size: i32,
 ) {
-    println!("Config: sr={sample_rate}, ch={channels}, app={application}, br={bitrate}, cx={complexity}, fs={frame_size}");
+    println!(
+        "Config: sr={sample_rate}, ch={channels}, app={application}, br={bitrate}, cx={complexity}, fs={frame_size}"
+    );
 
     // Rust encode
     let mut rust_enc = RustEncoder::new(sample_rate, channels, application).unwrap();
@@ -67,13 +73,8 @@ fn compare_encode(
         bindings::opus_encoder_ctl(c_enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, complexity);
 
         let mut c_out = vec![0u8; 4000];
-        let c_len = bindings::opus_encode(
-            c_enc,
-            pcm.as_ptr(),
-            frame_size,
-            c_out.as_mut_ptr(),
-            4000,
-        );
+        let c_len =
+            bindings::opus_encode(c_enc, pcm.as_ptr(), frame_size, c_out.as_mut_ptr(), 4000);
         bindings::opus_encoder_destroy(c_enc);
 
         if c_len < 0 {
@@ -95,7 +96,10 @@ fn compare_encode(
             // Find first difference
             for i in 0..rust_len.min(c_len) {
                 if rust_out[i] != c_out[i] {
-                    println!("  First diff at byte {i}: Rust=0x{:02X} C=0x{:02X}", rust_out[i], c_out[i]);
+                    println!(
+                        "  First diff at byte {i}: Rust=0x{:02X} C=0x{:02X}",
+                        rust_out[i], c_out[i]
+                    );
                     break;
                 }
             }
@@ -150,9 +154,14 @@ fn decode_toc(toc: u8, label: &str) {
         };
         ("CELT", bw, dur)
     };
-    println!("  {label} TOC: {mode} {bw} {frame_dur} {}{} (code={code})",
+    println!(
+        "  {label} TOC: {mode} {bw} {frame_dur} {}{} (code={code})",
         if stereo { "stereo" } else { "mono" },
-        if code > 0 { format!(" code={code}") } else { String::new() }
+        if code > 0 {
+            format!(" code={code}")
+        } else {
+            String::new()
+        }
     );
 }
 
@@ -179,10 +188,15 @@ fn main() {
         let samples_needed = frame_size as usize * channels as usize;
         let bytes_needed = samples_needed * 2;
 
-        println!("Parsed: sr={sample_rate} ch={channels} app={application} br={bitrate} cx={complexity} frame_size={frame_size}");
+        println!(
+            "Parsed: sr={sample_rate} ch={channels} app={application} br={bitrate} cx={complexity} frame_size={frame_size}"
+        );
 
         if pcm_bytes.len() < bytes_needed {
-            println!("Not enough PCM: need {bytes_needed}, have {}", pcm_bytes.len());
+            println!(
+                "Not enough PCM: need {bytes_needed}, have {}",
+                pcm_bytes.len()
+            );
             return;
         }
 
@@ -191,7 +205,15 @@ fn main() {
             .map(|c| i16::from_le_bytes([c[0], c[1]]))
             .collect();
 
-        compare_encode(sample_rate, channels, application, bitrate, complexity, &pcm, frame_size);
+        compare_encode(
+            sample_rate,
+            channels,
+            application,
+            bitrate,
+            complexity,
+            &pcm,
+            frame_size,
+        );
     }
 
     // Also test the known divergence case from the assertion message

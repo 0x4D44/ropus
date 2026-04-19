@@ -207,9 +207,9 @@ enum DownmixArg {
 /// excluding `=` (0x3D) and forbids empty keys. Enforce here so malformed
 /// tags never reach the OpusTags writer.
 fn parse_comment_kv(raw: &str) -> Result<String, String> {
-    let (key, _value) = raw.split_once('=').ok_or_else(|| {
-        format!("comment must be KEY=VALUE (missing '=' in {raw:?})")
-    })?;
+    let (key, _value) = raw
+        .split_once('=')
+        .ok_or_else(|| format!("comment must be KEY=VALUE (missing '=' in {raw:?})"))?;
     if key.is_empty() {
         return Err(format!("comment key must not be empty (in {raw:?})"));
     }
@@ -243,7 +243,11 @@ fn main() -> ExitCode {
     // (clap exits before our main body would otherwise see them).
     // `output_is_stdout` steers the banner to stderr so the bitstream on
     // stdout isn't polluted with text.
-    let PreludeFlags { quiet, no_color: _, output_is_stdout } = prelude::run_prelude();
+    let PreludeFlags {
+        quiet,
+        no_color: _,
+        output_is_stdout,
+    } = prelude::run_prelude();
     if !quiet {
         if output_is_stdout {
             ui::print_banner_stderr(

@@ -37,7 +37,9 @@
 //! Units match on both sides — SILK stays in fixed-point Q-format on both
 //! C and Rust, even in the float-mode CELT build.
 
-use ropus::{OPUS_APPLICATION_VOIP, OPUS_OK, OpusDecoder as RopusDecoder, OpusEncoder as RopusEncoder};
+use ropus::{
+    OPUS_APPLICATION_VOIP, OPUS_OK, OpusDecoder as RopusDecoder, OpusEncoder as RopusEncoder,
+};
 use ropus_harness_deep_plc::CRefFloatDecoder;
 
 const FS: i32 = 48_000;
@@ -105,7 +107,9 @@ fn rms_delta(c: &[f64], r: &[f64]) -> f64 {
 }
 
 fn rms(v: &[f64]) -> f64 {
-    if v.is_empty() { return 0.0; }
+    if v.is_empty() {
+        return 0.0;
+    }
     let n = v.len() as f64;
     (v.iter().map(|x| x * x).sum::<f64>() / n).sqrt()
 }
@@ -217,18 +221,32 @@ fn stage7b3_silk_state_divergence_at_loss_recovery() {
         if is_lost(i) {
             // About to lose — snapshot T1 on state as it was after the
             // previous good frame.
-            let mut ev = LossEvent { idx: i, t1: None, t2: None, t3: None };
+            let mut ev = LossEvent {
+                idx: i,
+                t1: None,
+                t2: None,
+                t3: None,
+            };
             ev.t1 = Some(snapshot(&c_dec, &r_dec));
             // Decode the lost frame on both sides.
-            c_dec.decode(None, &mut scratch_c, FRAME_SIZE, false).unwrap();
-            r_dec.decode(None, &mut scratch_r, FRAME_SIZE, false).unwrap();
+            c_dec
+                .decode(None, &mut scratch_c, FRAME_SIZE, false)
+                .unwrap();
+            r_dec
+                .decode(None, &mut scratch_r, FRAME_SIZE, false)
+                .unwrap();
             ev.t2 = Some(snapshot(&c_dec, &r_dec));
             events.push(ev);
         } else {
-            c_dec.decode(Some(pkt), &mut scratch_c, FRAME_SIZE, false).unwrap();
-            r_dec.decode(Some(pkt), &mut scratch_r, FRAME_SIZE, false).unwrap();
+            c_dec
+                .decode(Some(pkt), &mut scratch_c, FRAME_SIZE, false)
+                .unwrap();
+            r_dec
+                .decode(Some(pkt), &mut scratch_r, FRAME_SIZE, false)
+                .unwrap();
             // If previous frame was lost, this is T3 for that loss event.
-            if i > 0 && is_lost(i - 1)
+            if i > 0
+                && is_lost(i - 1)
                 && let Some(ev) = events.iter_mut().rev().find(|e| e.idx == i - 1)
             {
                 ev.t3 = Some(snapshot(&c_dec, &r_dec));
@@ -248,7 +266,12 @@ fn stage7b3_silk_state_divergence_at_loss_recovery() {
             if let Some(s) = snap_opt {
                 eprintln!(
                     "{:<8} {:<4} {:>14.6} {:>14.6} {:>14.6} {:>14.6}",
-                    ev.idx, label, s.s_lpc_q14_delta, s.plc_prev_gain_delta, s.dec_prev_gain_delta, s.out_buf_tail_delta
+                    ev.idx,
+                    label,
+                    s.s_lpc_q14_delta,
+                    s.plc_prev_gain_delta,
+                    s.dec_prev_gain_delta,
+                    s.out_buf_tail_delta
                 );
                 for (name, v) in [
                     ("s_lpc_q14", s.s_lpc_q14_delta),
@@ -270,8 +293,15 @@ fn stage7b3_silk_state_divergence_at_loss_recovery() {
             if let Some(s) = snap_opt {
                 eprintln!(
                     "  {} meta  pitch_Q8 C={} R={}  rand_scale C={} R={}  last_lost C={} R={}  plc_fs C={} R={}",
-                    label, s.plc_pitch_c, s.plc_pitch_r, s.plc_rand_scale_c, s.plc_rand_scale_r,
-                    s.last_lost_c, s.last_lost_r, s.c_plc_fs, s.r_plc_fs
+                    label,
+                    s.plc_pitch_c,
+                    s.plc_pitch_r,
+                    s.plc_rand_scale_c,
+                    s.plc_rand_scale_r,
+                    s.last_lost_c,
+                    s.last_lost_r,
+                    s.c_plc_fs,
+                    s.r_plc_fs
                 );
                 eprintln!(
                     "  {} RMS(C)  s_lpc={:.1} outBuf_tail={:.1}",
@@ -316,22 +346,38 @@ fn stage7b3_per_loss_snr() {
             sig += (c[i] as f64).powi(2);
             err += ((r[i] as i32 - c[i] as i32) as f64).powi(2);
         }
-        if err == 0.0 { f64::INFINITY } else { 10.0 * (sig / err).log10() }
+        if err == 0.0 {
+            f64::INFINITY
+        } else {
+            10.0 * (sig / err).log10()
+        }
     };
 
     eprintln!("\n=== Stage 7b.3 per-frame SNR ===");
     eprintln!("{:>4} {:>6} {:>10}", "idx", "type", "SNR_dB");
     for (i, pkt) in packets.iter().enumerate() {
         if is_lost(i) {
-            c_dec.decode(None, &mut scratch_c, FRAME_SIZE, false).unwrap();
-            r_dec.decode(None, &mut scratch_r, FRAME_SIZE, false).unwrap();
+            c_dec
+                .decode(None, &mut scratch_c, FRAME_SIZE, false)
+                .unwrap();
+            r_dec
+                .decode(None, &mut scratch_r, FRAME_SIZE, false)
+                .unwrap();
             let s = frame_snr(&scratch_c, &scratch_r);
             eprintln!("{:>4} {:>6} {:>10.2}", i, "LOST", s);
         } else {
-            c_dec.decode(Some(pkt), &mut scratch_c, FRAME_SIZE, false).unwrap();
-            r_dec.decode(Some(pkt), &mut scratch_r, FRAME_SIZE, false).unwrap();
+            c_dec
+                .decode(Some(pkt), &mut scratch_c, FRAME_SIZE, false)
+                .unwrap();
+            r_dec
+                .decode(Some(pkt), &mut scratch_r, FRAME_SIZE, false)
+                .unwrap();
             let s = frame_snr(&scratch_c, &scratch_r);
-            let label = if i > 0 && is_lost(i - 1) { "RCVR" } else { "good" };
+            let label = if i > 0 && is_lost(i - 1) {
+                "RCVR"
+            } else {
+                "good"
+            };
             eprintln!("{:>4} {:>6} {:>10.2}", i, label, s);
         }
     }
@@ -415,28 +461,49 @@ fn stage7b3_silk_detail_first_loss() {
     for (i, pkt) in packets.iter().enumerate() {
         if is_lost(i) {
             dump(&format!("T1 before loss@{}", i), &c_dec, &r_dec);
-            c_dec.decode(None, &mut scratch_c, FRAME_SIZE, false).unwrap();
-            r_dec.decode(None, &mut scratch_r, FRAME_SIZE, false).unwrap();
+            c_dec
+                .decode(None, &mut scratch_c, FRAME_SIZE, false)
+                .unwrap();
+            r_dec
+                .decode(None, &mut scratch_r, FRAME_SIZE, false)
+                .unwrap();
             dump(&format!("T2 after lost@{}", i), &c_dec, &r_dec);
             // Capture output frame for comparison
             let mut diffs = 0;
             for j in 0..frame_samples {
-                if scratch_c[j] != scratch_r[j] { diffs += 1; }
+                if scratch_c[j] != scratch_r[j] {
+                    diffs += 1;
+                }
             }
-            eprintln!("  PCM output samples diverging: {}/{}", diffs, frame_samples);
+            eprintln!(
+                "  PCM output samples diverging: {}/{}",
+                diffs, frame_samples
+            );
             break; // Only first loss
         } else {
-            c_dec.decode(Some(pkt), &mut scratch_c, FRAME_SIZE, false).unwrap();
-            r_dec.decode(Some(pkt), &mut scratch_r, FRAME_SIZE, false).unwrap();
+            c_dec
+                .decode(Some(pkt), &mut scratch_c, FRAME_SIZE, false)
+                .unwrap();
+            r_dec
+                .decode(Some(pkt), &mut scratch_r, FRAME_SIZE, false)
+                .unwrap();
         }
     }
 
     // Now decode the NEXT frame (first good after loss) and dump T3
     let next_good_idx = 8; // since is_lost(7) = true, 8 is next good
     let pkt = &packets[next_good_idx];
-    c_dec.decode(Some(pkt), &mut scratch_c, FRAME_SIZE, false).unwrap();
-    r_dec.decode(Some(pkt), &mut scratch_r, FRAME_SIZE, false).unwrap();
-    dump(&format!("T3 after recover@{}", next_good_idx), &c_dec, &r_dec);
+    c_dec
+        .decode(Some(pkt), &mut scratch_c, FRAME_SIZE, false)
+        .unwrap();
+    r_dec
+        .decode(Some(pkt), &mut scratch_r, FRAME_SIZE, false)
+        .unwrap();
+    dump(
+        &format!("T3 after recover@{}", next_good_idx),
+        &c_dec,
+        &r_dec,
+    );
 
     // Output PCM comparison on recovery frame
     let mut diffs = 0;
@@ -447,16 +514,22 @@ fn stage7b3_silk_detail_first_loss() {
     for j in 0..frame_samples {
         if scratch_c[j] != scratch_r[j] {
             diffs += 1;
-            if first_diff.is_none() { first_diff = Some(j); }
+            if first_diff.is_none() {
+                first_diff = Some(j);
+            }
         }
         let d = scratch_r[j] as i32 - scratch_c[j] as i32;
-        if d.abs() > max_abs_delta { max_abs_delta = d.abs(); }
+        if d.abs() > max_abs_delta {
+            max_abs_delta = d.abs();
+        }
         sum_err_sq += (d as f64).powi(2);
         sum_sig_sq += (scratch_c[j] as f64).powi(2);
     }
     let snr = if sum_err_sq > 0.0 {
         10.0 * (sum_sig_sq / sum_err_sq).log10()
-    } else { f64::INFINITY };
+    } else {
+        f64::INFINITY
+    };
     eprintln!(
         "  Recovery PCM diverging: {}/{}, first diff at {:?}, max_abs_delta={}, SNR={:.2} dB",
         diffs, frame_samples, first_diff, max_abs_delta, snr

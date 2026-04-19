@@ -101,7 +101,10 @@ struct OpusHead {
 
 fn parse_opus_head(data: &[u8]) -> Result<OpusHead, String> {
     if data.len() < 19 {
-        return Err(format!("OpusHead too short ({} bytes, need 19)", data.len()));
+        return Err(format!(
+            "OpusHead too short ({} bytes, need 19)",
+            data.len()
+        ));
     }
     if &data[..8] != b"OpusHead" {
         return Err("OpusHead magic missing".into());
@@ -221,7 +224,8 @@ fn diff_file(path: &Path) -> FileOutcome {
             MAX_FRAME_SAMPLES_PER_CH as i32,
             false,
         );
-        let cref_result = cref_dec.decode(&pkt.data, &mut cref_pcm, MAX_FRAME_SAMPLES_PER_CH as i32);
+        let cref_result =
+            cref_dec.decode(&pkt.data, &mut cref_pcm, MAX_FRAME_SAMPLES_PER_CH as i32);
 
         match (ropus_result, cref_result) {
             (Ok(r_n), Ok(c_n)) => {
@@ -232,9 +236,7 @@ fn diff_file(path: &Path) -> FileOutcome {
                         channel: 0,
                         ropus_value: r_n,
                         cref_value: c_n,
-                        note: format!(
-                            "decoded sample-count differs: ropus={r_n}, cref={c_n}"
-                        ),
+                        note: format!("decoded sample-count differs: ropus={r_n}, cref={c_n}"),
                     });
                 }
                 let n = r_n as usize;
@@ -336,11 +338,7 @@ impl CrefDecoder {
                 0, // decode_fec = false
             )
         };
-        if ret < 0 {
-            Err(ret)
-        } else {
-            Ok(ret)
-        }
+        if ret < 0 { Err(ret) } else { Ok(ret) }
     }
 }
 
@@ -413,7 +411,11 @@ fn main() {
         process::exit(2);
     }
 
-    println!("corpus_diff: scanning {} file(s) in {}", files.len(), dir.display());
+    println!(
+        "corpus_diff: scanning {} file(s) in {}",
+        files.len(),
+        dir.display()
+    );
 
     let mut matches = 0usize;
     let mut skipped = 0usize;
@@ -440,10 +442,11 @@ fn main() {
         let outcome = panic::catch_unwind(AssertUnwindSafe(|| diff_file(path)));
 
         match outcome {
-            Ok(FileOutcome::Match { packets, samples_per_ch }) => {
-                println!(
-                    "  OK   {display} ({packets} packets, {samples_per_ch} samples/ch)"
-                );
+            Ok(FileOutcome::Match {
+                packets,
+                samples_per_ch,
+            }) => {
+                println!("  OK   {display} ({packets} packets, {samples_per_ch} samples/ch)");
                 matches += 1;
             }
             Ok(FileOutcome::Skipped(reason)) => {

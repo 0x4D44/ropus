@@ -77,7 +77,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         idx += take;
 
         let n = encoder.encode(&pcm_frame, &mut packet)?;
-        let samples_per_channel = decoder.decode(&packet[..n], &mut decoded_frame, DecodeMode::Normal)?;
+        let samples_per_channel =
+            decoder.decode(&packet[..n], &mut decoded_frame, DecodeMode::Normal)?;
         decoded.extend_from_slice(&decoded_frame[..samples_per_channel * ch]);
         packets += 1;
     }
@@ -162,9 +163,10 @@ fn compute_snr_db(
     for lag_per_ch in 0..=max_lag_per_channel {
         let lag = lag_per_ch * ch;
         // Aligned window length capped by both buffers.
-        let usable = orig.len().saturating_sub(warmup).min(
-            decoded.len().saturating_sub(warmup + lag),
-        );
+        let usable = orig
+            .len()
+            .saturating_sub(warmup)
+            .min(decoded.len().saturating_sub(warmup + lag));
         if usable == 0 {
             continue;
         }
