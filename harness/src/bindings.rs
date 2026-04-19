@@ -551,6 +551,48 @@ unsafe extern "C" {
         buf_len: *mut opus_int32,
     );
 
+    pub fn debug_get_silk_extended_state(
+        enc: *mut OpusEncoder,
+        channel: c_int,
+        /* NSQ state */
+        nsq_rand_seed: *mut opus_int32,
+        nsq_slf_ar_shp_q14: *mut opus_int32,
+        nsq_lag_prev: *mut opus_int32,
+        nsq_sdiff_shp_q14: *mut opus_int32,
+        nsq_sltp_buf_idx: *mut opus_int32,
+        nsq_sltp_shp_buf_idx: *mut opus_int32,
+        nsq_rewhite_flag: *mut opus_int32,
+        nsq_slpc_q14: *mut opus_int32,
+        nsq_sar2_q14: *mut opus_int32,
+        nsq_sltp_shp_q14: *mut opus_int32,
+        /* VAD state */
+        vad_hp_state: *mut opus_int32,
+        vad_counter: *mut opus_int32,
+        vad_noise_level_bias: *mut opus_int32,
+        vad_ana_state: *mut opus_int32,
+        vad_ana_state1: *mut opus_int32,
+        vad_ana_state2: *mut opus_int32,
+        vad_nrg_ratio_smth_q8: *mut opus_int32,
+        vad_nl: *mut opus_int32,
+        vad_inv_nl: *mut opus_int32,
+        /* Common state */
+        sum_log_gain_q7: *mut opus_int32,
+        in_hp_state: *mut opus_int32,
+        input_tilt_q15: *mut opus_int32,
+        input_quality_bands_q15: *mut opus_int32,
+        frame_counter: *mut opus_int32,
+        no_speech_counter: *mut opus_int32,
+        /* LP state */
+        lp_in_lp_state: *mut opus_int32,
+        lp_transition_frame_no: *mut opus_int32,
+        /* Shape */
+        shape_harm_boost_smth: *mut opus_int32,
+        /* x_buf hash */
+        x_buf_hash: *mut opus_int32,
+        ltp_corr_q15: *mut opus_int32,
+        res_nrg_smth: *mut opus_int32,
+    );
+
     // ----- SILK decode trace (debug_silk_trace.c) -----
 
     pub fn debug_silk_trace_get_persistent_state(

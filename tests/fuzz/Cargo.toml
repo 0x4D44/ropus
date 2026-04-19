@@ -12,6 +12,9 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 ropus = { path = "../../ropus" }
 
+[build-dependencies]
+cc = "1"
+
 # Prevent this from interfering with workspaces
 [workspace]
 members = ["."]
