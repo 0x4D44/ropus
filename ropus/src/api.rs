@@ -402,9 +402,11 @@ impl Encoder {
             complexity: None,
             signal: None,
             vbr: None,
+            vbr_constraint: None,
             force_channels: None,
             max_bandwidth: None,
             frame_duration: None,
+            packet_loss_perc: None,
         }
     }
 
@@ -502,6 +504,22 @@ impl Encoder {
     pub fn lookahead(&self) -> u32 {
         self.inner.get_lookahead().max(0) as u32
     }
+
+    /// Current constrained-VBR setting, as the 0/1 `i32` libopus stores.
+    ///
+    /// Mirrors `OPUS_GET_VBR_CONSTRAINT`. Intended for introspection/testing
+    /// of settings applied via [`EncoderBuilder::vbr_constraint`].
+    pub fn get_vbr_constraint(&self) -> i32 {
+        self.inner.get_vbr_constraint()
+    }
+
+    /// Current packet-loss-percentage hint, as the 0..=100 `i32` libopus stores.
+    ///
+    /// Mirrors `OPUS_GET_PACKET_LOSS_PERC`. Intended for introspection/testing
+    /// of settings applied via [`EncoderBuilder::packet_loss_perc`].
+    pub fn get_packet_loss_perc(&self) -> i32 {
+        self.inner.get_packet_loss_perc()
+    }
 }
 
 /// Whether `per_channel` is one of the nine legal Opus per-channel sample
@@ -531,9 +549,11 @@ pub struct EncoderBuilder {
     complexity: Option<u8>,
     signal: Option<Signal>,
     vbr: Option<bool>,
+    vbr_constraint: Option<bool>,
     force_channels: Option<ForceChannels>,
     max_bandwidth: Option<Bandwidth>,
     frame_duration: Option<FrameDuration>,
+    packet_loss_perc: Option<u8>,
 }
 
 impl EncoderBuilder {
@@ -561,6 +581,15 @@ impl EncoderBuilder {
         self
     }
 
+    /// Constrain VBR to meet an averaged bitrate target (CVBR mode).
+    ///
+    /// Only meaningful when [`vbr`](Self::vbr) is also `true`; has no effect
+    /// in CBR mode. Wraps libopus' `OPUS_SET_VBR_CONSTRAINT`.
+    pub fn vbr_constraint(mut self, on: bool) -> Self {
+        self.vbr_constraint = Some(on);
+        self
+    }
+
     /// Force the encoded stream to a specific channel count.
     pub fn force_channels(mut self, c: ForceChannels) -> Self {
         self.force_channels = Some(c);
@@ -576,6 +605,15 @@ impl EncoderBuilder {
     /// Pin the encoder to a specific frame duration.
     pub fn frame_duration(mut self, d: FrameDuration) -> Self {
         self.frame_duration = Some(d);
+        self
+    }
+
+    /// Hint the expected packet-loss percentage (`0..=100`) so the encoder can
+    /// bias toward loss-tolerant modes. Wraps libopus' `OPUS_SET_PACKET_LOSS_PERC`;
+    /// values outside the range surface as [`EncoderBuildError::BadArg`] from
+    /// [`build`](Self::build).
+    pub fn packet_loss_perc(mut self, pct: u8) -> Self {
+        self.packet_loss_perc = Some(pct);
         self
     }
 
@@ -597,6 +635,9 @@ impl EncoderBuilder {
         if let Some(vbr) = self.vbr {
             check_ok(inner.set_vbr(i32::from(vbr)))?;
         }
+        if let Some(vbrc) = self.vbr_constraint {
+            check_ok(inner.set_vbr_constraint(i32::from(vbrc)))?;
+        }
         if let Some(fc) = self.force_channels {
             check_ok(inner.set_force_channels(fc.as_c_int()))?;
         }
@@ -605,6 +646,9 @@ impl EncoderBuilder {
         }
         if let Some(d) = self.frame_duration {
             check_ok(inner.set_expert_frame_duration(d.as_c_int()))?;
+        }
+        if let Some(pct) = self.packet_loss_perc {
+            check_ok(inner.set_packet_loss_perc(i32::from(pct)))?;
         }
 
         Ok(Encoder { inner })
@@ -975,5 +1019,67 @@ mod tests {
             encoder.valid_frame_sizes(),
             [120, 240, 480, 960, 1920, 2880, 3840, 4800, 5760]
         );
+    }
+
+    // ---- vbr_constraint plumbs through without panicking; one-frame encode ----
+
+    #[test]
+    fn builder_vbr_constraint_round_trip() {
+        for on in [false, true] {
+            let mut encoder = Encoder::builder(48_000, Channels::Mono, Application::Audio)
+                .bitrate(Bitrate::Bits(64_000))
+                .vbr(true)
+                .vbr_constraint(on)
+                .build()
+                .expect("encoder builds with vbr_constraint");
+            assert_eq!(
+                encoder.get_vbr_constraint(),
+                i32::from(on),
+                "vbr_constraint({on}) was not stored on the encoder"
+            );
+            let pcm_in = vec![0i16; 960]; // 20 ms mono @ 48 kHz
+            let mut packet = vec![0u8; 4000];
+            let n = encoder
+                .encode(&pcm_in, &mut packet)
+                .expect("encode succeeds");
+            assert!(n > 0, "encode produced empty packet");
+        }
+    }
+
+    // ---- packet_loss_perc plumbs through without panicking; one-frame encode ----
+
+    #[test]
+    fn builder_packet_loss_perc_round_trip() {
+        for pct in [0u8, 10, 100] {
+            let mut encoder = Encoder::builder(48_000, Channels::Mono, Application::Audio)
+                .bitrate(Bitrate::Bits(64_000))
+                .packet_loss_perc(pct)
+                .build()
+                .expect("encoder builds with packet_loss_perc");
+            assert_eq!(
+                encoder.get_packet_loss_perc(),
+                pct as i32,
+                "packet_loss_perc({pct}) was not stored on the encoder"
+            );
+            let pcm_in = vec![0i16; 960]; // 20 ms mono @ 48 kHz
+            let mut packet = vec![0u8; 4000];
+            let n = encoder
+                .encode(&pcm_in, &mut packet)
+                .expect("encode succeeds");
+            assert!(n > 0, "encode produced empty packet");
+        }
+    }
+
+    // ---- packet_loss_perc > 100 is rejected by the inner setter at build ----
+
+    #[test]
+    fn builder_packet_loss_perc_rejects_out_of_range() {
+        let result = Encoder::builder(48_000, Channels::Mono, Application::Audio)
+            .packet_loss_perc(101)
+            .build();
+        match result {
+            Ok(_) => panic!("packet_loss_perc > 100 must err"),
+            Err(e) => assert_eq!(e, EncoderBuildError::BadArg),
+        }
     }
 }

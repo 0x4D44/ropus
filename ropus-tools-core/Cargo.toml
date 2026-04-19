@@ -7,7 +7,7 @@ description = "Shared library for the ropus command-line tools (encode/decode/in
 license = "BSD-3-Clause"
 
 [dependencies]
-ropus = { path = "../ropus", version = "0.10" }
+ropus = { path = "../ropus", version = "0.11" }
 colored = "2.2"
 symphonia = { version = "0.5", default-features = false, features = ["wav", "pcm", "adpcm", "mp3", "flac", "ogg", "aac", "vorbis"] }    # WAV/MP3/FLAC/OGG/AAC input
 rubato = "0.16"                                          # resample to 48 kHz
