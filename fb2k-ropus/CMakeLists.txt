@@ -40,22 +40,46 @@ endif()
 # below for the full story.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
-# CRT mix caveat: Rust doesn't emit a /DEFAULTLIB directive for the CRT in
-# its staticlib bytes. The C++ side's /MD (release) or /MDd (debug) drags
-# in whichever CRT via its own objects. In Debug, that's msvcrtd — but the
-# Rust staticlib was compiled expecting msvcrt, so we risk cross-allocator
-# heap corruption and duplicate errno/iob. M4b validated Release only.
-# Surface a warning if a developer picks Debug without knowing this.
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+# CRT mix + optimization mix caveat: Rust doesn't emit a /DEFAULTLIB
+# directive for the CRT in its staticlib bytes. The C++ side's /MD
+# (release) or /MDd (debug) drags in whichever CRT via its own objects.
+# In Debug, that's msvcrtd — but a cargo `dev` staticlib compiled without
+# matching flags risks cross-allocator heap corruption and duplicate
+# errno/iob. MinSizeRel and RelWithDebInfo compile the C++ side at /O1
+# or /O2 /Zi while Rust still produces a release staticlib, so the
+# optimization levels are incoherent even where the CRT happens to line
+# up. M4b validated Release only. Note this is M5-forward protection:
+# Debug foo_ropus.dll currently has zero Rust symbols (M4b wires the
+# staticlib in but doesn't call into it), so the mismatch is theoretical
+# until M5 starts invoking the Rust decoder. Surface a warning on any
+# non-Release config so developers know what they've picked.
+set(_ROPUS_UNTESTED_CONFIGS "Debug" "MinSizeRel" "RelWithDebInfo")
+if(CMAKE_BUILD_TYPE AND CMAKE_BUILD_TYPE IN_LIST _ROPUS_UNTESTED_CONFIGS)
     message(WARNING
-        "Debug builds of foo_ropus are untested (Rust/C++ CRT mismatch risk). "
-        "Release is the supported config for M4b/M5. See "
-        "wrk_journals/2026.04.19 - JRN - ropus-fb2k-implementation.md §M4b for context.")
-elseif(CMAKE_CONFIGURATION_TYPES AND "Debug" IN_LIST CMAKE_CONFIGURATION_TYPES)
-    message(STATUS
-        "foo_ropus: Debug is listed in CMAKE_CONFIGURATION_TYPES but untested "
-        "(Rust/C++ CRT mismatch risk). Build --config Release for the supported path.")
+        "Non-Release config '${CMAKE_BUILD_TYPE}' mixes a Rust release "
+        "staticlib with C++ objects built at a different optimization and/or "
+        "CRT level. In M4b this is silent — the DLL contains no Rust symbols "
+        "yet — but in M5 forward it becomes a live runtime hazard (CRT "
+        "mismatch, incoherent optimization). Release is the supported config. "
+        "See wrk_journals/2026.04.19 - JRN - ropus-fb2k-implementation.md §M4b.")
+elseif(CMAKE_CONFIGURATION_TYPES)
+    set(_ROPUS_UNTESTED_IN_USE "")
+    foreach(_cfg IN LISTS _ROPUS_UNTESTED_CONFIGS)
+        if(_cfg IN_LIST CMAKE_CONFIGURATION_TYPES)
+            list(APPEND _ROPUS_UNTESTED_IN_USE "${_cfg}")
+        endif()
+    endforeach()
+    if(_ROPUS_UNTESTED_IN_USE)
+        message(STATUS
+            "foo_ropus: non-Release configs listed but untested — "
+            "${_ROPUS_UNTESTED_IN_USE}. Build --config Release for the "
+            "supported path (M4b ships no Rust symbols in Debug/MinSizeRel/"
+            "RelWithDebInfo; M5 forward will make the CRT/optimization "
+            "mismatch live).")
+    endif()
+    unset(_ROPUS_UNTESTED_IN_USE)
 endif()
+unset(_ROPUS_UNTESTED_CONFIGS)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -150,9 +174,16 @@ target_link_libraries(foobar2000_component_client PUBLIC foobar2000_SDK pfc)
 # `add_dependencies` rather than `add_custom_command(OUTPUT ...)` (which
 # short-circuits on the output mtime and misses .rs edits entirely) or the
 # `corrosion` CMake package (one fewer external dep on a one-off Windows
-# component). Cargo's own up-to-date check is authoritative; the ~1s no-op
-# invocation cost on clean rebuilds is acceptable in exchange for correct
-# incremental behaviour.
+# component). The ALL-target invokes cargo on every build regardless of
+# MSBuild's up-to-date check; cargo's own cache is the authoritative
+# staleness oracle. Measured overhead: ~5s for a direct no-op
+# `cargo build --release -p ropus-fb2k` (file-lock wait on the workspace
+# target dir dominates), rising to ~10–12s through the `cmake --build`
+# wrapper per cycle; occasionally the custom-target's invocation args
+# differ enough from a prior direct cargo call to flip the profile hash
+# and trigger a full recompile despite no source change. That's tolerable
+# for dev iteration — the alternative is listing every `.rs` under
+# DEPENDS and accepting that missing one silently produces stale `.lib`s.
 
 set(WORKSPACE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 
@@ -161,12 +192,16 @@ set(WORKSPACE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 # time), so branch on the generator expression rather than CMAKE_BUILD_TYPE
 # at configure time.
 #
-# `COMMAND_EXPAND_LISTS` + a semicolon-carrying genex is the only shape
-# that emits zero arguments when empty. Without it, `VERBATIM` preserves
-# an empty genex as a literal `""` argument, which cargo rejects with
-# `unexpected argument '' found` on Debug builds. With list expansion, the
-# genex produces either `--release` (non-Debug) or the empty list (Debug),
-# and CMake drops empty list elements before the shell sees them.
+# Under plain `VERBATIM`, an empty genex expansion survives as a literal
+# `""` argument that cargo rejects (`unexpected argument '' found`).
+# Quoting the genex and adding `COMMAND_EXPAND_LISTS` changes the
+# interpretation: each COMMAND argument is now parsed as a
+# semicolon-separated list, and an empty-string element is a zero-element
+# list which CMake drops before the shell command is emitted. In Release
+# the genex yields `--release` (one-element list → one arg); in Debug it
+# yields an empty string (zero-element list → no arg emitted). Other
+# shapes exist (a conditional `set()` picking a variable, for example) —
+# this one's just the cleanest.
 set(ROPUS_TARGET_SUBDIR "$<IF:$<CONFIG:Debug>,debug,release>")
 set(ROPUS_STATIC_LIB    "${WORKSPACE_ROOT}/target/${ROPUS_TARGET_SUBDIR}/ropus_fb2k.lib")
 
