@@ -1,67 +1,400 @@
-//! Play: any symphonia-supported input → default audio output.
+//! Play: directory-aware playlist player with status line + keyboard controls.
+//!
+//! Top-level flow:
+//! - `build_playlist` expands a file or directory into a sorted list of paths.
+//! - For each entry we decode through `decode_to_f32`, read its `OpusTags`,
+//!   hand the samples to a fresh `rodio::Sink`, and enter `run_track_loop`
+//!   (interactive) or `run_track_noninteractive` (piped/quiet) to watch for
+//!   track end + keyboard input.
+//! - Per-track decode errors are logged with a yellow `warning:` prefix and
+//!   skipped via `advance_on_error` so one corrupt file does not end a session.
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use colored::*;
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::tty::IsTty;
+use ogg::reading::PacketReader;
 
 use crate::audio::decode::{DecodedAudio, decode_to_f32};
 use crate::container::ogg::OpusTags;
 use crate::options::{LoopMode, PlayOptions};
-use crate::ui::{format_num, heading, ok};
+use crate::ui::heading;
+
+/// What ended a track. Drives the index-advancement logic in the main FSM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Action {
+    /// Sink emptied naturally — respect `loop_mode` for what comes next.
+    TrackFinished,
+    /// User pressed `n`.
+    Next,
+    /// User pressed `p`.
+    Prev,
+    /// User pressed `q` or Ctrl-C.
+    Quit,
+}
+
+/// Enables terminal raw mode on construction and disables it on Drop. The
+/// Drop impl runs on panic, `?`-bubble, or clean return, which is why this is
+/// a guard rather than a pair of bare function calls.
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn enable() -> Result<Self> {
+        crossterm::terminal::enable_raw_mode()
+            .context("enabling terminal raw mode")?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
 
 pub fn play(opts: PlayOptions) -> Result<()> {
     heading("play");
-    println!("file     {}", opts.input.display().to_string().cyan());
 
-    // Decode to interleaved f32 through one unified pipeline: symphonia demuxes
-    // every container, and `decode_to_f32` routes Opus tracks through ropus
-    // while everything else uses symphonia's native decoders.
-    let DecodedAudio {
-        samples,
-        sample_rate,
-        channels,
-    } = decode_to_f32(&opts.input)?;
-
-    let channels_u16 = u16::try_from(channels).map_err(|_| anyhow!("channel count overflow"))?;
-    println!(
-        "audio    {} samples, {} Hz, {} ch",
-        format_num(samples.len() as u64).bright_white(),
-        sample_rate.to_string().bright_white(),
-        channels_u16.to_string().bright_white(),
-    );
-
-    // Try to open the default audio device. If that fails (no device, headless
-    // environment, etc.) print a clear message instead of panicking.
-    let (_stream, handle) = match rodio::OutputStream::try_default() {
-        Ok(pair) => pair,
-        Err(e) => {
-            return Err(anyhow!("no default audio output device available: {e}"));
-        }
-    };
-    let sink = rodio::Sink::try_new(&handle).map_err(|e| anyhow!("creating sink failed: {e}"))?;
-
-    if let Some(v) = opts.volume {
-        sink.set_volume(v.clamp(0.0, 1.0));
+    let playlist = build_playlist(&opts.input)?;
+    if playlist.len() == 1 {
+        println!("file     {}", playlist[0].display().to_string().cyan());
+    } else {
+        println!(
+            "playlist {} tracks from {}",
+            playlist.len().to_string().bright_white(),
+            opts.input.display().to_string().cyan(),
+        );
     }
 
-    let source = rodio::buffer::SamplesBuffer::new(channels_u16, sample_rate, samples);
-    sink.append(source);
-    println!("playing  (Ctrl-C to stop)");
-    sink.sleep_until_end();
-    ok("playback finished");
+    let (_stream, handle) = rodio::OutputStream::try_default()
+        .map_err(|e| anyhow!("no default audio output device available: {e}"))?;
+
+    let interactive = interactive_enabled(is_quiet_argv());
+    // Bind the guard so it lives for the whole playback session and disables
+    // raw mode on any path out of this function.
+    let _raw = if interactive {
+        let guard = RawModeGuard::enable()?;
+        // Raw mode disables the implicit line ending for `println!`, so we
+        // stitch `\r\n` explicitly for the help row + blank status row.
+        print!("[space] pause  [n] next  [p] prev  [q] quit\r\n\r\n");
+        let _ = std::io::stdout().flush();
+        Some(guard)
+    } else {
+        None
+    };
+
+    let mut idx: usize = 0;
+    let mut consecutive_errors: usize = 0;
+    let playlist_len = playlist.len();
+
+    'outer: loop {
+        let path = &playlist[idx];
+
+        // Decode-latency UX: print an ephemeral `decoding …` line so the user
+        // sees progress even when a 10-minute file takes a noticeable moment
+        // to decode. Truncate to the terminal width so a long filename does
+        // not wrap onto a second row — `\r\x1b[K` only clears the current
+        // row, which would otherwise leave orphan fragments above.
+        {
+            let stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            let cols = crossterm::terminal::size()
+                .map(|(w, _)| w as usize)
+                .unwrap_or(80);
+            let prefix = format!("decoding {}/{}  ", idx + 1, playlist_len);
+            let stem_fit = truncate_to_fit(&stem, cols, prefix.chars().count(), 0);
+            print!("\r{prefix}{stem_fit}");
+            let _ = std::io::stdout().flush();
+        }
+
+        let (decoded, tags) = match decode_track(path) {
+            Ok(ok) => ok,
+            Err(e) => {
+                // Clear the ephemeral decoding line; the warning goes to
+                // stderr so it sits above the next status-line repaint.
+                print!("\r\x1b[K");
+                let _ = std::io::stdout().flush();
+                eprintln!(
+                    "{} skipping {}: {e}",
+                    "warning:".yellow(),
+                    path.display()
+                );
+                consecutive_errors += 1;
+                if consecutive_errors >= playlist_len {
+                    bail!("all {playlist_len} tracks failed to decode");
+                }
+                idx = match advance_on_error(idx, playlist_len, opts.loop_mode) {
+                    Some(next) => next,
+                    None => break 'outer,
+                };
+                continue 'outer;
+            }
+        };
+        consecutive_errors = 0;
+
+        let channels_u16 =
+            u16::try_from(decoded.channels).map_err(|_| anyhow!("channel count overflow"))?;
+        let duration = Duration::from_secs_f64(
+            decoded.samples.len() as f64
+                / decoded.channels as f64
+                / decoded.sample_rate as f64,
+        );
+        let file_len = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let avg_kbps = compute_avg_kbps(file_len, duration.as_secs_f64());
+        let display_name = resolve_display_name(&tags, path);
+
+        let sink = rodio::Sink::try_new(&handle)
+            .map_err(|e| anyhow!("creating sink failed: {e}"))?;
+        if let Some(v) = opts.volume {
+            sink.set_volume(v.clamp(0.0, 1.0));
+        }
+        sink.append(rodio::buffer::SamplesBuffer::new(
+            channels_u16,
+            decoded.sample_rate,
+            decoded.samples,
+        ));
+
+        let action = if interactive {
+            run_track_loop(
+                &sink,
+                &display_name,
+                duration,
+                idx,
+                playlist_len,
+                opts.loop_mode,
+                avg_kbps,
+            )?
+        } else {
+            run_track_noninteractive(&sink, &display_name, duration, idx, playlist_len);
+            Action::TrackFinished
+        };
+
+        // Read the elapsed position while the sink is still in scope —
+        // Prev's "restart-current vs previous-track" branch uses it.
+        let pos_at_exit = sink.get_pos();
+
+        match action {
+            Action::TrackFinished => {
+                idx = match opts.loop_mode {
+                    LoopMode::Single => idx,
+                    LoopMode::All => (idx + 1) % playlist_len,
+                    LoopMode::Off => {
+                        if idx + 1 < playlist_len {
+                            idx + 1
+                        } else {
+                            break 'outer;
+                        }
+                    }
+                };
+            }
+            Action::Next => idx = (idx + 1) % playlist_len,
+            Action::Prev => {
+                // Convention: >2s means restart current, else step back.
+                if pos_at_exit <= Duration::from_secs(2) {
+                    idx = if idx == 0 { playlist_len - 1 } else { idx - 1 };
+                }
+            }
+            Action::Quit => break 'outer,
+        }
+    }
+
     Ok(())
+}
+
+/// Interactive track loop. Polls for key events at 100 ms cadence, repainting
+/// the status line only when its content changes. Returns when the sink drains
+/// naturally (`Action::TrackFinished`) or the user presses `n` / `p` / `q` /
+/// Ctrl-C.
+#[allow(clippy::too_many_arguments)]
+fn run_track_loop(
+    sink: &rodio::Sink,
+    display_name: &str,
+    duration: Duration,
+    track_idx: usize,
+    playlist_len: usize,
+    loop_mode: LoopMode,
+    avg_kbps: f64,
+) -> Result<Action> {
+    let mut paused = false;
+    let mut last_rendered: Option<String> = None;
+
+    loop {
+        let cols = crossterm::terminal::size()
+            .map(|(w, _)| w as usize)
+            .unwrap_or(80);
+        let pos = sink.get_pos();
+        let status = format_status_line(
+            cols,
+            paused,
+            loop_mode,
+            display_name,
+            track_idx,
+            playlist_len,
+            pos,
+            duration,
+            avg_kbps,
+        );
+        if last_rendered.as_deref() != Some(status.as_str()) {
+            print!("\r\x1b[K{status}");
+            let _ = std::io::stdout().flush();
+            last_rendered = Some(status);
+        }
+
+        if sink.empty() {
+            // Move off the status line so subsequent output (next track's
+            // decoding line or shell prompt) does not overwrite it.
+            print!("\r\n");
+            let _ = std::io::stdout().flush();
+            return Ok(Action::TrackFinished);
+        }
+
+        if event::poll(Duration::from_millis(100))? {
+            let ev = event::read()?;
+            if let Event::Key(key) = ev {
+                // Windows fires both Press and Release; act on Press only so
+                // each tap produces exactly one action.
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                // `KeyModifiers` is a bitflag set — Caps Lock + Ctrl-C arrives
+                // as `CONTROL | SHIFT` on some platforms, so match on the code
+                // first and use `.contains()` for the Ctrl-C guard instead of
+                // exact modifier equality.
+                match key.code {
+                    KeyCode::Char(' ') => {
+                        paused = !paused;
+                        if paused {
+                            sink.pause();
+                        } else {
+                            sink.play();
+                        }
+                        // Force a repaint on the next tick so the glyph flips
+                        // immediately even within the same wall-clock second.
+                        last_rendered = None;
+                    }
+                    KeyCode::Char('n') => {
+                        print!("\r\n");
+                        let _ = std::io::stdout().flush();
+                        return Ok(Action::Next);
+                    }
+                    KeyCode::Char('p') => {
+                        print!("\r\n");
+                        let _ = std::io::stdout().flush();
+                        return Ok(Action::Prev);
+                    }
+                    KeyCode::Char('q') => {
+                        print!("\r\n");
+                        let _ = std::io::stdout().flush();
+                        return Ok(Action::Quit);
+                    }
+                    KeyCode::Char('c') | KeyCode::Char('C')
+                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        // In raw mode on Windows, Ctrl-C is a KeyEvent, not a
+                        // signal. Without this branch the user would have no
+                        // way to exit.
+                        print!("\r\n");
+                        let _ = std::io::stdout().flush();
+                        return Ok(Action::Quit);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// Non-interactive fallback: print one summary line and block until the sink
+/// drains. Used when stdout or stdin is not a tty, or when `-q/--quiet` is
+/// set — both cases where a repainting status line would be noise.
+fn run_track_noninteractive(
+    sink: &rodio::Sink,
+    display_name: &str,
+    duration: Duration,
+    track_idx: usize,
+    playlist_len: usize,
+) {
+    let total = duration.as_secs();
+    let clock = if total >= 3600 {
+        format!("{}:{:02}:{:02}", total / 3600, (total % 3600) / 60, total % 60)
+    } else {
+        format!("{}:{:02}", total / 60, total % 60)
+    };
+    println!(
+        "playing {}/{}  {display_name}  ({clock})",
+        track_idx + 1,
+        playlist_len,
+    );
+    sink.sleep_until_end();
+}
+
+/// Average bitrate in kbps computed from on-disk byte size and decoded
+/// duration. Returns 0.0 for zero-duration inputs rather than producing a
+/// NaN/infinity that would poison the `{:.0}` format in the status line.
+fn compute_avg_kbps(file_len_bytes: u64, duration_secs: f64) -> f64 {
+    if duration_secs > 0.0 {
+        (file_len_bytes as f64 * 8.0) / duration_secs / 1000.0
+    } else {
+        0.0
+    }
+}
+
+/// Decode a file to interleaved f32 and (best-effort) read its OpusTags. Tags
+/// are optional — non-Opus inputs and tag-read failures both yield
+/// `OpusTags::default()` rather than failing the whole track. A failed decode
+/// is a hard error; callers map it into a per-track warning + skip.
+fn decode_track(path: &Path) -> Result<(DecodedAudio, OpusTags)> {
+    let decoded = decode_to_f32(path)?;
+    let tags = read_opus_tags_from_file(path).unwrap_or_default();
+    Ok((decoded, tags))
+}
+
+/// Open `path` as Ogg and try to parse the second packet as `OpusTags`. Any
+/// failure (wrong extension, truncated file, non-Opus container, malformed
+/// tags) returns `None` — the caller falls back to the filename stem for
+/// display, which is exactly what we want for MP3/FLAC inputs.
+fn read_opus_tags_from_file(path: &Path) -> Option<OpusTags> {
+    let is_opus = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("opus"));
+    if !is_opus {
+        return None;
+    }
+    let file = File::open(path).ok()?;
+    let mut reader = PacketReader::new(BufReader::new(file));
+    // First packet is OpusHead; skip it.
+    let _head = reader.read_packet().ok().flatten()?;
+    let tags_pkt = reader.read_packet().ok().flatten()?;
+    OpusTags::parse(&tags_pkt.data).ok()
+}
+
+/// Raw mode + status line only make sense when both ends of the pipe are a
+/// real terminal. Piped stdout, redirected stdin, or `-q/--quiet` all fall
+/// through to the non-interactive path.
+fn interactive_enabled(quiet_flag: bool) -> bool {
+    !quiet_flag && std::io::stdout().is_tty() && std::io::stdin().is_tty()
+}
+
+/// Mirror of the argv sniff `run_prelude` does for the banner. Each binary's
+/// clap surface already consumes these flags separately; re-sniffing here
+/// keeps the library-facing `PlayOptions` free of a transport-layer concern
+/// and avoids a second pass through the CLI layer.
+fn is_quiet_argv() -> bool {
+    std::env::args().any(|a| a == "-q" || a == "--quiet")
 }
 
 /// Expand a CLI `input` into an ordered playlist. A file yields a single-entry
 /// vec; a directory yields every `.opus` child (case-insensitive match, not
 /// recursive) sorted lexicographically. Empty directories are rejected early
 /// so the caller can report a clear error instead of silently exiting.
-// `allow(dead_code)`: stage-3 wires these helpers into the main FSM. Tests
-// exercise them today.
-#[allow(dead_code)]
 pub(crate) fn build_playlist(input: &Path) -> Result<Vec<PathBuf>> {
     if input.is_file() {
         return Ok(vec![input.to_path_buf()]);
@@ -88,7 +421,6 @@ pub(crate) fn build_playlist(input: &Path) -> Result<Vec<PathBuf>> {
 /// Derive the on-screen track label from OpusTags, falling back to the file
 /// stem when tags are absent or incomplete. Produces `"ARTIST — TITLE"` when
 /// both are present (em-dash U+2014, matching the HLD example).
-#[allow(dead_code)]
 pub(crate) fn resolve_display_name(tags: &OpusTags, path: &Path) -> String {
     match (tags.get("ARTIST"), tags.get("TITLE")) {
         (Some(a), Some(t)) => format!("{a} \u{2014} {t}"),
@@ -105,7 +437,7 @@ pub(crate) fn resolve_display_name(tags: &OpusTags, path: &Path) -> String {
 /// and returns the final string with no trailing newline. Respects `cols` —
 /// truncates the display name with `…` when the full render would overflow,
 /// and drops the bar+bitrate entirely when `cols < 50`.
-#[allow(clippy::too_many_arguments, dead_code)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn format_status_line(
     cols: usize,
     paused: bool,
@@ -143,7 +475,6 @@ pub(crate) fn format_status_line(
 /// `NN/MM`, zero-padded to the width of the larger side. `len < 10` means
 /// single-digit rendering (`1/1`, `3/9`) — padding only kicks in once the
 /// playlist itself requires it.
-#[allow(dead_code)]
 fn format_track(track_idx: usize, playlist_len: usize) -> String {
     let width = playlist_len.to_string().len();
     format!(
@@ -154,7 +485,6 @@ fn format_track(track_idx: usize, playlist_len: usize) -> String {
     )
 }
 
-#[allow(dead_code)]
 fn loop_indicator(mode: LoopMode) -> &'static str {
     match mode {
         LoopMode::Off => "",
@@ -166,7 +496,6 @@ fn loop_indicator(mode: LoopMode) -> &'static str {
 /// 10-cell progress bar using U+2593 (filled) and U+2591 (empty). Filled count
 /// is clamped to 0..=10 so rodio's end-of-track position overshoot cannot
 /// produce an 11-cell bar.
-#[allow(dead_code)]
 fn progress_bar(pos: Duration, dur: Duration) -> String {
     let filled = if dur.is_zero() {
         0
@@ -187,7 +516,6 @@ fn progress_bar(pos: Duration, dur: Duration) -> String {
 /// `M:SS` when the reference `dur < 3600s`, else `H:MM:SS`. Both `pos` and
 /// `dur` should use the same format; callers thread `dur` as the reference
 /// for both to keep them consistent.
-#[allow(dead_code)]
 fn format_duration(value: Duration, reference: Duration) -> String {
     let total = value.as_secs();
     if reference.as_secs() < 3600 {
@@ -206,7 +534,6 @@ fn format_duration(value: Duration, reference: Duration) -> String {
 /// cols`. Appends U+2026 when anything was removed. Returns the original when
 /// it already fits, or an empty string when prefix+suffix alone already
 /// overflow — this keeps the render degradation monotonic instead of panicking.
-#[allow(dead_code)]
 fn truncate_to_fit(name: &str, cols: usize, prefix_cols: usize, suffix_cols: usize) -> String {
     let budget = cols.saturating_sub(prefix_cols + suffix_cols);
     let name_cols = name.chars().count();
@@ -226,7 +553,6 @@ fn truncate_to_fit(name: &str, cols: usize, prefix_cols: usize, suffix_cols: usi
 /// Pick the next playlist index after a decode error. `Off` stops when we run
 /// off the end; `All` and `Single` wrap. `Single` still advances on error —
 /// we never retry a broken track in a tight loop.
-#[allow(dead_code)]
 pub(crate) fn advance_on_error(
     idx: usize,
     playlist_len: usize,
@@ -727,5 +1053,20 @@ mod tests {
     #[test]
     fn advance_on_error_single_item_playlist_off_terminates() {
         assert_eq!(advance_on_error(0, 1, LoopMode::Off), None);
+    }
+
+    // -- compute_avg_kbps --------------------------------------------------
+
+    #[test]
+    fn compute_avg_kbps_standard_case() {
+        // 128 kbps over 60s is 128_000 bits/s * 60 / 8 = 960_000 bytes.
+        let kbps = compute_avg_kbps(960_000, 60.0);
+        assert!((kbps - 128.0).abs() < 0.01, "expected ~128 kbps, got {kbps}");
+    }
+
+    #[test]
+    fn compute_avg_kbps_zero_duration_returns_zero() {
+        // Avoid NaN/Inf that would poison the `{:.0}` format in the status line.
+        assert_eq!(compute_avg_kbps(12_345, 0.0), 0.0);
     }
 }
