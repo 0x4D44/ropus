@@ -716,6 +716,15 @@ impl Decoder {
         let fs = self.inner.get_sample_rate() as usize;
         fs * 6 / 50
     }
+
+    /// Set the decode gain in Q8 dB (range `[-32768, 32767]`).
+    ///
+    /// Applied inside the decoder in fixed-point before the i16 saturating
+    /// clamp — matches `OPUS_SET_GAIN` in libopus. Used by callers honouring
+    /// `OpusHead.output_gain` from RFC 7845 §5.1.
+    pub fn set_gain(&mut self, gain: i32) -> Result<(), DecodeError> {
+        self.inner.set_gain(gain).map_err(DecodeError::from_code)
+    }
 }
 
 fn packet_arg(packet: &[u8]) -> Option<&[u8]> {

@@ -230,6 +230,15 @@ pub(crate) fn decode(args: DecodeArgs) -> Result<()> {
     let mut decoder = RopusDecoder::new(OPUS_SR, opus_channels)
         .map_err(|e| anyhow!("decoder init failed: {e}"))?;
 
+    // RFC 7845 §5.1: decoders MUST apply OpusHead.output_gain. ropus::Decoder
+    // does it in fixed-point before the i16 clamp — preserves precision at low
+    // volumes and is differential-tested against the C reference.
+    if head.output_gain != 0 {
+        decoder
+            .set_gain(head.output_gain as i32)
+            .map_err(|e| anyhow!("set_gain from OpusHead failed: {e}"))?;
+    }
+
     // Maximum 120 ms of decoded samples at 48 kHz, per channel.
     let max_per_ch = (OPUS_SR / 1000 * 120) as usize;
     let mut decoded = vec![0i16; max_per_ch * opus_channels.count()];

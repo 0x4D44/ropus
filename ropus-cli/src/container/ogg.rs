@@ -44,7 +44,6 @@ pub(crate) struct OpusHead {
     pub(crate) channels: u8,
     pub(crate) pre_skip: u16,
     pub(crate) input_sample_rate: u32,
-    #[allow(dead_code)]
     pub(crate) output_gain: i16,
     pub(crate) channel_mapping: u8,
 }
