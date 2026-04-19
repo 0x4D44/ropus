@@ -36,3 +36,6 @@ notes/*.log
 
 # foobar2000 SDK (not redistributable; tools/fetch-fb2k-sdk.ps1 fetches it).
 /fb2k-ropus/sdk/
+
+# CMake build output for the fb2k-ropus C++ component.
+/fb2k-ropus/build/
