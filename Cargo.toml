@@ -10,7 +10,6 @@ members = [
     "harness",
     "harness-deep-plc",
     "capi",
-    "ropus-cli",
     "ropus-fb2k",
     "tests/conformance",
     "tools/fetch-assets",
@@ -31,3 +30,4 @@ panic = "unwind"
 lto = "thin"
 codegen-units = 1
 panic = "unwind"
+strip = "symbols"
