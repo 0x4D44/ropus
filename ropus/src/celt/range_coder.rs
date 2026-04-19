@@ -400,6 +400,42 @@ impl<'a> RangeEncoder<'a> {
         self.normalize();
     }
 
+    /// Encodes a signed integer with a Laplace distribution anchored at zero.
+    ///
+    /// `p0` is the probability mass (out of 32768) assigned to `value == 0`;
+    /// `decay` controls how quickly probability falls off on either side.
+    /// Used by DRED to code quantised RDOVAE latent + state values.
+    ///
+    /// Corresponds to `ec_laplace_encode_p0` in `celt/laplace.c`.
+    pub fn encode_laplace_p0(&mut self, value: i32, p0: u16, decay: u16) {
+        let sign_icdf: [u16; 3] = [32768 - p0, (32768 - p0) / 2, 0];
+        let s: u32 = if value == 0 {
+            0
+        } else if value > 0 {
+            1
+        } else {
+            2
+        };
+        self.encode_icdf16(s, &sign_icdf, 15);
+        let mut v = value.unsigned_abs() as i32;
+        if v != 0 {
+            let mut icdf: [u16; 8] = [0; 8];
+            icdf[0] = (7u16).max(decay);
+            for i in 1..7 {
+                icdf[i] = ((7 - i) as u16).max(((icdf[i - 1] as i32 * decay as i32) >> 15) as u16);
+            }
+            icdf[7] = 0;
+            v -= 1;
+            loop {
+                self.encode_icdf16(v.min(7) as u32, &icdf, 15);
+                v -= 7;
+                if v < 0 {
+                    break;
+                }
+            }
+        }
+    }
+
     /// Encodes a uniform integer in `[0, ft)`.
     ///
     /// When `ft` needs more than `EC_UINT_BITS` (8) bits, the value is split
@@ -808,6 +844,36 @@ impl<'a> RangeDecoder<'a> {
         ret
     }
 
+    /// Decodes a signed integer with a Laplace distribution anchored at zero.
+    ///
+    /// Inverse of [`RangeEncoder::encode_laplace_p0`]. `p0` and `decay` must
+    /// match the values used at encode time.
+    ///
+    /// Corresponds to `ec_laplace_decode_p0` in `celt/laplace.c`.
+    pub fn decode_laplace_p0(&mut self, p0: u16, decay: u16) -> i32 {
+        let sign_icdf: [u16; 3] = [32768 - p0, (32768 - p0) / 2, 0];
+        let raw = self.decode_icdf16(&sign_icdf, 15);
+        let s: i32 = if raw == 2 { -1 } else { raw };
+        if s == 0 {
+            return 0;
+        }
+        let mut icdf: [u16; 8] = [0; 8];
+        icdf[0] = (7u16).max(decay);
+        for i in 1..7 {
+            icdf[i] = ((7 - i) as u16).max(((icdf[i - 1] as i32 * decay as i32) >> 15) as u16);
+        }
+        icdf[7] = 0;
+        let mut value: i32 = 1;
+        loop {
+            let v = self.decode_icdf16(&icdf, 15);
+            value += v;
+            if v != 7 {
+                break;
+            }
+        }
+        s * value
+    }
+
     /// Decodes a uniform integer in `[0, ft)`. Self-contained.
     ///
     /// Corresponds to `ec_dec_uint`.
@@ -1080,6 +1146,40 @@ mod tests {
             let mut dec = RangeDecoder::new(&buf);
             for &expected in &symbols {
                 assert_eq!(dec.decode_icdf16(icdf, ftb), expected as i32);
+            }
+            assert!(!dec.error());
+        }
+    }
+
+    #[test]
+    fn encode_decode_laplace_p0_roundtrip() {
+        // Mixed values across the full DRED quantiser range (DRED uses q in
+        // roughly [-30, 30]; the p0/decay tables are `u8 << 7` = 0..32640).
+        let values: [i32; 13] = [0, 1, -1, 2, -2, 7, -7, 8, -8, 15, -15, 30, -30];
+        let params: [(u16, u16); 4] = [
+            (10000, 14000), // DRED-realistic mid-range p0/decay
+            (127 << 7, 200 << 7),
+            (255 << 7, 255 << 7),
+            (1 << 7, 1 << 7),
+        ];
+
+        for &(p0, decay) in &params {
+            let mut buf = vec![0u8; 256];
+            {
+                let mut enc = RangeEncoder::new(&mut buf);
+                for &v in &values {
+                    enc.encode_laplace_p0(v, p0, decay);
+                }
+                enc.done();
+                assert!(!enc.error(), "encode error p0={p0} decay={decay}");
+            }
+            let mut dec = RangeDecoder::new(&buf);
+            for &expected in &values {
+                let got = dec.decode_laplace_p0(p0, decay);
+                assert_eq!(
+                    got, expected,
+                    "roundtrip p0={p0} decay={decay} expected={expected}"
+                );
             }
             assert!(!dec.error());
         }

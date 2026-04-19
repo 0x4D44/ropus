@@ -223,6 +223,15 @@ unsafe extern "C" {
     pub fn ec_dec_bits(this: *mut ec_dec, ftb: c_uint) -> opus_uint32;
     pub fn ec_dec_icdf(this: *mut ec_dec, icdf: *const c_uchar, ftb: c_uint) -> c_int;
 
+    // Laplace-distribution entropy coder (DRED)
+    pub fn ec_laplace_encode_p0(
+        this: *mut ec_enc,
+        value: c_int,
+        p0: u16,
+        decay: u16,
+    );
+    pub fn ec_laplace_decode_p0(this: *mut ec_dec, p0: u16, decay: u16) -> c_int;
+
     // Repacketizer
     pub fn opus_repacketizer_create() -> *mut OpusRepacketizer;
     pub fn opus_repacketizer_destroy(rp: *mut OpusRepacketizer);
