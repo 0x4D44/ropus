@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#
+# Campaign 9 launcher — 24-hour fuzz session starting 2026-04-19 on main branch.
+# Fresh baseline post-upstream-sync (ropus rename, MLP port landed, harness
+# instrumentation ported, fuzz build.rs added).
+#
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+CAMPAIGN_DIR="$ROOT/logs/fuzz-findings/campaign9"
+CORPUS_DIR="$ROOT/tests/fuzz/corpus"
+BIN_DIR="$ROOT/tests/fuzz/target/x86_64-pc-windows-msvc/release"
+
+# Windows ASan setup
+ASAN_DIR="/c/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64"
+export PATH="$ASAN_DIR:$PATH"
+export ASAN_OPTIONS="detect_odr_violation=0:detect_leaks=0"
+
+# Panic capture for Windows (when a Rust panic aborts without libFuzzer saving
+# the crashing input)
+export FUZZ_PANIC_CAPTURE_DIR="$ROOT/fuzz_crashes"
+mkdir -p "$FUZZ_PANIC_CAPTURE_DIR"
+
+run_target() {
+    local target="$1"
+    local duration="$2"
+    local out_dir="$CAMPAIGN_DIR/$target"
+    local corpus_dir="$CORPUS_DIR/$target"
+    local binary="$BIN_DIR/${target}.exe"
+
+    mkdir -p "$out_dir" "$corpus_dir"
+
+    if [[ ! -f "$binary" ]]; then
+        echo "  ERROR: binary not found: $binary"
+        return 1
+    fi
+
+    local hrs=$((duration/3600))
+    echo "[$(date +%H:%M:%S)] Starting $target (${duration}s / ${hrs}h)..."
+
+    nohup "$binary" \
+        "$corpus_dir" \
+        -max_total_time="$duration" \
+        -max_len=16384 \
+        -artifact_prefix="$out_dir/" \
+        -print_final_stats=1 \
+        > "$out_dir/fuzz.log" 2>&1 &
+
+    local pid=$!
+    echo "$pid" > "$out_dir/pid"
+    echo "  PID=$pid, log=$out_dir/fuzz.log"
+}
+
+echo "=== Campaign 9: 24-hour Fuzz Session ==="
+echo "Start: $(date)"
+echo "Binary dir: $BIN_DIR"
+echo ""
+
+# All 9 targets at 24h — user asked for 24h flat.
+for t in fuzz_decode fuzz_encode fuzz_roundtrip \
+         fuzz_decode_safety fuzz_encode_safety fuzz_roundtrip_safety \
+         fuzz_repacketizer fuzz_packet_parse fuzz_encode_multiframe; do
+    run_target "$t" 86400
+done
+
+echo ""
+echo "All 9 targets launched."
+echo "Campaign dir: $CAMPAIGN_DIR"
