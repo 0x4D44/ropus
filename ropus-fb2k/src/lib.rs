@@ -6,19 +6,25 @@
 //! same crate that ships as the cdylib; integration tests drive the C
 //! entry points directly (no Rust-only convenience surface).
 //!
-//! M1 surface:
+//! C ABI surface:
 //!
 //! * `ropus_fb2k_open` — header + tags parse over a caller-supplied IO
-//!   callback struct, producing a `RopusFb2kReader` handle.
+//!   callback struct, producing a `RopusFb2kReader` handle. Reverse-scans
+//!   the last Ogg page to populate duration and bitrate when the IO is
+//!   seekable.
 //! * `ropus_fb2k_close` — destroy the handle.
-//! * `ropus_fb2k_get_info` — fill `RopusFb2kInfo` with what M1 can populate
-//!   (channels / pre_skip / input_sample_rate). Duration, bitrate, and
-//!   ReplayGain are populated as placeholder defaults and wired up in M2/M3.
+//! * `ropus_fb2k_get_info` — fill `RopusFb2kInfo` with `channels`,
+//!   `pre_skip`, `sample_rate` (always 48 kHz), `total_samples`, and
+//!   `nominal_bitrate`. The four ReplayGain fields are left as `NaN` until
+//!   the R128 / REPLAYGAIN tag-mapping lands.
 //! * `ropus_fb2k_read_tags` — invoke a caller callback for every parsed
 //!   vorbis_comment, plus a synthetic `VENDOR` entry so the caller sees the
 //!   encoder string for free. `METADATA_BLOCK_PICTURE` is filtered here.
-//! * `ropus_fb2k_decode_next`, `ropus_fb2k_seek` — stubs returning
-//!   `ROPUS_FB2K_UNSUPPORTED` with a "not implemented in M1" last-error.
+//! * `ropus_fb2k_decode_next` — decode the next Opus packet into the
+//!   caller's interleaved float buffer, transparently trimming the leading
+//!   `pre_skip` samples on the first call.
+//! * `ropus_fb2k_seek` — not yet implemented; returns
+//!   `ROPUS_FB2K_UNSUPPORTED` with a "seek not implemented" last-error.
 //! * `ropus_fb2k_last_error` / `ropus_fb2k_last_error_code` — thread-local
 //!   error slots, paired so the C++ shim can branch on the status code
 //!   (never on message text).
@@ -54,10 +60,19 @@ pub const ROPUS_FB2K_IO: c_int = -2;
 pub const ROPUS_FB2K_ABORTED: c_int = -3;
 pub const ROPUS_FB2K_INVALID_STREAM: c_int = -4;
 pub const ROPUS_FB2K_UNSUPPORTED: c_int = -5;
+/// Internal error: panic or otherwise-impossible state reached inside the
+/// Rust backend. The associated FFI call's return value may still be the
+/// per-entry-point sentinel (e.g. `BAD_ARG` for `get_info`, `ABORTED` for
+/// `decode_next`) because each entry has its own failure shape — callers
+/// that want the unified class should read `ropus_fb2k_last_error_code()`
+/// and prefer this code over the return value when they disagree.
+pub const ROPUS_FB2K_INTERNAL: c_int = -6;
 
-/// Info-only open hint — read the header + tags (+ later the last granule)
-/// but skip full page-walk. M1 accepts this bit and silently treats it the
-/// same as a normal open; M2 wires in the fast path.
+/// Info-only open hint — read the header + tags + last-granule reverse-scan
+/// but skip full page-walk. Today both paths reverse-scan identically, so
+/// the flag is accepted but not yet differentiated; a future release will
+/// replace the full path with a streaming page-walk that also populates
+/// the seek index, and the info-only path will keep the reverse-scan.
 pub const ROPUS_FB2K_OPEN_INFO_ONLY: u32 = 1 << 0;
 
 /// Tag keys that `ropus_fb2k_read_tags` silently drops before calling the
@@ -103,7 +118,8 @@ pub struct RopusFb2kIo {
 }
 
 /// Output struct populated by `ropus_fb2k_get_info`. Layout matches the
-/// header; fields not populated by M1 get sentinel defaults.
+/// header; fields not yet populated (ReplayGain) get `NaN` as the
+/// not-present sentinel.
 #[repr(C)]
 pub struct RopusFb2kInfo {
     pub sample_rate: u32,
@@ -141,18 +157,23 @@ pub struct RopusFb2kReader {
 ///
 /// Divergence from `capi/src/lib.rs::ffi_guard!`: the capi version only
 /// catches-and-returns the sentinel; it does not write the last-error slot
-/// (capi has no such slot). We deliberately *do* set the slot to
-/// "internal panic inside ropus-fb2k" so a C caller who sees an unexpected
-/// negative status can surface a message instead of a bare error code.
-/// The duplication is intentional: making `ropus-fb2k` depend on `capi`
-/// would couple two otherwise-independent adapters for the sake of ten
-/// lines of macro.
+/// (capi has no such slot). We deliberately *do* set both the message slot
+/// AND the error-code slot on panic so a C caller who sees an unexpected
+/// negative status can surface a message instead of a bare error code and
+/// can branch on the unified `ROPUS_FB2K_INTERNAL` class rather than the
+/// per-entry sentinel (which varies: `BAD_ARG` for `get_info`, `ABORTED`
+/// for `decode_next`, NULL pointer for `open`, etc.). The duplication is
+/// intentional: making `ropus-fb2k` depend on `capi` would couple two
+/// otherwise-independent adapters for the sake of ten lines of macro.
 macro_rules! ffi_guard {
     ($on_panic:expr, $body:block) => {{
         match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| $body)) {
             Ok(v) => v,
             Err(_) => {
-                $crate::error::set_last_error("internal panic inside ropus-fb2k");
+                $crate::error::set_last_error_with_code(
+                    "internal panic inside ropus-fb2k",
+                    $crate::ROPUS_FB2K_INTERNAL,
+                );
                 $on_panic
             }
         }
@@ -160,7 +181,7 @@ macro_rules! ffi_guard {
 }
 
 // ---------------------------------------------------------------------------
-// C entry points — M1 subset
+// C entry points
 // ---------------------------------------------------------------------------
 
 /// Open an Ogg Opus stream via caller-supplied IO callbacks.
@@ -192,7 +213,11 @@ pub unsafe extern "C" fn ropus_fb2k_open(
             set_last_error_with_code("io.read callback is null", ROPUS_FB2K_BAD_ARG);
             return ptr::null_mut();
         };
-        match OggOpusReader::open(reader, flags) {
+        // Capture the reverse-scan prerequisite once up front. An unseekable
+        // stream (no `seek` callback) or unknown size yields `None`, which
+        // tells the reader to skip the scan and publish zeroed duration.
+        let size_hint = reader.can_seek().then(|| reader.size()).flatten();
+        match OggOpusReader::open(reader, flags, size_hint) {
             Ok(inner) => {
                 clear_last_error();
                 Box::into_raw(Box::new(RopusFb2kReader { inner }))
@@ -237,10 +262,9 @@ pub unsafe extern "C" fn ropus_fb2k_last_error_code() -> c_int {
 
 /// Populate `RopusFb2kInfo` from a successfully-opened reader.
 ///
-/// M1 populates `channels`, `pre_skip`, and `sample_rate` (always 48000
-/// per HLD sec. 2). `total_samples`, `nominal_bitrate`, and the four
-/// ReplayGain fields are placeholder defaults (0 / -1 / NaN) until M2 / M3
-/// wire them up.
+/// Populates `channels`, `pre_skip`, `sample_rate` (always 48000 per
+/// HLD §2), `total_samples`, and `nominal_bitrate`. The four ReplayGain
+/// fields stay `NaN` until the R128 / REPLAYGAIN tag mapping lands.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ropus_fb2k_get_info(
     r: *mut RopusFb2kReader,
@@ -261,8 +285,8 @@ pub unsafe extern "C" fn ropus_fb2k_get_info(
             sample_rate: 48_000,
             channels: reader.inner.channels(),
             pre_skip: reader.inner.pre_skip(),
-            total_samples: 0,          // populated in M2 via reverse-scan
-            nominal_bitrate: -1,       // populated in M2
+            total_samples: reader.inner.total_samples(),
+            nominal_bitrate: reader.inner.nominal_bitrate(),
             rg_track_gain: f32::NAN,
             rg_album_gain: f32::NAN,
             rg_track_peak: f32::NAN,
@@ -341,30 +365,67 @@ fn emit_tag(cb: TagCb, ctx: *mut c_void, key: &str, value: &str) -> bool {
     true
 }
 
-/// Stub for M2. Returns `UNSUPPORTED` so the fb2k shim can map this to
-/// `exception_io_unsupported_format` and let another input component pick up
-/// the file — `BAD_ARG` would be a misleading "programmer error" signal.
+/// Minimum per-channel sample count the caller's buffer must accept, matching
+/// the 120 ms longest Opus frame at 48 kHz. Advertised in `ropus_fb2k.h`; a
+/// smaller buffer is rejected with `BAD_ARG` rather than silently truncating.
+const MIN_OUT_SAMPLES_PER_CH: usize = 5760;
+
+/// Decode the next Opus packet into the caller's interleaved float buffer.
+///
+/// Returns samples-per-channel written (`> 0`), `0` at clean end-of-stream,
+/// or a negative status. On the very first successful call after open, the
+/// leading `pre_skip` samples (typically 312) are trimmed transparently —
+/// callers never see the encoder warm-up.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ropus_fb2k_decode_next(
-    _r: *mut RopusFb2kReader,
-    _out_interleaved: *mut f32,
-    _max_samples_per_ch: usize,
+    r: *mut RopusFb2kReader,
+    out_interleaved: *mut f32,
+    max_samples_per_ch: usize,
 ) -> c_int {
-    ffi_guard!(ROPUS_FB2K_UNSUPPORTED, {
-        set_last_error_with_code(
-            "decode_next not implemented in M1",
-            ROPUS_FB2K_UNSUPPORTED,
-        );
-        ROPUS_FB2K_UNSUPPORTED
+    ffi_guard!(ROPUS_FB2K_BAD_ARG, {
+        if r.is_null() || out_interleaved.is_null() {
+            set_last_error_with_code("decode_next: null pointer", ROPUS_FB2K_BAD_ARG);
+            return ROPUS_FB2K_BAD_ARG;
+        }
+        if max_samples_per_ch < MIN_OUT_SAMPLES_PER_CH {
+            set_last_error_with_code(
+                "out buffer must fit 120 ms (5760 samples/ch)",
+                ROPUS_FB2K_BAD_ARG,
+            );
+            return ROPUS_FB2K_BAD_ARG;
+        }
+
+        // SAFETY: `r` came from `ropus_fb2k_open`, still valid per caller.
+        let reader = unsafe { &mut *r };
+        let channels = reader.inner.channels() as usize;
+        // SAFETY: header contract says `out_interleaved` has room for
+        // `max_samples_per_ch * channels` f32 values.
+        let out_slice = unsafe {
+            std::slice::from_raw_parts_mut(out_interleaved, max_samples_per_ch * channels)
+        };
+
+        match reader.inner.decode_next(out_slice, max_samples_per_ch) {
+            Ok(n) => {
+                clear_last_error();
+                n
+            }
+            Err(e) => {
+                let code = reader_error_code(&e);
+                set_last_error_with_code(e.to_string(), code);
+                code
+            }
+        }
     })
 }
 
-/// Stub for M3. Returns `UNSUPPORTED` for the same reason as
-/// `ropus_fb2k_decode_next` above.
+/// Seek to a per-channel sample position. Not yet implemented; returns
+/// `ROPUS_FB2K_UNSUPPORTED` and surfaces "seek not implemented" via the
+/// last-error slot. Tracked as a follow-up — the page-walk index this
+/// needs is stubbed alongside the reader state.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ropus_fb2k_seek(_r: *mut RopusFb2kReader, _sample_pos: u64) -> c_int {
     ffi_guard!(ROPUS_FB2K_UNSUPPORTED, {
-        set_last_error_with_code("seek not implemented in M1", ROPUS_FB2K_UNSUPPORTED);
+        set_last_error_with_code("seek not implemented", ROPUS_FB2K_UNSUPPORTED);
         ROPUS_FB2K_UNSUPPORTED
     })
 }

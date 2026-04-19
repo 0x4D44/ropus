@@ -74,7 +74,15 @@ typedef struct {
 /* ----- API ---------------------------------------------------------------- *
  *
  * Status convention: 0 = OK, negative = error code.
- * Errors: -1 BAD_ARG, -2 IO, -3 ABORTED, -4 INVALID_STREAM, -5 UNSUPPORTED.
+ * Errors:
+ *   -1 BAD_ARG         caller-supplied arguments failed validation
+ *   -2 IO              read/seek/size callback reported failure
+ *   -3 ABORTED         caller's abort callback signalled cancellation
+ *   -4 INVALID_STREAM  stream is malformed or parser rejected its contents
+ *   -5 UNSUPPORTED     stream is well-formed but uses an unsupported feature
+ *   -6 INTERNAL        panic or impossible state reached inside the Rust
+ *                      backend; the call's return value may be a sentinel
+ *                      (see `ropus_fb2k_last_error_code` for the unified code)
  * Error codes are stable; human messages via ropus_fb2k_last_error().
  */
 

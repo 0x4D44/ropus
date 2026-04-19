@@ -62,17 +62,14 @@ impl CallbackReader {
     }
 
     /// Whether the underlying stream advertised a `seek` callback. Used by
-    /// M2's seek-index builder to decide whether to even attempt one;
-    /// callers passing a live HTTP stream get `None` and we fall through
-    /// to the "unseekable" path. M1 accepts the dead-code warning rather
-    /// than deleting the accessor and rewiring the reader later.
-    #[allow(dead_code)]
+    /// `ropus_fb2k_open` to decide whether to attempt the reverse-scan for
+    /// last-page granule; live HTTP streams with no `seek` get `false` and
+    /// we fall through to the unseekable path (zero duration, no bitrate).
     pub(crate) fn can_seek(&self) -> bool {
         self.io.seek.is_some()
     }
 
     /// Best-effort size query cached at construction time.
-    #[cfg(test)]
     pub(crate) fn size(&self) -> Option<u64> {
         self.size
     }
@@ -174,6 +171,14 @@ impl Seek for CallbackReader {
         }
         self.pos = abs;
         Ok(abs)
+    }
+
+    /// Override the default impl (which routes through `seek(Current(0))`)
+    /// to return our cached position directly. The default would poll
+    /// `abort` and round-trip through the C `seek` callback just to learn
+    /// a value we already track locally — cheap to shave.
+    fn stream_position(&mut self) -> io::Result<u64> {
+        Ok(self.pos)
     }
 }
 

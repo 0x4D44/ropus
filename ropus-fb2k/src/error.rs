@@ -32,6 +32,11 @@ thread_local! {
 /// Prefer `set_last_error_with_code` when a negative code is available — this
 /// wrapper exists for code paths where the code would otherwise be
 /// duplicated at every call site (e.g. inside error formatting helpers).
+///
+/// Currently only used by this module's unit tests, which verify that the
+/// code-less path stores 0. If a future caller needs the no-code shape, drop
+/// the `#[cfg(test)]` gate.
+#[cfg(test)]
 pub(crate) fn set_last_error(msg: impl Into<String>) {
     set_last_error_with_code(msg, 0);
 }

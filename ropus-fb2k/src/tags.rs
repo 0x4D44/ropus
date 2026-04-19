@@ -23,10 +23,10 @@
 //! that *does* want the picture blob can get it from `ParsedTags::iter()`
 //! directly without re-parsing the packet.
 //!
-//! ReplayGain tag *conversion* does not live here — M3 adds it on top of the
-//! raw `(key, value)` iteration exposed below. For M1 we only need the
-//! vendor string and the raw comments so the tag-read callback has something
-//! to emit.
+//! ReplayGain tag *conversion* does not live here — a future release will
+//! layer it on top of the raw `(key, value)` iteration exposed below.
+//! Today we only need the vendor string and the raw comments so the
+//! tag-read callback has something to emit.
 
 use std::fmt;
 

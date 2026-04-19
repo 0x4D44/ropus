@@ -1,9 +1,9 @@
 //! Shared integration-test helpers for the `ropus-fb2k` C ABI.
 //!
-//! The M1 review explicitly wants every integration test to drive the C
-//! entry points (not the old `open_rust` rlib helper). These helpers keep
-//! the individual test cases short by pushing fixture construction and the
-//! mem-backed `RopusFb2kIo` boilerplate into one place.
+//! Every integration test drives the public C entry points (not the old
+//! `open_rust` rlib helper, which was dropped in an earlier review). These
+//! helpers keep the individual test cases short by pushing fixture
+//! construction and the mem-backed `RopusFb2kIo` boilerplate into one place.
 //!
 //! `MemIo` stores all state in a `Box` whose pointer is passed as the `ctx`
 //! field on `RopusFb2kIo`, so multiple tests (and multiple threads) can run
@@ -47,14 +47,43 @@ pub fn opus_fixture_with_artist_alice() -> &'static [u8] {
 /// Build an Ogg Opus file whose OpusTags block carries the given vendor
 /// and `(KEY, VALUE)` comments (each as a single `KEY=VALUE` entry).
 pub fn build_opus_fixture(vendor: &str, comments: &[(&str, &str)]) -> Vec<u8> {
+    build_opus_fixture_with_audio_packets(vendor, comments, 1, None)
+}
+
+/// Build an Ogg Opus file with a configurable number of 20 ms silence
+/// packets. Every packet has granule stepping of 960 (20 ms × 48 kHz), and
+/// the final packet carries the end-of-stream flag. `recorded_pre_skip`
+/// lets the caller override `OpusHead::pre_skip` — pass `None` to use the
+/// encoder's natural lookahead.
+///
+/// Used by the decode / duration integration tests
+/// (`decode_wiring_matches_direct_ogg_path`, `info_populates_*`) that need
+/// a deterministic multi-packet stream with a known duration.
+pub fn build_opus_fixture_with_audio_packets(
+    vendor: &str,
+    comments: &[(&str, &str)],
+    audio_packets: usize,
+    recorded_pre_skip: Option<u16>,
+) -> Vec<u8> {
+    assert!(audio_packets >= 1, "need at least one audio packet");
+
     let mut encoder = Encoder::builder(48_000, Channels::Stereo, Application::Audio)
         .build()
         .expect("encoder builds");
-    let pre_skip = u16::try_from(encoder.lookahead()).expect("lookahead fits u16");
+    let pre_skip = recorded_pre_skip.unwrap_or_else(|| {
+        u16::try_from(encoder.lookahead()).expect("lookahead fits u16")
+    });
 
+    // Encode each packet independently; silence input keeps every packet
+    // bit-identical so the fixture is deterministic across runs.
     let pcm = vec![0i16; 960 * 2];
-    let mut packet = vec![0u8; 4000];
-    let n = encoder.encode(&pcm, &mut packet).expect("encode silence");
+    let mut encoded: Vec<Vec<u8>> = Vec::with_capacity(audio_packets);
+    for _ in 0..audio_packets {
+        let mut packet = vec![0u8; 4000];
+        let n = encoder.encode(&pcm, &mut packet).expect("encode silence");
+        packet.truncate(n);
+        encoded.push(packet);
+    }
 
     let mut out = Vec::with_capacity(4096);
     let mut writer = PacketWriter::new(&mut out);
@@ -77,14 +106,18 @@ pub fn build_opus_fixture(vendor: &str, comments: &[(&str, &str)]) -> Vec<u8> {
         )
         .expect("write OpusTags page");
 
-    writer
-        .write_packet(
-            packet[..n].to_vec(),
-            FIXTURE_STREAM_SERIAL,
-            PacketWriteEndInfo::EndStream,
-            960,
-        )
-        .expect("write audio page");
+    for (idx, packet) in encoded.into_iter().enumerate() {
+        let is_last = idx + 1 == audio_packets;
+        let end = if is_last {
+            PacketWriteEndInfo::EndStream
+        } else {
+            PacketWriteEndInfo::NormalPacket
+        };
+        let absgp = ((idx + 1) as u64) * 960;
+        writer
+            .write_packet(packet, FIXTURE_STREAM_SERIAL, end, absgp)
+            .expect("write audio page");
+    }
 
     drop(writer);
     out
@@ -161,6 +194,15 @@ pub struct MemState {
     /// `(n+1)`-th call. Used by `abort_halts_open` to exercise the race
     /// where an abort trips mid-stream rather than at time zero.
     pub abort_after_n_reads: Option<usize>,
+    /// Running total of `read` callback invocations. Drives the
+    /// `open_uses_bounded_reads` assertion — we want the open fast path
+    /// bounded by a small constant, not O(file_size / buffer_size).
+    pub read_calls: usize,
+    /// Running total of `abort` callback invocations. Used by
+    /// `decode_propagates_abort` to prove non-vacuousness — if
+    /// `decode_next` ever returned without polling the IO layer at all,
+    /// neither `read_calls` nor `abort_calls` would move.
+    pub abort_calls: usize,
 }
 
 /// Owns the `MemState` box and hands out a `RopusFb2kIo` pointing at it.
@@ -168,6 +210,10 @@ pub struct MemState {
 /// side holds a raw pointer that would otherwise dangle.
 pub struct MemIo {
     state: Box<Mutex<MemState>>,
+    /// Whether the `seek` callback is wired. Tests that exercise the
+    /// unseekable path (`info_without_seek_returns_zero_total_samples`)
+    /// flip this off via `without_seek()`.
+    has_seek: bool,
 }
 
 impl MemIo {
@@ -178,7 +224,10 @@ impl MemIo {
                 pos: 0,
                 abort: false,
                 abort_after_n_reads: None,
+                read_calls: 0,
+                abort_calls: 0,
             })),
+            has_seek: true,
         }
     }
 
@@ -192,6 +241,36 @@ impl MemIo {
         self
     }
 
+    /// Flip the abort flag after `open` has already succeeded, so the next
+    /// `decode_next` is the call that trips. Used by
+    /// `decode_propagates_abort` because the reverse-scan inside open has a
+    /// variable read-count that would make `with_abort_after(n)` flaky.
+    pub fn set_aborting(&self) {
+        self.state.lock().unwrap().abort = true;
+    }
+
+    /// Pretend this is an unseekable stream (e.g. live HTTP). Drops the
+    /// `seek` callback from the published `RopusFb2kIo`; the Rust side
+    /// must fall back to the degraded (zero-duration) path.
+    pub fn without_seek(mut self) -> Self {
+        self.has_seek = false;
+        self
+    }
+
+    /// Snapshot the running `read` callback count. Used by bounded-read
+    /// tests to assert the open fast path doesn't walk the file.
+    pub fn read_calls(&self) -> usize {
+        self.state.lock().unwrap().read_calls
+    }
+
+    /// Snapshot the running `abort` callback count. Used as a
+    /// non-vacuousness proof by the abort tests: if a decode call
+    /// returned without polling the IO layer at all, neither this nor
+    /// `read_calls` would move.
+    pub fn abort_calls(&self) -> usize {
+        self.state.lock().unwrap().abort_calls
+    }
+
     /// Build a `RopusFb2kIo` pointing at this `MemIo`'s state. The returned
     /// struct is `Copy` — duplicating it is cheap — but its `ctx` points
     /// into `self`, so `self` must outlive any reader opened with it.
@@ -199,7 +278,7 @@ impl MemIo {
         RopusFb2kIo {
             ctx: &*self.state as *const Mutex<MemState> as *mut c_void,
             read: Some(mem_read),
-            seek: Some(mem_seek),
+            seek: if self.has_seek { Some(mem_seek) } else { None },
             size: Some(mem_size),
             abort: Some(mem_abort),
         }
@@ -211,6 +290,8 @@ extern "C" fn mem_read(ctx: *mut c_void, out: *mut u8, n: usize) -> i64 {
     // `&Mutex<MemState>` reference that outlives this call.
     let m = unsafe { &*(ctx as *const Mutex<MemState>) };
     let mut st = m.lock().unwrap();
+
+    st.read_calls += 1;
 
     // If the caller asked for mid-stream abort, tick the counter first —
     // the `check_abort` inside `CallbackReader` will then trip on the
@@ -255,7 +336,8 @@ extern "C" fn mem_size(ctx: *mut c_void, out: *mut u64) -> c_int {
 
 extern "C" fn mem_abort(ctx: *mut c_void) -> c_int {
     let m = unsafe { &*(ctx as *const Mutex<MemState>) };
-    let st = m.lock().unwrap();
+    let mut st = m.lock().unwrap();
+    st.abort_calls += 1;
     if st.abort { 1 } else { 0 }
 }
 
@@ -283,6 +365,19 @@ pub fn open_from_bytes_info_only(bytes: Vec<u8>) -> (MemIo, *mut RopusFb2kReader
     let handle = unsafe {
         ropus_fb2k::ropus_fb2k_open(&fb2k_io, ropus_fb2k::ROPUS_FB2K_OPEN_INFO_ONLY)
     };
+    (io, handle)
+}
+
+/// Open a stream whose underlying IO advertises no `seek` callback, mimicking
+/// a live HTTP source. `open` must still succeed (HLD §4.3 permits zero
+/// duration); `total_samples` / `nominal_bitrate` should reflect the absence.
+pub fn open_from_bytes_without_seek(
+    bytes: Vec<u8>,
+    flags: u32,
+) -> (MemIo, *mut RopusFb2kReader) {
+    let io = MemIo::new(bytes).without_seek();
+    let fb2k_io = io.io();
+    let handle = unsafe { ropus_fb2k::ropus_fb2k_open(&fb2k_io, flags) };
     (io, handle)
 }
 
