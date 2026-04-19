@@ -55,6 +55,30 @@ pub struct EncodeOptions {
 pub struct DecodeOptions {
     pub input: PathBuf,
     pub output: Option<PathBuf>,
+    /// Emit 32-bit IEEE float samples instead of 16-bit PCM. Flips both the
+    /// decoder path (`decode_float`) and the WAV writer (format code 3 + fact
+    /// chunk). Dither is silently a no-op in this mode.
+    pub float: bool,
+    /// Skip the WAV header and write raw interleaved samples (LE) to the
+    /// output file. Combines with `float`: `raw && float` = raw f32 LE,
+    /// `raw && !float` = raw i16 LE.
+    pub raw: bool,
+    /// Target sample rate. `None` keeps the codec's native 48 kHz. When set,
+    /// post-decode resample runs *after* the pre-skip trim so the resampler
+    /// can't smear leading silence into real output.
+    pub rate: Option<u32>,
+    /// User gain in dB, summed with `OpusHead.output_gain` and pushed through
+    /// `Decoder::set_gain` before any samples emerge. Sum is range-checked by
+    /// libopus (`±128 dB`); out-of-range surfaces as a clean error, not a
+    /// panic.
+    pub gain_db: f32,
+    /// Apply TPDF dither to i16 output. Default `true` matches `opusdec`.
+    /// Ignored for the float path — nothing to dither when bit depth is 32.
+    pub dither: bool,
+    /// Simulated random packet loss percentage (0..=100) for PLC exercising.
+    /// 0 means "never drop" and short-circuits the PRNG entirely so the output
+    /// is bit-identical to leaving the flag unset.
+    pub packet_loss_pct: u8,
 }
 
 #[derive(Debug)]

@@ -12,7 +12,7 @@ use ogg::writing::{PacketWriteEndInfo, PacketWriter};
 
 use crate::audio::decode::{DecodedAudio, decode_to_f32};
 use crate::audio::downmix::downmix_to_mono;
-use crate::audio::resample::resample_to_48k;
+use crate::audio::resample::resample;
 use crate::consts::{MAX_OPUS_FRAME_BYTES, MAX_PACKET_BYTES, MAX_SUBFRAMES_PER_PACKET, OPUS_SR};
 use crate::container::ogg::{OGG_STREAM_SERIAL, OpusTags, build_opus_head};
 use crate::container::picture::{
@@ -102,7 +102,7 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         samples
     } else {
         println!("resample {} Hz -> {} Hz", sample_rate, OPUS_SR);
-        resample_to_48k(&samples, sample_rate, channels)
+        resample(&samples, sample_rate, OPUS_SR, channels)
             .context("resampling to 48 kHz")?
     };
     println!(

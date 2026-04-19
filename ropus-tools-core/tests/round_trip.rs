@@ -89,6 +89,12 @@ fn encode_then_decode_48k_sine_round_trips_with_snr_above_20_db() {
     let dec_opts = DecodeOptions {
         input: tmp_opus.clone(),
         output: Some(tmp_wav.clone()),
+        float: false,
+        raw: false,
+        rate: None,
+        gain_db: 0.0,
+        dither: true,
+        packet_loss_pct: 0,
     };
     commands::decode(dec_opts).expect("decode");
 
@@ -358,6 +364,12 @@ fn encode_framesize_120_hard_cbr_128k_fills_packet_buffer() {
     let dec_opts = DecodeOptions {
         input: tmp_opus.clone(),
         output: Some(tmp_wav_out.clone()),
+        float: false,
+        raw: false,
+        rate: None,
+        gain_db: 0.0,
+        dither: true,
+        packet_loss_pct: 0,
     };
     commands::decode(dec_opts).expect("decode the CBR-at-120ms output");
 
@@ -375,4 +387,310 @@ fn encode_framesize_120_hard_cbr_128k_fills_packet_buffer() {
     let _ = std::fs::remove_file(&tmp_wav_in);
     let _ = std::fs::remove_file(&tmp_opus);
     let _ = std::fs::remove_file(&tmp_wav_out);
+}
+
+/// Shared encode fixture: synth a 1 s 1 kHz sine WAV, encode to Opus, return
+/// the Opus path. Callers own cleanup of that path. Keeps every decode-flag
+/// test from re-duplicating the 20 lines of `EncodeOptions` boilerplate.
+fn encode_tmp_sine_opus(tag: &str) -> PathBuf {
+    let nonce = format!(
+        "{}_{}_{}",
+        tag,
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let wav_in = std::env::temp_dir().join(format!("ropus_dec_in_{nonce}.wav"));
+    let opus_path = std::env::temp_dir().join(format!("ropus_dec_{nonce}.opus"));
+
+    write_sine_wav(&wav_in, 1, 1000.0);
+
+    let enc_opts = EncodeOptions {
+        input: wav_in.clone(),
+        output: Some(opus_path.clone()),
+        bitrate: Some(64_000),
+        complexity: None,
+        application: ropus_tools_core::Application::Audio,
+        vbr: true,
+        vbr_constraint: false,
+        signal: ropus_tools_core::Signal::Auto,
+        frame_duration: ropus_tools_core::FrameDuration::Ms20,
+        expect_loss: 0,
+        downmix_to_mono: false,
+        serial: None,
+        picture_path: None,
+        vendor: "ropus-tools-core-test".to_string(),
+        comments: Vec::new(),
+    };
+    commands::encode(enc_opts).expect("encode sine fixture");
+    let _ = std::fs::remove_file(&wav_in);
+
+    opus_path
+}
+
+#[test]
+fn decode_with_rate_44100_writes_that_rate() {
+    // --rate 44100 must resample *after* pre-skip trim and write a WAV whose
+    // fmt chunk reports 44 100 Hz. Any regression that skips the rename
+    // (sample_rate still hard-coded to 48 kHz in write_wav_pcm16) fails here.
+    let opus_path = encode_tmp_sine_opus("rate44100");
+    let wav_out = std::env::temp_dir().join(format!(
+        "ropus_dec_rate_{}_{}.wav",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+
+    let dec_opts = DecodeOptions {
+        input: opus_path.clone(),
+        output: Some(wav_out.clone()),
+        float: false,
+        raw: false,
+        rate: Some(44_100),
+        gain_db: 0.0,
+        dither: true,
+        packet_loss_pct: 0,
+    };
+    commands::decode(dec_opts).expect("decode --rate 44100");
+
+    let (_, out_sr, _) = read_pcm16_wav(&wav_out);
+    assert_eq!(out_sr, 44_100, "WAV header must advertise target rate");
+
+    let _ = std::fs::remove_file(&opus_path);
+    let _ = std::fs::remove_file(&wav_out);
+}
+
+#[test]
+fn decode_float_round_trip_produces_valid_wav() {
+    // --float: WAV format code 3, fact chunk, bits_per_sample = 32, and the
+    // correct interleaved f32 sample count.
+    let opus_path = encode_tmp_sine_opus("float");
+    let wav_out = std::env::temp_dir().join(format!(
+        "ropus_dec_float_{}_{}.wav",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+
+    let dec_opts = DecodeOptions {
+        input: opus_path.clone(),
+        output: Some(wav_out.clone()),
+        float: true,
+        raw: false,
+        rate: None,
+        gain_db: 0.0,
+        dither: true, // ignored in float mode
+        packet_loss_pct: 0,
+    };
+    commands::decode(dec_opts).expect("decode --float");
+
+    let bytes = std::fs::read(&wav_out).expect("read float wav");
+    assert_eq!(&bytes[0..4], b"RIFF");
+    assert_eq!(&bytes[8..12], b"WAVE");
+    assert_eq!(&bytes[12..16], b"fmt ");
+    let fmt_size = u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    assert_eq!(fmt_size, 18, "float WAV needs fmt chunk size 18");
+    let format_code = u16::from_le_bytes([bytes[20], bytes[21]]);
+    assert_eq!(format_code, 3, "format code must be IEEE float (3)");
+    let bits = u16::from_le_bytes([bytes[34], bytes[35]]);
+    assert_eq!(bits, 32);
+    // fact chunk immediately follows the 18-byte fmt body (plus the 8-byte
+    // chunk header): "fact" at offset 38..42.
+    assert_eq!(&bytes[38..42], b"fact");
+    assert_eq!(&bytes[50..54], b"data");
+    let data_bytes = u32::from_le_bytes([bytes[54], bytes[55], bytes[56], bytes[57]]) as usize;
+    assert!(data_bytes > 0, "float WAV must contain sample data");
+    assert!(data_bytes.is_multiple_of(4), "data size must be multiple of 4 bytes");
+
+    let _ = std::fs::remove_file(&opus_path);
+    let _ = std::fs::remove_file(&wav_out);
+}
+
+#[test]
+fn decode_gain_plus_header_gain_clamps_cleanly() {
+    // Header gain 0 + --gain 200 dB => total Q8 far beyond libopus' ±128 dB
+    // range. `set_gain` must surface an error via anyhow rather than panic
+    // or silently wrap. We only assert that decode() returns Err — the exact
+    // message is not load-bearing.
+    let opus_path = encode_tmp_sine_opus("bad_gain");
+    let wav_out = std::env::temp_dir().join(format!(
+        "ropus_dec_bad_gain_{}_{}.wav",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+
+    let dec_opts = DecodeOptions {
+        input: opus_path.clone(),
+        output: Some(wav_out.clone()),
+        float: false,
+        raw: false,
+        rate: None,
+        gain_db: 200.0, // 200 dB * 256 = 51200 Q8, out of [-32768, 32767]
+        dither: true,
+        packet_loss_pct: 0,
+    };
+    let err = commands::decode(dec_opts).expect_err("200 dB must surface as Err");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.to_ascii_lowercase().contains("gain"),
+        "error should mention gain, got: {msg}"
+    );
+
+    let _ = std::fs::remove_file(&opus_path);
+    let _ = std::fs::remove_file(&wav_out);
+}
+
+#[test]
+fn decode_rejects_nan_gain() {
+    // NaN `--gain` would saturate to 0 when cast to the Q8 i32 later,
+    // silently ignoring the flag. The validator must surface it as a
+    // clean error before opening any files.
+    let opus_path = encode_tmp_sine_opus("nan_gain");
+    let wav_out = std::env::temp_dir().join(format!(
+        "ropus_dec_nan_gain_{}_{}.wav",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+
+    let dec_opts = DecodeOptions {
+        input: opus_path.clone(),
+        output: Some(wav_out.clone()),
+        float: false,
+        raw: false,
+        rate: None,
+        gain_db: f32::NAN,
+        dither: true,
+        packet_loss_pct: 0,
+    };
+    let err = commands::decode(dec_opts).expect_err("NaN gain must surface as Err");
+    let msg = format!("{err:#}").to_ascii_lowercase();
+    assert!(
+        msg.contains("gain") && msg.contains("finite"),
+        "error should mention gain + finite, got: {msg}"
+    );
+
+    // Also reject +∞.
+    let dec_opts_inf = DecodeOptions {
+        input: opus_path.clone(),
+        output: Some(wav_out.clone()),
+        float: false,
+        raw: false,
+        rate: None,
+        gain_db: f32::INFINITY,
+        dither: true,
+        packet_loss_pct: 0,
+    };
+    assert!(
+        commands::decode(dec_opts_inf).is_err(),
+        "+∞ gain must surface as Err"
+    );
+
+    let _ = std::fs::remove_file(&opus_path);
+    let _ = std::fs::remove_file(&wav_out);
+}
+
+#[test]
+fn decode_packet_loss_zero_is_bit_identical_to_no_flag() {
+    // `packet_loss_pct = 0` must short-circuit the PRNG entirely so the
+    // output matches a default-flag decode byte-for-byte. This is the safety
+    // net: the flag exists but "off" means off.
+    let opus_path = encode_tmp_sine_opus("loss0");
+    let tag_a = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let wav_default = std::env::temp_dir().join(format!(
+        "ropus_loss_default_{}_{}.wav",
+        std::process::id(),
+        tag_a
+    ));
+    let wav_explicit = std::env::temp_dir().join(format!(
+        "ropus_loss_explicit0_{}_{}.wav",
+        std::process::id(),
+        tag_a
+    ));
+
+    let base = DecodeOptions {
+        input: opus_path.clone(),
+        output: Some(wav_default.clone()),
+        float: false,
+        raw: false,
+        rate: None,
+        gain_db: 0.0,
+        dither: true,
+        packet_loss_pct: 0,
+    };
+    commands::decode(base).expect("decode default");
+
+    let explicit = DecodeOptions {
+        input: opus_path.clone(),
+        output: Some(wav_explicit.clone()),
+        float: false,
+        raw: false,
+        rate: None,
+        gain_db: 0.0,
+        dither: true,
+        packet_loss_pct: 0,
+    };
+    commands::decode(explicit).expect("decode packet_loss_pct=0");
+
+    let a = std::fs::read(&wav_default).expect("read a");
+    let b = std::fs::read(&wav_explicit).expect("read b");
+    assert_eq!(a, b, "packet_loss_pct=0 must match no-flag output byte-for-byte");
+
+    let _ = std::fs::remove_file(&opus_path);
+    let _ = std::fs::remove_file(&wav_default);
+    let _ = std::fs::remove_file(&wav_explicit);
+}
+
+#[test]
+fn decode_packet_loss_nonzero_produces_valid_output() {
+    // With 10% simulated loss PLC must fill the gaps and the output must
+    // decode without error. Length is approximately (source seconds * rate),
+    // which for a 1 s 48 kHz fixture lands ~48 000 samples (minus pre-skip).
+    let opus_path = encode_tmp_sine_opus("loss10");
+    let wav_out = std::env::temp_dir().join(format!(
+        "ropus_loss10_{}_{}.wav",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+
+    let dec_opts = DecodeOptions {
+        input: opus_path.clone(),
+        output: Some(wav_out.clone()),
+        float: false,
+        raw: false,
+        rate: None,
+        gain_db: 0.0,
+        dither: true,
+        packet_loss_pct: 10,
+    };
+    commands::decode(dec_opts).expect("decode with --packet-loss 10");
+
+    let (samples, sr, _) = read_pcm16_wav(&wav_out);
+    assert_eq!(sr, 48_000);
+    // 1 s of mono audio: expect at least 40 000 samples after pre-skip.
+    assert!(
+        samples.len() > 40_000,
+        "decoded length {} too short — PLC did not fill dropped packets",
+        samples.len()
+    );
+
+    let _ = std::fs::remove_file(&opus_path);
+    let _ = std::fs::remove_file(&wav_out);
 }
