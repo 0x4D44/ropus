@@ -288,6 +288,8 @@ fn main() {
     // pointers so the Rust differential test can call it without
     // replicating the C struct layouts.
     build.file(harness_dir.join("dred_enc_shim.c"));
+    // Sibling shim for stage 8.5: RDOVAE decoder forward pass + init.
+    build.file(harness_dir.join("dred_dec_shim.c"));
 
     build.compile("opus_ref_float");
 
@@ -295,4 +297,5 @@ fn main() {
     println!("cargo:rerun-if-changed=config.h");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=dred_enc_shim.c");
+    println!("cargo:rerun-if-changed=dred_dec_shim.c");
 }

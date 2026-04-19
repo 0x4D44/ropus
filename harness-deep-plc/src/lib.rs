@@ -63,6 +63,25 @@ unsafe extern "C" {
         initial_state: *mut f32,
         input: *const f32,
     );
+
+    // --- Stage 8.5 DRED RDOVAE decoder shim ---
+    // Defined in `harness-deep-plc/dred_dec_shim.c`. Same opaque-pointer
+    // pattern as the encoder shim above.
+    pub fn ropus_test_rdovaedec_new() -> *mut c_void;
+    pub fn ropus_test_rdovaedec_free(model: *mut c_void);
+    pub fn ropus_test_rdovae_dec_state_new() -> *mut c_void;
+    pub fn ropus_test_rdovae_dec_state_free(state: *mut c_void);
+    pub fn ropus_test_dred_rdovae_dec_init_states(
+        state: *mut c_void,
+        model: *const c_void,
+        initial_state: *const f32,
+    );
+    pub fn ropus_test_dred_rdovae_decode_qframe(
+        state: *mut c_void,
+        model: *const c_void,
+        qframe: *mut f32,
+        input: *const f32,
+    );
 }
 
 /// Thin RAII wrapper around the C float-mode decoder — used by the tier-2

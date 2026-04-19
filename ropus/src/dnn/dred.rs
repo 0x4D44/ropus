@@ -13,8 +13,8 @@
 
 use super::core::{
     ACTIVATION_LINEAR, ACTIVATION_TANH, LinearLayer, WeightArray, compute_generic_conv1d,
-    compute_generic_conv1d_dilation, compute_generic_dense, compute_generic_gru, linear_init,
-    parse_weights,
+    compute_generic_conv1d_dilation, compute_generic_dense, compute_generic_gru, compute_glu,
+    linear_init, parse_weights,
 };
 use super::embedded_weights::WEIGHTS_BLOB;
 use super::lpcnet::LPCNetEncState;
@@ -100,6 +100,39 @@ const DEC_OUTPUT_OUT_SIZE: usize = 80;
 const DEC_CONV_DENSE_OUT_SIZE: usize = 32;
 const DEC_GRU_INIT_OUT_SIZE: usize = 320;
 const DEC_GRU_STATE_SIZE: usize = 64;
+
+// Per-layer decoder GRU/conv dimensions. Uniform sizes in the current
+// upstream checkpoint; named explicitly so the forward pass body mirrors
+// the C source one-to-one.
+const DEC_GRU1_OUT_SIZE: usize = 64;
+const DEC_GRU2_OUT_SIZE: usize = 64;
+const DEC_GRU3_OUT_SIZE: usize = 64;
+const DEC_GRU4_OUT_SIZE: usize = 64;
+const DEC_GRU5_OUT_SIZE: usize = 64;
+
+const DEC_GRU1_STATE_SIZE: usize = 64;
+const DEC_GRU2_STATE_SIZE: usize = 64;
+const DEC_GRU3_STATE_SIZE: usize = 64;
+const DEC_GRU4_STATE_SIZE: usize = 64;
+const DEC_GRU5_STATE_SIZE: usize = 64;
+
+const DEC_CONV1_OUT_SIZE: usize = 32;
+const DEC_CONV2_OUT_SIZE: usize = 32;
+const DEC_CONV3_OUT_SIZE: usize = 32;
+const DEC_CONV4_OUT_SIZE: usize = 32;
+const DEC_CONV5_OUT_SIZE: usize = 32;
+
+const DEC_CONV1_IN_SIZE: usize = 32;
+const DEC_CONV2_IN_SIZE: usize = 32;
+const DEC_CONV3_IN_SIZE: usize = 32;
+const DEC_CONV4_IN_SIZE: usize = 32;
+const DEC_CONV5_IN_SIZE: usize = 32;
+
+const DEC_CONV_DENSE1_OUT_SIZE: usize = 32;
+const DEC_CONV_DENSE2_OUT_SIZE: usize = 32;
+const DEC_CONV_DENSE3_OUT_SIZE: usize = 32;
+const DEC_CONV_DENSE4_OUT_SIZE: usize = 32;
+const DEC_CONV_DENSE5_OUT_SIZE: usize = 32;
 
 const DEC_CONV_STATE_SIZE: usize = 32;
 
@@ -1236,6 +1269,333 @@ impl Default for RDOVAEDecState {
     }
 }
 
+// Buffer concatenates the per-stage outputs the decoder feeds into
+// `dec_output`. Order must exactly match the C `output_index` sequence in
+// `dred_rdovae_decode_qframe`:
+//
+//   dense1 [96] + gru1 [64] + conv1 [32] + gru2 [64] + conv2 [32]
+//        + gru3 [64] + conv3 [32] + gru4 [64] + conv4 [32]
+//        + gru5 [64] + conv5 [32]                                      = 576
+//
+// This equals `dec_output.nb_inputs` in the weight init, so the concatenated
+// buffer is precisely what the final dense layer wants.
+const DEC_FORWARD_BUFFER_SIZE: usize = DEC_DENSE1_OUT_SIZE
+    + DEC_GRU1_OUT_SIZE
+    + DEC_CONV1_OUT_SIZE
+    + DEC_GRU2_OUT_SIZE
+    + DEC_CONV2_OUT_SIZE
+    + DEC_GRU3_OUT_SIZE
+    + DEC_CONV3_OUT_SIZE
+    + DEC_GRU4_OUT_SIZE
+    + DEC_CONV4_OUT_SIZE
+    + DEC_GRU5_OUT_SIZE
+    + DEC_CONV5_OUT_SIZE;
+const _: () = assert!(DEC_FORWARD_BUFFER_SIZE == 576);
+
+/// Width of the latent vector passed to `decode_qframe`. Matches the
+/// C `dec_dense1.nb_inputs` (26 = DRED_LATENT_DIM + 1, the trailing byte
+/// being the quantiser index).
+const DEC_DENSE1_IN_SIZE: usize = DRED_LATENT_DIM + 1;
+
+/// Total size of the GRU-init vector produced by `dec_gru_init`. Must equal
+/// the sum of the five per-GRU state sizes so the `OPUS_COPY` chain in
+/// `dred_rdovae_dec_init_states` covers exactly those outputs.
+const _: () = assert!(
+    DEC_GRU_INIT_OUT_SIZE
+        == DEC_GRU1_STATE_SIZE
+            + DEC_GRU2_STATE_SIZE
+            + DEC_GRU3_STATE_SIZE
+            + DEC_GRU4_STATE_SIZE
+            + DEC_GRU5_STATE_SIZE
+);
+
+impl RDOVAEDecState {
+    /// Seed the five GRU hidden states from a reconstructed `initial_state`
+    /// (the 50-wide bank the encoder emitted via `gdense2`). Matches C
+    /// `dred_rdovae_dec_init_states` in `dred_rdovae_dec.c`. Calls two
+    /// dense layers, then splits the 320-wide output into the five GRU
+    /// banks. Also clears `initialized` so the next `decode_qframe` call
+    /// performs the one-shot conv-memory zeroing.
+    ///
+    /// # Panics
+    ///
+    /// Debug-only: panics if `initial_state.len() < DRED_STATE_DIM`.
+    pub fn init_states(&mut self, model: &RDOVAEDec, initial_state: &[f32]) {
+        debug_assert!(initial_state.len() >= DRED_STATE_DIM);
+
+        let mut hidden = [0.0f32; DEC_HIDDEN_INIT_OUT_SIZE];
+        let mut state_init = [0.0f32; DEC_GRU_INIT_OUT_SIZE];
+
+        compute_generic_dense(
+            &model.dec_hidden_init,
+            &mut hidden,
+            &initial_state[..DRED_STATE_DIM],
+            ACTIVATION_TANH,
+        );
+        compute_generic_dense(
+            &model.dec_gru_init,
+            &mut state_init,
+            &hidden,
+            ACTIVATION_TANH,
+        );
+
+        let mut counter = 0;
+        self.gru1_state
+            .copy_from_slice(&state_init[counter..counter + DEC_GRU1_STATE_SIZE]);
+        counter += DEC_GRU1_STATE_SIZE;
+        self.gru2_state
+            .copy_from_slice(&state_init[counter..counter + DEC_GRU2_STATE_SIZE]);
+        counter += DEC_GRU2_STATE_SIZE;
+        self.gru3_state
+            .copy_from_slice(&state_init[counter..counter + DEC_GRU3_STATE_SIZE]);
+        counter += DEC_GRU3_STATE_SIZE;
+        self.gru4_state
+            .copy_from_slice(&state_init[counter..counter + DEC_GRU4_STATE_SIZE]);
+        counter += DEC_GRU4_STATE_SIZE;
+        self.gru5_state
+            .copy_from_slice(&state_init[counter..counter + DEC_GRU5_STATE_SIZE]);
+        debug_assert_eq!(counter + DEC_GRU5_STATE_SIZE, DEC_GRU_INIT_OUT_SIZE);
+
+        self.initialized = false;
+    }
+
+    /// Run the RDOVAE decoder forward pass on a single `DRED_LATENT_DIM+1`
+    /// = 26-wide latent. Updates `self` (all GRU / conv hidden state) in
+    /// place and writes:
+    /// - `qframe[0..DEC_OUTPUT_OUT_SIZE]` — 80 floats, four concatenated
+    ///   LPCNet feature vectors in reverse time order.
+    ///
+    /// Mirrors C `dred_rdovae_decode_qframe` in `dred_rdovae_dec.c`. The
+    /// `arch` parameter is absent: `dnn::core` primitives pick the scalar
+    /// reference path at compile time (no RTCD).
+    ///
+    /// # Panics
+    ///
+    /// Panics in debug builds if the output slice is shorter than
+    /// `DEC_OUTPUT_OUT_SIZE`, or if the input has fewer than
+    /// `DEC_DENSE1_IN_SIZE` elements. In release builds the slice indexing
+    /// panics on its own if the caller violates the contract.
+    pub fn decode_qframe(
+        &mut self,
+        model: &RDOVAEDec,
+        qframe: &mut [f32],
+        input: &[f32],
+    ) {
+        debug_assert!(input.len() >= DEC_DENSE1_IN_SIZE);
+        debug_assert!(qframe.len() >= DEC_OUTPUT_OUT_SIZE);
+
+        let mut buffer = [0.0f32; DEC_FORWARD_BUFFER_SIZE];
+        let mut conv_tmp = [0.0f32; DRED_MAX_CONV_INPUTS];
+
+        // Stage 1: dense1 -> GRU1 -> GLU1 -> conv1 (dilation = 1).
+        let mut output_index = 0;
+        compute_generic_dense(
+            &model.dec_dense1,
+            &mut buffer[output_index..output_index + DEC_DENSE1_OUT_SIZE],
+            &input[..DEC_DENSE1_IN_SIZE],
+            ACTIVATION_TANH,
+        );
+        output_index += DEC_DENSE1_OUT_SIZE;
+
+        // The C reference passes `buffer` (fixed-length stack array) to the
+        // GRU. The GRU only reads its first `nb_inputs` elements (96 =
+        // DEC_DENSE1_OUT_SIZE for GRU1), so slicing to that prefix is
+        // equivalent.
+        compute_generic_gru(
+            &model.dec_gru1_input,
+            &model.dec_gru1_recurrent,
+            &mut self.gru1_state,
+            &buffer[..model.dec_gru1_input.nb_inputs],
+        );
+        compute_glu(
+            &model.dec_glu1,
+            &mut buffer[output_index..output_index + DEC_GLU_OUT_SIZE],
+            &self.gru1_state,
+        );
+        output_index += DEC_GRU1_OUT_SIZE;
+        conv1_cond_init(
+            &mut self.conv1_state,
+            DEC_CONV1_IN_SIZE,
+            1,
+            &mut self.initialized,
+        );
+        compute_generic_dense(
+            &model.dec_conv_dense1,
+            &mut conv_tmp[..DEC_CONV_DENSE1_OUT_SIZE],
+            &buffer[..model.dec_conv_dense1.nb_inputs],
+            ACTIVATION_TANH,
+        );
+        let mut conv_out = [0.0f32; DEC_CONV1_OUT_SIZE];
+        compute_generic_conv1d(
+            &model.dec_conv1,
+            &mut conv_out,
+            &mut self.conv1_state,
+            &conv_tmp[..DEC_CONV1_IN_SIZE],
+            DEC_CONV1_OUT_SIZE,
+            ACTIVATION_TANH,
+        );
+        buffer[output_index..output_index + DEC_CONV1_OUT_SIZE].copy_from_slice(&conv_out);
+        output_index += DEC_CONV1_OUT_SIZE;
+
+        // Stage 2: GRU2 -> GLU2 -> conv2 (dilation = 1).
+        compute_generic_gru(
+            &model.dec_gru2_input,
+            &model.dec_gru2_recurrent,
+            &mut self.gru2_state,
+            &buffer[..model.dec_gru2_input.nb_inputs],
+        );
+        compute_glu(
+            &model.dec_glu2,
+            &mut buffer[output_index..output_index + DEC_GLU_OUT_SIZE],
+            &self.gru2_state,
+        );
+        output_index += DEC_GRU2_OUT_SIZE;
+        conv1_cond_init(
+            &mut self.conv2_state,
+            DEC_CONV2_IN_SIZE,
+            1,
+            &mut self.initialized,
+        );
+        compute_generic_dense(
+            &model.dec_conv_dense2,
+            &mut conv_tmp[..DEC_CONV_DENSE2_OUT_SIZE],
+            &buffer[..model.dec_conv_dense2.nb_inputs],
+            ACTIVATION_TANH,
+        );
+        let mut conv_out = [0.0f32; DEC_CONV2_OUT_SIZE];
+        compute_generic_conv1d(
+            &model.dec_conv2,
+            &mut conv_out,
+            &mut self.conv2_state,
+            &conv_tmp[..DEC_CONV2_IN_SIZE],
+            DEC_CONV2_OUT_SIZE,
+            ACTIVATION_TANH,
+        );
+        buffer[output_index..output_index + DEC_CONV2_OUT_SIZE].copy_from_slice(&conv_out);
+        output_index += DEC_CONV2_OUT_SIZE;
+
+        // Stage 3: GRU3 -> GLU3 -> conv3 (dilation = 1).
+        compute_generic_gru(
+            &model.dec_gru3_input,
+            &model.dec_gru3_recurrent,
+            &mut self.gru3_state,
+            &buffer[..model.dec_gru3_input.nb_inputs],
+        );
+        compute_glu(
+            &model.dec_glu3,
+            &mut buffer[output_index..output_index + DEC_GLU_OUT_SIZE],
+            &self.gru3_state,
+        );
+        output_index += DEC_GRU3_OUT_SIZE;
+        conv1_cond_init(
+            &mut self.conv3_state,
+            DEC_CONV3_IN_SIZE,
+            1,
+            &mut self.initialized,
+        );
+        compute_generic_dense(
+            &model.dec_conv_dense3,
+            &mut conv_tmp[..DEC_CONV_DENSE3_OUT_SIZE],
+            &buffer[..model.dec_conv_dense3.nb_inputs],
+            ACTIVATION_TANH,
+        );
+        let mut conv_out = [0.0f32; DEC_CONV3_OUT_SIZE];
+        compute_generic_conv1d(
+            &model.dec_conv3,
+            &mut conv_out,
+            &mut self.conv3_state,
+            &conv_tmp[..DEC_CONV3_IN_SIZE],
+            DEC_CONV3_OUT_SIZE,
+            ACTIVATION_TANH,
+        );
+        buffer[output_index..output_index + DEC_CONV3_OUT_SIZE].copy_from_slice(&conv_out);
+        output_index += DEC_CONV3_OUT_SIZE;
+
+        // Stage 4: GRU4 -> GLU4 -> conv4 (dilation = 1).
+        compute_generic_gru(
+            &model.dec_gru4_input,
+            &model.dec_gru4_recurrent,
+            &mut self.gru4_state,
+            &buffer[..model.dec_gru4_input.nb_inputs],
+        );
+        compute_glu(
+            &model.dec_glu4,
+            &mut buffer[output_index..output_index + DEC_GLU_OUT_SIZE],
+            &self.gru4_state,
+        );
+        output_index += DEC_GRU4_OUT_SIZE;
+        conv1_cond_init(
+            &mut self.conv4_state,
+            DEC_CONV4_IN_SIZE,
+            1,
+            &mut self.initialized,
+        );
+        compute_generic_dense(
+            &model.dec_conv_dense4,
+            &mut conv_tmp[..DEC_CONV_DENSE4_OUT_SIZE],
+            &buffer[..model.dec_conv_dense4.nb_inputs],
+            ACTIVATION_TANH,
+        );
+        let mut conv_out = [0.0f32; DEC_CONV4_OUT_SIZE];
+        compute_generic_conv1d(
+            &model.dec_conv4,
+            &mut conv_out,
+            &mut self.conv4_state,
+            &conv_tmp[..DEC_CONV4_IN_SIZE],
+            DEC_CONV4_OUT_SIZE,
+            ACTIVATION_TANH,
+        );
+        buffer[output_index..output_index + DEC_CONV4_OUT_SIZE].copy_from_slice(&conv_out);
+        output_index += DEC_CONV4_OUT_SIZE;
+
+        // Stage 5: GRU5 -> GLU5 -> conv5 (dilation = 1).
+        compute_generic_gru(
+            &model.dec_gru5_input,
+            &model.dec_gru5_recurrent,
+            &mut self.gru5_state,
+            &buffer[..model.dec_gru5_input.nb_inputs],
+        );
+        compute_glu(
+            &model.dec_glu5,
+            &mut buffer[output_index..output_index + DEC_GLU_OUT_SIZE],
+            &self.gru5_state,
+        );
+        output_index += DEC_GRU5_OUT_SIZE;
+        conv1_cond_init(
+            &mut self.conv5_state,
+            DEC_CONV5_IN_SIZE,
+            1,
+            &mut self.initialized,
+        );
+        compute_generic_dense(
+            &model.dec_conv_dense5,
+            &mut conv_tmp[..DEC_CONV_DENSE5_OUT_SIZE],
+            &buffer[..model.dec_conv_dense5.nb_inputs],
+            ACTIVATION_TANH,
+        );
+        let mut conv_out = [0.0f32; DEC_CONV5_OUT_SIZE];
+        compute_generic_conv1d(
+            &model.dec_conv5,
+            &mut conv_out,
+            &mut self.conv5_state,
+            &conv_tmp[..DEC_CONV5_IN_SIZE],
+            DEC_CONV5_OUT_SIZE,
+            ACTIVATION_TANH,
+        );
+        buffer[output_index..output_index + DEC_CONV5_OUT_SIZE].copy_from_slice(&conv_out);
+        output_index += DEC_CONV5_OUT_SIZE;
+        debug_assert_eq!(output_index, DEC_FORWARD_BUFFER_SIZE);
+
+        // Final projection: dec_output (linear) -> qframe[0..80].
+        compute_generic_dense(
+            &model.dec_output,
+            &mut qframe[..DEC_OUTPUT_OUT_SIZE],
+            &buffer,
+            ACTIVATION_LINEAR,
+        );
+    }
+}
+
 // ===========================================================================
 // DREDEnc — full encoder-side DRED state
 // ===========================================================================
@@ -1538,6 +1898,60 @@ mod tests {
         assert!(
             initial.iter().any(|&v| v != 0.0),
             "initial_state all zero — forward pass looks inert"
+        );
+    }
+
+    /// Smoke test for `RDOVAEDecState::init_states` +
+    /// `RDOVAEDecState::decode_qframe` — confirm both run without panic on
+    /// deterministic input, produce finite and nontrivial qframe output,
+    /// and promote `initialized` from `false` to `true` on the first
+    /// decode call. Skipped when the embedded DRED weight blob is empty
+    /// (bare checkout without fetched DNN data files).
+    ///
+    /// This is a shape / liveness check only; the C-differential tier-1
+    /// (or tier-2 SNR) oracle lives in `harness-deep-plc/tests/`.
+    #[test]
+    fn decode_qframe_liveness_check() {
+        if WEIGHTS_BLOB.is_empty() {
+            eprintln!(
+                "dred::tests: WEIGHTS_BLOB empty — skipping decode_qframe smoke test."
+            );
+            return;
+        }
+        let arrays = parse_weights(WEIGHTS_BLOB).expect("parse_weights blob");
+        let model = init_rdovaedec(&arrays).expect("init_rdovaedec");
+
+        // 50-wide initial state (encoder-side `gdense2` output, simulated
+        // here with a small deterministic ramp so the init path has
+        // something nontrivial to project).
+        let mut initial_state = [0.0f32; DRED_STATE_DIM];
+        for (i, x) in initial_state.iter_mut().enumerate() {
+            *x = ((i as f32) * 0.019 - 0.5).sin() * 0.1;
+        }
+
+        // 26-wide latent (25 quantised latents + 1 auxiliary byte slot).
+        let mut input = [0.0f32; DRED_LATENT_DIM + 1];
+        for (i, x) in input.iter_mut().enumerate() {
+            *x = ((i as f32) * 0.023 + 0.1).cos() * 0.15;
+        }
+
+        let mut state = RDOVAEDecState::default();
+        state.init_states(&model, &initial_state);
+        // After init_states the flag must be `false` so the first decode
+        // call performs the one-shot conv-memory zeroing.
+        assert!(!state.initialized);
+
+        let mut qframe = [0.0f32; DEC_OUTPUT_OUT_SIZE];
+        state.decode_qframe(&model, &mut qframe, &input);
+
+        assert!(state.initialized, "conv1_cond_init must flip initialized");
+        assert!(
+            qframe.iter().all(|v| v.is_finite()),
+            "qframe contains non-finite values: {qframe:?}"
+        );
+        assert!(
+            qframe.iter().any(|&v| v != 0.0),
+            "qframe all zero — forward pass looks inert"
         );
     }
 }
