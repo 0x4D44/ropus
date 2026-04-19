@@ -65,6 +65,23 @@ pub fn build_opus_fixture_with_audio_packets(
     audio_packets: usize,
     recorded_pre_skip: Option<u16>,
 ) -> Vec<u8> {
+    build_opus_fixture_audio_source(vendor, comments, audio_packets, recorded_pre_skip, |_| {
+        vec![0i16; 960 * 2]
+    })
+}
+
+/// Like `build_opus_fixture_with_audio_packets` but calls `pcm_for` to
+/// synthesise each 20 ms stereo packet's PCM input. The closure receives
+/// the packet index (0-based) so it can emit a time-varying signal — used
+/// by the seek-tolerance test, which needs a continuous sine distinguishable
+/// at every 20 ms step.
+pub fn build_opus_fixture_audio_source(
+    vendor: &str,
+    comments: &[(&str, &str)],
+    audio_packets: usize,
+    recorded_pre_skip: Option<u16>,
+    mut pcm_for: impl FnMut(usize) -> Vec<i16>,
+) -> Vec<u8> {
     assert!(audio_packets >= 1, "need at least one audio packet");
 
     let mut encoder = Encoder::builder(48_000, Channels::Stereo, Application::Audio)
@@ -74,13 +91,12 @@ pub fn build_opus_fixture_with_audio_packets(
         u16::try_from(encoder.lookahead()).expect("lookahead fits u16")
     });
 
-    // Encode each packet independently; silence input keeps every packet
-    // bit-identical so the fixture is deterministic across runs.
-    let pcm = vec![0i16; 960 * 2];
     let mut encoded: Vec<Vec<u8>> = Vec::with_capacity(audio_packets);
-    for _ in 0..audio_packets {
+    for i in 0..audio_packets {
+        let pcm = pcm_for(i);
+        assert_eq!(pcm.len(), 960 * 2, "pcm_for must return a 20 ms stereo frame");
         let mut packet = vec![0u8; 4000];
-        let n = encoder.encode(&pcm, &mut packet).expect("encode silence");
+        let n = encoder.encode(&pcm, &mut packet).expect("encode pcm");
         packet.truncate(n);
         encoded.push(packet);
     }

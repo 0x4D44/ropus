@@ -23,10 +23,12 @@
 //! that *does* want the picture blob can get it from `ParsedTags::iter()`
 //! directly without re-parsing the packet.
 //!
-//! ReplayGain tag *conversion* does not live here — a future release will
-//! layer it on top of the raw `(key, value)` iteration exposed below.
-//! Today we only need the vendor string and the raw comments so the
-//! tag-read callback has something to emit.
+//! ReplayGain tag conversion lives at the bottom of this file (see
+//! `extract_replaygain`) per HLD sec. 5.5: legacy `REPLAYGAIN_*` tags
+//! override their R128 counterparts when both are present; R128 values are
+//! Q7.8 dB relative to -23 LUFS and get a +5 dB offset to match the
+//! ReplayGain -18 LUFS reference. Malformed values fall back to `NaN`
+//! silently — logging is the host's job if it cares.
 
 use std::fmt;
 
@@ -152,6 +154,160 @@ fn take<'a>(cur: &mut &'a [u8], n: usize) -> Result<&'a [u8], TagError> {
     Ok(head)
 }
 
+// ---------------------------------------------------------------------------
+// ReplayGain extraction (HLD sec. 5.5)
+// ---------------------------------------------------------------------------
+
+/// R128-to-ReplayGain dB offset. R128 targets -23 LUFS; ReplayGain targets
+/// -18 LUFS; adding +5 dB to the R128 value aligns the two references.
+const R128_TO_RG_OFFSET_DB: f32 = 5.0;
+
+/// Q7.8 divisor for the string-encoded signed integer in `R128_*_GAIN` tags.
+/// `"-1280"` means -1280/256 = -5 dB relative to the R128 reference.
+const R128_Q78_DIVISOR: f32 = 256.0;
+
+/// ReplayGain values as they will appear in `RopusFb2kInfo`. `NaN` means
+/// "tag absent or malformed"; callers check with `.is_nan()`, not equality.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ReplayGainInfo {
+    pub(crate) track_gain: f32,
+    pub(crate) album_gain: f32,
+    pub(crate) track_peak: f32,
+    pub(crate) album_peak: f32,
+}
+
+impl ReplayGainInfo {
+    pub(crate) fn nan() -> Self {
+        Self {
+            track_gain: f32::NAN,
+            album_gain: f32::NAN,
+            track_peak: f32::NAN,
+            album_peak: f32::NAN,
+        }
+    }
+}
+
+/// Extract ReplayGain values from parsed OpusTags per HLD sec. 5.5.
+///
+/// Rules:
+/// * `R128_TRACK_GAIN` / `R128_ALBUM_GAIN` — string-encoded signed integer
+///   in Q7.8 dB relative to R128 -23 LUFS. Convert: `i / 256 + 5` dB.
+/// * `REPLAYGAIN_TRACK_GAIN` / `REPLAYGAIN_ALBUM_GAIN` — legacy string like
+///   `"-6.75 dB"` or `"-6.75"`, already in ReplayGain dB. Parse the leading
+///   float.
+/// * **Legacy overrides R128.** If both are present the user (or tool that
+///   wrote the file) explicitly set `REPLAYGAIN_*`; R128 was probably
+///   auto-derived and we should not second-guess the explicit value.
+/// * `R128_TRACK_PEAK` / `R128_ALBUM_PEAK` / `REPLAYGAIN_TRACK_PEAK` /
+///   `REPLAYGAIN_ALBUM_PEAK` — linear peak as float, pass through. Legacy
+///   overrides R128 by the same rule.
+/// * Absent tag → `NaN`. Malformed value (unparseable, non-finite) → `NaN`
+///   silently (logging is fb2k's job; a bad RG tag shouldn't break
+///   playback).
+pub(crate) fn extract_replaygain(tags: &ParsedTags) -> ReplayGainInfo {
+    let mut rg = ReplayGainInfo::nan();
+
+    // First pass: R128 tags. These are the canonical Opus form, so we
+    // populate from them first; the legacy pass below then overrides.
+    for (key, value) in tags.iter() {
+        match key {
+            "R128_TRACK_GAIN" => {
+                if let Some(v) = parse_r128_gain(value) {
+                    rg.track_gain = v;
+                }
+            }
+            "R128_ALBUM_GAIN" => {
+                if let Some(v) = parse_r128_gain(value) {
+                    rg.album_gain = v;
+                }
+            }
+            "R128_TRACK_PEAK" => {
+                if let Some(v) = parse_rg_peak(value) {
+                    rg.track_peak = v;
+                }
+            }
+            "R128_ALBUM_PEAK" => {
+                if let Some(v) = parse_rg_peak(value) {
+                    rg.album_peak = v;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Second pass: legacy REPLAYGAIN_* tags override R128 when both are
+    // present. We overwrite unconditionally on a successful parse — an
+    // unparseable legacy tag leaves the (possibly-R128-populated) value
+    // alone rather than nuking it to NaN.
+    for (key, value) in tags.iter() {
+        match key {
+            "REPLAYGAIN_TRACK_GAIN" => {
+                if let Some(v) = parse_legacy_gain(value) {
+                    rg.track_gain = v;
+                }
+            }
+            "REPLAYGAIN_ALBUM_GAIN" => {
+                if let Some(v) = parse_legacy_gain(value) {
+                    rg.album_gain = v;
+                }
+            }
+            "REPLAYGAIN_TRACK_PEAK" => {
+                if let Some(v) = parse_rg_peak(value) {
+                    rg.track_peak = v;
+                }
+            }
+            "REPLAYGAIN_ALBUM_PEAK" => {
+                if let Some(v) = parse_rg_peak(value) {
+                    rg.album_peak = v;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    rg
+}
+
+/// Parse `R128_*_GAIN`: string-encoded signed integer in Q7.8 dB relative
+/// to R128 -23 LUFS. Add +5 dB to land on the ReplayGain -18 LUFS reference.
+/// Returns `None` on parse failure, non-finite result, or out-of-range
+/// value (outside ±127 dB — matches libopusfile's R128 clamp; a value
+/// outside this range is almost certainly file corruption, and rejecting
+/// NaN/Inf alone would still accept `i32::MIN` → ≈-8.4 million dB).
+fn parse_r128_gain(s: &str) -> Option<f32> {
+    let raw: i32 = s.trim().parse().ok()?;
+    let gain = raw as f32 / R128_Q78_DIVISOR + R128_TO_RG_OFFSET_DB;
+    if !gain.is_finite() || !(-127.0..=127.0).contains(&gain) {
+        return None;
+    }
+    Some(gain)
+}
+
+/// Parse `REPLAYGAIN_*_GAIN`: legacy string, e.g. `"-6.75 dB"` or `"-6.75"`.
+/// Strip a trailing "dB" / "db" (case-insensitive) before parsing as `f32`.
+fn parse_legacy_gain(s: &str) -> Option<f32> {
+    let trimmed = s.trim();
+    // `str::strip_suffix` is case-sensitive, so we walk the canonical
+    // spellings. The " " variants handle files written with a space before
+    // the unit; the no-space variants handle files without.
+    let numeric = trimmed
+        .strip_suffix(" dB")
+        .or_else(|| trimmed.strip_suffix(" db"))
+        .or_else(|| trimmed.strip_suffix("dB"))
+        .or_else(|| trimmed.strip_suffix("db"))
+        .unwrap_or(trimmed)
+        .trim();
+    let v: f32 = numeric.parse().ok()?;
+    v.is_finite().then_some(v)
+}
+
+/// Parse a ReplayGain peak: linear float, unitless. Both R128 and legacy
+/// forms share the same parse — they differ only in the tag key.
+fn parse_rg_peak(s: &str) -> Option<f32> {
+    let v: f32 = s.trim().parse().ok()?;
+    v.is_finite().then_some(v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,5 +411,112 @@ mod tests {
         bytes.extend_from_slice(&[0xFF, 0xFE, 0xFD]);
         bytes.extend_from_slice(&0u32.to_le_bytes());
         assert!(matches!(parse(&bytes), Err(TagError::NonUtf8Vendor)));
+    }
+
+    // -----------------------------------------------------------------
+    // ReplayGain extraction (HLD sec. 5.5)
+    // -----------------------------------------------------------------
+
+    fn tags_from(kvs: &[(&str, &str)]) -> ParsedTags {
+        ParsedTags {
+            vendor: String::new(),
+            comments: kvs
+                .iter()
+                .map(|(k, v)| (k.to_ascii_uppercase(), (*v).to_owned()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn extract_rg_absent_tags_are_nan() {
+        let parsed = tags_from(&[("ARTIST", "Alice")]);
+        let rg = extract_replaygain(&parsed);
+        assert!(rg.track_gain.is_nan());
+        assert!(rg.album_gain.is_nan());
+        assert!(rg.track_peak.is_nan());
+        assert!(rg.album_peak.is_nan());
+    }
+
+    #[test]
+    fn extract_rg_r128_track_gain_converts_q78_and_offsets_by_5db() {
+        // -1280 Q7.8 = -5 dB R128. Add +5 dB offset → 0 dB RG.
+        let parsed = tags_from(&[("R128_TRACK_GAIN", "-1280")]);
+        let rg = extract_replaygain(&parsed);
+        assert!((rg.track_gain - 0.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn extract_rg_legacy_overrides_r128() {
+        let parsed = tags_from(&[
+            ("R128_TRACK_GAIN", "-1280"),           // -5 dB R128 → 0 dB RG
+            ("REPLAYGAIN_TRACK_GAIN", "-6.75 dB"),  // wins the override
+        ]);
+        let rg = extract_replaygain(&parsed);
+        assert!((rg.track_gain - (-6.75)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn extract_rg_legacy_gain_accepts_no_unit() {
+        let parsed = tags_from(&[("REPLAYGAIN_TRACK_GAIN", "-3.5")]);
+        let rg = extract_replaygain(&parsed);
+        assert!((rg.track_gain - (-3.5)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn extract_rg_peak_passes_through() {
+        let parsed = tags_from(&[("R128_TRACK_PEAK", "0.95")]);
+        let rg = extract_replaygain(&parsed);
+        assert!((rg.track_peak - 0.95).abs() < 1e-3);
+    }
+
+    #[test]
+    fn extract_rg_malformed_is_nan() {
+        let parsed = tags_from(&[("R128_TRACK_GAIN", "not_a_number")]);
+        let rg = extract_replaygain(&parsed);
+        assert!(rg.track_gain.is_nan());
+    }
+
+    #[test]
+    fn extract_rg_malformed_legacy_does_not_wipe_r128() {
+        let parsed = tags_from(&[
+            ("R128_TRACK_GAIN", "-1280"),
+            ("REPLAYGAIN_TRACK_GAIN", "boom"),
+        ]);
+        let rg = extract_replaygain(&parsed);
+        assert!((rg.track_gain - 0.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn r128_gain_out_of_range_is_none() {
+        // i32::MIN through Q7.8 conversion ≈ -8.4 million dB, which is
+        // almost certainly file corruption. We reject rather than emit
+        // a catastrophic gain value. Matches libopusfile's R128 clamp.
+        let extreme = i32::MIN.to_string();
+        assert!(parse_r128_gain(&extreme).is_none(), "i32::MIN must reject");
+
+        let extreme_pos = i32::MAX.to_string();
+        assert!(parse_r128_gain(&extreme_pos).is_none(), "i32::MAX must reject");
+
+        // Values just outside the ±127 dB window also reject. 127 dB
+        // plus the +5 dB RG offset pre-subtraction: raw = (122 dB) * 256
+        // = 31_232 is just inside, and one past that clamp is out.
+        // In practice, anything beyond ~±32k Q7.8 maps outside ±127 dB.
+        let just_out = (128 * 256 + 1).to_string(); // > 128 dB raw
+        assert!(
+            parse_r128_gain(&just_out).is_none(),
+            "value outside ±127 dB window must reject"
+        );
+
+        // Confirm normal values still work as a sanity check.
+        assert!(parse_r128_gain("-1280").is_some());
+    }
+
+    #[test]
+    fn extract_rg_r128_extreme_gain_is_nan() {
+        // End-to-end: a corrupted R128_TRACK_GAIN value surfaces as NaN in
+        // the extracted RG struct, not as a catastrophic finite gain.
+        let parsed = tags_from(&[("R128_TRACK_GAIN", &i32::MIN.to_string())]);
+        let rg = extract_replaygain(&parsed);
+        assert!(rg.track_gain.is_nan());
     }
 }
