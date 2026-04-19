@@ -2129,6 +2129,16 @@ impl CeltDecoder {
         &self.old_log_e2
     }
 
+    /// Get background_log_e (debug accessor).
+    pub fn debug_background_log_e(&self) -> &[i32] {
+        &self.background_log_e
+    }
+
+    /// Length of the per-channel decode_mem slab (DECODE_BUFFER_SIZE + overlap).
+    pub fn debug_decode_mem_stride(&self) -> usize {
+        self.decode_mem.len() / self.channels.max(1) as usize
+    }
+
     /// Get a slice of decode_mem (debug accessor).
     pub fn debug_get_decode_mem(&self, offset: usize, count: usize) -> &[i32] {
         &self.decode_mem[offset..offset + count]

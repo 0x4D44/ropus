@@ -304,6 +304,11 @@ fn main() {
     // Stage 8.6 shim: full encoder-side pipeline (DREDEnc init, compute
     // latents, encode silk frame) behind opaque handles.
     build.file(harness_dir.join("dred_encode_shim.c"));
+    // Stage 7b.3 diagnostic peek — pure-read getters into C-ref private
+    // state. Compiled into the same static lib so they see `config.h`,
+    // `ENABLE_DEEP_PLC=1`, and the internal headers without touching
+    // `reference/`.
+    build.file(harness_dir.join("c/peek.c"));
 
     build.compile("opus_ref_float");
 
@@ -313,4 +318,5 @@ fn main() {
     println!("cargo:rerun-if-changed=dred_enc_shim.c");
     println!("cargo:rerun-if-changed=dred_dec_shim.c");
     println!("cargo:rerun-if-changed=dred_encode_shim.c");
+    println!("cargo:rerun-if-changed=c/peek.c");
 }

@@ -9,6 +9,7 @@ members = [
     "ropusplay",
     "harness",
     "harness-deep-plc",
+    "harness-control",
     "capi",
     "ropus-fb2k",
     "tests/conformance",

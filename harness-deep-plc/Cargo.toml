@@ -1,6 +1,6 @@
 [package]
 name = "ropus-harness-deep-plc"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 license = "BSD-3-Clause"
 publish = false
@@ -12,4 +12,12 @@ ropus = { path = "../ropus" }
 [build-dependencies]
 cc = "1"
 
-# No [[bin]] — this crate only exists for integration tests under `tests/`.
+# Stage 7b.3 control experiment: a single [[bin]] target that decodes a
+# packet stream through the float-mode C reference at complexity = 4, so
+# DEEP_PLC stays dormant and classical SILK PLC fills lost frames. Paired
+# with `ctrl_decode_fixed` in the fixed-point `harness` crate; the
+# `harness-control` crate orchestrates the two and computes the
+# fixed-vs-float arithmetic-gap SNR.
+[[bin]]
+name = "ctrl_decode_float"
+path = "src/bin/ctrl_decode_float.rs"

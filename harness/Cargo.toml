@@ -1,6 +1,6 @@
 [package]
 name = "ropus-harness"
-version = "0.0.0"
+version = "0.0.1"
 edition = "2024"
 license = "BSD-3-Clause"
 publish = false
@@ -43,3 +43,7 @@ path = "src/bin/projection_roundtrip.rs"
 [[bin]]
 name = "corpus_diff"
 path = "src/bin/corpus_diff.rs"
+
+[[bin]]
+name = "ctrl_decode_fixed"
+path = "src/bin/ctrl_decode_fixed.rs"

@@ -1,0 +1,16 @@
+[package]
+name = "ropus-harness-control"
+version = "0.1.0"
+edition = "2024"
+license = "BSD-3-Clause"
+publish = false
+description = "Stage 7b.3 control harness: measures the fixed-vs-float arithmetic-gap ceiling of classical SILK PLC by diffing the C reference against itself in two build flavours. Sits one level above `harness/` (fixed-point) and `harness-deep-plc/` (float) and spawns their `ctrl_decode_*` binaries to decode the same packet stream."
+
+[dependencies]
+ropus = { path = "../ropus" }
+
+# No build-dependencies — the orchestrator crate is pure Rust. It asks
+# `cargo` to build the two sibling decoder binaries on demand via
+# `cargo build -p ... --bin ...`, then exec's them.
+
+# No [[bin]] — only the integration test under `tests/control_snr.rs`.

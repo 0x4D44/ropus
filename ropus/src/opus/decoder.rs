@@ -1449,6 +1449,16 @@ impl OpusDecoder {
         self.celt_dec.debug_old_log_e2()
     }
 
+    /// Get the CELT decoder's background_log_e (for debug comparison).
+    pub fn debug_get_background_log_e(&self) -> &[i32] {
+        self.celt_dec.debug_background_log_e()
+    }
+
+    /// Get the CELT decode_mem per-channel stride length.
+    pub fn debug_get_decode_mem_stride(&self) -> usize {
+        self.celt_dec.debug_decode_mem_stride()
+    }
+
     /// Get the CELT decoder's postfilter state (for debug comparison).
     pub fn debug_get_preemph_mem(&self) -> [i32; 2] {
         self.celt_dec.preemph_mem_d

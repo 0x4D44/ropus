@@ -142,6 +142,59 @@ unsafe extern "C" {
         out_process_stage: *mut c_int,
         out_dred_offset: *mut c_int,
     ) -> c_int;
+
+    // Stage 7b.3 diagnostic peek getters (harness-deep-plc/c/peek.c).
+    pub fn peek_decode_mem(
+        opus_st: *const OpusDecoder,
+        offset: c_int,
+        count: c_int,
+        out: *mut f32,
+    ) -> c_int;
+    pub fn peek_decode_mem_stride(opus_st: *const OpusDecoder) -> c_int;
+    pub fn peek_old_band_e(
+        opus_st: *const OpusDecoder,
+        offset: c_int,
+        count: c_int,
+        out: *mut f32,
+    ) -> c_int;
+    pub fn peek_old_log_e(
+        opus_st: *const OpusDecoder,
+        offset: c_int,
+        count: c_int,
+        out: *mut f32,
+    ) -> c_int;
+    pub fn peek_background_log_e(
+        opus_st: *const OpusDecoder,
+        offset: c_int,
+        count: c_int,
+        out: *mut f32,
+    ) -> c_int;
+    pub fn peek_nb_ebands(opus_st: *const OpusDecoder) -> c_int;
+
+    // SILK-side peeks
+    pub fn peek_silk_fs_khz_top(opus_st: *const OpusDecoder) -> c_int;
+    pub fn peek_silk_prev_gain(opus_st: *const OpusDecoder) -> opus_int32;
+    pub fn peek_silk_s_lpc_q14(
+        opus_st: *const OpusDecoder,
+        out: *mut opus_int32,
+        max_count: c_int,
+    ) -> c_int;
+    pub fn peek_silk_plc_prev_gain_top(
+        opus_st: *const OpusDecoder,
+        out: *mut opus_int32,
+    ) -> c_int;
+    pub fn peek_silk_plc_pitch(opus_st: *const OpusDecoder) -> opus_int32;
+    pub fn peek_silk_plc_rand_scale(opus_st: *const OpusDecoder) -> opus_int32;
+    pub fn peek_silk_plc_last_lost(opus_st: *const OpusDecoder) -> c_int;
+    pub fn peek_silk_plc_fs(opus_st: *const OpusDecoder) -> c_int;
+    pub fn peek_silk_outbuf(
+        opus_st: *const OpusDecoder,
+        offset: c_int,
+        count: c_int,
+        out: *mut i16,
+    ) -> c_int;
+    pub fn peek_silk_ltpmem(opus_st: *const OpusDecoder) -> c_int;
+    pub fn peek_silk_framelen(opus_st: *const OpusDecoder) -> c_int;
 }
 
 /// Thin RAII wrapper around the C float-mode decoder — used by the tier-2
@@ -194,6 +247,88 @@ impl CRefFloatDecoder {
         let ret =
             unsafe { opus_decoder_ctl(self.ptr, OPUS_SET_COMPLEXITY_REQUEST, complexity) };
         if ret == OPUS_OK { Ok(()) } else { Err(ret) }
+    }
+
+    /// Stage 7b.3 diagnostic: read `count` samples from the CELT decode_mem
+    /// starting at `offset`. Returns samples as f32 (float-mode `celt_sig`).
+    pub fn peek_decode_mem(&self, offset: i32, count: i32) -> Vec<f32> {
+        let mut out = vec![0.0f32; count as usize];
+        unsafe { peek_decode_mem(self.ptr, offset, count, out.as_mut_ptr()) };
+        out
+    }
+
+    /// Per-channel stride of the CELT decode_mem slab.
+    pub fn decode_mem_stride(&self) -> i32 {
+        unsafe { peek_decode_mem_stride(self.ptr) }
+    }
+
+    /// Stage 7b.3 diagnostic: read oldBandE entries as f32 (celt_glog).
+    pub fn peek_old_band_e(&self, offset: i32, count: i32) -> Vec<f32> {
+        let mut out = vec![0.0f32; count as usize];
+        unsafe { peek_old_band_e(self.ptr, offset, count, out.as_mut_ptr()) };
+        out
+    }
+
+    /// Stage 7b.3 diagnostic: read oldLogE entries as f32 (celt_glog).
+    pub fn peek_old_log_e(&self, offset: i32, count: i32) -> Vec<f32> {
+        let mut out = vec![0.0f32; count as usize];
+        unsafe { peek_old_log_e(self.ptr, offset, count, out.as_mut_ptr()) };
+        out
+    }
+
+    /// Stage 7b.3 diagnostic: read backgroundLogE entries as f32 (celt_glog).
+    pub fn peek_background_log_e(&self, offset: i32, count: i32) -> Vec<f32> {
+        let mut out = vec![0.0f32; count as usize];
+        unsafe { peek_background_log_e(self.ptr, offset, count, out.as_mut_ptr()) };
+        out
+    }
+
+    /// nbEBands of the active CELT mode.
+    pub fn nb_ebands(&self) -> i32 {
+        unsafe { peek_nb_ebands(self.ptr) }
+    }
+
+    // --- SILK peeks ---
+
+    pub fn silk_fs_khz(&self) -> i32 {
+        unsafe { peek_silk_fs_khz_top(self.ptr) }
+    }
+    pub fn silk_prev_gain_q16(&self) -> i32 {
+        unsafe { peek_silk_prev_gain(self.ptr) }
+    }
+    /// MAX_LPC_ORDER = 16 entries.
+    pub fn silk_s_lpc_q14(&self) -> [i32; 16] {
+        let mut out = [0i32; 16];
+        unsafe { peek_silk_s_lpc_q14(self.ptr, out.as_mut_ptr(), 16) };
+        out
+    }
+    pub fn silk_plc_prev_gain_q16(&self) -> [i32; 2] {
+        let mut out = [0i32; 2];
+        unsafe { peek_silk_plc_prev_gain_top(self.ptr, out.as_mut_ptr()) };
+        out
+    }
+    pub fn silk_plc_pitch_l_q8(&self) -> i32 {
+        unsafe { peek_silk_plc_pitch(self.ptr) }
+    }
+    pub fn silk_plc_rand_scale_q14(&self) -> i32 {
+        unsafe { peek_silk_plc_rand_scale(self.ptr) }
+    }
+    pub fn silk_plc_last_frame_lost(&self) -> i32 {
+        unsafe { peek_silk_plc_last_lost(self.ptr) }
+    }
+    pub fn silk_plc_fs_khz(&self) -> i32 {
+        unsafe { peek_silk_plc_fs(self.ptr) }
+    }
+    pub fn silk_out_buf(&self, offset: i32, count: i32) -> Vec<i16> {
+        let mut out = vec![0i16; count as usize];
+        unsafe { peek_silk_outbuf(self.ptr, offset, count, out.as_mut_ptr()) };
+        out
+    }
+    pub fn silk_ltp_mem_length(&self) -> i32 {
+        unsafe { peek_silk_ltpmem(self.ptr) }
+    }
+    pub fn silk_frame_length(&self) -> i32 {
+        unsafe { peek_silk_framelen(self.ptr) }
     }
 }
 
