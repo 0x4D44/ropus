@@ -405,7 +405,11 @@ pub unsafe extern "C" fn opus_multistream_encode(
         let Some(ms) = (unsafe { handle_to_ms_encoder(st) }) else {
             return OPUS_BAD_ARG;
         };
-        let nb_channels = ms.nb_streams() + ms.nb_coupled_streams();
+        // Input PCM is interleaved across ALL layout channels, including any
+        // muted ones. `nb_channels` is the correct width; matches C reference
+        // `opus_multistream_encode_native` (reads `st->layout.nb_channels`
+        // samples per frame slot).
+        let nb_channels = ms.nb_channels();
         let Some(n_samples) = (frame_size as usize).checked_mul(nb_channels as usize) else {
             return OPUS_BAD_ARG;
         };

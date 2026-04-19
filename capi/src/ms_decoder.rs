@@ -294,7 +294,13 @@ pub unsafe extern "C" fn opus_multistream_decode(
         let Some(ms) = (unsafe { handle_to_ms_decoder(st) }) else {
             return OPUS_BAD_ARG;
         };
-        let nb_channels = ms.nb_streams() + ms.nb_coupled_streams();
+        // Output PCM is interleaved across ALL layout channels, including any
+        // muted channels (mapping == 255). Using `nb_streams + nb_coupled_streams`
+        // undercounts by the number of muted channels (e.g. the test-suite
+        // `MSdec_err` with channels=3, streams=2, coupled=0, mapping=[0,1,255]).
+        // Matches C reference `opus_multistream_decode_native` which sizes
+        // `pcm` as `frame_size * st->layout.nb_channels`.
+        let nb_channels = ms.nb_channels();
         let Some(n_samples) = (frame_size as usize).checked_mul(nb_channels as usize) else {
             return OPUS_BAD_ARG;
         };
@@ -334,7 +340,9 @@ pub unsafe extern "C" fn opus_multistream_decode_float(
         let Some(ms) = (unsafe { handle_to_ms_decoder(st) }) else {
             return OPUS_BAD_ARG;
         };
-        let nb_channels = ms.nb_streams() + ms.nb_coupled_streams();
+        // Same rationale as the i16 path above: size by total layout
+        // channels (including muted), not the physically-routed count.
+        let nb_channels = ms.nb_channels();
         let Some(n_samples) = (frame_size as usize).checked_mul(nb_channels as usize) else {
             return OPUS_BAD_ARG;
         };

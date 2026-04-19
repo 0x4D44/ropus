@@ -1363,3 +1363,88 @@ fn test_encoder_final_range_matches_decoder_on_hybrid_cvbr_min_packet_floor() {
     unsafe { opus_decoder_destroy(c_dec) };
 }
 
+/// Regression for `test_opus_encode.c` `fuzz_encoder_settings` failure:
+/// when the requested bitrate falls below the encoder's "useful work" floor
+/// (`bitrate_bps < 3 * frame_rate * 8`), ropus must emit a short "PLC" frame
+/// whose TOC advertises the caller's actual frame duration — not whatever
+/// mode the previous frame used. Before the fix, a 2.5 ms frame at 8 kHz
+/// with 6 kbps produced a `MODE_SILK_ONLY` TOC with garbage period bits
+/// (`(period-2) << 3` underflowing when `period == 0`), which decoded as
+/// a 10 ms packet and returned 80 samples instead of the requested 20.
+/// C reference: `opus_encoder.c:1340-1406`.
+#[test]
+fn test_encoder_toc_matches_reference_on_below_threshold_2p5ms_frame() {
+    const OPUS_SET_FORCE_CHANNELS_REQUEST: c_int = 4022;
+    const OPUS_SET_MAX_BANDWIDTH_REQUEST: c_int = 4004;
+    const OPUS_SET_EXPERT_FRAME_DURATION_REQUEST: c_int = 4040;
+    const OPUS_FRAMESIZE_2_5_MS: c_int = 5001;
+    const OPUS_BANDWIDTH_FULLBAND: c_int = 1105;
+
+    let sr: i32 = 8000;
+    let ch: i32 = 2;
+    let frame_size: i32 = sr / 400; // 2.5 ms → 20 samples @ 8 kHz
+
+    let mut enc = OpusEncoder::new(sr, ch, OPUS_APPLICATION_VOIP).unwrap();
+    enc.set_bitrate(6_000);
+    enc.set_vbr(1);
+    enc.set_vbr_constraint(1);
+    enc.set_complexity(8);
+    enc.set_force_channels(1);
+    enc.set_max_bandwidth(OPUS_BANDWIDTH_FULLBAND);
+    enc.set_expert_frame_duration(OPUS_FRAMESIZE_2_5_MS);
+
+    let pcm = patterned_pcm_i16(frame_size as usize, ch as usize, 12345);
+    let mut out = vec![0u8; 1500];
+    let len = enc.encode(&pcm, frame_size, &mut out, 1500).unwrap();
+    assert!(len > 0, "ropus encode returned {len}");
+    let ropus_pkt = &out[..len as usize];
+    let ropus_toc = ropus_pkt[0];
+    let ropus_config = ropus_toc >> 3;
+    eprintln!(
+        "ropus: len={len}, TOC=0x{:02x}, config={}, stereo={}, code={}",
+        ropus_toc,
+        ropus_config,
+        (ropus_toc >> 2) & 1,
+        ropus_toc & 0x3,
+    );
+
+    // Compare to the C reference encoder's output.
+    let c_enc = unsafe {
+        let mut err: c_int = 0;
+        let e = opus_encoder_create(sr, ch, OPUS_APPLICATION_VOIP, &mut err);
+        assert!(!e.is_null() && err == 0);
+        e
+    };
+    unsafe {
+        opus_encoder_ctl(c_enc, OPUS_SET_BITRATE_REQUEST, 6_000i32);
+        opus_encoder_ctl(c_enc, OPUS_SET_VBR_REQUEST, 1i32);
+        opus_encoder_ctl(c_enc, OPUS_SET_COMPLEXITY_REQUEST, 8i32);
+        opus_encoder_ctl(c_enc, OPUS_SET_FORCE_CHANNELS_REQUEST, 1i32);
+        opus_encoder_ctl(c_enc, OPUS_SET_MAX_BANDWIDTH_REQUEST, OPUS_BANDWIDTH_FULLBAND);
+        opus_encoder_ctl(
+            c_enc,
+            OPUS_SET_EXPERT_FRAME_DURATION_REQUEST,
+            OPUS_FRAMESIZE_2_5_MS,
+        );
+    }
+    let mut c_out = vec![0u8; 1500];
+    let c_len = unsafe { opus_encode(c_enc, pcm.as_ptr(), frame_size, c_out.as_mut_ptr(), 1500) };
+    assert!(c_len > 0, "C-ref encode returned {c_len}");
+    let c_toc = c_out[0];
+    let c_config = c_toc >> 3;
+    eprintln!(
+        "C-ref: len={c_len}, TOC=0x{:02x}, config={}, stereo={}, code={}",
+        c_toc,
+        c_config,
+        (c_toc >> 2) & 1,
+        c_toc & 0x3,
+    );
+    unsafe { opus_encoder_destroy(c_enc) };
+
+    // If the TOCs differ, the encoder is packing the wrong frame duration.
+    assert_eq!(
+        ropus_config, c_config,
+        "ropus TOC config={ropus_config} but C-ref config={c_config}"
+    );
+}
+

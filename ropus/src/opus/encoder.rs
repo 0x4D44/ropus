@@ -1325,26 +1325,90 @@ impl OpusEncoder {
         let max_rate = bits_to_bitrate(max_data_bytes * 8, self.fs, frame_size);
 
         // --- PLC frame emission ---
+        // Mirrors `opus_encoder.c:1340-1406`: when there isn't enough budget to
+        // do anything useful, emit a short packet describing the frame shape so
+        // the decoder can at least run PLC for the right duration. Critically,
+        // this branch must (1) force CELT-only for frame_rate > 100 Hz (2.5 ms
+        // and 5 ms frames), (2) encode 40 ms CELT/HYBRID as 2×20 ms with
+        // `packet_code=1`, (3) encode 60-120 ms frames as code-3 multiframes
+        // or SILK-only code-0/1 packets, and (4) pad to `max_data_bytes` under
+        // CBR. Omitting any of this causes the TOC to advertise a different
+        // frame duration than what the caller passed (see the 12 kHz 2.5 ms
+        // failure in `test_opus_encode.c` fuzz_encoder_settings).
         if max_data_bytes < 3
             || bitrate_bps < 3 * frame_rate * 8
             || (frame_rate < 50 && (max_data_bytes * frame_rate < 300 || bitrate_bps < 2400))
         {
-            // Emit 1-byte TOC-only packet
-            let toc_mode = if self.prev_mode == 0 {
-                MODE_SILK_ONLY
-            } else {
-                self.prev_mode
-            };
-            let toc_bw = if self.bandwidth == 0 {
+            let mut toc_mode = self.mode;
+            let mut bw = if self.bandwidth == 0 {
                 OPUS_BANDWIDTH_NARROWBAND
             } else {
                 self.bandwidth
             };
-            data[0] = gen_toc(toc_mode, frame_rate, toc_bw, self.stream_channels);
+            let mut packet_code: i32 = 0;
+            let mut num_multiframes: i32 = 0;
+            let mut toc_frame_rate = frame_rate;
+
+            if toc_mode == 0 {
+                toc_mode = MODE_SILK_ONLY;
+            }
+            if toc_frame_rate > 100 {
+                toc_mode = MODE_CELT_ONLY;
+            }
+            // 40 ms -> 2 × 20 ms for CELT_ONLY / HYBRID.
+            if toc_frame_rate == 25 && toc_mode != MODE_SILK_ONLY {
+                toc_frame_rate = 50;
+                packet_code = 1;
+            }
+            // >= 60 ms frames.
+            if toc_frame_rate <= 16 {
+                // 1×60 ms (SILK-only at 16 Hz), 2×40 ms (12 Hz) or 2×60 ms
+                // (8 Hz) via code-1 SILK_ONLY, else code-3 multiframe.
+                if out_data_bytes == 1
+                    || (toc_mode == MODE_SILK_ONLY && toc_frame_rate != 10)
+                {
+                    toc_mode = MODE_SILK_ONLY;
+                    packet_code = if toc_frame_rate <= 12 { 1 } else { 0 };
+                    toc_frame_rate = if toc_frame_rate == 12 { 25 } else { 16 };
+                } else {
+                    num_multiframes = 50 / toc_frame_rate;
+                    toc_frame_rate = 50;
+                    packet_code = 3;
+                }
+            }
+
+            // Clamp bandwidth to what the chosen mode can express in the TOC.
+            if toc_mode == MODE_SILK_ONLY && bw > OPUS_BANDWIDTH_WIDEBAND {
+                bw = OPUS_BANDWIDTH_WIDEBAND;
+            } else if toc_mode == MODE_CELT_ONLY && bw == OPUS_BANDWIDTH_MEDIUMBAND {
+                bw = OPUS_BANDWIDTH_NARROWBAND;
+            } else if toc_mode == MODE_HYBRID && bw <= OPUS_BANDWIDTH_SUPERWIDEBAND {
+                bw = OPUS_BANDWIDTH_SUPERWIDEBAND;
+            }
+
+            data[0] = gen_toc(toc_mode, toc_frame_rate, bw, self.stream_channels);
+            data[0] |= packet_code as u8;
+
+            let mut ret: i32 = if packet_code <= 1 { 1 } else { 2 };
+            let padded_len = max_data_bytes.max(ret);
+
+            if packet_code == 3 {
+                data[1] = num_multiframes as u8;
+            }
+
+            if self.use_vbr == 0 {
+                // CBR: pad to the full CBR byte count.
+                let pad_ret = crate::opus::repacketizer::opus_packet_pad(data, ret, padded_len);
+                if pad_ret == OPUS_OK {
+                    ret = padded_len;
+                } else {
+                    return Err(OPUS_INTERNAL_ERROR);
+                }
+            }
+
             self.range_final = 0;
-            // Update delay buffer
             self.update_delay_buffer(pcm, frame_size);
-            return Ok(1);
+            return Ok(ret);
         }
 
         // --- Equivalent rate ---
