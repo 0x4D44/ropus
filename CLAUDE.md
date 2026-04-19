@@ -40,10 +40,9 @@ mdopus/                     # workspace root (disk name)
 │   ├── conformance/        # workspace member: conformance suite
 │   ├── fuzz/               # cargo-fuzz targets (excluded from workspace)
 │   └── vectors/            # deterministic WAV fixtures
-├── assets/                 # Architecture docs and code review notes per module
 ├── tools/                  # Coordinator, integration scripts, bisect/trace utilities
-├── notes/                  # Working scratchpad and investigation logs
-├── wrk_docs/ wrk_journals/ # HLDs and investigation journals
+├── wrk_docs/               # HLDs and design docs (design_docs/ holds per-module architecture + review notes)
+├── wrk_journals/           # Investigation journals
 └── logs/                   # Coordinator run logs (git-ignored)
 ```
 

@@ -7,9 +7,9 @@ This project is a Rust port of the Opus codec. Core code lives in `src/`.
 - `src/types.rs`: fixed-point numeric types and helper utilities.
 - `tests/harness/`: `mdopus-compare` binary, C FFI build script, and bindings used for bit-exact validation.
 - `tests/vectors/`: deterministic WAV fixtures for comparison runs.
-- `assets/`: architecture/design notes and generated documentation.
+- `wrk_docs/design_docs/`: architecture/design notes and generated documentation.
 - `tools/`: coordinator and workflow scripts.
-- `notes/`, `logs/`, `wrk_docs/`, `wrk_journals/`: process notes and artifacts.
+- `logs/`, `wrk_docs/`, `wrk_journals/`: process notes and artifacts.
 
 ## Build, Test, and Development Commands
 - `cargo build`  
