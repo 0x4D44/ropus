@@ -35,10 +35,10 @@ notes/*.log
 /tests/vectors/real_world/*.webm
 
 # foobar2000 SDK (not redistributable; tools/fetch-fb2k-sdk.ps1 fetches it).
-/fb2k-ropus/sdk/
+/foo_ropus/sdk/
 
-# CMake build output for the fb2k-ropus C++ component.
-/fb2k-ropus/build/
+# CMake build output for the foo_ropus C++ component.
+/foo_ropus/build/
 
 # IETF RFC 6716 / RFC 8251 test vectors (~71 MB; fetched by
 # tools/fetch_ietf_vectors.sh / .ps1 and used by the conformance

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(fb2k_ropus CXX)
+project(foo_ropus CXX)
 
 # --------------------------------------------------------------------------
 # foo_ropus — single-DLL foobar2000 input component
@@ -245,7 +245,7 @@ set_target_properties(foo_ropus PROPERTIES
 target_compile_definitions(foo_ropus PRIVATE _WINDLL)
 
 # Rust staticlib's C ABI header. The `..` path is stable because
-# fb2k-ropus/ and ropus-fb2k/ are sibling directories under the workspace
+# foo_ropus/ and ropus-fb2k/ are sibling directories under the workspace
 # root — do not collapse into a single name without a second pair of eyes.
 target_include_directories(foo_ropus PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../ropus-fb2k/include"

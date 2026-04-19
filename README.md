@@ -10,7 +10,7 @@ This repository is a Cargo workspace: the published library crate lives in `ropu
 
 - `ropus/src/` contains codec modules (`celt`, `silk`, `opus`, `dnn`) and shared types in `types.rs`.
 - End-user CLI binaries, one crate per command: `ropusenc/` (encode any symphonia-supported input to Ogg Opus), `ropusdec/` (decode Ogg Opus to WAV or raw PCM), `ropusinfo/` (print stream metadata), `ropusplay/` (play via the default output device).
-- `ropus-fb2k/` is a foobar2000 input-component backend — Ogg Opus demux + ropus decoder behind a stable C ABI — paired with the C++ SDK adapter in `fb2k-ropus/`.
+- `ropus-fb2k/` is a foobar2000 input-component backend — Ogg Opus demux + ropus decoder behind a stable C ABI — paired with the C++ SDK adapter in `foo_ropus/` (the directory name matches the built DLL, `foo_ropus.dll`, per the standard foobar2000 `foo_*` naming convention).
 - `harness/` builds C Opus as `opus_ref` and runs `ropus-compare`.
 - `capi/` exposes the Rust codec through the libopus C ABI.
 - `tests/conformance/` is the workspace conformance suite; `tests/vectors/` stores deterministic WAV fixtures.
@@ -87,9 +87,12 @@ either 16-bit-PCM WAV, 32-bit-float WAV, or raw interleaved PCM.
 ### foobar2000 plugin
 
 A Windows foobar2000 input-component backed by ropus lives in
-`ropus-fb2k/` (Rust, decoder + Ogg demux behind a stable C ABI) plus
-`fb2k-ropus/` (C++ SDK adapter). Build the C++ side against the foobar2000
-SDK; it links the Rust static library produced by `cargo build -p ropus-fb2k`.
+`ropus-fb2k/` (Rust: decoder + Ogg demux behind a stable C ABI) plus
+`foo_ropus/` (C++ SDK adapter — the directory name matches the shipped
+DLL, `foo_ropus.dll`, per the foobar2000 `foo_*` plugin naming convention).
+Build the C++ side via `pwsh -File foo_ropus\build.ps1`; it drives CMake,
+cascades into `cargo build -p ropus-fb2k` for the Rust staticlib, and
+packages the result as `foo_ropus.fb2k-component`.
 
 ## Testing scope
 
@@ -128,7 +131,7 @@ ropus/            # workspace root
 ├── ropusinfo/    # CLI: Ogg Opus stream metadata
 ├── ropusplay/    # CLI: play audio via the default output device
 ├── ropus-fb2k/   # foobar2000 input-component backend (Rust, stable C ABI)
-├── fb2k-ropus/   # foobar2000 SDK adapter (C++) loading ropus-fb2k
+├── foo_ropus/    # foobar2000 SDK adapter (C++) — builds foo_ropus.dll
 ├── harness/      # comparison binary + bindings (ropus-compare)
 ├── capi/         # C ABI shim (libopus-compatible)
 ├── tests/

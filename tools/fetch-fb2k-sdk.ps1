@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Fetch foobar2000 SDK 2025-03-07 and unpack it into fb2k-ropus\sdk\.
+  Fetch foobar2000 SDK 2025-03-07 and unpack it into foo_ropus\sdk\.
 
 .DESCRIPTION
   Downloads SDK-2025-03-07.7z from foobar2000.org, verifies Content-Length
@@ -33,7 +33,7 @@ $SdkUrl      = 'https://www.foobar2000.org/downloads/SDK-2025-03-07.7z'
 $ExpectedLen = 765947  # bytes, from HEAD response 2026-04-19
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$SdkDir   = Join-Path $RepoRoot 'fb2k-ropus\sdk'
+$SdkDir   = Join-Path $RepoRoot 'foo_ropus\sdk'
 $TempFile = Join-Path $env:TEMP "SDK-2025-03-07-$([Guid]::NewGuid().ToString('N')).7z"
 
 Write-Host "[fetch-fb2k-sdk] workspace  : $RepoRoot"
@@ -88,7 +88,7 @@ finally {
 }
 
 # Spot-check: confirm the archive produced the top-level dirs we'll link
-# against in fb2k-ropus\CMakeLists.txt. If these are missing, the SDK
+# against in foo_ropus\CMakeLists.txt. If these are missing, the SDK
 # layout has drifted and the M4 build will fail in a harder-to-diagnose
 # spot.
 $wantDirs = @('foobar2000', 'pfc')

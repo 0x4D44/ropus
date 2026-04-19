@@ -1,4 +1,4 @@
-# fb2k-ropus — foobar2000 input component (C++)
+# foo_ropus — foobar2000 input component (C++)
 
 Builds `foo_ropus.dll`: a single-DLL foobar2000 input component that
 decodes `.opus` files via the statically-linked Rust `ropus-fb2k` crate.
@@ -27,7 +27,7 @@ pwsh -File tools\fetch-fb2k-sdk.ps1
 ```
 
 This downloads `SDK-2025-03-07.7z` from foobar2000.org, verifies its size,
-and extracts it into `fb2k-ropus\sdk\`. The script is idempotent; pass
+and extracts it into `foo_ropus\sdk\`. The script is idempotent; pass
 `-Force` to wipe and reinstall.
 
 ## Build
@@ -35,8 +35,8 @@ and extracts it into `fb2k-ropus\sdk\`. The script is idempotent; pass
 From the workspace root (`c:\language\mdopus`):
 
 ```powershell
-cmake -S fb2k-ropus -B fb2k-ropus\build -G "Visual Studio 17 2022" -A x64
-cmake --build fb2k-ropus\build --config Release
+cmake -S foo_ropus -B foo_ropus\build -G "Visual Studio 17 2022" -A x64
+cmake --build foo_ropus\build --config Release
 ```
 
 If you are on VS 2026, swap the generator for `"Visual Studio 18 2026"`.
@@ -47,20 +47,20 @@ Note: a single `cmake --build` run drives `cargo build -p ropus-fb2k` as a
 dependency of the C++ link step, so the Rust staticlib (`ropus_fb2k.lib`)
 is (re)built as needed automatically. No separate cargo invocation required.
 
-The output DLL lands at `fb2k-ropus\build\Release\foo_ropus.dll`.
+The output DLL lands at `foo_ropus\build\Release\foo_ropus.dll`.
 
 ## Packaging
 
 For a distributable build, use the wrapper script:
 
 ```powershell
-pwsh -File fb2k-ropus\build.ps1
+pwsh -File foo_ropus\build.ps1
 ```
 
 This runs CMake Release (cascading into `cargo` for the Rust staticlib)
 and then packages `foo_ropus.dll` into a `.fb2k-component` archive with
 the `x64/foo_ropus.dll` layout fb2k expects. The archive lands at
-`fb2k-ropus\build\foo_ropus.fb2k-component`. Pass `-Clean` to wipe
+`foo_ropus\build\foo_ropus.fb2k-component`. Pass `-Clean` to wipe
 `build\` first.
 
 ## Install
@@ -75,8 +75,8 @@ Two install flows:
 
 **From the `.fb2k-component` archive** (normal user flow):
 
-1. Run `pwsh -File fb2k-ropus\build.ps1` to produce
-   `fb2k-ropus\build\foo_ropus.fb2k-component`.
+1. Run `pwsh -File foo_ropus\build.ps1` to produce
+   `foo_ropus\build\foo_ropus.fb2k-component`.
 2. Double-click the `.fb2k-component` file, or drag it into *Preferences
    → Components* in a running foobar2000. fb2k unpacks the DLL into
    `%APPDATA%\foobar2000-v2\user-components-x64\foo_ropus\` itself and
@@ -86,7 +86,7 @@ Two install flows:
 
 ```
 mkdir %APPDATA%\foobar2000-v2\user-components-x64\foo_ropus
-copy fb2k-ropus\build\Release\foo_ropus.dll ^
+copy foo_ropus\build\Release\foo_ropus.dll ^
      %APPDATA%\foobar2000-v2\user-components-x64\foo_ropus\
 ```
 
@@ -98,7 +98,7 @@ console and plays the audio.
 ## Layout
 
 ```
-fb2k-ropus/
+foo_ropus/
 ├── CMakeLists.txt              build script (drives cargo + builds pfc/SDK/component)
 ├── README.md                   this file
 ├── sdk/                        foobar2000 SDK — fetched, git-ignored

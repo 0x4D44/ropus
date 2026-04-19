@@ -19,8 +19,8 @@
   Idempotent: re-run safely. Pass -Clean to wipe build\ first.
 
 .EXAMPLE
-  pwsh -File fb2k-ropus\build.ps1
-  pwsh -File fb2k-ropus\build.ps1 -Clean
+  pwsh -File foo_ropus\build.ps1
+  pwsh -File foo_ropus\build.ps1 -Clean
 #>
 
 [CmdletBinding()]
