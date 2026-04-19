@@ -1,0 +1,15 @@
+[package]
+name = "ropus-harness-deep-plc"
+version = "0.1.0"
+edition = "2024"
+license = "BSD-3-Clause"
+publish = false
+description = "Sibling float-mode harness for DEEP_PLC comparison between ropus and the xiph C reference. See `wrk_journals/2026.04.19 - JRN - stage7-dnn-wiring-supervisor.md` Stage 7b.2."
+
+[dependencies]
+ropus = { path = "../ropus" }
+
+[build-dependencies]
+cc = "1"
+
+# No [[bin]] — this crate only exists for integration tests under `tests/`.
