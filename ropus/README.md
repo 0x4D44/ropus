@@ -59,6 +59,16 @@ Deferred:
 - OSCE / DRED neural post-processing
 - Analysis / tonality detection (encoder runs without it)
 
+## Performance & SIMD
+
+ropus uses portable SIMD through the [`wide`](https://crates.io/crates/wide)
+crate and runs at approximate parity with the xiph/opus C reference. Platform-
+specific intrinsics (ARM NEON, x86 AVX) are intentionally deferred: at C-parity,
+a hand-tuned per-architecture backend is optimization-above-parity rather than
+a correctness gate, so it is not a shipping requirement and not a blocker to
+adoption. The portable path is a single implementation that compiles everywhere
+the Rust target does.
+
 ## License
 
 BSD-3-Clause. See `LICENSE`. This port derives from xiph/opus; upstream
