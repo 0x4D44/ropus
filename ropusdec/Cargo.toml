@@ -7,7 +7,7 @@ description = "Decode an Ogg Opus file to a 16-bit PCM WAV using the ropus codec
 license = "BSD-3-Clause"
 
 [dependencies]
-ropus-tools-core = { path = "../ropus-tools-core", version = "0.1" }
+ropus-tools-core = { path = "../ropus-tools-core", version = "0.2" }
 clap = { version = "4.6", features = ["derive"] }
 anyhow = "1.0"
 

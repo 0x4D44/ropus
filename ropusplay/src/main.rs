@@ -44,6 +44,7 @@ fn main() -> ExitCode {
     let opts = PlayOptions {
         input: args.input,
         volume: args.volume,
+        loop_mode: ropus_tools_core::options::LoopMode::default(),
     };
     prelude::run(commands::play(opts))
 }

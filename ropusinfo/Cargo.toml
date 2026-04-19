@@ -7,7 +7,7 @@ description = "Print stream info for an Ogg Opus file"
 license = "BSD-3-Clause"
 
 [dependencies]
-ropus-tools-core = { path = "../ropus-tools-core", version = "0.1" }
+ropus-tools-core = { path = "../ropus-tools-core", version = "0.2" }
 clap = { version = "4.6", features = ["derive"] }
 anyhow = "1.0"
 
