@@ -110,4 +110,23 @@ pub struct PlayOptions {
     /// Suppress interactive UI and fall back to the non-TTY path. Sourced
     /// from the `-q`/`--quiet` prelude flag.
     pub quiet: bool,
+    /// Exact cpal output-device name to open. `None` uses the host default.
+    /// Unknown name surfaces as an error listing the available devices; we
+    /// never silently fall back to the default.
+    pub device: Option<String>,
+    /// When `true`, the `play` command enumerates cpal output devices (one
+    /// per line on stdout) and returns immediately — no file is loaded.
+    /// Used to back `ropusplay --list-devices`.
+    pub list_devices: bool,
+    /// Linear-dB gain applied to the f32 PCM right before it reaches the
+    /// rodio sink. 0 is a no-op (we skip the multiply). Clamped to
+    /// `[-128.0, 128.0]` dB (matching libopus `OPUS_SET_GAIN`); NaN / ±∞
+    /// surface as a clean error.
+    ///
+    /// Gain is applied to decoded PCM before the rodio sink; sink volume
+    /// (via `--volume`) applies on top. Effective scale is
+    /// `volume × 10^(gain_db/20)`. This ordering is intentional: `--gain`
+    /// is a track-level dB adjustment (symmetric, can amplify), while
+    /// `--volume` is a sink-level linear attenuation (0..=1, mixer knob).
+    pub gain_db: f32,
 }

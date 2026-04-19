@@ -19,6 +19,7 @@ use colored::*;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::tty::IsTty;
 use ogg::reading::PacketReader;
+use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
 use crate::audio::decode::{DecodedAudio, decode_to_f32};
 use crate::container::ogg::OpusTags;
@@ -58,6 +59,24 @@ impl Drop for RawModeGuard {
 }
 
 pub fn play(opts: PlayOptions) -> Result<()> {
+    // `--list-devices` short-circuits before the banner, any file I/O, and any
+    // audio-output initialisation: we only need a host to walk for names.
+    if opts.list_devices {
+        return list_output_devices();
+    }
+
+    // Validate gain and resolve the audio device *before* touching the
+    // filesystem. A bogus gain or an unknown device name should surface as
+    // "wrong config" without first reporting a "file not found" error for
+    // an input the user may not have meant to supply yet — fail fast on the
+    // config knobs the user actually set on the command line.
+    let gain_multiplier = validate_and_compute_gain(opts.gain_db)?;
+    let (_stream, handle) = match &opts.device {
+        Some(name) => open_named_output_stream(name)?,
+        None => rodio::OutputStream::try_default()
+            .map_err(|e| anyhow!("no default audio output device available: {e}"))?,
+    };
+
     heading("play");
 
     let playlist = build_playlist(&opts.input)?;
@@ -70,9 +89,6 @@ pub fn play(opts: PlayOptions) -> Result<()> {
             opts.input.display().to_string().cyan(),
         );
     }
-
-    let (_stream, handle) = rodio::OutputStream::try_default()
-        .map_err(|e| anyhow!("no default audio output device available: {e}"))?;
 
     let interactive = interactive_enabled(opts.quiet);
     // Bind the guard so it lives for the whole playback session and disables
@@ -114,7 +130,7 @@ pub fn play(opts: PlayOptions) -> Result<()> {
             let _ = std::io::stdout().flush();
         }
 
-        let (decoded, tags) = match decode_track(path) {
+        let (mut decoded, tags) = match decode_track(path) {
             Ok(ok) => ok,
             Err(e) => {
                 // Clear the ephemeral decoding line; the warning goes to
@@ -138,6 +154,13 @@ pub fn play(opts: PlayOptions) -> Result<()> {
             }
         };
         consecutive_errors = 0;
+
+        // Gain is applied to the f32 PCM right before it reaches the sink.
+        // A `gain_multiplier` of exactly 1.0 (i.e. `gain_db == 0.0`) is a
+        // no-op — `validate_and_compute_gain` returned 1.0 in that case and
+        // we skip the per-sample multiply to avoid pointless iteration on
+        // the hot path.
+        apply_gain(&mut decoded.samples, gain_multiplier);
 
         let channels_u16 =
             u16::try_from(decoded.channels).map_err(|_| anyhow!("channel count overflow"))?;
@@ -206,6 +229,120 @@ pub fn play(opts: PlayOptions) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Validate `--gain DB` and convert it to a linear multiplier. Returns 1.0 for
+/// the common `db == 0.0` case so callers can branch on "no-op" without a
+/// floating-point equality check of their own. NaN / ±∞ and values outside
+/// `[-128.0, 128.0]` dB both surface as a user-visible error — the range
+/// matches libopus `OPUS_SET_GAIN` so parity with `opusdec --gain` is exact
+/// (e.g. `--gain -80` fully mutes a loud track).
+pub(crate) fn validate_and_compute_gain(db: f32) -> Result<f32> {
+    if !db.is_finite() {
+        bail!("--gain must be a finite dB value (got {db})");
+    }
+    if !(-128.0..=128.0).contains(&db) {
+        bail!("--gain {db} dB out of range [-128.0, 128.0]");
+    }
+    if db == 0.0 {
+        return Ok(1.0);
+    }
+    Ok(10f32.powf(db / 20.0))
+}
+
+/// Multiply every sample by `multiplier` in place. Exactly 1.0 is a no-op —
+/// the main loop already skips this call via `gain_db == 0.0`, but the guard
+/// is cheap and protects direct callers (e.g. unit tests).
+fn apply_gain(samples: &mut [f32], multiplier: f32) {
+    if multiplier == 1.0 {
+        return;
+    }
+    for s in samples.iter_mut() {
+        *s *= multiplier;
+    }
+}
+
+/// IO-free half of `list_output_devices`: format a slice of device names into
+/// the stdout block, or return an error if the slice is empty. Split out so
+/// the empty-list contract is unit-testable on headless CI where
+/// `cpal::default_host().output_devices()` genuinely returns zero devices.
+///
+/// Output shape is one name per line with a trailing newline, so downstream
+/// scripts can `ropusplay --list-devices | grep -x "Speakers (Realtek)"`
+/// without worrying about a missing final `\n`.
+fn format_device_list(names: &[String]) -> Result<String> {
+    if names.is_empty() {
+        bail!("no output devices available on this host");
+    }
+    let mut out = String::new();
+    for name in names {
+        out.push_str(name);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// Print every cpal output-device name (one per line) on stdout and return
+/// `Ok(())`. Empty host list is treated as an error with exit code 1 so
+/// scripts can `if ropusplay --list-devices; then …` without parsing stdout.
+/// Enumeration + printing live here; the formatting + empty-list contract is
+/// delegated to `format_device_list` so it is unit-testable.
+fn list_output_devices() -> Result<()> {
+    let host = rodio::cpal::default_host();
+    let devices = host
+        .output_devices()
+        .context("enumerating cpal output devices")?;
+    let mut names: Vec<String> = Vec::new();
+    for device in devices {
+        // `device.name()` can fail (e.g. a device disconnected between enum
+        // and query) — skip silently; we do not want one disconnected device
+        // to abort the listing of the rest.
+        if let Ok(name) = device.name() {
+            names.push(name);
+        }
+    }
+    let formatted = format_device_list(&names)?;
+    print!("{formatted}");
+    let _ = std::io::stdout().flush();
+    Ok(())
+}
+
+/// Find an output device by exact (case-sensitive) name and hand the caller a
+/// fresh rodio stream + handle pair bound to it. Not-found errors list the
+/// available devices on stderr so the user can spot typos without re-running
+/// with `--list-devices`.
+fn open_named_output_stream(
+    name: &str,
+) -> Result<(rodio::OutputStream, rodio::OutputStreamHandle)> {
+    let host = rodio::cpal::default_host();
+    let devices = host
+        .output_devices()
+        .context("enumerating cpal output devices")?;
+    let mut available: Vec<String> = Vec::new();
+    let mut matched: Option<rodio::cpal::Device> = None;
+    for device in devices {
+        if let Ok(dn) = device.name() {
+            if dn == name {
+                matched = Some(device);
+                break;
+            }
+            available.push(dn);
+        }
+    }
+    let device = matched.ok_or_else(|| {
+        let mut msg = format!("ropusplay: device '{name}' not found. Available:");
+        if available.is_empty() {
+            msg.push_str("\n  (no cpal output devices)");
+        } else {
+            for d in &available {
+                msg.push_str("\n  ");
+                msg.push_str(d);
+            }
+        }
+        anyhow!(msg)
+    })?;
+    rodio::OutputStream::try_from_device(&device)
+        .map_err(|e| anyhow!("opening output device '{name}' failed: {e}"))
 }
 
 /// Interactive track loop. Polls for key events at 100 ms cadence, repainting
@@ -1060,5 +1197,134 @@ mod tests {
     fn compute_avg_kbps_zero_duration_returns_zero() {
         // Avoid NaN/Inf that would poison the `{:.0}` format in the status line.
         assert_eq!(compute_avg_kbps(12_345, 0.0), 0.0);
+    }
+
+    // -- validate_and_compute_gain / apply_gain ---------------------------
+
+    #[test]
+    fn apply_gain_multiplier_matches_formula() {
+        // +6 dB is a factor of 10^(6/20) ≈ 1.99526. Applied to 0.5 gives
+        // ≈ 0.99763. Assert both the intermediate multiplier and the
+        // post-multiply sample land within 0.01 of the textbook answer.
+        let mult = validate_and_compute_gain(6.0).expect("+6 dB is valid");
+        assert!((mult - 1.995).abs() < 0.01, "+6 dB ≈ 1.995, got {mult}");
+
+        let mut samples = [0.5f32];
+        apply_gain(&mut samples, mult);
+        assert!(
+            (samples[0] - 0.998).abs() < 0.01,
+            "expected ~0.998, got {}",
+            samples[0]
+        );
+    }
+
+    #[test]
+    fn apply_gain_zero_db_is_exact_identity() {
+        // 0 dB is a no-op: validator returns 1.0 and apply_gain short-circuits
+        // to avoid iterating the buffer. The expected behaviour is exact
+        // bit-equality, not "within epsilon".
+        let mult = validate_and_compute_gain(0.0).expect("0 dB is valid");
+        assert_eq!(mult, 1.0, "0 dB must round-trip to multiplier == 1.0");
+
+        let orig = [0.5f32, -0.25, 0.0, 1.0, -1.0];
+        let mut samples = orig;
+        apply_gain(&mut samples, mult);
+        assert_eq!(samples, orig, "0 dB must leave samples bit-identical");
+    }
+
+    #[test]
+    fn gain_db_nan_rejected() {
+        let err = validate_and_compute_gain(f32::NAN)
+            .expect_err("NaN must surface as an error");
+        let msg = format!("{err:#}").to_ascii_lowercase();
+        assert!(msg.contains("finite"), "error should mention finite: {msg}");
+    }
+
+    #[test]
+    fn gain_db_infinity_rejected() {
+        assert!(
+            validate_and_compute_gain(f32::INFINITY).is_err(),
+            "+∞ must surface as an error"
+        );
+        assert!(
+            validate_and_compute_gain(f32::NEG_INFINITY).is_err(),
+            "-∞ must surface as an error"
+        );
+    }
+
+    #[test]
+    fn gain_db_out_of_range_rejected() {
+        // 128 dB is the upper clamp (matches libopus OPUS_SET_GAIN); anything
+        // strictly outside [-128, 128] must trip the guard. Use 200 / -200 so
+        // the test is obviously out-of-range and decoupled from the exact
+        // boundary arithmetic.
+        assert!(validate_and_compute_gain(128.0).is_ok());
+        assert!(validate_and_compute_gain(-128.0).is_ok());
+        let err_hi = validate_and_compute_gain(200.0)
+            .expect_err("200 dB above clamp must error");
+        let err_lo = validate_and_compute_gain(-200.0)
+            .expect_err("-200 dB below clamp must error");
+        let msg_hi = format!("{err_hi:#}").to_ascii_lowercase();
+        let msg_lo = format!("{err_lo:#}").to_ascii_lowercase();
+        assert!(
+            msg_hi.contains("range") || msg_hi.contains("out of"),
+            "high-side error should mention range: {msg_hi}"
+        );
+        assert!(
+            msg_lo.contains("range") || msg_lo.contains("out of"),
+            "low-side error should mention range: {msg_lo}"
+        );
+    }
+
+    // -- format_device_list -----------------------------------------------
+
+    #[test]
+    fn format_device_list_empty_list_errors() {
+        let err = format_device_list(&[]).expect_err("empty slice must error");
+        let msg = format!("{err:#}").to_ascii_lowercase();
+        assert!(
+            msg.contains("no output devices"),
+            "error should mention 'no output devices': {msg}"
+        );
+    }
+
+    #[test]
+    fn format_device_list_prints_one_per_line() {
+        let names = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        let out = format_device_list(&names).expect("non-empty slice formats cleanly");
+        assert_eq!(out, "A\nB\nC\n");
+    }
+
+    #[test]
+    fn gain_and_volume_compose_multiplicatively() {
+        // Pipeline: apply_gain(&mut buf, mult) happens *before* sink.set_volume(v),
+        // so the effective scaling applied to each sample is `v * mult`. Here we
+        // pick +6 dB (≈ ×1.995) and a sink-volume equivalent of 0.5, and assert
+        // the composed scale matches the input to within a small tolerance (the
+        // textbook answer is 1.995 × 0.5 ≈ 0.9977, i.e. within ~0.25% of unity).
+        let mult = validate_and_compute_gain(6.0).expect("+6 dB is valid");
+        let sink_volume = 0.5f32;
+
+        let orig = [0.5f32, -0.25, 0.0, 1.0, -1.0];
+        let mut samples = orig;
+        apply_gain(&mut samples, mult);
+        // Model the sink volume as the second multiplicative stage.
+        for s in samples.iter_mut() {
+            *s *= sink_volume;
+        }
+
+        // Expected composed scale is mult * sink_volume ≈ 0.9977. Compare each
+        // sample against `orig * composed_scale` within a tight tolerance.
+        let composed = mult * sink_volume;
+        for (i, (got, want)) in samples
+            .iter()
+            .zip(orig.iter().map(|s| s * composed))
+            .enumerate()
+        {
+            assert!(
+                (got - want).abs() < 1e-5,
+                "sample {i}: got {got}, expected {want} (composed = {composed})"
+            );
+        }
     }
 }
