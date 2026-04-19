@@ -16,7 +16,7 @@ use std::ptr;
 
 use ropus::opus::encoder::OpusEncoder;
 
-use crate::{OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, ffi_guard, state_free};
+use crate::{OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, OPUS_UNIMPLEMENTED, ffi_guard, state_free};
 
 // ---------------------------------------------------------------------------
 // Handle layout
@@ -223,6 +223,30 @@ pub unsafe extern "C" fn opus_encode(
             Ok(n) => n,
             Err(e) => e,
         }
+    })
+}
+
+/// Encode 24-bit-in-i32 PCM — currently unimplemented.
+///
+/// opus_demo references this at link time even on the decode path; actual
+/// 24-bit encode is out of scope for Piece A. If needed in future, add
+/// with full differential test coverage (the prior implementation diverged
+/// from the C reference on overflow-edge inputs and on analysis routing —
+/// see devil's-advocate review 2026-04-19).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn opus_encode24(
+    st: *mut OpusEncoder,
+    pcm: *const i32,
+    frame_size: c_int,
+    data: *mut c_uchar,
+    max_data_bytes: i32,
+) -> i32 {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if pcm.is_null() || data.is_null() || frame_size <= 0 || max_data_bytes <= 0 {
+            return OPUS_BAD_ARG;
+        }
+        let _ = st;
+        OPUS_UNIMPLEMENTED
     })
 }
 

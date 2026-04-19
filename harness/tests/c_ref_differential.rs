@@ -2313,3 +2313,249 @@ fn diag_first_differing_field_after_frame_1() {
     }
 }
 
+/// Long-running differential: 500 frames of multi-tone input, byte-comparing
+/// the full `TonalityAnalysisState` AFTER EVERY FRAME. On mismatch prints
+/// frame number + first-differing byte offset and panics.
+///
+/// This test exists to answer a specific question in the Stage 6.4 journal:
+/// is the remaining encode drift in the analysis module itself, or in the
+/// CELT-side wiring? The 30-frame sine test passes bit-exactly but isn't
+/// rich enough to excite all analyzer state (tonality trackers, long-term
+/// band-energy trackers, etc.). A multi-tone input drives more of the
+/// state machine.
+#[test]
+fn test_analysis_run_matches_c_reference_long() {
+    // 500 frames * 20 ms/frame = 10 s of audio. Enough to warm up long-run
+    // trackers (low_e / high_e / mean_e / cmean / std) and to exercise the
+    // BFCC memory ring (mem[] is 4*NB_TBANDS*DETECT_SIZE = 32 entries
+    // wide, refreshed across frames).
+    const NUM_FRAMES: usize = 500;
+    const FRAME_SIZE: usize = 960;
+    const FS: i32 = 48_000;
+    const C1: i32 = 0;
+    const C2: i32 = -2;
+    const CHANNELS: i32 = 1;
+    const LSB_DEPTH: i32 = 24;
+
+    // Multi-tone signal: 200 Hz + 800 Hz + 3 kHz + linear-congruential
+    // pseudorandom noise, each at modest amplitude so the sum stays inside
+    // [-0.5, 0.5] and never clips through the FLOAT2SIG chain. Deterministic
+    // — both sides see identical input. The noise term prevents the input
+    // from being purely periodic (which would leave some long-run trackers
+    // unexercised).
+    let pcm: Vec<f32> = {
+        let mut seed: u32 = 0xCAFE_BABE;
+        (0..NUM_FRAMES * FRAME_SIZE)
+            .map(|i| {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                let noise = ((seed >> 16) & 0x7fff) as f32 / 32768.0 - 0.5;
+                let t = i as f32 / FS as f32;
+                let w0 = 2.0 * std::f32::consts::PI * 200.0 * t;
+                let w1 = 2.0 * std::f32::consts::PI * 800.0 * t;
+                let w2 = 2.0 * std::f32::consts::PI * 3000.0 * t;
+                (w0.sin() + w1.sin() + w2.sin()) * 0.1 + noise * 0.2
+            })
+            .collect()
+    };
+    let pcm_bytes: &[u8] = unsafe {
+        std::slice::from_raw_parts(
+            pcm.as_ptr() as *const u8,
+            std::mem::size_of_val(pcm.as_slice()),
+        )
+    };
+
+    let mut c_state = TonalityAnalysisState::new_boxed();
+    let mut rust_state = TonalityAnalysisState::new_boxed();
+
+    let celt_mode_ptr: *mut std::ffi::c_void = unsafe {
+        let mut err: c_int = 0;
+        let p = opus_custom_mode_create(FS, FRAME_SIZE as c_int, &mut err);
+        assert!(!p.is_null() && err == 0, "opus_custom_mode_create err={err}");
+        p
+    };
+
+    unsafe {
+        tonality_analysis_init(&raw mut *c_state, FS);
+    }
+    rust_tonality_analysis_init(&mut rust_state, FS);
+
+    let state_size = std::mem::size_of::<TonalityAnalysisState>();
+    // Skip the `arch` field (offset 0..4): C sets it via `opus_select_arch`
+    // (returns 4 on x86 with SSE4.1 enabled in harness config), the Rust
+    // port hardcodes 0.
+    const ARCH_FIELD_BYTES: usize = 4;
+
+    let frame_bytes = FRAME_SIZE * std::mem::size_of::<f32>();
+    for f in 0..NUM_FRAMES {
+        let start = f * frame_bytes;
+        let end = start + frame_bytes;
+        let frame_slice = &pcm_bytes[start..end];
+
+        let mut c_info = AnalysisInfo::default();
+        unsafe {
+            run_analysis(
+                &raw mut *c_state,
+                celt_mode_ptr,
+                frame_slice.as_ptr() as *const std::ffi::c_void,
+                FRAME_SIZE as c_int,
+                FRAME_SIZE as c_int,
+                C1,
+                C2,
+                CHANNELS,
+                FS,
+                LSB_DEPTH,
+                downmix_float,
+                &mut c_info,
+            );
+        }
+
+        let mut rust_info = AnalysisInfo::default();
+        use ropus::celt::modes::MODE_48000_960_120 as ROPUS_CELT_MODE;
+        let rust_downmix_cb: DownmixFunc = rust_downmix_float;
+        rust_run_analysis(
+            &mut rust_state,
+            &ROPUS_CELT_MODE,
+            Some(frame_slice),
+            FRAME_SIZE as i32,
+            FRAME_SIZE as i32,
+            C1,
+            C2,
+            CHANNELS,
+            FS,
+            LSB_DEPTH,
+            rust_downmix_cb,
+            &mut rust_info,
+        );
+
+        // Full state byte-compare (skipping arch) after EVERY frame.
+        let c_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(c_state.as_ref() as *const _ as *const u8, state_size)
+        };
+        let r_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(rust_state.as_ref() as *const _ as *const u8, state_size)
+        };
+        let mut first_diff: Option<usize> = None;
+        for (i, (&c, &r)) in c_bytes
+            .iter()
+            .zip(r_bytes.iter())
+            .enumerate()
+            .skip(ARCH_FIELD_BYTES)
+        {
+            if c != r {
+                first_diff = Some(i);
+                break;
+            }
+        }
+        if let Some(off) = first_diff {
+            let end_off = (off + 32).min(state_size);
+            let start_off = off.saturating_sub(8);
+            eprintln!(
+                "DIVERGED at frame {f}, first differing byte at offset 0x{off:x} ({off})\n  C   : {:02x?}\n  Rust: {:02x?}",
+                &c_bytes[off..end_off],
+                &r_bytes[off..end_off],
+            );
+            eprintln!(
+                "surrounding region [0x{start_off:x}..0x{end_off:x}]\n  C   : {:02x?}\n  Rust: {:02x?}",
+                &c_bytes[start_off..end_off],
+                &r_bytes[start_off..end_off],
+            );
+            let aligned = off & !3;
+            if aligned + 4 <= state_size {
+                let c_f32 = f32::from_le_bytes([
+                    c_bytes[aligned],
+                    c_bytes[aligned + 1],
+                    c_bytes[aligned + 2],
+                    c_bytes[aligned + 3],
+                ]);
+                let r_f32 = f32::from_le_bytes([
+                    r_bytes[aligned],
+                    r_bytes[aligned + 1],
+                    r_bytes[aligned + 2],
+                    r_bytes[aligned + 3],
+                ]);
+                eprintln!(
+                    "at aligned offset 0x{aligned:x}: C f32 = {c_f32:e} ({:08x}), Rust f32 = {r_f32:e} ({:08x})",
+                    c_f32.to_bits(),
+                    r_f32.to_bits()
+                );
+            }
+            // Field-offset table for mapping byte offsets back to field names.
+            // Offsets computed via field_offsets_for_diag() below, printed on
+            // the first run by diag_print_field_offsets.
+            panic!("state diverges at frame {f}, offset 0x{off:x}");
+        }
+
+        // Also enforce the user-visible AnalysisInfo fields on valid frames.
+        assert_eq!(
+            c_info.valid, rust_info.valid,
+            "frame {f}: valid mismatch (c={}, rust={})",
+            c_info.valid, rust_info.valid
+        );
+        if c_info.valid == 1 {
+            assert_eq!(
+                c_info.music_prob.to_bits(),
+                rust_info.music_prob.to_bits(),
+                "frame {f}: music_prob bit-diff (c={}, rust={})",
+                c_info.music_prob, rust_info.music_prob
+            );
+        }
+    }
+}
+
+/// Emit a table of field offsets for [`TonalityAnalysisState`], used to
+/// map byte-offset divergences from the long differential test back to
+/// field names. Run with `-- --ignored --nocapture` when the long test
+/// fails to localize the drift.
+#[test]
+#[ignore = "diagnostic: prints field offset table"]
+fn diag_print_field_offsets() {
+    // Stable macro-free way: build a zeroed state and compute the offsets of
+    // every field manually via raw-pointer math.
+    let st = TonalityAnalysisState::new_boxed();
+    let base = st.as_ref() as *const _ as usize;
+    macro_rules! off {
+        ($name:ident) => {{
+            let p = &st.$name as *const _ as usize;
+            (stringify!($name), p - base, std::mem::size_of_val(&st.$name))
+        }};
+    }
+    let fields: Vec<(&'static str, usize, usize)> = vec![
+        off!(arch),
+        off!(application),
+        off!(fs),
+        off!(angle),
+        off!(d_angle),
+        off!(d2_angle),
+        off!(inmem),
+        off!(mem_fill),
+        off!(prev_band_tonality),
+        off!(prev_tonality),
+        off!(prev_bandwidth),
+        off!(e_frames),
+        off!(log_e_frames),
+        off!(low_e),
+        off!(high_e),
+        off!(mean_e),
+        off!(mem),
+        off!(cmean),
+        off!(std),
+        off!(e_tracker),
+        off!(low_e_count),
+        off!(e_count),
+        off!(count),
+        off!(analysis_offset),
+        off!(write_pos),
+        off!(read_pos),
+        off!(read_subframe),
+        off!(hp_ener_accum),
+        off!(initialized),
+        off!(rnn_state),
+        off!(downmix_state),
+        off!(info),
+    ];
+    println!("TonalityAnalysisState layout (total {} bytes):", std::mem::size_of::<TonalityAnalysisState>());
+    for (name, off, size) in &fields {
+        println!("  0x{off:06x}..0x{:06x} ({size:6} bytes) {name}", off + size);
+    }
+}
+

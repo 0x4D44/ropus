@@ -805,6 +805,33 @@ fn copy_channel_out_short(
     }
 }
 
+/// Route decoded i16 audio to a 24-bit-in-i32 output channel.
+/// Each sample is left-shifted by 8 so that `i16` full-scale lands in the
+/// top 24 bits of the `i32` word, matching C `opus_copy_channel_out_int24`
+/// under the `!ENABLE_RES24` fixed-point build (where opus_res == opus_int16).
+/// If `src` is None, writes silence.
+fn copy_channel_out_int24(
+    dst: &mut [i32],
+    dst_stride: usize,
+    dst_channel: usize,
+    src: Option<&[i16]>,
+    src_stride: usize,
+    frame_size: usize,
+) {
+    match src {
+        Some(s) => {
+            for i in 0..frame_size {
+                dst[i * dst_stride + dst_channel] = (s[i * src_stride] as i32) << 8;
+            }
+        }
+        None => {
+            for i in 0..frame_size {
+                dst[i * dst_stride + dst_channel] = 0;
+            }
+        }
+    }
+}
+
 // ===========================================================================
 // OpusMSEncoder
 // ===========================================================================
@@ -1572,6 +1599,166 @@ impl OpusMSDecoder {
         decode_fec: bool,
     ) -> Result<i32, i32> {
         self.decode_native(data, len, pcm, frame_size, decode_fec)
+    }
+
+    /// Decode a multistream packet to interleaved 24-bit-in-i32 PCM.
+    /// Matches C `opus_multistream_decode24` (reference
+    /// `opus_multistream_decoder.c:408`): calls `opus_multistream_decode_native`
+    /// with `opus_copy_channel_out_int24`. In our fixed-point / !ENABLE_RES24
+    /// build this collapses to: decode each stream to i16 then left-shift by
+    /// 8 on the route to the i32 output frame.
+    pub fn decode24(
+        &mut self,
+        data: Option<&[u8]>,
+        len: i32,
+        pcm: &mut [i32],
+        frame_size: i32,
+        decode_fec: bool,
+    ) -> Result<i32, i32> {
+        self.decode24_native(data, len, pcm, frame_size, decode_fec)
+    }
+
+    /// Internal 24-bit decode. Identical to `decode_native` except the output
+    /// channel routing uses `copy_channel_out_int24` and writes `i32` samples.
+    fn decode24_native(
+        &mut self,
+        data: Option<&[u8]>,
+        len: i32,
+        pcm: &mut [i32],
+        mut frame_size: i32,
+        decode_fec: bool,
+    ) -> Result<i32, i32> {
+        if frame_size <= 0 {
+            return Err(OPUS_BAD_ARG);
+        }
+        let fs = self.decoders[0].ms_get_sample_rate();
+        // Limit frame_size to avoid excessive allocation
+        frame_size = imin(frame_size, fs / 25 * 3);
+
+        let mut buf = vec![0i16; 2 * frame_size as usize];
+        let do_plc = data.is_none() || len == 0;
+
+        if !do_plc && len < 0 {
+            return Err(OPUS_BAD_ARG);
+        }
+        if !do_plc && len < 2 * self.layout.nb_streams - 1 {
+            return Err(OPUS_INVALID_PACKET);
+        }
+
+        // Validate the multistream packet (same logic as i16 path).
+        if !do_plc {
+            let raw_data = data.unwrap();
+            let ret = multistream_packet_validate(raw_data, len, self.layout.nb_streams, fs);
+            if ret < 0 {
+                return Err(ret);
+            } else if ret > frame_size {
+                return Err(OPUS_BUFFER_TOO_SMALL);
+            }
+        }
+
+        let mut data_offset: usize = 0;
+        let mut remaining = len;
+
+        for s in 0..self.layout.nb_streams as usize {
+            let s_i32 = s as i32;
+
+            if !do_plc && remaining <= 0 {
+                return Err(OPUS_INTERNAL_ERROR);
+            }
+
+            let mut packet_offset: i32 = 0;
+            let sub_data = if do_plc {
+                None
+            } else {
+                Some(&data.unwrap()[data_offset..])
+            };
+            let self_delimited = s_i32 != self.layout.nb_streams - 1;
+
+            let dec = &mut self.decoders[s];
+            let ret = dec.decode_native(
+                sub_data,
+                &mut buf,
+                frame_size,
+                decode_fec,
+                self_delimited,
+                Some(&mut packet_offset),
+            )?;
+
+            if !do_plc {
+                data_offset += packet_offset as usize;
+                remaining -= packet_offset;
+            }
+
+            frame_size = ret;
+
+            if s_i32 < self.layout.nb_coupled_streams {
+                let mut prev = -1;
+                loop {
+                    let chan = get_left_channel(&self.layout, s_i32, prev);
+                    if chan == -1 {
+                        break;
+                    }
+                    copy_channel_out_int24(
+                        pcm,
+                        self.layout.nb_channels as usize,
+                        chan as usize,
+                        Some(&buf),
+                        2,
+                        frame_size as usize,
+                    );
+                    prev = chan;
+                }
+                prev = -1;
+                loop {
+                    let chan = get_right_channel(&self.layout, s_i32, prev);
+                    if chan == -1 {
+                        break;
+                    }
+                    copy_channel_out_int24(
+                        pcm,
+                        self.layout.nb_channels as usize,
+                        chan as usize,
+                        Some(&buf[1..]),
+                        2,
+                        frame_size as usize,
+                    );
+                    prev = chan;
+                }
+            } else {
+                let mut prev = -1;
+                loop {
+                    let chan = get_mono_channel(&self.layout, s_i32, prev);
+                    if chan == -1 {
+                        break;
+                    }
+                    copy_channel_out_int24(
+                        pcm,
+                        self.layout.nb_channels as usize,
+                        chan as usize,
+                        Some(&buf),
+                        1,
+                        frame_size as usize,
+                    );
+                    prev = chan;
+                }
+            }
+        }
+
+        // Handle muted channels (mapping == 255)
+        for c in 0..self.layout.nb_channels as usize {
+            if self.layout.mapping[c] == 255 {
+                copy_channel_out_int24(
+                    pcm,
+                    self.layout.nb_channels as usize,
+                    c,
+                    None,
+                    0,
+                    frame_size as usize,
+                );
+            }
+        }
+
+        Ok(frame_size)
     }
 
     /// Internal decode. Matches C `opus_multistream_decode_native` (fixed-point).

@@ -39,11 +39,12 @@ fn main() {
         .parent()
         .expect("tests has a parent (repo root)");
     let ref_tests = repo_root.join("reference").join("tests");
+    let ref_src = repo_root.join("reference").join("src");
 
     let include_dir = manifest_dir.join("include");
     let private_h = include_dir.join("opus_private.h");
 
-    // (source file, library name / main symbol, extra_c_files).
+    // (source dir, source file, library name / main symbol, extra_c_files).
     //
     // One entry per reference test. Each produces its own static lib; the
     // matching Rust file in `tests/` links exactly that one lib into its
@@ -55,24 +56,55 @@ fn main() {
     //
     // `extra` files are compiled into the same static lib as the reference
     // test — used for `test_opus_encode.c` to bring in our
-    // `regression_test()` stub.
-    let tests: &[(&str, &str, &[&str])] = &[
-        ("test_opus_padding.c", "test_opus_padding", &[]),
-        ("test_opus_decode.c", "test_opus_decode", &[]),
-        ("test_opus_api.c", "test_opus_api", &[]),
+    // `regression_test()` stub, and for `opus_demo` to bring in our
+    // lossgen + DRED stubs.
+    //
+    // `source_dir` selects between `reference/tests/` (the default) and
+    // `reference/src/` (for opus_demo.c and opus_compare.c, which are
+    // binaries rather than tests but built the same way).
+    enum SrcDir {
+        Tests,
+        Src,
+    }
+    let tests: &[(SrcDir, &str, &str, &[&str])] = &[
+        (SrcDir::Tests, "test_opus_padding.c", "test_opus_padding", &[]),
+        (SrcDir::Tests, "test_opus_decode.c", "test_opus_decode", &[]),
+        (SrcDir::Tests, "test_opus_api.c", "test_opus_api", &[]),
         (
+            SrcDir::Tests,
             "test_opus_encode.c",
             "test_opus_encode",
             &["src/regression_test_stub.c"],
         ),
-        ("test_opus_extensions.c", "test_opus_extensions", &[]),
+        (SrcDir::Tests, "test_opus_extensions.c", "test_opus_extensions", &[]),
+        // Piece A — IETF vectors via opus_demo + opus_compare.
+        //
+        // `opus_demo.c` pulls in DRED symbols unconditionally; we replace
+        // them with no-op stubs (see `src/dred_stub.c`) since our decode-only
+        // driver on valid RFC 8251 vectors never enters those code paths.
+        // All lossgen references in opus_demo.c are gated by
+        // `#ifdef ENABLE_LOSSGEN`, which we don't define — so no lossgen
+        // symbols are ever link-referenced and no lossgen stub is needed.
+        // `opus_compare.c` is a pure PCM comparator with no libopus
+        // dependency — it links clean.
+        (
+            SrcDir::Src,
+            "opus_demo.c",
+            "opus_demo",
+            &["src/dred_stub.c"],
+        ),
+        (SrcDir::Src, "opus_compare.c", "opus_compare", &[]),
     ];
 
-    for (src_name, stem, extras) in tests {
-        let src_path = ref_tests.join(src_name);
+    for (src_dir, src_name, stem, extras) in tests {
+        let src_root = match src_dir {
+            SrcDir::Tests => &ref_tests,
+            SrcDir::Src => &ref_src,
+        };
+        let src_path = src_root.join(src_name);
         if !src_path.exists() {
             panic!(
-                "Reference test source not found: {}. \
+                "Reference source not found: {}. \
                  Clone https://github.com/xiph/opus into reference/.",
                 src_path.display()
             );
@@ -84,13 +116,34 @@ fn main() {
             .include(&include_dir)
             .include(&ref_tests) // for test_opus_common.h
             .define("main", &*format!("{stem}_main"))
+            // `FIXED_POINT` is load-bearing: with it off, the reference
+            // headers typedef `opus_res` to `float`, which would mismatch
+            // our capi's `opus_int32*` 24-bit pcm pointer type silently at
+            // the C call site (C doesn't type-check through the function
+            // pointer). Apply uniformly for hygiene even to tests that
+            // don't call `opus_res*` functions today.
+            .define("FIXED_POINT", "1")
             .warnings(false);
+
+        // opus_demo.c does `#include "debug.h"` (the SILK timer/debug
+        // header, which is a no-op when SILK_DEBUG and SILK_TIC_TOC are
+        // 0). Add `reference/silk/` to the include path so that resolves.
+        // This is the HLD's preferred "include-path-first" strategy.
+        if *stem == "opus_demo" {
+            build.include(repo_root.join("reference").join("silk"));
+        }
 
         // test_opus_encode.c and test_opus_extensions.c both do
         // `#include "../src/opus_private.h"` which resolves to the real
         // upstream header; force-include our stub first so its header
-        // guard wins.
-        if *stem == "test_opus_encode" || *stem == "test_opus_extensions" {
+        // guard wins. opus_demo.c does `#include "opus_private.h"` via
+        // the standard include path — our vendored stub in `include/`
+        // already wins there by virtue of being on the include path
+        // before `reference/src/`, but we still force-include for belt-
+        // and-braces parity.
+        let needs_private_h =
+            matches!(*stem, "test_opus_encode" | "test_opus_extensions" | "opus_demo");
+        if needs_private_h {
             let compiler = build.get_compiler();
             let flag = if compiler.is_like_msvc() {
                 format!("/FI{}", private_h.display())

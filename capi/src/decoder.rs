@@ -300,6 +300,57 @@ pub unsafe extern "C" fn opus_decode(
     })
 }
 
+/// Decode an Opus packet to 24-bit PCM (stored in 32-bit container).
+///
+/// Matches C `opus_decode24` (reference `opus_decoder.c:937`). Output is the
+/// decoded 16-bit sample left-shifted by 8 — the 24-bit path is an upsample
+/// of the 16-bit path under our fixed-point / non-RES24 build.
+///
+/// PLC / `decode_fec` validation is identical to [`opus_decode`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn opus_decode24(
+    st: *mut OpusDecoder,
+    data: *const c_uchar,
+    len: i32,
+    pcm: *mut i32,
+    frame_size: c_int,
+    decode_fec: c_int,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if st.is_null() || pcm.is_null() || frame_size <= 0 {
+            return OPUS_BAD_ARG;
+        }
+        if decode_fec != 0 && decode_fec != 1 {
+            return OPUS_BAD_ARG;
+        }
+        let plc = data.is_null() || len == 0;
+        if !plc && len < 0 {
+            return OPUS_BAD_ARG;
+        }
+
+        let Some(dec) = (unsafe { resolve_handle(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+
+        let packet: Option<&[u8]> = if plc {
+            None
+        } else {
+            Some(unsafe { std::slice::from_raw_parts(data, len as usize) })
+        };
+
+        let channels = dec.get_channels() as usize;
+        let Some(n_samples) = (frame_size as usize).checked_mul(channels) else {
+            return OPUS_BAD_ARG;
+        };
+        let pcm_slice = unsafe { std::slice::from_raw_parts_mut(pcm, n_samples) };
+
+        match dec.decode24(packet, pcm_slice, frame_size, decode_fec != 0) {
+            Ok(n) => n as c_int,
+            Err(e) => e,
+        }
+    })
+}
+
 /// Decode an Opus packet to 32-bit float PCM. See [`opus_decode`] for the
 /// PLC / `decode_fec` validation rules, which are identical.
 #[unsafe(no_mangle)]

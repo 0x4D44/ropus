@@ -317,6 +317,54 @@ pub unsafe extern "C" fn opus_multistream_decode(
     })
 }
 
+/// Decode a multistream Opus packet to 24-bit-in-i32 interleaved PCM.
+///
+/// Matches C `opus_multistream_decode24` (reference
+/// `opus_multistream_decoder.c:408`). Same PLC / `decode_fec` validation as
+/// [`opus_multistream_decode`]; only the output type differs.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn opus_multistream_decode24(
+    st: *mut OpusMSDecoder,
+    data: *const c_uchar,
+    len: i32,
+    pcm: *mut i32,
+    frame_size: c_int,
+    decode_fec: c_int,
+) -> c_int {
+    ffi_guard!(OPUS_INTERNAL_ERROR, {
+        if pcm.is_null() || frame_size <= 0 {
+            return OPUS_BAD_ARG;
+        }
+        if decode_fec != 0 && decode_fec != 1 {
+            return OPUS_BAD_ARG;
+        }
+        let plc = data.is_null() || len == 0;
+        if !plc && len < 0 {
+            return OPUS_BAD_ARG;
+        }
+        let Some(ms) = (unsafe { handle_to_ms_decoder(st) }) else {
+            return OPUS_BAD_ARG;
+        };
+        // Output PCM is interleaved across ALL layout channels, including any
+        // muted channels (mapping == 255). See opus_multistream_decode for
+        // the rationale.
+        let nb_channels = ms.nb_channels();
+        let Some(n_samples) = (frame_size as usize).checked_mul(nb_channels as usize) else {
+            return OPUS_BAD_ARG;
+        };
+        let pcm_slice = unsafe { std::slice::from_raw_parts_mut(pcm, n_samples) };
+        let packet: Option<&[u8]> = if plc {
+            None
+        } else {
+            Some(unsafe { std::slice::from_raw_parts(data, len as usize) })
+        };
+        match ms.decode24(packet, len, pcm_slice, frame_size, decode_fec != 0) {
+            Ok(n) => n,
+            Err(e) => e,
+        }
+    })
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn opus_multistream_decode_float(
     st: *mut OpusMSDecoder,

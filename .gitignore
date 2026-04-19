@@ -39,3 +39,8 @@ notes/*.log
 
 # CMake build output for the fb2k-ropus C++ component.
 /fb2k-ropus/build/
+
+# IETF RFC 6716 / RFC 8251 test vectors (~71 MB; fetched by
+# tools/fetch_ietf_vectors.sh / .ps1 and used by the conformance
+# `ietf_vectors` test).
+/tests/vectors/ietf/
