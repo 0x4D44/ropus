@@ -1,11 +1,13 @@
-//! Phase 2 JSON envelope.
+//! Phase 3 JSON envelope.
 //!
 //! The HLD's Stage 5 is an HTML report; Phase 4 will build that. Through
-//! Phase 2 we emit a structured JSON blob so the supervisor has a stable
+//! Phase 3 we emit a structured JSON blob so the supervisor has a stable
 //! contract to parse. Field shape matches the task brief verbatim.
 
 use serde_json::{Value, json};
 
+use crate::ambisonics::AmbisonicsResult;
+use crate::bench::BenchResult;
 use crate::quality::{Check, Outcome as QualityOutcome};
 use crate::setup::SetupInfo;
 use crate::tests::Outcome as TestsOutcome;
@@ -14,6 +16,8 @@ pub struct Envelope<'a> {
     pub setup: &'a SetupInfo,
     pub quality: &'a QualityOutcome,
     pub tests: &'a TestsOutcome,
+    pub ambisonics: &'a AmbisonicsResult,
+    pub bench: &'a BenchResult,
     pub exit_code: u8,
 }
 
@@ -24,6 +28,8 @@ impl Envelope<'_> {
             "stages": {
                 "quality": quality_to_json(self.quality),
                 "tests": tests_to_json(self.tests),
+                "ambisonics": ambisonics_to_json(self.ambisonics),
+                "bench": bench_to_json(self.bench),
             },
             "exit_code": self.exit_code,
         })
@@ -62,6 +68,20 @@ fn check_to_json(c: &Check) -> Value {
     })
 }
 
+fn ambisonics_to_json(o: &AmbisonicsResult) -> Value {
+    // Reuse serde's derive on `AmbisonicsResult`/`OrderOutcome` rather than
+    // hand-writing a field mirror — keeps the JSON in lock-step with the
+    // struct shape. Falls back to Null defensively (matches the style of
+    // `tests_to_json`).
+    serde_json::to_value(o).unwrap_or(Value::Null)
+}
+
+fn bench_to_json(o: &BenchResult) -> Value {
+    // Same splice pattern as ambisonics/tests: derive-Serialize on the
+    // outcome struct, then hand the `Value` to the envelope verbatim.
+    serde_json::to_value(o).unwrap_or(Value::Null)
+}
+
 fn tests_to_json(o: &TestsOutcome) -> Value {
     // Defer to serde's derived representation for the inner types, then
     // splice in the coverage payload + a couple of convenience fields the
@@ -95,6 +115,8 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::ambisonics::{AmbisonicsResult, OrderOutcome};
+    use crate::bench::{BenchResult, VectorBench};
     use crate::cargo_parse::{BinaryResult, Outcome as OutcomeKind, TestOutcome, TestsResult};
     use crate::cli::Options;
     use crate::llvm_cov_parse::{CoverageMetrics, CoverageResult};
@@ -108,6 +130,17 @@ mod tests {
             ietf_vectors_present: true,
             options_snapshot: Options::default(),
         }
+    }
+
+    /// Default-skipped ambisonics/bench results for Phase 2-era tests that
+    /// don't care about the new stages. Keeps the old assertions intact
+    /// while still exercising the new envelope contract.
+    fn skipped_ambisonics() -> AmbisonicsResult {
+        AmbisonicsResult::skipped("phase 2 compat")
+    }
+
+    fn skipped_bench() -> BenchResult {
+        BenchResult::skipped("phase 2 compat")
     }
 
     fn quality_ok() -> QualityOutcome {
@@ -179,10 +212,14 @@ mod tests {
         let setup = dummy_setup();
         let quality = quality_ok();
         let tests = tests_populated();
+        let amb = skipped_ambisonics();
+        let bench = skipped_bench();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            ambisonics: &amb,
+            bench: &bench,
             exit_code: 0,
         };
         let v = env.to_json();
@@ -216,10 +253,14 @@ mod tests {
             coverage: None,
             coverage_skipped: true,
         };
+        let amb = skipped_ambisonics();
+        let bench = skipped_bench();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            ambisonics: &amb,
+            bench: &bench,
             exit_code: 0,
         };
         let v = env.to_json();
@@ -232,10 +273,14 @@ mod tests {
         let setup = dummy_setup();
         let quality = quality_ok();
         let tests = TestsStageOutcome::skipped("stage disabled via flag");
+        let amb = skipped_ambisonics();
+        let bench = skipped_bench();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            ambisonics: &amb,
+            bench: &bench,
             exit_code: 0,
         };
         let v = env.to_json();
@@ -259,10 +304,14 @@ mod tests {
             coverage: None,
             coverage_skipped: false,
         };
+        let amb = skipped_ambisonics();
+        let bench = skipped_bench();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            ambisonics: &amb,
+            bench: &bench,
             exit_code: 1,
         };
         let v = env.to_json();
@@ -277,10 +326,14 @@ mod tests {
         let setup = dummy_setup();
         let quality = quality_ok();
         let tests = TestsStageOutcome::skipped("phase 1 compat");
+        let amb = skipped_ambisonics();
+        let bench = skipped_bench();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            ambisonics: &amb,
+            bench: &bench,
             exit_code: 0,
         };
         let v = env.to_json();
@@ -308,10 +361,14 @@ mod tests {
         let setup = dummy_setup();
         let quality = QualityOutcome::skipped();
         let tests = TestsStageOutcome::skipped("phase 1 compat");
+        let amb = skipped_ambisonics();
+        let bench = skipped_bench();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            ambisonics: &amb,
+            bench: &bench,
             exit_code: 0,
         };
         let v = env.to_json();
@@ -320,6 +377,217 @@ mod tests {
             v["stages"]["quality"]["checks"].as_array().unwrap().len(),
             0
         );
+    }
+
+    // ---- Phase 3: ambisonics + bench envelope coverage ----
+
+    fn ambisonics_populated() -> AmbisonicsResult {
+        AmbisonicsResult {
+            skipped: false,
+            skip_reason: None,
+            build_failed: false,
+            duration_ms: 14_200,
+            overall_pass: true,
+            per_order: (1u8..=5u8)
+                .map(|o| OrderOutcome {
+                    order: o,
+                    passed: true,
+                    detail: format!("5 frames, encode 5/5, decode 5/5 (order {o})"),
+                })
+                .collect(),
+        }
+    }
+
+    fn bench_populated() -> BenchResult {
+        BenchResult {
+            skipped: false,
+            skip_reason: None,
+            build_failed: false,
+            duration_ms: 1_800_000,
+            vectors: vec![
+                VectorBench {
+                    label: "SILK NB 8k mono noise".to_string(),
+                    bitrate: 16_000,
+                    skipped: false,
+                    skip_reason: None,
+                    crashed: false,
+                    crash_reason: None,
+                    c_encode_ms: Some(100.0),
+                    rust_encode_ms: Some(75.0),
+                    enc_ratio: Some(0.75),
+                    c_decode_ms: Some(20.0),
+                    rust_decode_ms: Some(22.0),
+                    dec_ratio: Some(1.1),
+                },
+                VectorBench {
+                    label: "MUSIC 48k stereo".to_string(),
+                    bitrate: 128_000,
+                    skipped: true,
+                    skip_reason: Some(
+                        "fixture missing at tests/vectors/music_48k_stereo.wav".to_string(),
+                    ),
+                    crashed: false,
+                    crash_reason: None,
+                    c_encode_ms: None,
+                    rust_encode_ms: None,
+                    enc_ratio: None,
+                    c_decode_ms: None,
+                    rust_decode_ms: None,
+                    dec_ratio: None,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn phase3_envelope_exposes_ambisonics_stage() {
+        let setup = dummy_setup();
+        let quality = quality_ok();
+        let tests = tests_populated();
+        let amb = ambisonics_populated();
+        let bench = skipped_bench();
+        let env = Envelope {
+            setup: &setup,
+            quality: &quality,
+            tests: &tests,
+            ambisonics: &amb,
+            bench: &bench,
+            exit_code: 0,
+        };
+        let v = env.to_json();
+
+        assert_eq!(v["stages"]["ambisonics"]["skipped"], false);
+        assert_eq!(v["stages"]["ambisonics"]["build_failed"], false);
+        assert_eq!(v["stages"]["ambisonics"]["overall_pass"], true);
+        assert_eq!(v["stages"]["ambisonics"]["duration_ms"], 14_200);
+        let per_order = v["stages"]["ambisonics"]["per_order"].as_array().unwrap();
+        assert_eq!(per_order.len(), 5);
+        assert_eq!(per_order[0]["order"], 1);
+        assert_eq!(per_order[0]["passed"], true);
+        assert!(
+            per_order[0]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("encode 5/5")
+        );
+    }
+
+    #[test]
+    fn phase3_envelope_exposes_bench_stage() {
+        let setup = dummy_setup();
+        let quality = quality_ok();
+        let tests = tests_populated();
+        let amb = skipped_ambisonics();
+        let bench = bench_populated();
+        let env = Envelope {
+            setup: &setup,
+            quality: &quality,
+            tests: &tests,
+            ambisonics: &amb,
+            bench: &bench,
+            exit_code: 0,
+        };
+        let v = env.to_json();
+
+        assert_eq!(v["stages"]["bench"]["skipped"], false);
+        assert_eq!(v["stages"]["bench"]["duration_ms"], 1_800_000);
+        let vectors = v["stages"]["bench"]["vectors"].as_array().unwrap();
+        assert_eq!(vectors.len(), 2);
+        assert_eq!(vectors[0]["label"], "SILK NB 8k mono noise");
+        assert_eq!(vectors[0]["bitrate"], 16_000);
+        assert_eq!(vectors[0]["c_encode_ms"], 100.0);
+        assert_eq!(vectors[0]["rust_encode_ms"], 75.0);
+        assert_eq!(vectors[0]["enc_ratio"], 0.75);
+        assert_eq!(vectors[0]["dec_ratio"], 1.1);
+        assert_eq!(vectors[1]["skipped"], true);
+        assert!(vectors[1]["c_encode_ms"].is_null());
+        assert!(vectors[1]["enc_ratio"].is_null());
+        assert_eq!(
+            vectors[1]["skip_reason"],
+            "fixture missing at tests/vectors/music_48k_stereo.wav"
+        );
+    }
+
+    #[test]
+    fn skipped_ambisonics_stage_serialises_with_reason() {
+        let setup = dummy_setup();
+        let quality = quality_ok();
+        let tests = tests_populated();
+        let amb = AmbisonicsResult::skipped("--skip-ambisonics");
+        let bench = skipped_bench();
+        let env = Envelope {
+            setup: &setup,
+            quality: &quality,
+            tests: &tests,
+            ambisonics: &amb,
+            bench: &bench,
+            exit_code: 0,
+        };
+        let v = env.to_json();
+        assert_eq!(v["stages"]["ambisonics"]["skipped"], true);
+        assert_eq!(
+            v["stages"]["ambisonics"]["skip_reason"],
+            "--skip-ambisonics"
+        );
+    }
+
+    #[test]
+    fn skipped_bench_stage_serialises_with_reason() {
+        let setup = dummy_setup();
+        let quality = quality_ok();
+        let tests = tests_populated();
+        let amb = skipped_ambisonics();
+        let bench = BenchResult::skipped("--quick");
+        let env = Envelope {
+            setup: &setup,
+            quality: &quality,
+            tests: &tests,
+            ambisonics: &amb,
+            bench: &bench,
+            exit_code: 0,
+        };
+        let v = env.to_json();
+        assert_eq!(v["stages"]["bench"]["skipped"], true);
+        assert_eq!(v["stages"]["bench"]["skip_reason"], "--quick");
+    }
+
+    #[test]
+    fn upstream_build_failure_propagates_to_ambisonics_and_bench_skip_reasons() {
+        // Matches the HLD chaining rule: when Stage 2 reports build_failed,
+        // Stage 3 and Stage 4 are skipped with reason "upstream build failure".
+        // main.rs is responsible for threading the skip; the envelope just
+        // has to round-trip the reason verbatim.
+        let setup = dummy_setup();
+        let quality = quality_ok();
+        let t = TestsResult {
+            build_failed: true,
+            ..TestsResult::default()
+        };
+        let tests = TestsStageOutcome {
+            tests: t,
+            coverage: None,
+            coverage_skipped: false,
+        };
+        let amb = AmbisonicsResult::skipped("upstream build failure");
+        let bench = BenchResult::skipped("upstream build failure");
+        let env = Envelope {
+            setup: &setup,
+            quality: &quality,
+            tests: &tests,
+            ambisonics: &amb,
+            bench: &bench,
+            exit_code: 1,
+        };
+        let v = env.to_json();
+        assert_eq!(
+            v["stages"]["ambisonics"]["skip_reason"],
+            "upstream build failure"
+        );
+        assert_eq!(
+            v["stages"]["bench"]["skip_reason"],
+            "upstream build failure"
+        );
+        assert_eq!(v["stages"]["tests"]["build_failed"], true);
     }
 
     #[test]
@@ -335,10 +603,14 @@ mod tests {
             }],
         };
         let tests = TestsStageOutcome::skipped("phase 1 compat");
+        let amb = skipped_ambisonics();
+        let bench = skipped_bench();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            ambisonics: &amb,
+            bench: &bench,
             exit_code: 1,
         };
         let v = env.to_json();
