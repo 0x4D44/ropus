@@ -284,10 +284,9 @@ int opus_decoder_ctl(OpusDecoder *st, int request, ...)
 
         /* DNN blob: two args (pointer + length). Mirrors xiph's
          * `opus_decoder.c:1218` gated on USE_WEIGHTS_FILE + ENABLE_DEEP_PLC —
-         * we always route the CTL; the Rust side's `set_dnn_blob` is a
-         * Stage 7a placeholder returning OPUS_UNIMPLEMENTED (= -5) until
-         * Stage 7b ports the real `LPCNetPLCState::load_model`. */
-        /* TODO(stage-7b): replace with LPCNetPLCState::load_model */
+         * we always route the CTL; the Rust side's `set_dnn_blob` parses the
+         * blob and dispatches named sections to `LPCNetPLCState::load_model`
+         * (real weight-name dispatch ported in Stage 7b.1.5). */
         case OPUS_SET_DNN_BLOB_REQUEST: {
             const unsigned char *data = va_arg(ap, const unsigned char *);
             int len = va_arg(ap, int);

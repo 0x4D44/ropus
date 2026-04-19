@@ -363,9 +363,8 @@ pub unsafe extern "C" fn mdopus_decoder_ctl_get_int(
 /// to `lpcnet_plc_load_model` + `silk_LoadOSCEModels`
 /// (`reference/src/opus_decoder.c:1218`). We fold both checks into a
 /// `from_raw_parts` of the slice and forward to `OpusDecoder::set_dnn_blob`,
-/// which is a Stage 7a placeholder (always `Err(OPUS_UNIMPLEMENTED)`).
-/// Real loading lands with the rest of the DNN wiring in 7b.
-// TODO(stage-7b): replace with LPCNetPLCState::load_model
+/// which parses the weight blob and hands each named section off to
+/// `LPCNetPLCState::load_model` (ported in Stage 7b.1.5).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mdopus_decoder_ctl_set_dnn_blob(
     st: *mut OpusDecoder,
