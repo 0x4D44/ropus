@@ -424,6 +424,16 @@ impl<R: Read + Seek> OggOpusReader<R> {
         out_interleaved: &mut [f32],
         max_samples_per_ch: usize,
     ) -> Result<i32, ReaderError> {
+        // Test-only panic injection. Compiled out unless the `test-panic`
+        // feature is on; see `lib.rs::ropus_fb2k_test_set_panic_flag` for
+        // the sibling FFI hook the integration test uses to arm it.
+        #[cfg(feature = "test-panic")]
+        {
+            if crate::test_panic_should_fire() {
+                panic!("ropus-fb2k test-panic hook fired in decode_next");
+            }
+        }
+
         let channels = self.head.channels as usize;
         // Lazy-init the low-level decoder AND the scratch buffer together.
         // Deferring until the first decode keeps open() cheap for fb2k
@@ -533,48 +543,78 @@ impl<R: Read + Seek> OggOpusReader<R> {
     /// Seek the decoder to a per-channel sample position (48 kHz, post-pre-skip).
     ///
     /// Behaviour:
-    /// 1. Clamp `sample_pos` to `[0, total_samples]`. For unseekable or
-    ///    unknown-duration streams only `0` is accepted; anything else
-    ///    returns `ReaderError::Unsupported`.
-    /// 2. Lazily build the page index if it isn't already.
-    /// 3. Convert to granule (pre-skip-inclusive), rewind 80 ms, binary-search
+    /// 1. Reject *any* seek (including `0`) on unseekable streams — pretending
+    ///    `seek(0)` works without actually rewinding would silently mislead
+    ///    callers that already pumped `decode_next`. The HLD §5.2
+    ///    `decode_can_seek` will return false for these streams via the C++
+    ///    shim, so this is the right contract.
+    /// 2. For seekable streams of unknown duration (`total_samples == 0`),
+    ///    accept only `sample_pos == 0` and rewind to audio start; non-zero
+    ///    targets return `InvalidStream`.
+    /// 3. Otherwise: clamp `sample_pos` to `[0, total_samples]`. If the
+    ///    target lands inside the pre-skip window, short-circuit straight
+    ///    to a rewind-to-audio-start (no page index walk needed).
+    /// 4. Lazily build the page index if it isn't already.
+    /// 5. Convert to granule (pre-skip-inclusive), rewind 80 ms, binary-search
     ///    the index for the largest entry with `start_granule <= rewind_to`.
     ///    If none, pick the first entry.
-    /// 4. Seek the underlying reader to that page's byte offset and reset
+    /// 6. Seek the underlying reader to that page's byte offset and reset
     ///    the Opus decoder (OPUS_RESET_STATE semantics).
-    /// 5. Set `next_sample_abs_pos = entry.start_granule` and
+    /// 7. Set `next_sample_abs_pos = entry.start_granule` and
     ///    `target_abs_pos = sample_pos + pre_skip`. `decode_next` then
     ///    silently discards the pre-roll before returning real audio.
     pub(crate) fn seek(&mut self, sample_pos: u64) -> Result<(), ReaderError> {
-        // Unseekable IO can't support a non-zero seek. Zero is a no-op
-        // because an unseekable stream already starts at the beginning.
-        // We surface this as InvalidStream (→ -4) rather than Unsupported
-        // (→ -5) because by this point we've already accepted the stream
-        // via open(): the fb2k contract for `exception_io_unsupported_format`
-        // is "fall through to next input decoder", which is the wrong
-        // signal at decode time — we already own the stream.
+        // Unseekable streams have no `seek` IO callback; we surface this as
+        // InvalidStream (→ -4) rather than Unsupported (→ -5) because by
+        // this point we've already accepted the stream via open(): the fb2k
+        // contract for `exception_io_unsupported_format` is "fall through to
+        // next input decoder", which is the wrong signal once we own the
+        // stream. We reject *every* target — including 0 — because a
+        // `seek(0)` that silently does nothing after decode_next has already
+        // run is a contract violation: the caller thinks they rewound but
+        // didn't. The C++ shim's `decode_can_seek` returns false here, so
+        // fb2k won't ever issue this call in practice.
         if self.file_size.is_none() {
-            return if sample_pos == 0 {
-                Ok(())
-            } else {
-                Err(ReaderError::InvalidStream(
-                    "stream is not seekable".into(),
-                ))
-            };
+            return Err(ReaderError::InvalidStream(
+                "cannot rewind unseekable stream".into(),
+            ));
         }
+
+        // Seekable but unknown duration: only seek-to-zero is meaningful.
+        // Unlike the unseekable branch we *do* honour `sample_pos == 0` here
+        // because the underlying IO can actually rewind us back to audio
+        // start, so the operation has real effect.
         if self.total_samples == 0 {
-            return if sample_pos == 0 {
-                Ok(())
-            } else {
-                Err(ReaderError::InvalidStream(
+            if sample_pos != 0 {
+                return Err(ReaderError::InvalidStream(
                     "stream duration unknown; seek only to 0 supported".into(),
-                ))
-            };
+                ));
+            }
+            return self.rewind_to_audio_start();
         }
 
         // Clamp to the legal per-channel sample range. fb2k sometimes seeks
         // past the end on a scrub; HLD §4.2 says we clamp rather than error.
         let sample_pos = sample_pos.min(self.total_samples);
+
+        // Granule units (pre-skip-inclusive, matches Ogg page granules).
+        let pre_skip = self.head.pre_skip as u64;
+        let target_granule = sample_pos.saturating_add(pre_skip);
+
+        // Early-file shortcut: if the user is seeking somewhere inside the
+        // pre-skip preamble, the post-rewind state is identical to a fresh
+        // open — we'd land at the very first audio page and discard up to
+        // `pre_skip`. Skip the index walk in that case (saves the disk-walk
+        // entirely on a `seek(0)` that hasn't seeked before).
+        if target_granule <= pre_skip {
+            return self.rewind_to_audio_start();
+        }
+
+        // Saturation is intentional for early-file seeks: when
+        // `target_granule < PRE_ROLL_SAMPLES` the rewind point floors at 0,
+        // and the page-index search below correctly picks the very first
+        // entry in that case.
+        let rewind_to = target_granule.saturating_sub(PRE_ROLL_SAMPLES);
 
         // Build the index on demand.
         if self.page_index.is_none() {
@@ -589,15 +629,6 @@ impl<R: Read + Seek> OggOpusReader<R> {
                 "seek: page index is empty".into(),
             ));
         }
-
-        // Granule units (pre-skip-inclusive, matches Ogg page granules).
-        let pre_skip = self.head.pre_skip as u64;
-        let target_granule = sample_pos.saturating_add(pre_skip);
-        // Saturation is intentional for early-file seeks: when
-        // `target_granule < PRE_ROLL_SAMPLES` the rewind point floors at 0,
-        // and the page-index search below correctly picks the very first
-        // entry in that case.
-        let rewind_to = target_granule.saturating_sub(PRE_ROLL_SAMPLES);
 
         // Largest entry with start_granule <= rewind_to. `partition_point`
         // returns the insertion index of the first entry where the
@@ -640,6 +671,46 @@ impl<R: Read + Seek> OggOpusReader<R> {
         // start seeing samples at absolute granule `target_granule`.
         self.next_sample_abs_pos = start_page.start_granule;
         self.target_abs_pos = target_granule;
+
+        Ok(())
+    }
+
+    /// Re-seat the reader at the first audio page and clear the decoder so
+    /// the next `decode_next` produces samples starting from absolute
+    /// granule 0 (which the unified discard logic then trims down to
+    /// `pre_skip`). Shared by the main seek path's early-file shortcut and
+    /// the `total_samples == 0` + `sample_pos == 0` branch.
+    fn rewind_to_audio_start(&mut self) -> Result<(), ReaderError> {
+        // Same reposition pattern M2 established for the post-reverse-scan
+        // re-seat: take the bare reader out of the PacketReader, seek it,
+        // then reseat a fresh PacketReader (the ogg crate's `has_seeked`
+        // flag must be flipped via `seek_bytes` for mid-stream reads to
+        // tolerate the move).
+        let packet_reader = self
+            .packet_reader
+            .take()
+            .expect("packet_reader is always Some between open and drop");
+        let mut bare_reader = packet_reader.into_inner();
+        bare_reader
+            .seek(SeekFrom::Start(self.audio_start_offset))
+            .map_err(classify_io_error)?;
+        let mut fresh = PacketReader::new(bare_reader);
+        fresh.seek_bytes(SeekFrom::Start(self.audio_start_offset))
+            .map_err(classify_io_error)?;
+        self.packet_reader = Some(fresh);
+
+        // OPUS_RESET_STATE if the decoder exists; otherwise the lazy-init
+        // path in `decode_next` will build a fresh one.
+        if let Some(dec) = self.decoder.as_mut() {
+            dec.reset();
+        }
+
+        // Match the open()-time state: the decoder hasn't produced anything
+        // yet (next_sample_abs_pos = 0), and the discard target is the
+        // pre-skip count so the first `pre_skip` decoded samples are
+        // dropped before the caller sees real audio.
+        self.next_sample_abs_pos = 0;
+        self.target_abs_pos = self.head.pre_skip as u64;
 
         Ok(())
     }

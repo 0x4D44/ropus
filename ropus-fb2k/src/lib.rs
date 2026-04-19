@@ -474,3 +474,45 @@ fn reader_error_code(e: &ReaderError) -> c_int {
         ReaderError::Aborted => ROPUS_FB2K_ABORTED,
     }
 }
+
+// ---------------------------------------------------------------------------
+// Test-only panic injection (HLD §7 "Panic safety" tier)
+// ---------------------------------------------------------------------------
+//
+// Behind the `test-panic` feature flag we expose a hidden FFI hook
+// (`ropus_fb2k_test_set_panic_flag`) and a thread-local flag that the
+// `decode_next` path consults at entry. With the flag set, `decode_next`
+// `panic!`s deep in the stack so the integration test in
+// `tests/roundtrip.rs` can prove `ffi_guard!` catches the unwind, sets
+// `LAST_ERROR_CODE = -6 INTERNAL`, populates a human-readable message, and
+// returns the per-entry sentinel (`-1 BAD_ARG` for `decode_next`).
+//
+// Gated entirely behind `cfg(feature = "test-panic")` so the symbol is not
+// part of the released cdylib's exported surface and the runtime cost in
+// production is exactly zero (no branch, no thread-local, no extra code).
+
+#[cfg(feature = "test-panic")]
+thread_local! {
+    static PANIC_FLAG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Returns `true` iff the test harness has armed the panic flag for this
+/// thread. Called from `reader.rs::decode_next` (only when the feature
+/// is enabled).
+#[cfg(feature = "test-panic")]
+pub(crate) fn test_panic_should_fire() -> bool {
+    PANIC_FLAG.with(|c| c.get())
+}
+
+/// Test-only FFI hook to arm the panic-injection flag for the current
+/// thread. Set to `true` to make the next `decode_next` call panic; set
+/// back to `false` to disarm. The flag is per-thread so parallel test runs
+/// can't trip each other.
+///
+/// **Not** part of the public ABI — the symbol is only exported when the
+/// `test-panic` feature is on. Don't ship a `cdylib` built with this flag.
+#[cfg(feature = "test-panic")]
+#[unsafe(no_mangle)]
+pub extern "C" fn ropus_fb2k_test_set_panic_flag(on: bool) {
+    PANIC_FLAG.with(|c| c.set(on));
+}

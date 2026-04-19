@@ -26,7 +26,7 @@ use common::{
 
 use ropus_fb2k::{
     RopusFb2kInfo, ROPUS_FB2K_ABORTED, ROPUS_FB2K_BAD_ARG, ROPUS_FB2K_INVALID_STREAM,
-    ROPUS_FB2K_UNSUPPORTED,
+    ROPUS_FB2K_IO, ROPUS_FB2K_UNSUPPORTED,
 };
 
 // ---------------------------------------------------------------------------
@@ -48,6 +48,67 @@ fn open_rejects_garbage() {
         "garbage must surface as INVALID_STREAM (last_error={:?})",
         last_error_string()
     );
+}
+
+// ---------------------------------------------------------------------------
+// Truncating a *valid* fixture at various points must surface a clean
+// negative status — never a panic (`-6 INTERNAL`), never UB. Garbage bytes
+// would fail the OpusHead magic at byte 0 and never reach the length-check
+// discipline in `tags::read_u32_le` / `tags::take` or the second-page
+// handling in the reader; this test forces those paths by feeding partial
+// real bytes. Acceptable codes are `-4 INVALID_STREAM` (parser detected
+// corruption) or `-2 IO` (read returned short before the parser could
+// react).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn open_rejects_truncated_valid_fixture() {
+    // Use a multi-packet fixture so cuts hit a representative spread of
+    // boundaries: inside OpusHead, between OpusHead and OpusTags, inside
+    // OpusTags vendor-length, between OpusTags and the audio pages, and
+    // mid-audio. Each cut point exercises a different parse step.
+    // Smaller fixture is enough — we want cuts that hit the OpusHead
+    // page (bytes ~0..47), the OpusTags page (~47..103), and beyond into
+    // the audio area where the parser has already accepted the headers
+    // but the tail is missing. Five packets of silence pack into a single
+    // ~50-byte audio page in practice, so total fixture is ~150 bytes.
+    let full = build_opus_fixture_with_audio_packets("ropus-fb2k-test", &[], 5, Some(312));
+    let len = full.len();
+    // Cuts spread across all parser stages. We deliberately do *not*
+    // include cuts that lop off only the trailing 1-4 bytes: the reader
+    // is intentionally lenient about a torn tail (the OpusHead +
+    // OpusTags pages plus a complete audio page are enough to open with
+    // valid metadata; the missing bytes just shorten the apparent
+    // duration). Tests for the parser-discipline cuts are what matter.
+    let cuts = [
+        10usize, // mid first Ogg page header
+        27,      // immediately after the first Ogg page header
+        30,      // mid OpusHead packet payload (inside the 19 body bytes)
+        50,      // around the OpusHead/OpusTags page boundary
+        60,      // mid OpusTags Ogg page header
+        80,      // mid OpusTags vendor / comment-count area
+    ];
+
+    for &cut in &cuts {
+        if cut == 0 || cut >= len {
+            continue;
+        }
+        let truncated = full[..cut].to_vec();
+        let (_io, handle) = open_from_bytes(truncated);
+        if !handle.is_null() {
+            unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+            panic!(
+                "cut={cut} (fixture len={len}) must not parse as a valid stream"
+            );
+        }
+        let code = unsafe { ropus_fb2k::ropus_fb2k_last_error_code() };
+        assert!(
+            code == ROPUS_FB2K_INVALID_STREAM || code == ROPUS_FB2K_IO,
+            "cut={cut} got code={code}, expected INVALID_STREAM or IO \
+             (last_error={:?})",
+            last_error_string()
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -672,6 +733,87 @@ fn seek_to_zero_is_valid() {
 }
 
 // ---------------------------------------------------------------------------
+// seek_zero_after_decode_rewinds — regression test for the silent
+// no-op-on-`seek(0)` bug. Earlier the seek path's `total_samples == 0` and
+// unseekable branches both early-returned `Ok(())` for `sample_pos == 0`
+// without resetting the decoder or repositioning the packet reader. After
+// `decode_next` had already drained N packets, that left the decoder
+// mid-stream while the caller thought they had rewound — so the next
+// `decode_next` returned packet N+1 instead of packet 1.
+//
+// Here we drain a chunk, seek(0), then decode again and assert the first
+// emitted sample equals the first emitted sample from a fresh handle.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn seek_zero_after_decode_rewinds() {
+    let bytes = build_opus_fixture_with_audio_packets("ropus-fb2k-test", &[], 5, Some(312));
+
+    // Capture the very first samples-per-channel and float buffer a *fresh*
+    // handle produces from its first `decode_next` call. With pre_skip=312
+    // and a 960-sample packet, that's 960 - 312 = 648 samples/ch (one
+    // partial packet), distinct from packet 2's 960 samples/ch — the size
+    // alone is enough to detect the bug if the seek silently no-ops.
+    let (fresh_n, fresh_buf) = {
+        let (_io, handle) = open_from_bytes(bytes.clone());
+        assert!(!handle.is_null());
+        let mut buf = vec![0f32; 5760 * 2];
+        let n = unsafe {
+            ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760)
+        };
+        assert!(n > 0, "fresh-handle first decode must produce samples");
+        let captured: Vec<f32> = buf[..n as usize * 2].to_vec();
+        unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+        (n, captured)
+    };
+
+    // Drain a packet on a separate handle; *then* seek(0) and decode again.
+    // With the bug, the next decode_next returns the *second* packet (a
+    // full 960 samples/ch with different content); with the fix, the next
+    // decode_next reproduces the fresh-handle first chunk.
+    let (_io, handle) = open_from_bytes(bytes);
+    assert!(!handle.is_null());
+    let mut buf = vec![0f32; 5760 * 2];
+
+    let first_decode = unsafe {
+        ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760)
+    };
+    assert!(first_decode > 0, "pre-seek decode must produce samples");
+
+    let rc = unsafe { ropus_fb2k::ropus_fb2k_seek(handle, 0) };
+    assert_eq!(
+        rc, 0,
+        "seek(0) after decode must return OK (last_error={:?})",
+        last_error_string()
+    );
+
+    let post_seek_first = unsafe {
+        ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760)
+    };
+    assert!(
+        post_seek_first > 0,
+        "first decode after seek(0) must produce samples, got {post_seek_first}"
+    );
+
+    // Sample-count and bit-for-bit equality. If seek(0) silently did
+    // nothing, post_seek_first would be 960 (full packet 2) rather than
+    // fresh_n (= 648, partial packet 1 after pre-skip trim).
+    assert_eq!(
+        post_seek_first, fresh_n,
+        "post-seek samples-per-ch must match fresh-handle first-call count \
+         (got {post_seek_first}, expected {fresh_n}; a no-op seek would have \
+         returned the next packet's 960 samples/ch instead)"
+    );
+    let got = &buf[..post_seek_first as usize * 2];
+    assert_eq!(
+        got, fresh_buf.as_slice(),
+        "post-seek samples must match fresh-handle samples bit-for-bit"
+    );
+
+    unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+}
+
+// ---------------------------------------------------------------------------
 // seek_to_nonzero_then_decode — mirror of seek_to_zero_is_valid for a
 // non-zero target. Seek to a sample in the middle of the fixture, decode,
 // and confirm the first emitted samples match the corresponding offset in
@@ -781,30 +923,37 @@ fn seek_past_end_clamps() {
 
 // ---------------------------------------------------------------------------
 // seek_on_unseekable_returns_invalid_stream — without a seek IO callback,
-// any non-zero seek returns -4 INVALID_STREAM (→ exception_io_data at the
-// C++ shim) rather than -5 UNSUPPORTED (which would mean "fall through to
-// next input decoder" — the wrong signal once we already own the stream).
+// *any* seek (including zero) returns -4 INVALID_STREAM. The previous
+// behaviour silently returned OK on `sample_pos == 0` even after the caller
+// had already pumped `decode_next`, which left the decoder mid-stream while
+// the caller thought they had rewound — a contract violation. We now reject
+// up front; the C++ shim's `decode_can_seek` returns false for unseekable
+// streams so fb2k won't issue this call in practice anyway.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn seek_on_unseekable_returns_invalid_stream() {
+fn seek_on_unseekable_returns_invalid_stream_even_for_zero() {
     let bytes = build_opus_fixture_with_audio_packets("ropus-fb2k-test", &[], 20, Some(312));
     let (_io, handle) = open_from_bytes_without_seek(bytes, 0);
     assert!(!handle.is_null(), "unseekable open must succeed: {}", last_error_string());
 
-    let rc = unsafe { ropus_fb2k::ropus_fb2k_seek(handle, 1_000) };
-    assert_eq!(
-        rc, ROPUS_FB2K_INVALID_STREAM,
-        "non-zero seek on unseekable stream must return INVALID_STREAM"
-    );
+    // Both a non-zero target (used to be rejected) and zero (used to be
+    // silently accepted as a no-op) must now consistently return INVALID_STREAM.
+    for &target in &[1_000u64, 0u64] {
+        let rc = unsafe { ropus_fb2k::ropus_fb2k_seek(handle, target) };
+        assert_eq!(
+            rc, ROPUS_FB2K_INVALID_STREAM,
+            "seek({target}) on unseekable stream must return INVALID_STREAM"
+        );
 
-    let code = unsafe { ropus_fb2k::ropus_fb2k_last_error_code() };
-    assert_eq!(code, ROPUS_FB2K_INVALID_STREAM);
-    let msg = last_error_string().to_lowercase();
-    assert!(
-        msg.contains("seek") || msg.contains("seekable"),
-        "last-error should mention seek/seekable; got {msg:?}"
-    );
+        let code = unsafe { ropus_fb2k::ropus_fb2k_last_error_code() };
+        assert_eq!(code, ROPUS_FB2K_INVALID_STREAM);
+        let msg = last_error_string().to_lowercase();
+        assert!(
+            msg.contains("seek") || msg.contains("seekable") || msg.contains("rewind"),
+            "last-error should mention seek/seekable/rewind; got {msg:?}"
+        );
+    }
 
     unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
 }
@@ -987,6 +1136,66 @@ fn rg_malformed_tag_is_nan() {
     };
     assert!(rc >= 0, "decode must still work; got {rc}");
 
+    unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+}
+
+// ---------------------------------------------------------------------------
+// panic_in_decode_surfaces_internal_code — proves `ffi_guard!` turns a
+// deep panic in `decode_next` into the unified `-6 INTERNAL` last-error
+// code, plus the per-entry `-1 BAD_ARG` return sentinel and a human-
+// readable message containing "internal panic". Gated behind the
+// `test-panic` feature flag because it depends on a hidden FFI hook
+// (`ropus_fb2k_test_set_panic_flag`) that arms a thread-local panic flag.
+// CI runs `cargo test -p ropus-fb2k --features test-panic` to exercise
+// this case; the default `cargo test` skips it.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "test-panic")]
+unsafe extern "C" {
+    fn ropus_fb2k_test_set_panic_flag(on: bool);
+}
+
+#[cfg(feature = "test-panic")]
+#[test]
+fn panic_in_decode_surfaces_internal_code() {
+    use ropus_fb2k::ROPUS_FB2K_INTERNAL;
+
+    let (_io, handle) = open_from_bytes(minimal_opus_fixture().to_vec());
+    assert!(!handle.is_null(), "fixture must open");
+
+    // Arm the panic flag, then call decode_next. The hook fires at the top
+    // of `decode_next` before any real work; `ffi_guard!` should catch the
+    // unwind and:
+    //   * return the per-entry sentinel (`-1 BAD_ARG` — see ffi_guard! call
+    //     site in lib.rs::ropus_fb2k_decode_next),
+    //   * write `ROPUS_FB2K_INTERNAL` to the last-error-code slot,
+    //   * stash a "internal panic" message in the last-error string slot.
+    unsafe { ropus_fb2k_test_set_panic_flag(true) };
+    let mut buf = vec![0f32; 5760 * 2];
+    let rc = unsafe {
+        ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760)
+    };
+    // Per-entry sentinel — ffi_guard!'s on_panic for decode_next is BAD_ARG.
+    assert_eq!(
+        rc, ROPUS_FB2K_BAD_ARG,
+        "decode_next entry sentinel must be BAD_ARG (got {rc})"
+    );
+    // Unified class code in the last-error slot.
+    let code = unsafe { ropus_fb2k::ropus_fb2k_last_error_code() };
+    assert_eq!(
+        code, ROPUS_FB2K_INTERNAL,
+        "last_error_code must be INTERNAL after panic (got {code})"
+    );
+    // Message text — must mention "internal panic" so a C caller surfacing
+    // the message can distinguish the panic from a regular bad-arg error.
+    let msg = last_error_string().to_lowercase();
+    assert!(
+        msg.contains("internal panic"),
+        "last_error message must mention 'internal panic'; got {msg:?}"
+    );
+
+    // Disarm so subsequent tests in the same thread don't trip.
+    unsafe { ropus_fb2k_test_set_panic_flag(false) };
     unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
 }
 

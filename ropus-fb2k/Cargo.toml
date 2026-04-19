@@ -1,6 +1,6 @@
 [package]
 name = "ropus-fb2k"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "BSD-3-Clause"
 publish = false
@@ -8,6 +8,19 @@ description = "foobar2000 input-component backend: Ogg Opus demux + ropus decode
 
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+[features]
+# `test-panic` enables a hidden FFI hook (`ropus_fb2k_test_set_panic_flag`)
+# and a check inside `decode_next` that fires `panic!` when the flag is set.
+# Used by the `panic_in_decode_surfaces_internal_code` integration test in
+# `tests/roundtrip.rs` to prove the `ffi_guard!` panic catch turns a deep
+# panic into `-6 INTERNAL` + a human last-error message rather than UB.
+#
+# CI runs `cargo test -p ropus-fb2k --features test-panic` so this hook is
+# exercised on every push. Default `cargo test` omits it. NEVER ship in
+# release builds — the entry point is `extern "C"` and stable in name, so a
+# malicious caller could weaponise the panic. Don't enable in `default`.
+test-panic = []
 
 [dependencies]
 ropus = { path = "../ropus" }
