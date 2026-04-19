@@ -54,7 +54,12 @@ The output DLL lands at `fb2k-ropus\build\Release\foo_input_ropus.dll`.
 foobar2000 keeps user components under
 `%APPDATA%\foobar2000-v2\user-components-x64\<name>\`. The per-component
 folder does not exist until you create it; the DLL must live inside, not
-alongside. For M4 rapid iteration:
+alongside.
+
+Prerequisite: foobar2000 v2 must be installed and launched at least once —
+this creates `%APPDATA%\foobar2000-v2\`, which the commands below require.
+
+For M4 rapid iteration:
 
 ```
 mkdir %APPDATA%\foobar2000-v2\user-components-x64\foo_input_ropus

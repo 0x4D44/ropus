@@ -12,6 +12,9 @@
 
 #include <SDK/foobar2000.h>
 
+// Version below is the C++ shell's own stream, independent of the Rust
+// `ropus-fb2k` crate (Cargo.toml 0.2.0). Separate build artefacts on separate
+// lifecycles; any alignment is an M6 packaging decision.
 DECLARE_COMPONENT_VERSION(
     "ropus (Rust Opus decoder)",
     "0.0.4",
