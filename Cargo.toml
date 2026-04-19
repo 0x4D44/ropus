@@ -1,6 +1,14 @@
 [workspace]
 resolver = "3"
-members = ["ropus", "harness", "capi", "ropus-cli", "ropus-fb2k", "tests/conformance"]
+members = [
+    "ropus",
+    "harness",
+    "capi",
+    "ropus-cli",
+    "ropus-fb2k",
+    "tests/conformance",
+    "tools/fetch-assets",
+]
 exclude = ["tests/fuzz", "reference"]
 
 [profile.dev]

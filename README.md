@@ -21,7 +21,11 @@ This repository is a Cargo workspace: the published library crate lives in `ropu
 git clone https://github.com/0x4D44/ropus.git
 cd ropus
 
-git clone https://github.com/xiph/opus.git reference
+# Fetch external build assets (pinned, idempotent, cached).
+#   `reference` clones xiph/opus at a pinned commit.
+#   `weights`   downloads the DNN model tarball (~135 MB) and extracts into reference/dnn/.
+#   `all`       does both, in order.
+cargo run -p fetch-assets -- all
 
 cargo build
 ```
@@ -30,7 +34,14 @@ Required:
 
 - Rust 2024 (`1.85+`)
 - C compiler toolchain (MSVC/GCC/Clang)
-- `reference/` directory containing the Opus C source tree
+- `git`, `curl`, `tar` on `PATH` (all three ship with Windows 10 1803+, macOS, and
+  every mainstream Linux distro — used by `fetch-assets`)
+- `reference/` directory containing the Opus C source tree (produced by
+  `cargo run -p fetch-assets -- reference`)
+
+If you run `cargo build` before fetching assets, the harness build script panics
+with a clear pointer to the `fetch-assets` command — nothing subtle, but the
+explicit fetch step is cleaner than surprise network I/O during `cargo build`.
 
 ## Core commands
 

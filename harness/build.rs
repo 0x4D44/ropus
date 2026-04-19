@@ -12,8 +12,21 @@ fn main() {
 
     if !ref_dir.join("celt/bands.c").exists() {
         panic!(
-            "Reference opus source not found under {}. \
-             Clone https://github.com/xiph/opus into reference/.",
+            "\n\n\
+             === Reference opus C source not found ===\n\
+             Expected under: {}\n\n\
+             Fetch it (pinned commit, idempotent):\n\
+             \n\
+             \x20   cargo run -p fetch-assets -- reference\n\
+             \n\
+             Or, to also fetch DNN model weights:\n\
+             \n\
+             \x20   cargo run -p fetch-assets -- all\n\
+             \n\
+             Manual alternative:\n\
+             \n\
+             \x20   git clone https://github.com/xiph/opus.git reference\n\
+             \n",
             ref_dir.display()
         );
     }

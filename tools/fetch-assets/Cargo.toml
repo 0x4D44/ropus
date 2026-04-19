@@ -1,0 +1,13 @@
+[package]
+name = "fetch-assets"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Fetches external build assets (xiph/opus reference C source, DNN model weights) into ./reference/"
+
+[[bin]]
+name = "fetch-assets"
+path = "src/main.rs"
+
+[dependencies]
+sha2 = "0.10"
