@@ -10,7 +10,7 @@
 
 #![allow(non_camel_case_types, dead_code)]
 
-use std::os::raw::{c_int, c_uchar};
+use std::os::raw::{c_int, c_uchar, c_void};
 
 pub type opus_int16 = i16;
 pub type opus_int32 = i32;
@@ -48,6 +48,21 @@ unsafe extern "C" {
     pub fn opus_decoder_destroy(st: *mut OpusDecoder);
 
     pub fn opus_decoder_ctl(st: *mut OpusDecoder, request: c_int, ...) -> c_int;
+
+    // --- Stage 8.4 DRED RDOVAE encoder shim ---
+    // Defined in `harness-deep-plc/dred_enc_shim.c`. Opaque pointers keep
+    // the C struct layouts out of the FFI surface.
+    pub fn ropus_test_rdovaeenc_new() -> *mut c_void;
+    pub fn ropus_test_rdovaeenc_free(model: *mut c_void);
+    pub fn ropus_test_rdovae_enc_state_new() -> *mut c_void;
+    pub fn ropus_test_rdovae_enc_state_free(state: *mut c_void);
+    pub fn ropus_test_dred_rdovae_encode_dframe(
+        state: *mut c_void,
+        model: *const c_void,
+        latents: *mut f32,
+        initial_state: *mut f32,
+        input: *const f32,
+    );
 }
 
 /// Thin RAII wrapper around the C float-mode decoder — used by the tier-2

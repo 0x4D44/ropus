@@ -224,6 +224,23 @@ fn main() {
         "dnn/pitchdnn_data.c",
     ];
 
+    // --- DRED sources ---
+    //
+    // Stage 8.4 adds the RDOVAE encoder forward pass for C-vs-Rust
+    // differential testing. These files need no ENABLE_DRED gate at the
+    // call level (the top-level DRED features in opus_encoder.c do, but
+    // `dred_rdovae_enc.c` itself is just a pure forward pass the test
+    // invokes directly). The weight tables arrive via
+    // `dred_rdovae_enc_data.c`. Matches xiph's `DRED_SOURCES` list in
+    // `reference/lpcnet_sources.mk`.
+    let dred_sources = [
+        "dnn/dred_rdovae_enc.c",
+        "dnn/dred_rdovae_enc_data.c",
+        "dnn/dred_rdovae_dec.c",
+        "dnn/dred_rdovae_dec_data.c",
+        "dnn/dred_rdovae_stats_data.c",
+    ];
+
     let mut build = cc::Build::new();
 
     build
@@ -263,10 +280,19 @@ fn main() {
     for src in &dnn_sources {
         build.file(ref_dir.join(src));
     }
+    for src in &dred_sources {
+        build.file(ref_dir.join(src));
+    }
+
+    // Local shim that exposes `dred_rdovae_encode_dframe` via opaque
+    // pointers so the Rust differential test can call it without
+    // replicating the C struct layouts.
+    build.file(harness_dir.join("dred_enc_shim.c"));
 
     build.compile("opus_ref_float");
 
     println!("cargo:rustc-link-lib=static=opus_ref_float");
     println!("cargo:rerun-if-changed=config.h");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=dred_enc_shim.c");
 }
