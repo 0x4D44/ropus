@@ -189,6 +189,131 @@ pub fn parse_opus_head(data: &[u8]) -> Result<OpusHead> {
     })
 }
 
+/// Sentinel value meaning "unknown granule position" per RFC 3533 §6. Pages
+/// with this granule are excluded from `read_page_granules` so they don't
+/// masquerade as a huge backwards jump from a real absgp.
+pub const UNKNOWN_GRANULE: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+
+/// Forward-scan every Ogg page belonging to `target_serial` and collect the
+/// absolute granule position from each, in file order.
+///
+/// `ogg::reading::PacketReader` is packet-oriented: it coalesces lacing
+/// segments back into Opus packets and doesn't expose per-page state. The
+/// info command's granule-gap detector needs per-page granules to flag
+/// backwards jumps and oversized forward jumps, so we roll a small raw-bytes
+/// walker here.
+///
+/// Sentinel-filtered: pages whose absgp is `UNKNOWN_GRANULE` (common on
+/// partial-packet continuation pages in some encoders) are skipped so callers
+/// don't see phantom gaps caused by `0xFFFF_...` values sandwiched between
+/// real granule positions.
+///
+/// The parser is deliberately minimal — we only need capture pattern, version,
+/// absgp, serial, and the lacing segment count (to skip to the next page).
+/// We do **not** verify the page CRC: for info/diagnostic output, mis-framed
+/// pages that happen to align "OggS" would show up as corrupt granule
+/// sequences anyway, which is arguably the right signal. Keeping the walker
+/// tight avoids the dependency on `ogg::reading::PageHeader` internals that
+/// the crate doesn't expose publicly.
+pub fn read_page_granules<R: Read + Seek>(
+    src: &mut R,
+    target_serial: u32,
+) -> std::io::Result<Vec<u64>> {
+    // Reset to start of file; the function contract is "walk the whole stream".
+    src.seek(SeekFrom::Start(0))?;
+    let mut buf = Vec::new();
+    src.read_to_end(&mut buf)?;
+
+    let mut granules = Vec::new();
+    let mut pos = 0usize;
+    while pos + 27 <= buf.len() {
+        if &buf[pos..pos + 4] != b"OggS" || buf[pos + 4] != 0 {
+            pos += 1;
+            continue;
+        }
+        let absgp = u64::from_le_bytes([
+            buf[pos + 6],
+            buf[pos + 7],
+            buf[pos + 8],
+            buf[pos + 9],
+            buf[pos + 10],
+            buf[pos + 11],
+            buf[pos + 12],
+            buf[pos + 13],
+        ]);
+        let serial = u32::from_le_bytes([
+            buf[pos + 14],
+            buf[pos + 15],
+            buf[pos + 16],
+            buf[pos + 17],
+        ]);
+        let nseg = buf[pos + 26] as usize;
+        let lacing_end = pos + 27 + nseg;
+        if lacing_end > buf.len() {
+            // Truncated page header (file ends mid-lacing). Nothing more to
+            // extract; stop cleanly.
+            break;
+        }
+        let payload_len: usize = buf[pos + 27..lacing_end].iter().map(|&x| x as usize).sum();
+        let page_end = lacing_end + payload_len;
+        if page_end > buf.len() {
+            // Truncated payload. Same handling as above — the partial page
+            // gives us no usable granule, stop scanning.
+            break;
+        }
+
+        if serial == target_serial && absgp != UNKNOWN_GRANULE {
+            granules.push(absgp);
+        }
+
+        pos = page_end;
+    }
+    Ok(granules)
+}
+
+/// Description of a single granule-position gap detected by
+/// `detect_granule_gaps`. Page indexing is 0-based over pages belonging to the
+/// target stream serial (matching the `Vec<u64>` returned by
+/// `read_page_granules`), so a `page=3` means "between the 3rd and 4th
+/// target-serial page, counting from zero".
+///
+/// Only backwards-jump gaps are reported — see `detect_granule_gaps`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GranuleGap {
+    /// Index of the *later* page in the pair, relative to the target-serial
+    /// page list. Matches the common "gap at page N" reading in opusinfo's
+    /// extended output.
+    pub page: usize,
+    pub from: u64,
+    pub to: u64,
+}
+
+/// Detects only backwards-granule jumps, which are unambiguously invalid.
+/// Per-packet forward-jump gap detection requires packet-level frame-size
+/// bookkeeping and is not implemented.
+///
+/// Originally the HLD also flagged "forward jumps > 5760 samples" (one 120 ms
+/// frame at 48 kHz), but Ogg pages aggregate many packets before flushing (the
+/// page boundary fires on 255-segment overflow, not per-packet), so per-page
+/// forward increments routinely exceed 5760 samples on well-formed opusenc
+/// output. A correct forward-jump check has to decode each packet's TOC and
+/// walk packet-level granules — deferred as future work.
+pub fn detect_granule_gaps(granules: &[u64]) -> Vec<GranuleGap> {
+    let mut gaps = Vec::new();
+    for i in 1..granules.len() {
+        let prev = granules[i - 1];
+        let cur = granules[i];
+        if cur < prev {
+            gaps.push(GranuleGap {
+                page: i,
+                from: prev,
+                to: cur,
+            });
+        }
+    }
+    gaps
+}
+
 /// Scan backwards from EOF for the last Ogg `OggS` page belonging to
 /// `target_serial`, and return its absolute granule position. Returns
 /// `Ok(None)` if the last matching page has the unknown-granule sentinel
@@ -206,7 +331,6 @@ pub fn read_last_granule<R: Read + Seek>(
 ) -> std::io::Result<Option<u64>> {
     const SCAN_WINDOW: u64 = 128 * 1024;
     const HEADER_LEN: usize = 27;
-    const UNKNOWN_GRANULE: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 
     // Use Seek to obtain the source's length without depending on filesystem
     // metadata, so this helper can drive any Read+Seek (including Cursor in
@@ -436,5 +560,84 @@ mod tests {
             comments: vec!["KEY=a=b=c".to_string()],
         };
         assert_eq!(tags.get("key"), Some("a=b=c"));
+    }
+
+    // -- Granule-gap detection --------------------------------------------
+
+    /// Build a stream of `N` minimal Ogg pages (zero-payload), one per absgp,
+    /// all on the same target serial. Used by the gap-detector tests below so
+    /// they can assemble synthetic page sequences without threading a raw-byte
+    /// writer through each test.
+    fn pages_from_absgps(absgps: &[u64], serial: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        for &g in absgps {
+            buf.extend_from_slice(&build_minimal_ogg_page(g, serial));
+        }
+        buf
+    }
+
+    #[test]
+    fn read_page_granules_collects_every_target_serial_page() {
+        let bytes = pages_from_absgps(&[100, 200, 300], 0xC0DE_C0DE);
+        let mut cur = Cursor::new(bytes);
+        let got = read_page_granules(&mut cur, 0xC0DE_C0DE).expect("ok");
+        assert_eq!(got, vec![100, 200, 300]);
+    }
+
+    #[test]
+    fn read_page_granules_skips_other_serials() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&build_minimal_ogg_page(100, 0xC0DE_C0DE));
+        buf.extend_from_slice(&build_minimal_ogg_page(9_999, 0xDEAD_BEEF));
+        buf.extend_from_slice(&build_minimal_ogg_page(200, 0xC0DE_C0DE));
+        let mut cur = Cursor::new(buf);
+        let got = read_page_granules(&mut cur, 0xC0DE_C0DE).expect("ok");
+        assert_eq!(got, vec![100, 200]);
+    }
+
+    #[test]
+    fn granule_gaps_flags_backward_jump() {
+        let gaps = detect_granule_gaps(&[100, 200, 150]);
+        assert_eq!(gaps.len(), 1, "one backward jump should yield one gap");
+        assert_eq!(gaps[0].page, 2);
+        assert_eq!(gaps[0].from, 200);
+        assert_eq!(gaps[0].to, 150);
+    }
+
+    #[test]
+    fn granule_gaps_forward_jump_no_longer_flagged() {
+        // A large forward jump is not a gap — Ogg pages aggregate many packets
+        // before flushing on segment overflow, so per-page forward granule
+        // increments on well-formed opusenc output routinely exceed the single
+        // 120 ms frame (5760 samples @ 48 kHz) limit. Only backwards jumps are
+        // reported. See `detect_granule_gaps` doc comment for details.
+        let gaps = detect_granule_gaps(&[0, 10_000]);
+        assert!(gaps.is_empty(), "large forward jumps are no longer gaps");
+    }
+
+    #[test]
+    fn granule_gaps_normal_sequence_no_warning() {
+        // Every delta is exactly 960 samples (20 ms @ 48 kHz) and strictly
+        // forward. Detector must stay silent.
+        let seq: Vec<u64> = (1..=10).map(|i| i * 960).collect();
+        let gaps = detect_granule_gaps(&seq);
+        assert!(gaps.is_empty(), "expected zero gaps, got {gaps:?}");
+    }
+
+    #[test]
+    fn granule_gaps_ignores_sentinel_pages() {
+        // `read_page_granules` skips UNKNOWN_GRANULE pages, so by the time
+        // `detect_granule_gaps` runs a sentinel is already gone — a sentinel
+        // between `100` and `200` yields the filtered sequence `[100, 200]`
+        // with zero gaps.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&build_minimal_ogg_page(100, 0xC0DE_C0DE));
+        buf.extend_from_slice(&build_minimal_ogg_page(UNKNOWN_GRANULE, 0xC0DE_C0DE));
+        buf.extend_from_slice(&build_minimal_ogg_page(200, 0xC0DE_C0DE));
+        let mut cur = Cursor::new(buf);
+        let filtered = read_page_granules(&mut cur, 0xC0DE_C0DE).expect("ok");
+        assert_eq!(filtered, vec![100, 200], "sentinel must be filtered out");
+        let gaps = detect_granule_gaps(&filtered);
+        assert!(gaps.is_empty());
     }
 }

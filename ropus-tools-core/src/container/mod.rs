@@ -2,3 +2,4 @@
 
 pub mod ogg;
 pub mod picture;
+pub mod toc;
