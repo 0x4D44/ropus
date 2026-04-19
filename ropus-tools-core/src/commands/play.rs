@@ -74,7 +74,7 @@ pub fn play(opts: PlayOptions) -> Result<()> {
     let (_stream, handle) = rodio::OutputStream::try_default()
         .map_err(|e| anyhow!("no default audio output device available: {e}"))?;
 
-    let interactive = interactive_enabled(is_quiet_argv());
+    let interactive = interactive_enabled(opts.quiet);
     // Bind the guard so it lives for the whole playback session and disables
     // raw mode on any path out of this function.
     let _raw = if interactive {
@@ -381,14 +381,6 @@ fn read_opus_tags_from_file(path: &Path) -> Option<OpusTags> {
 /// through to the non-interactive path.
 fn interactive_enabled(quiet_flag: bool) -> bool {
     !quiet_flag && std::io::stdout().is_tty() && std::io::stdin().is_tty()
-}
-
-/// Mirror of the argv sniff `run_prelude` does for the banner. Each binary's
-/// clap surface already consumes these flags separately; re-sniffing here
-/// keeps the library-facing `PlayOptions` free of a transport-layer concern
-/// and avoids a second pass through the CLI layer.
-fn is_quiet_argv() -> bool {
-    std::env::args().any(|a| a == "-q" || a == "--quiet")
 }
 
 /// Expand a CLI `input` into an ordered playlist. A file yields a single-entry

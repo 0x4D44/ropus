@@ -84,6 +84,13 @@ pub struct DecodeOptions {
 #[derive(Debug)]
 pub struct InfoOptions {
     pub input: PathBuf,
+    /// `-e` / `--extended`: print a per-packet TOC decode section after the
+    /// default block. Verbose on long files — opus-tools behaves the same.
+    pub extended: bool,
+    /// `-q` / `--query KEY`: bypass the banner and the multi-line block and
+    /// print a single named value (see `commands::info::query_key` for the
+    /// supported keys). `None` means "print the human-readable block".
+    pub query: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -100,4 +107,7 @@ pub struct PlayOptions {
     pub volume: Option<f32>,
     /// Repeat behaviour for directory playback.
     pub loop_mode: LoopMode,
+    /// Suppress interactive UI and fall back to the non-TTY path. Sourced
+    /// from the `-q`/`--quiet` prelude flag.
+    pub quiet: bool,
 }
