@@ -11,6 +11,9 @@ panic = "unwind"
 panic = "unwind"
 
 [profile.release]
-lto = "fat"
+# ThinLTO beats FatLTO by ~6-8pp on encode across the board, and PGO is
+# a wash-to-negative on top. See wrk_journals/2026.04.19 - JRN - lto-pgo-bakeoff.md
+# and the README "Performance" section for the measurement.
+lto = "thin"
 codegen-units = 1
 panic = "unwind"
