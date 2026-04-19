@@ -1585,7 +1585,19 @@ mod tests {
 
     /// A trivial downmix callback that interprets the PCM bytes as
     /// `f32` little-endian (matching the default build on x86), applies
-    /// `FLOAT2SIG` (multiply by 32768), and sums the selected channels.
+    /// the C `FLOAT2SIG` chain from `reference/celt/float_cast.h:166-172`
+    /// (FIXED_POINT variant — we're a fixed-point codec), and sums the
+    /// selected channels:
+    ///
+    /// ```text
+    /// y = float2int( clamp( x * (32768 << SIG_SHIFT),
+    ///                       -(65536 << SIG_SHIFT), +(65536 << SIG_SHIFT) ) )
+    /// ```
+    ///
+    /// With `SIG_SHIFT = 12` this multiplies by `32768 << 12 = 134_217_728`
+    /// and rounds half-to-even (matches `lrintf`). The harness-side
+    /// `rust_downmix_float` in `harness/tests/c_ref_differential.rs` uses
+    /// the same formula, which is why that differential test is bit-exact.
     fn test_downmix_float(
         input: &[u8],
         output: &mut [i32],
@@ -1602,24 +1614,34 @@ mod tests {
                 input.len() / core::mem::size_of::<f32>(),
             )
         };
-        const CELT_SIG_SCALE: f32 = 32_768.0;
+        const FLOAT2SIG_MULT: f32 = 134_217_728.0; // 32768 << SIG_SHIFT (=12)
+        const SIG_CLAMP_MAX: f32 = 268_435_456.0; // 65536 << SIG_SHIFT
+        const SIG_CLAMP_MIN: f32 = -268_435_456.0;
+        #[inline(always)]
+        fn float2sig(x: f32) -> i32 {
+            let mut y = x * FLOAT2SIG_MULT;
+            if y > SIG_CLAMP_MAX {
+                y = SIG_CLAMP_MAX;
+            }
+            if y < SIG_CLAMP_MIN {
+                y = SIG_CLAMP_MIN;
+            }
+            y.round_ties_even() as i32
+        }
         for j in 0..subframe as usize {
-            output[j] = (samples[((j as i32 + offset) * c + c1) as usize] * CELT_SIG_SCALE) as i32;
+            output[j] = float2sig(samples[((j as i32 + offset) * c + c1) as usize]);
         }
         if c2 > -1 {
             for j in 0..subframe as usize {
-                output[j] += (samples[((j as i32 + offset) * c + c2) as usize] * CELT_SIG_SCALE)
-                    as i32;
+                output[j] += float2sig(samples[((j as i32 + offset) * c + c2) as usize]);
             }
         } else if c2 == -2 {
             for ch in 1..c {
                 for j in 0..subframe as usize {
-                    output[j] += (samples[((j as i32 + offset) * c + ch) as usize] * CELT_SIG_SCALE)
-                        as i32;
+                    output[j] += float2sig(samples[((j as i32 + offset) * c + ch) as usize]);
                 }
             }
         }
-        // Fixed-point mode: skip the +/-65536 clamp from the float path.
     }
 
     fn f32_to_bytes(samples: &[f32]) -> Vec<u8> {

@@ -1781,10 +1781,19 @@ unsafe extern "C" {
 }
 
 /// Matching Rust-side DownmixFunc that interprets the PCM buffer as f32
-/// samples (little-endian x86 default) and multiplies by CELT_SIG_SCALE
-/// (32768) before the i32 cast — the FLOAT2SIG chain the C `downmix_float`
-/// performs on a `*const float` input. Matches the test helper in
-/// `ropus/src/opus/analysis.rs`.
+/// samples (little-endian x86 default) and applies the C `FLOAT2SIG`
+/// chain from `reference/celt/float_cast.h:166-172` for FIXED_POINT
+/// builds:
+///   y = float2int( clamp( x * (32768<<SIG_SHIFT),
+///                         -(65536<<SIG_SHIFT), +(65536<<SIG_SHIFT) ) )
+/// where `float2int` is round-half-even (matches `lrintf`).
+///
+/// Previously this helper used `x * 32768` (the non-FIXED_POINT macro
+/// form) and `as i32` truncation — which gave Rust `inmem` values ~4096x
+/// smaller than the C `FLOAT2SIG` output and cast with the wrong rounding,
+/// producing several-ULP drift on downstream analysis outputs. See the
+/// harness config in `harness/config.h:8` — we build with FIXED_POINT=1,
+/// so the C side is using the FIXED_POINT FLOAT2SIG.
 fn rust_downmix_float(
     input: &[u8],
     output: &mut [i32],
@@ -1801,23 +1810,37 @@ fn rust_downmix_float(
             input.len() / std::mem::size_of::<f32>(),
         )
     };
-    const CELT_SIG_SCALE: f32 = 32_768.0;
+    // CELT_SIG_SCALE << SIG_SHIFT = 32768 * 4096 = 134_217_728.
+    // Matches `FLOAT2SIG(x)` in `float_cast.h:166-172` under FIXED_POINT.
+    const FLOAT2SIG_MULT: f32 = 134_217_728.0; // 32768 << 12
+    const SIG_CLAMP_MAX: f32 = 268_435_456.0;  // 65536 << 12
+    const SIG_CLAMP_MIN: f32 = -268_435_456.0;
+    #[inline(always)]
+    fn float2sig(x: f32) -> i32 {
+        let mut y = x * FLOAT2SIG_MULT;
+        if y > SIG_CLAMP_MAX {
+            y = SIG_CLAMP_MAX;
+        }
+        if y < SIG_CLAMP_MIN {
+            y = SIG_CLAMP_MIN;
+        }
+        // float2int uses round-half-even (matches `lrintf` on Windows).
+        y.round_ties_even() as i32
+    }
     for j in 0..subframe as usize {
-        output[j] = (samples[((j as i32 + offset) * c + c1) as usize] * CELT_SIG_SCALE) as i32;
+        output[j] = float2sig(samples[((j as i32 + offset) * c + c1) as usize]);
     }
     if c2 > -1 {
         for j in 0..subframe as usize {
-            output[j] += (samples[((j as i32 + offset) * c + c2) as usize] * CELT_SIG_SCALE) as i32;
+            output[j] += float2sig(samples[((j as i32 + offset) * c + c2) as usize]);
         }
     } else if c2 == -2 {
         for ch in 1..c {
             for j in 0..subframe as usize {
-                output[j] += (samples[((j as i32 + offset) * c + ch) as usize] * CELT_SIG_SCALE)
-                    as i32;
+                output[j] += float2sig(samples[((j as i32 + offset) * c + ch) as usize]);
             }
         }
     }
-    // Fixed-point: skip the +/-65536 clamp from the float path.
 }
 
 /// Drive both Rust and C `run_analysis` over an identical input stream,
@@ -1829,16 +1852,14 @@ fn rust_downmix_float(
 /// binary or hand-pasted hex constants. Any f32 drift between the two
 /// ports shows up here as a bit-pattern mismatch.
 ///
-/// Currently `#[ignore]` because Stage 6.3's port is not yet fully
-/// bit-exact with the C reference — the very first valid frame already
-/// shows a several-ULP drift on `music_prob` (observed: c=0x3df2ab1c,
-/// rust=0x3db05310 on a 1 kHz sine @ 48 kHz). Fixing that drift is
-/// Stage 6.4+ work (encoder wiring will surface the same bytes-out
-/// delta). Until then this test stays in the tree so the upstream agent
-/// can run it with `--ignored` to measure progress and remove the
-/// `#[ignore]` marker once bit-exact.
+/// Bit-exact as of the Stage 6.3 closeout fix: the previous `#[ignore]`
+/// was tracking a test-harness helper bug (not a port bug). `rust_downmix_float`
+/// above used the non-FIXED_POINT `FLOAT2SIG = x * 32768`, which mismatched
+/// the C side's FIXED_POINT `FLOAT2SIG = float2int(clamp(x * (32768<<12)))`
+/// in `reference/celt/float_cast.h:166-172`. Matching the FIXED_POINT
+/// macro exactly closes the ~4096x input-scale drift that propagated
+/// through the FFT, band energies, and the MLP chain into music_prob.
 #[test]
-#[ignore = "Stage 6.3 port is not yet bit-exact against the C reference; see body comment"]
 fn test_analysis_run_matches_c_reference() {
     // 30 frames of 1 kHz sine at 48 kHz mono, f32, amplitude 0.5. 30 frames
     // x 960 samples gives enough lookahead to exercise the post-fill path
@@ -1974,6 +1995,248 @@ fn test_analysis_run_matches_c_reference() {
                 "frame {f}: bandwidth mismatch (c={}, rust={})",
                 c_info.bandwidth, rust_info.bandwidth
             );
+        }
+    }
+}
+
+/// Diagnostic: run only `downmix_and_resample` via a fresh Rust-only
+/// and a fresh C-only state, then byte-compare `inmem`. Isolates whether
+/// divergence begins BEFORE the FFT (i.e. inside downmix/resample).
+#[test]
+#[ignore = "diagnostic; not a conformance test"]
+fn diag_inmem_after_downmix() {
+    const FRAME_SIZE: usize = 960;
+    const FS: i32 = 48_000;
+    const FREQ: f32 = 1_000.0;
+    const C1: i32 = 0;
+    const C2: i32 = -2;
+    const CHANNELS: i32 = 1;
+    const LSB_DEPTH: i32 = 24;
+
+    let pcm: Vec<f32> = (0..FRAME_SIZE)
+        .map(|i| 0.5 * (2.0 * std::f32::consts::PI * FREQ * i as f32 / FS as f32).sin())
+        .collect();
+    let pcm_bytes: &[u8] = unsafe {
+        std::slice::from_raw_parts(
+            pcm.as_ptr() as *const u8,
+            std::mem::size_of_val(pcm.as_slice()),
+        )
+    };
+
+    let mut c_state = TonalityAnalysisState::new_boxed();
+    let mut rust_state = TonalityAnalysisState::new_boxed();
+
+    let celt_mode_ptr: *mut std::ffi::c_void = unsafe {
+        let mut err: c_int = 0;
+        let p = opus_custom_mode_create(FS, FRAME_SIZE as c_int, &mut err);
+        assert!(!p.is_null() && err == 0);
+        p
+    };
+
+    unsafe {
+        tonality_analysis_init(&raw mut *c_state, FS);
+    }
+    rust_tonality_analysis_init(&mut rust_state, FS);
+
+    let mut c_info = AnalysisInfo::default();
+    unsafe {
+        run_analysis(
+            &raw mut *c_state,
+            celt_mode_ptr,
+            pcm_bytes.as_ptr() as *const std::ffi::c_void,
+            FRAME_SIZE as c_int,
+            FRAME_SIZE as c_int,
+            C1,
+            C2,
+            CHANNELS,
+            FS,
+            LSB_DEPTH,
+            downmix_float,
+            &mut c_info,
+        );
+    }
+    let mut rust_info = AnalysisInfo::default();
+    use ropus::celt::modes::MODE_48000_960_120 as ROPUS_CELT_MODE;
+    let rust_downmix_cb: DownmixFunc = rust_downmix_float;
+    rust_run_analysis(
+        &mut rust_state,
+        &ROPUS_CELT_MODE,
+        Some(pcm_bytes),
+        FRAME_SIZE as i32,
+        FRAME_SIZE as i32,
+        C1,
+        C2,
+        CHANNELS,
+        FS,
+        LSB_DEPTH,
+        rust_downmix_cb,
+        &mut rust_info,
+    );
+
+    // Compare only `inmem` — it is the downmix+resample result, and is
+    // the input to the FFT.
+    println!("c_state.inmem[0..20]   = {:?}", &c_state.inmem[0..20]);
+    println!("rust_state.inmem[0..20] = {:?}", &rust_state.inmem[0..20]);
+    println!("c_state.inmem[240..260]   = {:?}", &c_state.inmem[240..260]);
+    println!("rust_state.inmem[240..260] = {:?}", &rust_state.inmem[240..260]);
+    let mut first_diff: Option<usize> = None;
+    for i in 0..c_state.inmem.len() {
+        if c_state.inmem[i] != rust_state.inmem[i] {
+            first_diff = Some(i);
+            break;
+        }
+    }
+    println!("first differing inmem index = {:?}", first_diff);
+    // Compare downmix_state too
+    println!("c_state.downmix_state = {:?}", c_state.downmix_state);
+    println!("rust_state.downmix_state = {:?}", rust_state.downmix_state);
+    println!("c_state.hp_ener_accum = {} ({:08x})", c_state.hp_ener_accum, c_state.hp_ener_accum.to_bits());
+    println!(
+        "rust_state.hp_ener_accum = {} ({:08x})",
+        rust_state.hp_ener_accum, rust_state.hp_ener_accum.to_bits()
+    );
+    println!("c_state.mem_fill = {}", c_state.mem_fill);
+    println!("rust_state.mem_fill = {}", rust_state.mem_fill);
+}
+
+/// Diagnostic: drive one frame, then byte-compare the entire
+/// `TonalityAnalysisState`, print the first differing range, and panic
+/// with enough context to map the offset back to a field.
+#[test]
+#[ignore = "diagnostic; not a conformance test"]
+fn diag_first_differing_field_after_frame_1() {
+    const FRAME_SIZE: usize = 960;
+    const FS: i32 = 48_000;
+    const FREQ: f32 = 1_000.0;
+    const C1: i32 = 0;
+    const C2: i32 = -2;
+    const CHANNELS: i32 = 1;
+    const LSB_DEPTH: i32 = 24;
+
+    let pcm: Vec<f32> = (0..FRAME_SIZE)
+        .map(|i| 0.5 * (2.0 * std::f32::consts::PI * FREQ * i as f32 / FS as f32).sin())
+        .collect();
+    let pcm_bytes: &[u8] = unsafe {
+        std::slice::from_raw_parts(
+            pcm.as_ptr() as *const u8,
+            std::mem::size_of_val(pcm.as_slice()),
+        )
+    };
+
+    let mut c_state = TonalityAnalysisState::new_boxed();
+    let mut rust_state = TonalityAnalysisState::new_boxed();
+
+    let celt_mode_ptr: *mut std::ffi::c_void = unsafe {
+        let mut err: c_int = 0;
+        let p = opus_custom_mode_create(FS, FRAME_SIZE as c_int, &mut err);
+        assert!(!p.is_null() && err == 0);
+        p
+    };
+
+    unsafe {
+        tonality_analysis_init(&raw mut *c_state, FS);
+    }
+    rust_tonality_analysis_init(&mut rust_state, FS);
+
+    let mut c_info = AnalysisInfo::default();
+    unsafe {
+        run_analysis(
+            &raw mut *c_state,
+            celt_mode_ptr,
+            pcm_bytes.as_ptr() as *const std::ffi::c_void,
+            FRAME_SIZE as c_int,
+            FRAME_SIZE as c_int,
+            C1,
+            C2,
+            CHANNELS,
+            FS,
+            LSB_DEPTH,
+            downmix_float,
+            &mut c_info,
+        );
+    }
+    let mut rust_info = AnalysisInfo::default();
+    use ropus::celt::modes::MODE_48000_960_120 as ROPUS_CELT_MODE;
+    let rust_downmix_cb: DownmixFunc = rust_downmix_float;
+    rust_run_analysis(
+        &mut rust_state,
+        &ROPUS_CELT_MODE,
+        Some(pcm_bytes),
+        FRAME_SIZE as i32,
+        FRAME_SIZE as i32,
+        C1,
+        C2,
+        CHANNELS,
+        FS,
+        LSB_DEPTH,
+        rust_downmix_cb,
+        &mut rust_info,
+    );
+
+    let state_size = std::mem::size_of::<TonalityAnalysisState>();
+    let c_bytes: &[u8] = unsafe {
+        std::slice::from_raw_parts(c_state.as_ref() as *const _ as *const u8, state_size)
+    };
+    let r_bytes: &[u8] = unsafe {
+        std::slice::from_raw_parts(rust_state.as_ref() as *const _ as *const u8, state_size)
+    };
+
+    println!("state size = {} bytes", state_size);
+    // Skip the `arch` field (offset 0..4): C sets it via `opus_select_arch`
+    // (returns 4 on x86 with SSE4.1 enabled in harness config), the Rust
+    // port hardcodes 0. That delta is purely a metadata tag and is
+    // expected — opus_fft only SIMD-dispatches on ARM with NE10, not x86.
+    const ARCH_FIELD_BYTES: usize = 4;
+    let mut first_diff: Option<usize> = None;
+    for (i, (&c, &r)) in c_bytes
+        .iter()
+        .zip(r_bytes.iter())
+        .enumerate()
+        .skip(ARCH_FIELD_BYTES)
+    {
+        if c != r {
+            first_diff = Some(i);
+            break;
+        }
+    }
+    match first_diff {
+        None => println!("after frame 1: state matches (excluding arch metadata tag)"),
+        Some(off) => {
+            let end = (off + 32).min(state_size);
+            println!(
+                "first differing byte at offset 0x{off:x} ({off})\n  C   : {:02x?}\n  Rust: {:02x?}",
+                &c_bytes[off..end],
+                &r_bytes[off..end],
+            );
+            // Show surrounding region
+            let start = off.saturating_sub(8);
+            println!(
+                "surrounding region [0x{start:x}..0x{end:x}]\n  C   : {:02x?}\n  Rust: {:02x?}",
+                &c_bytes[start..end],
+                &r_bytes[start..end],
+            );
+            // Map to f32 at 4-byte alignment
+            let aligned = off & !3;
+            if aligned + 4 <= state_size {
+                let c_f32 = f32::from_le_bytes([
+                    c_bytes[aligned],
+                    c_bytes[aligned + 1],
+                    c_bytes[aligned + 2],
+                    c_bytes[aligned + 3],
+                ]);
+                let r_f32 = f32::from_le_bytes([
+                    r_bytes[aligned],
+                    r_bytes[aligned + 1],
+                    r_bytes[aligned + 2],
+                    r_bytes[aligned + 3],
+                ]);
+                println!(
+                    "at aligned offset 0x{aligned:x}: C f32 = {c_f32:e} ({:08x}), Rust f32 = {r_f32:e} ({:08x})",
+                    c_f32.to_bits(),
+                    r_f32.to_bits()
+                );
+            }
+            panic!("state diverges at offset {off}");
         }
     }
 }
