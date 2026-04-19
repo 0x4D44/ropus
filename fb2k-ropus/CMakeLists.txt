@@ -244,6 +244,13 @@ set_target_properties(foo_ropus PROPERTIES
 
 target_compile_definitions(foo_ropus PRIVATE _WINDLL)
 
+# Rust staticlib's C ABI header. The `..` path is stable because
+# fb2k-ropus/ and ropus-fb2k/ are sibling directories under the workspace
+# root — do not collapse into a single name without a second pair of eyes.
+target_include_directories(foo_ropus PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../ropus-fb2k/include"
+)
+
 # Per-target split: our code compiles clean at /W4 /permissive- (the
 # `(void)p_xxx;` casts in input_ropus_opus.cpp deliberately silence C4100
 # on stub parameters). The three SDK static libs above stay at CMake's

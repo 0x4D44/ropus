@@ -19,10 +19,8 @@
 // component's user-visible behaviour changes.
 DECLARE_COMPONENT_VERSION(
     "ropus (Rust Opus decoder)",
-    "0.1.0",
-    "Development component backed by the Rust `ropus` codec.\n"
-    "M4 scaffold: component loads but does not decode yet.\n"
-    "Replaces foobar2000's built-in Opus decoder for .opus files "
-    "once wired up (milestone M5).");
+    "0.2.0",
+    "Opus input component backed by the Rust `ropus` codec.\n"
+    "48 kHz output, mono + stereo, seekable, ReplayGain from OpusTags.");
 
 VALIDATE_COMPONENT_FILENAME("foo_ropus.dll");
