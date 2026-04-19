@@ -2,7 +2,8 @@
 
 use colored::*;
 
-/// Print the "<name> <version> (build <ts>, sha <sha>)" banner line.
+/// Print the "<name> <version> (build <ts>, sha <sha>)" banner line to
+/// stdout.
 ///
 /// The library is binary-agnostic, so each binary passes its own
 /// `env!("CARGO_PKG_NAME")` / `CARGO_PKG_VERSION` / `BUILD_TIMESTAMP` /
@@ -12,6 +13,16 @@ pub fn print_banner(name: &str, version: &str, timestamp: &str, sha: &str) {
     let version = version.bright_white();
     let suffix = format!("(build {timestamp}, sha {sha})").dimmed();
     println!("{name} {version} {suffix}");
+}
+
+/// Same as [`print_banner`] but writes to stderr. Used by `ropusenc`/`ropusdec`
+/// when the bitstream is piped to stdout — the banner's ANSI codes and text
+/// would otherwise corrupt the byte stream downstream consumers see.
+pub fn print_banner_stderr(name: &str, version: &str, timestamp: &str, sha: &str) {
+    let name = name.bright_cyan().bold();
+    let version = version.bright_white();
+    let suffix = format!("(build {timestamp}, sha {sha})").dimmed();
+    eprintln!("{name} {version} {suffix}");
 }
 
 pub fn heading(text: &str) {

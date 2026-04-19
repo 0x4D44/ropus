@@ -71,7 +71,7 @@ struct Args {
 }
 
 fn main() -> ExitCode {
-    let PreludeFlags { quiet, no_color: _ } = prelude::run_prelude();
+    let PreludeFlags { quiet, no_color: _, .. } = prelude::run_prelude();
     if !quiet {
         ui::print_banner(
             env!("CARGO_PKG_NAME"),

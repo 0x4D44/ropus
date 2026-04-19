@@ -17,10 +17,14 @@ use ropus_tools_core::{commands, ui};
     color = clap::ColorChoice::Auto,
 )]
 struct Args {
-    /// Input .opus file.
+    /// Input .opus file. Use `-` for stdin; the entire input is buffered
+    /// in memory for Ogg page sniffing, so a multi-GB pipe will use that
+    /// much RAM.
     input: PathBuf,
 
-    /// Output path. Defaults to `<input>.wav` (or `<input>.pcm` with `--raw`).
+    /// Output path. Defaults to `<input>.wav` (or `<input>.pcm` with `--raw`),
+    /// or stdout when input is `-`. Use `-` for stdout; progress/banner
+    /// lines route to stderr in that case so the WAV/PCM stream stays clean.
     #[arg(short = 'o', long)]
     output: Option<PathBuf>,
 
@@ -63,14 +67,25 @@ struct Args {
 }
 
 fn main() -> ExitCode {
-    let PreludeFlags { quiet, no_color: _ } = prelude::run_prelude();
+    // `output_is_stdout` steers the banner to stderr so the WAV/PCM byte
+    // stream isn't polluted when `-o -` (or implicit stdin→stdout) is used.
+    let PreludeFlags { quiet, no_color: _, output_is_stdout } = prelude::run_prelude();
     if !quiet {
-        ui::print_banner(
-            env!("CARGO_PKG_NAME"),
-            env!("CARGO_PKG_VERSION"),
-            env!("BUILD_TIMESTAMP"),
-            env!("BUILD_GIT_SHA"),
-        );
+        if output_is_stdout {
+            ui::print_banner_stderr(
+                env!("CARGO_PKG_NAME"),
+                env!("CARGO_PKG_VERSION"),
+                env!("BUILD_TIMESTAMP"),
+                env!("BUILD_GIT_SHA"),
+            );
+        } else {
+            ui::print_banner(
+                env!("CARGO_PKG_NAME"),
+                env!("CARGO_PKG_VERSION"),
+                env!("BUILD_TIMESTAMP"),
+                env!("BUILD_GIT_SHA"),
+            );
+        }
     }
     let args = Args::parse();
     if args.packet_loss > 100 {

@@ -1,7 +1,7 @@
 //! Encode: any symphonia-supported input → Ogg Opus.
 
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{BufWriter, Cursor, Read, Write};
 
 use anyhow::{Context, Result, anyhow, bail};
 use colored::*;
@@ -10,7 +10,7 @@ use ropus::{Bitrate, Encoder};
 
 use ogg::writing::{PacketWriteEndInfo, PacketWriter};
 
-use crate::audio::decode::{DecodedAudio, decode_to_f32};
+use crate::audio::decode::{DecodedAudio, decode_reader, decode_to_f32};
 use crate::audio::downmix::downmix_to_mono;
 use crate::audio::resample::resample;
 use crate::consts::{MAX_OPUS_FRAME_BYTES, MAX_PACKET_BYTES, MAX_SUBFRAMES_PER_PACKET, OPUS_SR};
@@ -20,7 +20,7 @@ use crate::container::picture::{
 };
 use crate::options::EncodeOptions;
 use crate::ui::{format_num, heading, ok};
-use crate::util::{channel_count_to_ropus, with_extension};
+use crate::util::{channel_count_to_ropus, is_stdio_sentinel, with_extension};
 
 use ropus::FrameDuration;
 
@@ -63,22 +63,70 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         "MAX_PACKET_BYTES must equal MAX_OPUS_FRAME_BYTES * MAX_SUBFRAMES_PER_PACKET"
     );
 
-    heading("encode");
-    println!("input    {}", opts.input.display().to_string().cyan());
+    // Resolve the output path first. `-` and "input is stdin with no explicit
+    // -o" both map to stdout (there's no sensible filename to derive from a
+    // pipe). Detect stdout early so every banner/progress `println!` below can
+    // route through `report!` and land on stderr instead — mixing progress
+    // text with the Ogg bitstream on stdout corrupts downstream consumers.
+    let input_is_stdin = is_stdio_sentinel(&opts.input);
+    let output_path: std::path::PathBuf = match opts.output.clone() {
+        Some(p) => p,
+        None if input_is_stdin => std::path::PathBuf::from("-"),
+        None => with_extension(&opts.input, "opus"),
+    };
+    let output_is_stdout = is_stdio_sentinel(&output_path);
 
-    let output = opts
-        .output
-        .clone()
-        .unwrap_or_else(|| with_extension(&opts.input, "opus"));
-    println!("output   {}", output.display().to_string().cyan());
+    // Print progress/banner lines. Gated on output-sink: stdout gets the
+    // bitstream, so progress must go to stderr in that case.
+    macro_rules! report {
+        ($($arg:tt)*) => {
+            if output_is_stdout {
+                eprintln!($($arg)*);
+            } else {
+                println!($($arg)*);
+            }
+        };
+    }
+    if output_is_stdout {
+        eprintln!("{}", "encode".bright_yellow().bold());
+    } else {
+        heading("encode");
+    }
+    report!(
+        "input    {}",
+        if input_is_stdin {
+            "<stdin>".cyan().to_string()
+        } else {
+            opts.input.display().to_string().cyan().to_string()
+        }
+    );
+    report!(
+        "output   {}",
+        if output_is_stdout {
+            "<stdout>".cyan().to_string()
+        } else {
+            output_path.display().to_string().cyan().to_string()
+        }
+    );
 
-    // 1. Decode the input to interleaved f32 PCM.
+    // 1. Decode the input to interleaved f32 PCM. Stdin path buffers all bytes
+    //    into a `Vec<u8>` (symphonia's probe chain needs `Seek` for format
+    //    sniffing); a multi-GB pipe will use multi-GB RAM. Accepted per HLD.
     let DecodedAudio {
         samples,
         sample_rate,
         channels,
-    } = decode_to_f32(&opts.input).context("decoding input")?;
-    println!(
+    } = if input_is_stdin {
+        let mut buf = Vec::new();
+        std::io::stdin()
+            .lock()
+            .read_to_end(&mut buf)
+            .context("reading stdin into buffer")?;
+        decode_reader(Box::new(Cursor::new(buf)), None).context("decoding stdin input")?
+    } else {
+        decode_to_f32(&opts.input).context("decoding input")?
+    };
+    report!(
         "decoded  {} samples, {} Hz, {} ch",
         format_num(samples.len() as u64).bright_white(),
         sample_rate.to_string().bright_white(),
@@ -91,7 +139,7 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
     let (samples, channels) = if opts.downmix_to_mono && channels > 1 {
         let mixed = downmix_to_mono(&samples, channels)
             .context("downmixing stereo to mono")?;
-        println!("downmix  {} ch -> 1 ch", channels);
+        report!("downmix  {} ch -> 1 ch", channels);
         (mixed, 1usize)
     } else {
         (samples, channels)
@@ -101,11 +149,11 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
     let pcm_48k = if sample_rate == OPUS_SR {
         samples
     } else {
-        println!("resample {} Hz -> {} Hz", sample_rate, OPUS_SR);
+        report!("resample {} Hz -> {} Hz", sample_rate, OPUS_SR);
         resample(&samples, sample_rate, OPUS_SR, channels)
             .context("resampling to 48 kHz")?
     };
-    println!(
+    report!(
         "resampled {} samples @ 48 kHz",
         format_num(pcm_48k.len() as u64).bright_white(),
     );
@@ -144,10 +192,17 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         )
     })?;
 
-    // 5. Open Ogg writer.
-    let file = File::create(&output)
-        .with_context(|| format!("creating output file {}", output.display()))?;
-    let mut writer = PacketWriter::new(BufWriter::new(file));
+    // 5. Open Ogg writer. For `-` we route to locked stdout; for everything
+    //    else we create the file. `PacketWriter` is generic over any
+    //    `Write` so both sinks plug in identically.
+    let sink: Box<dyn Write> = if output_is_stdout {
+        Box::new(BufWriter::new(std::io::stdout().lock()))
+    } else {
+        let file = File::create(&output_path)
+            .with_context(|| format!("creating output file {}", output_path.display()))?;
+        Box::new(BufWriter::new(file))
+    };
+    let mut writer = PacketWriter::new(sink);
 
     // The caller's `--serial N` overrides the library's default constant.
     let serial = opts.serial.unwrap_or(OGG_STREAM_SERIAL);
@@ -190,7 +245,7 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         })?;
         let b64 = base64_encode(&block);
         comments.insert(0, format!("METADATA_BLOCK_PICTURE={b64}"));
-        println!(
+        report!(
             "picture  {} ({} bytes, {})",
             pic_path.display().to_string().cyan(),
             format_num(data.len() as u64).bright_white(),
@@ -261,11 +316,28 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         packet_count += 1;
     }
 
-    println!(
+    // Drain the Ogg packet writer and the BufWriter underneath before
+    // returning. `BufWriter::drop` swallows write errors, so relying on
+    // drop lets broken pipes (`ropusenc … -o - | head -c 100`) pass as
+    // clean exits with truncated output. Explicitly flushing surfaces the
+    // error via `?` instead.
+    let mut sink = writer.into_inner();
+    sink.flush().context("flushing Ogg output")?;
+
+    report!(
         "wrote    {} packets, {} samples (granule)",
         format_num(packet_count).bright_white(),
         format_num(samples_written).bright_white(),
     );
-    ok(&format!("encoded -> {}", output.display()));
+    let dest = if output_is_stdout {
+        "<stdout>".to_string()
+    } else {
+        output_path.display().to_string()
+    };
+    if output_is_stdout {
+        eprintln!("{}", format!("encoded -> {dest}").green());
+    } else {
+        ok(&format!("encoded -> {dest}"));
+    }
     Ok(())
 }

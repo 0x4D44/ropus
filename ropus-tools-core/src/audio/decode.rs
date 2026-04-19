@@ -15,7 +15,7 @@ use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{CODEC_TYPE_NULL, CODEC_TYPE_OPUS, Decoder as SymphoniaDecoder, DecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::FormatOptions;
-use symphonia::core::io::MediaSourceStream;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
@@ -53,10 +53,28 @@ enum CodecPipeline {
 
 pub fn decode_to_f32(path: &Path) -> Result<DecodedAudio> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let hint_ext = path.extension().and_then(|e| e.to_str()).map(str::to_string);
+    decode_reader(Box::new(file), hint_ext.as_deref())
+        .with_context(|| format!("decoding {}", path.display()))
+}
+
+/// Decode an arbitrary symphonia `MediaSource`. `hint_ext` is an optional file
+/// extension (no leading dot) used by symphonia's probe to narrow down the
+/// container format. Callers feeding `Cursor<Vec<u8>>` from stdin can pass
+/// `None` — probe falls back to magic-byte sniffing.
+///
+/// Note: symphonia's probe chain can require backward seeks for format
+/// sniffing, which is why `MediaSource` requires `Seek`. Wrapping stdin in a
+/// `Cursor<Vec<u8>>` (buffered up-front) satisfies that requirement, at the
+/// cost of buffering the whole input in memory.
+pub fn decode_reader(
+    source: Box<dyn MediaSource>,
+    hint_ext: Option<&str>,
+) -> Result<DecodedAudio> {
+    let mss = MediaSourceStream::new(source, Default::default());
 
     let mut hint = Hint::new();
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = hint_ext {
         hint.with_extension(ext);
     }
 
@@ -67,7 +85,7 @@ pub fn decode_to_f32(path: &Path) -> Result<DecodedAudio> {
             &FormatOptions::default(),
             &MetadataOptions::default(),
         )
-        .with_context(|| format!("probing {}", path.display()))?;
+        .context("probing input")?;
 
     let mut format = probed.format;
 

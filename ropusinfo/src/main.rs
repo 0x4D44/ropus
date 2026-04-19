@@ -42,7 +42,7 @@ struct Args {
 }
 
 fn main() -> ExitCode {
-    let PreludeFlags { quiet, no_color: _ } = prelude::run_prelude();
+    let PreludeFlags { quiet, no_color: _, .. } = prelude::run_prelude();
     // `--query` implicitly disables the banner regardless of `--quiet`, per
     // the HLD. Sniff argv for `--query` or `-q …` here so we don't print the
     // banner before clap has had a chance to parse. We explicitly exclude a

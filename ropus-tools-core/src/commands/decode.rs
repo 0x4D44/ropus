@@ -13,7 +13,7 @@
 //! kernel width.
 
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter, Cursor, Read, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -25,12 +25,14 @@ use ogg::reading::PacketReader;
 
 use crate::audio::dither::{DITHER_SEED, PACKET_LOSS_SEED, Xorshift32, quantize_to_i16};
 use crate::audio::resample::resample;
-use crate::audio::wav::{write_wav_float32, write_wav_pcm16};
+use crate::audio::wav::{
+    write_wav_float32, write_wav_float32_to, write_wav_pcm16, write_wav_pcm16_to,
+};
 use crate::consts::OPUS_SR;
 use crate::container::ogg::{OpusTags, parse_opus_head};
 use crate::options::DecodeOptions;
 use crate::ui::{format_num, heading, ok};
-use crate::util::{channel_count_to_ropus, with_extension};
+use crate::util::{channel_count_to_ropus, is_stdio_sentinel, with_extension};
 
 /// Accepted output sample-rate range for `--rate`. Mirrors the WAV-supported
 /// band (8 kHz for narrowband telephony up to 192 kHz high-res). rubato can
@@ -40,10 +42,12 @@ use crate::util::{channel_count_to_ropus, with_extension};
 const MIN_OUTPUT_RATE: u32 = 8_000;
 const MAX_OUTPUT_RATE: u32 = 192_000;
 
-pub fn decode(opts: DecodeOptions) -> Result<()> {
-    heading("decode");
-    println!("input    {}", opts.input.display().to_string().cyan());
+/// Type-erased `Read + Seek` bound used to plumb both `File`-backed and
+/// `Cursor<Vec<u8>>`-backed (stdin) sources through the same `PacketReader`.
+trait ReadSeek: std::io::Read + std::io::Seek {}
+impl<T: std::io::Read + std::io::Seek> ReadSeek for T {}
 
+pub fn decode(opts: DecodeOptions) -> Result<()> {
     // Validate --gain before opening any files. NaN or ±∞ would saturate to 0
     // when cast to the Q8 i32 later, silently ignoring the flag; surface that
     // as a clean error instead.
@@ -69,26 +73,74 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
         );
     }
 
-    // Default output extension matches the chosen container: `.wav` for WAV
-    // writers, `.pcm` for `--raw` (an unlabeled binary blob is less confusing
-    // to land on disk than one that lies about being a WAV).
+    // Resolve the output path. `-` and "input is stdin with no explicit -o"
+    // both map to stdout (no sensible filename to derive from a pipe). Detect
+    // stdout early so progress lines route to stderr — raw WAV/PCM bytes and
+    // coloured banner text don't mix on the same fd.
+    let input_is_stdin = is_stdio_sentinel(&opts.input);
     let default_ext = if opts.raw { "pcm" } else { "wav" };
-    let output = opts
-        .output
-        .clone()
-        .unwrap_or_else(|| with_extension(&opts.input, default_ext));
-    println!("output   {}", output.display().to_string().cyan());
+    let output_path: std::path::PathBuf = match opts.output.clone() {
+        Some(p) => p,
+        None if input_is_stdin => std::path::PathBuf::from("-"),
+        None => with_extension(&opts.input, default_ext),
+    };
+    let output_is_stdout = is_stdio_sentinel(&output_path);
 
-    let file = File::open(&opts.input)
-        .with_context(|| format!("opening {}", opts.input.display()))?;
-    let mut reader = PacketReader::new(BufReader::new(file));
+    // Progress/banner lines. Gated on output-sink so that piping bytes to
+    // stdout doesn't mix with the banner text.
+    macro_rules! report {
+        ($($arg:tt)*) => {
+            if output_is_stdout {
+                eprintln!($($arg)*);
+            } else {
+                println!($($arg)*);
+            }
+        };
+    }
+    if output_is_stdout {
+        eprintln!("{}", "decode".bright_yellow().bold());
+    } else {
+        heading("decode");
+    }
+    report!(
+        "input    {}",
+        if input_is_stdin {
+            "<stdin>".cyan().to_string()
+        } else {
+            opts.input.display().to_string().cyan().to_string()
+        }
+    );
+    report!(
+        "output   {}",
+        if output_is_stdout {
+            "<stdout>".cyan().to_string()
+        } else {
+            output_path.display().to_string().cyan().to_string()
+        }
+    );
+
+    // `PacketReader` takes any `Read + Seek`, so `Cursor<Vec<u8>>` from stdin
+    // plugs in identically to a `File`. Stdin path buffers the whole stream
+    // into a `Vec<u8>` first — memory-bounded by input size; documented risk.
+    let mut reader: PacketReader<Box<dyn ReadSeek>> = if input_is_stdin {
+        let mut buf = Vec::new();
+        std::io::stdin()
+            .lock()
+            .read_to_end(&mut buf)
+            .context("reading stdin into buffer")?;
+        PacketReader::new(Box::new(Cursor::new(buf)))
+    } else {
+        let file = File::open(&opts.input)
+            .with_context(|| format!("opening {}", opts.input.display()))?;
+        PacketReader::new(Box::new(BufReader::new(file)))
+    };
 
     // Header packet: OpusHead.
     let head_pkt = reader
         .read_packet()?
         .ok_or_else(|| anyhow!("no packets found in input"))?;
     let head = parse_opus_head(&head_pkt.data)?;
-    println!(
+    report!(
         "header   ch={} input_sr={} pre_skip={}",
         head.channels.to_string().bright_white(),
         head.input_sample_rate.to_string().bright_white(),
@@ -102,7 +154,7 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
         .read_packet()?
         .ok_or_else(|| anyhow!("expected OpusTags packet, got end of stream"))?;
     let tags = OpusTags::parse(&tags_pkt.data).context("parsing OpusTags packet")?;
-    println!(
+    report!(
         "tags     vendor={}, {} comments",
         format!("\"{}\"", tags.vendor).bright_white(),
         tags.comments.len().to_string().bright_white(),
@@ -140,13 +192,13 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
     // Active-flags banner. Print each configuration knob that deviates from the
     // default so a user looking at output diffs can see immediately which flags
     // were in effect.
-    println!(
+    report!(
         "format   {}",
         (if opts.float { "f32" } else { "i16" })
             .bright_white()
     );
     if opts.gain_db != 0.0 {
-        println!(
+        report!(
             "gain     header={} Q8 + user={:.2} dB -> {} Q8",
             head.output_gain.to_string().bright_white(),
             opts.gain_db,
@@ -154,27 +206,27 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
         );
     }
     if !opts.float {
-        println!(
+        report!(
             "dither   {}",
             (if opts.dither { "on" } else { "off" }).bright_white()
         );
     }
     let output_rate = opts.rate.unwrap_or(OPUS_SR);
     if let Some(rate) = opts.rate {
-        println!(
+        report!(
             "rate     {} -> {} Hz",
             OPUS_SR.to_string().bright_white(),
             rate.to_string().bright_white(),
         );
     }
     if opts.packet_loss_pct > 0 {
-        println!(
+        report!(
             "loss     simulating {}% packet drops (deterministic seed)",
             opts.packet_loss_pct.to_string().bright_white(),
         );
     }
     if opts.raw {
-        println!("mode     raw (no WAV header)");
+        report!("mode     raw (no WAV header)");
     }
 
     // Maximum per-channel samples decodable from one packet (120 ms @ 48 kHz).
@@ -277,7 +329,8 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
         if opts.float {
             // User asked for f32 output: write the f32 samples directly.
             write_output_samples(
-                &output,
+                &output_path,
+                output_is_stdout,
                 OutputData::Float(&resampled),
                 output_rate,
                 ch_count as u16,
@@ -288,7 +341,8 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
                 dropped_count,
                 total_before_trim as u64,
                 resampled.len() as u64,
-                &output,
+                &output_path,
+                output_is_stdout,
             )
         } else {
             // i16 output via the f32 pipeline (triggered by --rate or dither).
@@ -296,7 +350,8 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
             // before the round-and-clamp.
             let i16_out = quantize_to_i16(&resampled, opts.dither, &mut dither_rng);
             write_output_samples(
-                &output,
+                &output_path,
+                output_is_stdout,
                 OutputData::I16(&i16_out),
                 output_rate,
                 ch_count as u16,
@@ -307,7 +362,8 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
                 dropped_count,
                 total_before_trim as u64,
                 i16_out.len() as u64,
-                &output,
+                &output_path,
+                output_is_stdout,
             )
         }
     } else {
@@ -316,7 +372,8 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
         // so every sample survives bit-identical to what ropus emitted.
         let trimmed_i16: &[i16] = &all_pcm_i16[pre_skip..];
         write_output_samples(
-            &output,
+            &output_path,
+            output_is_stdout,
             OutputData::I16(trimmed_i16),
             output_rate,
             ch_count as u16,
@@ -327,7 +384,8 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
             dropped_count,
             total_before_trim as u64,
             trimmed_i16.len() as u64,
-            &output,
+            &output_path,
+            output_is_stdout,
         )
     }
 }
@@ -337,38 +395,69 @@ enum OutputData<'a> {
     Float(&'a [f32]),
 }
 
+/// Open the output sink (locked stdout or a newly-created file) and invoke
+/// the caller-supplied closure with a mutable `Write` reference. Consolidates
+/// the four raw-or-WAV × path-or-stdout combinations into one flush point.
+fn with_output_sink<F>(output: &Path, output_is_stdout: bool, body: F) -> Result<()>
+where
+    F: FnOnce(&mut dyn Write) -> Result<()>,
+{
+    if output_is_stdout {
+        let stdout = std::io::stdout();
+        let mut w = BufWriter::new(stdout.lock());
+        body(&mut w)?;
+        w.flush()?;
+    } else {
+        let f = File::create(output)
+            .with_context(|| format!("creating {}", output.display()))?;
+        let mut w = BufWriter::new(f);
+        body(&mut w)?;
+        w.flush()?;
+    }
+    Ok(())
+}
+
 fn write_output_samples(
     output: &Path,
+    output_is_stdout: bool,
     data: OutputData<'_>,
     sample_rate: u32,
     channels: u16,
     raw: bool,
 ) -> Result<()> {
-    match data {
-        OutputData::I16(samples) => {
-            if raw {
-                let f = File::create(output)
-                    .with_context(|| format!("creating {}", output.display()))?;
-                let mut w = BufWriter::new(f);
+    match (data, raw) {
+        (OutputData::I16(samples), true) => {
+            with_output_sink(output, output_is_stdout, |w| {
                 for s in samples {
                     w.write_all(&s.to_le_bytes())?;
                 }
-                w.flush()?;
                 Ok(())
+            })
+        }
+        (OutputData::I16(samples), false) => {
+            if output_is_stdout {
+                with_output_sink(output, true, |w| {
+                    write_wav_pcm16_to(w, samples, sample_rate, channels)
+                        .context("writing WAV")
+                })
             } else {
                 write_wav_pcm16(output, samples, sample_rate, channels).context("writing WAV")
             }
         }
-        OutputData::Float(samples) => {
-            if raw {
-                let f = File::create(output)
-                    .with_context(|| format!("creating {}", output.display()))?;
-                let mut w = BufWriter::new(f);
+        (OutputData::Float(samples), true) => {
+            with_output_sink(output, output_is_stdout, |w| {
                 for s in samples {
                     w.write_all(&s.to_le_bytes())?;
                 }
-                w.flush()?;
                 Ok(())
+            })
+        }
+        (OutputData::Float(samples), false) => {
+            if output_is_stdout {
+                with_output_sink(output, true, |w| {
+                    write_wav_float32_to(w, samples, sample_rate, channels)
+                        .context("writing float WAV")
+                })
             } else {
                 write_wav_float32(output, samples, sample_rate, channels)
                     .context("writing float WAV")
@@ -383,8 +472,11 @@ fn report_and_return(
     total_samples: u64,
     emitted_samples: u64,
     output: &Path,
+    output_is_stdout: bool,
 ) -> Result<()> {
-    println!(
+    // Mirror the progress-banner gating inside `decode()`: progress lines
+    // must not land on stdout when it's the bitstream sink.
+    let line = format!(
         "decoded  {} packets{}, {} samples ({} emitted)",
         format_num(packet_count).bright_white(),
         if dropped_count > 0 {
@@ -397,6 +489,17 @@ fn report_and_return(
         format_num(total_samples).bright_white(),
         format_num(emitted_samples).bright_white(),
     );
-    ok(&format!("decoded -> {}", output.display()));
+    let dest = if output_is_stdout {
+        "<stdout>".to_string()
+    } else {
+        output.display().to_string()
+    };
+    if output_is_stdout {
+        eprintln!("{line}");
+        eprintln!("{}", format!("decoded -> {dest}").green());
+    } else {
+        println!("{line}");
+        ok(&format!("decoded -> {dest}"));
+    }
     Ok(())
 }

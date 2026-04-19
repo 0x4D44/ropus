@@ -23,7 +23,19 @@ pub fn write_wav_pcm16(
 ) -> Result<()> {
     let f = File::create(path).with_context(|| format!("creating {}", path.display()))?;
     let mut w = BufWriter::new(f);
+    write_wav_pcm16_to(&mut w, samples, sample_rate, channels)?;
+    w.flush()?;
+    Ok(())
+}
 
+/// Write a 16-bit PCM WAV into any `Write`. Used by the path-based wrapper
+/// and by the stdout-sink branch of `ropusdec -o -`.
+pub fn write_wav_pcm16_to<W: Write + ?Sized>(
+    w: &mut W,
+    samples: &[i16],
+    sample_rate: u32,
+    channels: u16,
+) -> Result<()> {
     let bits_per_sample: u16 = 16;
     let byte_rate: u32 = sample_rate * channels as u32 * (bits_per_sample as u32 / 8);
     let block_align: u16 = channels * (bits_per_sample / 8);
@@ -55,7 +67,6 @@ pub fn write_wav_pcm16(
     for s in samples {
         w.write_all(&s.to_le_bytes())?;
     }
-    w.flush()?;
     Ok(())
 }
 
@@ -70,11 +81,24 @@ pub fn write_wav_float32(
     sample_rate: u32,
     channels: u16,
 ) -> Result<()> {
+    let f = File::create(path).with_context(|| format!("creating {}", path.display()))?;
+    let mut w = BufWriter::new(f);
+    write_wav_float32_to(&mut w, samples, sample_rate, channels)?;
+    w.flush()?;
+    Ok(())
+}
+
+/// Write a 32-bit IEEE-float WAV into any `Write`. Used by the path-based
+/// wrapper and by the stdout-sink branch of `ropusdec -o -`.
+pub fn write_wav_float32_to<W: Write + ?Sized>(
+    w: &mut W,
+    samples: &[f32],
+    sample_rate: u32,
+    channels: u16,
+) -> Result<()> {
     if channels == 0 {
         return Err(anyhow!("float WAV requires channels >= 1"));
     }
-    let f = File::create(path).with_context(|| format!("creating {}", path.display()))?;
-    let mut w = BufWriter::new(f);
 
     let bits_per_sample: u16 = 32;
     let block_align: u16 = channels * (bits_per_sample / 8);
@@ -128,7 +152,6 @@ pub fn write_wav_float32(
     for s in samples {
         w.write_all(&s.to_le_bytes())?;
     }
-    w.flush()?;
     Ok(())
 }
 

@@ -18,3 +18,10 @@ pub fn with_extension(path: &Path, ext: &str) -> PathBuf {
     p.set_extension(ext);
     p
 }
+
+/// Returns true if `path` is the stdin/stdout sentinel `-` used by
+/// `ropusenc` and `ropusdec`. Centralised here so every command compares the
+/// sentinel identically (OsStr-level equality, no lossy string conversion).
+pub fn is_stdio_sentinel(path: &Path) -> bool {
+    path.as_os_str() == "-"
+}
