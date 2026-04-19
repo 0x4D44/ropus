@@ -1,15 +1,9 @@
 # fb2k-ropus — foobar2000 input component (C++)
 
 Builds `foo_ropus.dll`: a single-DLL foobar2000 input component that
-statically links the Rust `ropus-fb2k` decoder crate. This directory
-holds the C++ SDK glue; the Rust decoder sources live at
+decodes `.opus` files via the statically-linked Rust `ropus-fb2k` crate.
+This directory holds the C++ SDK glue; the Rust decoder sources live at
 `../ropus-fb2k/` and are built (as a staticlib) on demand by CMake.
-
-M4 milestone: the component compiles, links, and registers itself as an
-input for `.opus` files. It does **not** decode yet — every method logs
-its name via `console::formatter` and returns an inert zero/false. M5
-wires the statically-linked Rust decoder through the FFI defined in
-`ropus-fb2k/include/ropus_fb2k.h`.
 
 ## Prerequisites
 
@@ -55,17 +49,40 @@ is (re)built as needed automatically. No separate cargo invocation required.
 
 The output DLL lands at `fb2k-ropus\build\Release\foo_ropus.dll`.
 
-## Install (for manual testing)
+## Packaging
+
+For a distributable build, use the wrapper script:
+
+```powershell
+pwsh -File fb2k-ropus\build.ps1
+```
+
+This runs CMake Release (cascading into `cargo` for the Rust staticlib)
+and then packages `foo_ropus.dll` into a `.fb2k-component` archive with
+the `x64/foo_ropus.dll` layout fb2k expects. The archive lands at
+`fb2k-ropus\build\foo_ropus.fb2k-component`. Pass `-Clean` to wipe
+`build\` first.
+
+## Install
 
 foobar2000 keeps user components under
-`%APPDATA%\foobar2000-v2\user-components-x64\<name>\`. The per-component
-folder does not exist until you create it; the DLL must live inside, not
-alongside.
+`%APPDATA%\foobar2000-v2\user-components-x64\<name>\`.
 
 Prerequisite: foobar2000 v2 must be installed and launched at least once —
-this creates `%APPDATA%\foobar2000-v2\`, which the commands below require.
+this creates `%APPDATA%\foobar2000-v2\`.
 
-For M4 rapid iteration:
+Two install flows:
+
+**From the `.fb2k-component` archive** (normal user flow):
+
+1. Run `pwsh -File fb2k-ropus\build.ps1` to produce
+   `fb2k-ropus\build\foo_ropus.fb2k-component`.
+2. Double-click the `.fb2k-component` file, or drag it into *Preferences
+   → Components* in a running foobar2000. fb2k unpacks the DLL into
+   `%APPDATA%\foobar2000-v2\user-components-x64\foo_ropus\` itself and
+   prompts for a restart.
+
+**Manual DLL copy** (for rapid dev iteration):
 
 ```
 mkdir %APPDATA%\foobar2000-v2\user-components-x64\foo_ropus
@@ -73,12 +90,10 @@ copy fb2k-ropus\build\Release\foo_ropus.dll ^
      %APPDATA%\foobar2000-v2\user-components-x64\foo_ropus\
 ```
 
-Then restart foobar2000. You should see the component listed at
-*Preferences → Components*; opening any `.opus` file will log
-`[ropus] open …` / `[ropus] decode_run (stub → EOF)` lines to the foobar2000
-console and the file will fail to play (expected for M4).
-
-`.fb2k-component` zip packaging is an M6 deliverable; it is not done here.
+Then restart foobar2000. *Preferences → Components* should list
+`ropus (Rust Opus decoder) 0.2.0`. Opening any `.opus` file logs
+`[ropus] open …` and `[ropus] decode_run` lines to the foobar2000
+console and plays the audio.
 
 ## Layout
 
