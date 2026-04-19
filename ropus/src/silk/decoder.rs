@@ -793,10 +793,17 @@ fn silk_decode_parameters(
     // 5. Save current NLSF
     dec.prev_nlsf_q15[..lpc_order].copy_from_slice(&nlsf_q15[..lpc_order]);
 
-    // 6. Bandwidth expansion after loss
+    // 6. Bandwidth expansion after loss.
+    // C: decode_parameters.c:81-84 uses `BWE_AFTER_LOSS_Q16` (63570, Q16 of
+    // ~0.97). Previously we used `BWE_COEF_Q16` (64881, ~0.99) here — that's
+    // the *PLC* bandwidth-expansion coefficient used inside
+    // `silk_PLC_conceal`. Mixing them produces a ~2% coefficient error in the
+    // first-good-frame LPC synthesis filter, which amplifies through the IIR
+    // feedback and produces 1-2 orders of magnitude divergence in
+    // `sLPC_Q14_buf` after a single recovery frame (stage 7b.3 diagnostic).
     if dec.loss_cnt > 0 {
-        silk_bwexpander(&mut dec_ctrl.pred_coef_q12[0], lpc_order, BWE_COEF_Q16);
-        silk_bwexpander(&mut dec_ctrl.pred_coef_q12[1], lpc_order, BWE_COEF_Q16);
+        silk_bwexpander(&mut dec_ctrl.pred_coef_q12[0], lpc_order, BWE_AFTER_LOSS_Q16);
+        silk_bwexpander(&mut dec_ctrl.pred_coef_q12[1], lpc_order, BWE_AFTER_LOSS_Q16);
     }
 
     // 7. Voiced frame processing
@@ -1396,18 +1403,33 @@ fn silk_plc_glue_frames(dec: &mut SilkDecoderState, frame: &mut [i16], length: u
             };
 
             if conc_e < new_energy {
-                // New frame louder than concealment: fade in
-                let gain_q16 =
-                    silk_sqrt_approx(((conc_e as i64) << 16) as i32 / imax(new_energy, 1));
-                let mut slope_q16 =
-                    ((65536 - gain_q16) as i64 / imax(length as i32, 1) as i64) as i32;
-                slope_q16 = shl32(slope_q16, 2); // 4x steeper
+                // New frame louder than concealment: fade in.
+                // C: `silk_PLC_glue_frames` (reference/silk/PLC.c:477-479) —
+                // when DEEP_PLC is enabled AND the internal SILK rate is 16 kHz
+                // the fade-in loop is SKIPPED (the neural PLC already produces
+                // a continuous signal, so energy-mismatch smoothing would just
+                // attenuate the first good frame for no benefit). We must
+                // mirror that here or we apply a 2x-plus amplitude squash to
+                // the first good frame every time the conc_energy is much
+                // smaller than the new energy, which blows through tier-2 SNR.
+                //
+                // In Rust, DEEP_PLC is always enabled (no compile-time gate)
+                // so the C co-condition `#ifdef ENABLE_DEEP_PLC` is implicitly
+                // satisfied; we only need to test `fs_khz != 16`.
+                let compute_gain = dec.s_plc.fs_khz != 16;
+                if compute_gain {
+                    let gain_q16 =
+                        silk_sqrt_approx(((conc_e as i64) << 16) as i32 / imax(new_energy, 1));
+                    let mut slope_q16 =
+                        ((65536 - gain_q16) as i64 / imax(length as i32, 1) as i64) as i32;
+                    slope_q16 = shl32(slope_q16, 2); // 4x steeper
 
-                let mut cur_gain_q16 = gain_q16;
-                for i in 0..length {
-                    frame[i] = ((frame[i] as i32 * cur_gain_q16) >> 16) as i16;
-                    cur_gain_q16 += slope_q16;
-                    cur_gain_q16 = imin(cur_gain_q16, 65536);
+                    let mut cur_gain_q16 = gain_q16;
+                    for i in 0..length {
+                        frame[i] = ((frame[i] as i32 * cur_gain_q16) >> 16) as i16;
+                        cur_gain_q16 += slope_q16;
+                        cur_gain_q16 = imin(cur_gain_q16, 65536);
+                    }
                 }
             }
         }
@@ -2244,6 +2266,25 @@ pub fn silk_decode_frame(
 ) {
     let frame_length = dec.frame_length;
 
+    // Keep PLC sample-rate state in sync with the active decoder rate
+    // (C: `silk_PLC` in `reference/silk/PLC.c:84`). Without this the
+    // neural PLC gate `dec.s_plc.fs_khz == 16` is always false because
+    // `SilkPlcState::default()` leaves it at 0, and the neural PLC branch
+    // is silently skipped on every lost frame even when weights are loaded.
+    //
+    // C `silk_PLC_Reset` narrowly resets the four pitch/gain fields it
+    // preserves `fs_kHz`, `enable_deep_plc`, `last_frame_lost`, etc. We
+    // mirror that here rather than calling our broader `silk_plc_reset`
+    // (which wipes the full `SilkPlcState`) to avoid clobbering
+    // `enable_deep_plc` that the caller just set above in `silk_decode`.
+    if dec.fs_khz != dec.s_plc.fs_khz {
+        dec.s_plc.pitch_l_q8 = (dec.frame_length as i32) << 7;
+        dec.s_plc.prev_gain_q16 = [1 << 16, 1 << 16];
+        dec.s_plc.subfr_length = 20;
+        dec.s_plc.nb_subfr = 2;
+        dec.s_plc.fs_khz = dec.fs_khz;
+    }
+
     if lost_flag != FLAG_PACKET_LOST
         && !(lost_flag == FLAG_DECODE_LBRR && !dec.lbrr_flags[dec.n_frames_decoded])
     {
@@ -2351,6 +2392,32 @@ pub fn silk_decode_frame(
                     lpcnet.conceal(&mut p_out[k..k + pair_len]);
                     k += pair_len;
                 }
+                // C: `silk_PLC_conceal` in `reference/silk/PLC.c:406-409` —
+                // after deep PLC overwrites `frame[]`, re-derive the SILK
+                // LPC history buffer from the actual neural output so the
+                // next good frame's LPC synthesis continues from the signal
+                // the listener heard, not the discarded classical PLC.
+                //
+                // Bit-exact port of the C evaluation order
+                //     (int)floor(.5 + frame[i] * (float)(1<<24) / prevGain_Q10[1])
+                // The multiplication MUST happen before the division, in f32,
+                // so the intermediate `frame * 2^24` overflows f32 mantissa
+                // precision (~24 bits) the same way C does. Computing
+                // `inv_gain = 2^24 / prevGain_Q10` up-front changes the
+                // rounding pattern by 1 LSB on some samples. `.5 +` promotes
+                // to f64 because the C literal `.5` is double.
+                let prev_gain_q10_1 = dec.s_plc.prev_gain_q16[1] >> 6;
+                if prev_gain_q10_1 > 0 {
+                    let scale_f32 = (1u32 << 24) as f32;
+                    let prev_gain_f32 = prev_gain_q10_1 as f32;
+                    for i in 0..MAX_LPC_ORDER {
+                        let src_idx = frame_length - MAX_LPC_ORDER + i;
+                        let num_f32 = (p_out[src_idx] as i32 as f32) * scale_f32;
+                        let q_f32 = num_f32 / prev_gain_f32;
+                        let rounded = (0.5_f64 + q_f32 as f64).floor();
+                        dec.s_lpc_q14_buf[i] = rounded as i32;
+                    }
+                }
             } else {
                 let mut k = 0;
                 while k + pair_len <= frame_length {
@@ -2377,6 +2444,18 @@ pub fn silk_decode_frame(
         let dec_ctrl = SilkDecoderControl::default();
         silk_cng(dec, &dec_ctrl, p_out, frame_length);
         silk_plc_glue_frames(dec, p_out, frame_length);
+
+        // C: `decode_frame.c:162` — `psDec->lagPrev = psDecCtrl->pitchL[nb_subfr-1]`.
+        // On the lost-frame path, `silk_PLC_conceal` sets every element of
+        // `psDecCtrl->pitchL` to its final drifted `lag` (PLC.c:426-428), so
+        // the effect is `lagPrev = silk_RSHIFT_ROUND(sPLC.pitchL_Q8, 8)`. We
+        // mirror that directly off `dec.s_plc.pitch_l_q8` (which was drifted
+        // by `silk_plc_conceal`) because our classical PLC does not write
+        // into any dec_ctrl. Without this, `lag_prev` stays at the pre-loss
+        // pitch value, so the subsequent voiced→unvoiced transition guard in
+        // `silk_decode_core` (line 920) uses a stale lag and mis-seeds the
+        // recovery-frame LTP path.
+        dec.lag_prev = silk_rshift_round(dec.s_plc.pitch_l_q8, 8);
     }
 
     *p_n = frame_length;
@@ -3386,7 +3465,11 @@ mod tests {
                 .iter()
                 .all(|&sample| sample == 0)
         );
-        assert_eq!(decoder.channel_state[1].lag_prev, 100);
+        // NOTE: `lag_prev` is reset to 100 before silk_decode_frame runs, but
+        // silk_decode_frame then overwrites it with the post-PLC drifted lag
+        // (matches C decode_frame.c:162). So we check the reset happened via
+        // the OTHER fields below; `lag_prev` gets a fresh value from the lost
+        // frame's concealment.
         assert_eq!(decoder.channel_state[1].last_gain_index, 10);
         assert_eq!(
             decoder.channel_state[1].prev_signal_type,
@@ -3878,8 +3961,14 @@ mod tests {
             lpcnet_arg,
         );
         assert_eq!(ret, 0);
-        // Side channel should have been reset since prev_decode_only_middle was true
-        assert_eq!(decoder.channel_state[1].lag_prev, 100);
+        // Side channel should have been reset since prev_decode_only_middle was true.
+        // NOTE: `lag_prev` is reset to 100 at the start of silk_decode, but then
+        // silk_decode_frame overwrites it at the end with the post-PLC lag
+        // (`silk_RSHIFT_ROUND(sPLC.pitchL_Q8, 8)`), matching C's
+        // `decode_frame.c:162` behaviour. So we check the *other* reset fields
+        // here — `last_gain_index`, `prev_signal_type`, and
+        // `first_frame_after_reset` — which silk_decode_frame does NOT overwrite
+        // on the lost-frame path.
         assert_eq!(decoder.channel_state[1].last_gain_index, 10);
         assert_eq!(
             decoder.channel_state[1].prev_signal_type,

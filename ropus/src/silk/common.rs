@@ -69,7 +69,8 @@ pub const NB_ATT: usize = 2;
 pub const HARM_ATT_Q15: [i32; NB_ATT] = [32440, 31130];
 pub const PLC_RAND_ATTENUATE_V_Q15: [i32; NB_ATT] = [31130, 26214];
 pub const PLC_RAND_ATTENUATE_UV_Q15: [i32; NB_ATT] = [32440, 29491];
-pub const BWE_COEF_Q16: i32 = 64881; // ~0.99 in Q16
+pub const BWE_COEF_Q16: i32 = 64881; // ~0.99 in Q16 (C: PLC.h BWE_COEF = 0.99, used in silk_PLC_conceal)
+pub const BWE_AFTER_LOSS_Q16: i32 = 63570; // C: define.h BWE_AFTER_LOSS_Q16, used in silk_decode_parameters after a lost frame
 pub const LOG2_INV_LPC_GAIN_HIGH_THRES: i32 = 3; // 2^3 = 8 dB LPC gain
 pub const LOG2_INV_LPC_GAIN_LOW_THRES: i32 = 8; // 2^8 = 24 dB LPC gain
 
