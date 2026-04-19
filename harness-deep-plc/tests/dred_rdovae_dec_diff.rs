@@ -21,7 +21,12 @@
 
 use ropus::dnn::core::parse_weights;
 use ropus::dnn::dred::{
-    DRED_LATENT_DIM, DRED_STATE_DIM, RDOVAEDecState, init_rdovaedec,
+    DRED_LATENT_DIM, DRED_NUM_FEATURES, DRED_STATE_DIM, RDOVAEDecState, RDOVAEEncState,
+    compute_quantizer, init_rdovaedec, init_rdovaeenc,
+};
+use ropus::dnn::dred_stats::{
+    dred_latent_dead_zone_q8, dred_latent_p0_q8, dred_latent_quant_scales_q8, dred_latent_r_q8,
+    dred_state_dead_zone_q8, dred_state_p0_q8, dred_state_quant_scales_q8, dred_state_r_q8,
 };
 use ropus::dnn::embedded_weights::WEIGHTS_BLOB;
 
@@ -239,4 +244,223 @@ fn rdovae_decode_qframe_matches_c_reference() {
         first_drift_frame,
         first_drift_details
     );
+}
+
+/// Stage 8.6 carryover: complement to `rdovae_decode_qframe_matches_c_reference`
+/// that exercises the decoder on integer-aligned quantised inputs — the
+/// realistic code path DRED actually takes. The original test feeds
+/// continuous-valued xorshift floats directly into `decode_qframe`, which
+/// is plenty to shake out layer-level bugs but doesn't catch anything
+/// that only misbehaves on the specific integer lattice the encoder
+/// emits.
+///
+/// This test runs two back-to-back RDOVAE encoders (C + Rust), passes
+/// realistic 40-wide feature inputs through both, quantises the resulting
+/// latents / initial_state through the exact same deadzone + tanh pipeline
+/// as the encoder's range coder, packs the integer outputs as floats, and
+/// feeds both decoders. Byte-exact match asserts the decoder stays
+/// tier-1 even on the constrained-input manifold.
+#[test]
+fn decode_qframe_diff_quantised_inputs() {
+    if !weights_or_skip() {
+        return;
+    }
+
+    // --- Rust + C encoder side (to produce realistic unquantised latents). ---
+    let arrays = parse_weights(WEIGHTS_BLOB).expect("parse_weights WEIGHTS_BLOB");
+    let rust_enc_model = init_rdovaeenc(&arrays).expect("init_rdovaeenc");
+    let mut rust_enc_state = RDOVAEEncState::default();
+
+    // --- Rust + C decoder side. ---
+    let rust_dec_model = init_rdovaedec(&arrays).expect("init_rdovaedec");
+    let mut rust_dec_state = RDOVAEDecState::default();
+    let c_dec_model = unsafe { ropus_test_rdovaedec_new() };
+    assert!(!c_dec_model.is_null(), "C rdovaedec_new failed");
+    let c_dec_state = unsafe { ropus_test_rdovae_dec_state_new() };
+    assert!(!c_dec_state.is_null(), "C rdovae_dec_state_new failed");
+
+    // Step 1: run the encoder once on a deterministic feature frame to
+    // produce a plausible `initial_state` for the decoder — the exact
+    // oracle both sides will seed from. `synth_initial_state()` above
+    // bypasses the encoder; here we route through it so the init_states
+    // input is on the real-payload manifold.
+    let mut enc_input = [0.0f32; 2 * DRED_NUM_FEATURES];
+    {
+        let mut rng: u32 = 0x8DA_BEEF_u32;
+        for x in enc_input.iter_mut() {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            let s = (rng as i32) as f64 / (i32::MAX as f64);
+            *x = (s * 0.2) as f32;
+        }
+    }
+    let mut warmup_latents = [0.0f32; DRED_LATENT_DIM];
+    let mut seed_state = [0.0f32; DRED_STATE_DIM];
+    rust_enc_state.encode_dframe(
+        &rust_enc_model,
+        &mut warmup_latents,
+        &mut seed_state,
+        &enc_input,
+    );
+
+    // Quantise the seed state through the encoder's deadzone pipeline
+    // (q0 = 0 picks the first row of `dred_state_*_q8`), then dequantise
+    // back to float as the decoder expects.
+    let quantised_state = quantise_state(&seed_state, 0);
+
+    // Seed both decoders from the same quantised state.
+    unsafe {
+        ropus_test_dred_rdovae_dec_init_states(
+            c_dec_state,
+            c_dec_model,
+            quantised_state.as_ptr(),
+        );
+    }
+    rust_dec_state.init_states(&rust_dec_model, &quantised_state);
+
+    const NUM_FRAMES_QUANT: usize = 8;
+    let mut all_bit_exact = true;
+    let mut worst_snr_qframe = f64::INFINITY;
+    let mut first_drift: Option<(usize, usize, f32, f32)> = None;
+
+    for f in 0..NUM_FRAMES_QUANT {
+        // Re-encode to get a fresh realistic latent.
+        let mut frame_input = [0.0f32; 2 * DRED_NUM_FEATURES];
+        let mut rng: u32 = 0xDEADC0DE_u32.wrapping_add((f as u32) * 0x9E3779B9);
+        for x in frame_input.iter_mut() {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            let s = (rng as i32) as f64 / (i32::MAX as f64);
+            *x = (s * 0.2) as f32;
+        }
+        let mut latents = [0.0f32; DRED_LATENT_DIM];
+        let mut _state = [0.0f32; DRED_STATE_DIM];
+        rust_enc_state.encode_dframe(
+            &rust_enc_model,
+            &mut latents,
+            &mut _state,
+            &frame_input,
+        );
+
+        // Quantise the latents through the encoder's deadzone pipeline
+        // at quantiser level matching the actual `compute_quantizer`
+        // call used for chunk `f/2`.
+        let q_level = compute_quantizer(0, 0, 15, (f as i32) / 2);
+        let quantised_latent = quantise_latent(&latents, q_level);
+        // Pack as decoder input: 25 quantised floats + 1 trailing slot
+        // (the quantiser level byte). The C decoder reads 26 floats.
+        let mut dec_input = [0.0f32; DRED_LATENT_DIM + 1];
+        dec_input[..DRED_LATENT_DIM].copy_from_slice(&quantised_latent);
+        dec_input[DRED_LATENT_DIM] = q_level as f32;
+
+        // --- C forward pass ---
+        let mut c_qframe = vec![0.0f32; 80];
+        unsafe {
+            ropus_test_dred_rdovae_decode_qframe(
+                c_dec_state,
+                c_dec_model,
+                c_qframe.as_mut_ptr(),
+                dec_input.as_ptr(),
+            );
+        }
+        // --- Rust forward pass ---
+        let mut r_qframe = vec![0.0f32; 80];
+        rust_dec_state.decode_qframe(&rust_dec_model, &mut r_qframe, &dec_input);
+
+        // Tier 1 — bit-exact.
+        if let Some((idx, cv, rv)) = first_divergent(&c_qframe, &r_qframe) {
+            all_bit_exact = false;
+            if first_drift.is_none() {
+                first_drift = Some((f, idx, cv, rv));
+            }
+        }
+        let snr = compute_snr_db(&c_qframe, &r_qframe);
+        if snr < worst_snr_qframe {
+            worst_snr_qframe = snr;
+        }
+        eprintln!(
+            "[quantised] frame {f}: q_level={q_level}, SNR={:>7.2} dB, bit-exact={}",
+            if snr.is_infinite() {
+                f64::INFINITY
+            } else {
+                snr
+            },
+            all_bit_exact,
+        );
+    }
+
+    // Free C handles before assertions.
+    unsafe {
+        ropus_test_rdovaedec_free(c_dec_model);
+        ropus_test_rdovae_dec_state_free(c_dec_state);
+    }
+
+    if all_bit_exact {
+        eprintln!("Tier 1 achieved: bit-exact on {NUM_FRAMES_QUANT} quantised frames.");
+        return;
+    }
+    const TIER2_THRESHOLD_DB: f64 = 60.0;
+    assert!(
+        worst_snr_qframe >= TIER2_THRESHOLD_DB,
+        "Tier-2 failure on qframe (quantised): worst SNR {:.2} dB < {:.0} dB. First drift: {:?}",
+        worst_snr_qframe,
+        TIER2_THRESHOLD_DB,
+        first_drift,
+    );
+}
+
+/// Run the first three steps of `dred_encode_latents` (deadzone + tanh +
+/// floor-half-up rounding) but skip the Laplace range coder, and then
+/// dequantise back to float as the decoder expects. `q_level` indexes the
+/// per-quantiser-level tables.
+fn quantise_latent(x: &[f32; DRED_LATENT_DIM], q_level: i32) -> [f32; DRED_LATENT_DIM] {
+    let offset = (q_level as usize) * DRED_LATENT_DIM;
+    let scale = &dred_latent_quant_scales_q8[offset..offset + DRED_LATENT_DIM];
+    let dzone = &dred_latent_dead_zone_q8[offset..offset + DRED_LATENT_DIM];
+    let r = &dred_latent_r_q8[offset..offset + DRED_LATENT_DIM];
+    let p0 = &dred_latent_p0_q8[offset..offset + DRED_LATENT_DIM];
+    quantise_one(x, scale, dzone, r, p0)
+}
+
+/// State-side variant of `quantise_latent` for 50-wide init seed.
+fn quantise_state(x: &[f32; DRED_STATE_DIM], q_level: i32) -> [f32; DRED_STATE_DIM] {
+    let offset = (q_level as usize) * DRED_STATE_DIM;
+    let scale = &dred_state_quant_scales_q8[offset..offset + DRED_STATE_DIM];
+    let dzone = &dred_state_dead_zone_q8[offset..offset + DRED_STATE_DIM];
+    let r = &dred_state_r_q8[offset..offset + DRED_STATE_DIM];
+    let p0 = &dred_state_p0_q8[offset..offset + DRED_STATE_DIM];
+    quantise_one(x, scale, dzone, r, p0)
+}
+
+fn quantise_one<const N: usize>(
+    x: &[f32; N],
+    scale: &[u8],
+    dzone: &[u8],
+    r: &[u8],
+    p0: &[u8],
+) -> [f32; N] {
+    let mut delta = [0.0f32; N];
+    let mut xq = [0.0f32; N];
+    let mut deadzone = [0.0f32; N];
+    let eps = 0.1f32;
+    for i in 0..N {
+        delta[i] = dzone[i] as f32 / 256.0;
+        xq[i] = x[i] * scale[i] as f32 / 256.0;
+        deadzone[i] = xq[i] / (delta[i] + eps);
+    }
+    for v in deadzone.iter_mut() {
+        *v = v.tanh();
+    }
+    let mut q = [0.0f32; N];
+    for i in 0..N {
+        let adjusted = xq[i] - delta[i] * deadzone[i];
+        let qi = (0.5 + adjusted).floor() as i32;
+        // Matches `if (r[i] == 0 || p0[i] == 255) q[i] = 0` skip in the
+        // encoder — the range coder wouldn't emit a symbol for that dim.
+        let q_int = if r[i] == 0 || p0[i] == 255 { 0 } else { qi };
+        q[i] = q_int as f32;
+    }
+    q
 }

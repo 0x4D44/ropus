@@ -82,6 +82,40 @@ unsafe extern "C" {
         qframe: *mut f32,
         input: *const f32,
     );
+
+    // --- Stage 8.6 DRED full encoder-side pipeline shim ---
+    // Defined in `harness-deep-plc/dred_encode_shim.c`. Wraps
+    // `dred_encoder_init`, `dred_compute_latents`, and
+    // `dred_encode_silk_frame` behind an opaque `DREDEnc *` so the Rust
+    // differential test can drive the full payload-emission pipeline
+    // without replicating the `DREDEnc` layout across FFI.
+    pub fn ropus_test_dredenc_new(fs: c_int, channels: c_int) -> *mut c_void;
+    pub fn ropus_test_dredenc_free(enc: *mut c_void);
+    pub fn ropus_test_dredenc_input_buffer_fill(enc: *const c_void) -> c_int;
+    pub fn ropus_test_dred_compute_latents(
+        enc: *mut c_void,
+        pcm: *const f32,
+        frame_size: c_int,
+        extra_delay: c_int,
+    );
+    pub fn ropus_test_dred_encode_silk_frame(
+        enc: *mut c_void,
+        buf: *mut c_uchar,
+        max_chunks: c_int,
+        max_bytes: c_int,
+        q0: c_int,
+        d_q: c_int,
+        qmax: c_int,
+        activity_mem: *mut c_uchar,
+    ) -> c_int;
+    pub fn ropus_test_dredenc_latents_buffer_fill(enc: *const c_void) -> c_int;
+    pub fn ropus_test_dredenc_dred_offset(enc: *const c_void) -> c_int;
+    pub fn ropus_test_dredenc_latent_offset(enc: *const c_void) -> c_int;
+    pub fn ropus_test_dredenc_copy_latents(enc: *const c_void, dst: *mut f32, n: c_int);
+    pub fn ropus_test_dredenc_copy_state(enc: *const c_void, dst: *mut f32, n: c_int);
+    pub fn ropus_test_dredenc_copy_input_buffer(enc: *const c_void, dst: *mut f32, n: c_int);
+    pub fn ropus_test_dredenc_copy_resample_mem(enc: *const c_void, dst: *mut f32, n: c_int);
+    pub fn ropus_test_dredenc_copy_lpcnet_features(enc: *const c_void, dst: *mut f32, n: c_int);
 }
 
 /// Thin RAII wrapper around the C float-mode decoder — used by the tier-2

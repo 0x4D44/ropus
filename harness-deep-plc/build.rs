@@ -233,12 +233,20 @@ fn main() {
     // invokes directly). The weight tables arrive via
     // `dred_rdovae_enc_data.c`. Matches xiph's `DRED_SOURCES` list in
     // `reference/lpcnet_sources.mk`.
+    //
+    // Stage 8.6 adds `dred_encoder.c` / `dred_coding.c` — the full
+    // encoder-side pipeline (`dred_compute_latents`,
+    // `dred_encode_silk_frame`, `compute_quantizer`). These reference
+    // the LPCNet feature extractor, which is already linked via
+    // `lpcnet_enc.c` above.
     let dred_sources = [
         "dnn/dred_rdovae_enc.c",
         "dnn/dred_rdovae_enc_data.c",
         "dnn/dred_rdovae_dec.c",
         "dnn/dred_rdovae_dec_data.c",
         "dnn/dred_rdovae_stats_data.c",
+        "dnn/dred_encoder.c",
+        "dnn/dred_coding.c",
     ];
 
     let mut build = cc::Build::new();
@@ -290,6 +298,9 @@ fn main() {
     build.file(harness_dir.join("dred_enc_shim.c"));
     // Sibling shim for stage 8.5: RDOVAE decoder forward pass + init.
     build.file(harness_dir.join("dred_dec_shim.c"));
+    // Stage 8.6 shim: full encoder-side pipeline (DREDEnc init, compute
+    // latents, encode silk frame) behind opaque handles.
+    build.file(harness_dir.join("dred_encode_shim.c"));
 
     build.compile("opus_ref_float");
 
@@ -298,4 +309,5 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=dred_enc_shim.c");
     println!("cargo:rerun-if-changed=dred_dec_shim.c");
+    println!("cargo:rerun-if-changed=dred_encode_shim.c");
 }

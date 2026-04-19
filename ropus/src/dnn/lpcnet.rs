@@ -9,7 +9,7 @@
 use super::core::{
     ACTIVATION_LINEAR, ACTIVATION_SIGMOID, ACTIVATION_TANH, LinearLayer, WeightArray,
     compute_activation, compute_generic_conv1d, compute_generic_dense, compute_generic_gru,
-    compute_linear, lin2ulaw, linear_init, log2_approx, lpcnet_exp, parse_weights, ulaw2lin,
+    compute_linear, lin2ulaw, linear_init, lpcnet_exp, parse_weights, ulaw2lin,
 };
 
 // ===========================================================================
@@ -603,7 +603,17 @@ static ATT_TABLE: [f32; 10] = [0.0, 0.0, -0.2, -0.2, -0.4, -0.4, -0.8, -0.8, -1.
 
 #[inline]
 fn celt_log10_f32(x: f32) -> f32 {
-    0.3010299957 * log2_approx(x)
+    // C computes `celt_log10(x)` which expands (without FLOAT_APPROX, as
+    // harness-deep-plc's config.h does) to:
+    //   celt_log10(x) = 0.3010299957f * celt_log2(x)
+    //   celt_log2(x)  = (float)(1.442695040888963387 * log((double)x))
+    // Natural log done in double, rescaled, rounded to float, then scaled
+    // again by the f32 constant. Rust's `log2_approx` is the FLOAT_APPROX
+    // path, which diverges. Emulate the two-stage non-FLOAT_APPROX path
+    // so we match bit-for-bit. Used by `compute_frame_features` for
+    // `if_features[0]` and `if_features[3*i]`.
+    let log2_f32 = (1.442695040888963387_f64 * (x as f64).ln()) as f32;
+    0.3010299957_f32 * log2_f32
 }
 
 fn fmax(a: f32, b: f32) -> f32 {
@@ -688,24 +698,30 @@ fn compute_band_energy_inverse(band_e: &mut [f32; NB_BANDS], x: &[Cpx]) {
 }
 
 pub fn dct(out: &mut [f32], input: &[f32]) {
-    let scale = (2.0f64 / NB_BANDS as f64).sqrt() as f32;
+    // C computes `sum * sqrt(2./NB_BANDS)` in double and truncates to f32
+    // at the store — matching that requires keeping `scale` at f64 and
+    // doing the final multiply in f64 too, then casting back to f32.
+    // Using an f32 pre-cast loses a ULP on some NB_BANDS values and
+    // leaks through to `features[0]` bit-exactness (root cause of
+    // Stage 8.6 LPCNet feature drift).
+    let scale_f64 = (2.0f64 / NB_BANDS as f64).sqrt();
     for i in 0..NB_BANDS {
         let mut sum = 0.0f32;
         for j in 0..NB_BANDS {
             sum += input[j] * DCT_TABLE[j * NB_BANDS + i];
         }
-        out[i] = sum * scale;
+        out[i] = (sum as f64 * scale_f64) as f32;
     }
 }
 
 fn idct(out: &mut [f32], input: &[f32]) {
-    let scale = (2.0f64 / NB_BANDS as f64).sqrt() as f32;
+    let scale_f64 = (2.0f64 / NB_BANDS as f64).sqrt();
     for i in 0..NB_BANDS {
         let mut sum = 0.0f32;
         for j in 0..NB_BANDS {
             sum += input[j] * DCT_TABLE[i * NB_BANDS + j];
         }
-        out[i] = sum * scale;
+        out[i] = (sum as f64 * scale_f64) as f32;
     }
 }
 
@@ -1621,10 +1637,21 @@ impl LPCNetEncState {
         self.prev_if[..PITCH_IF_MAX_FREQ].copy_from_slice(&x_cpx[..PITCH_IF_MAX_FREQ]);
 
         // Cepstral coefficients with spectral floor.
+        //
+        // Bit-exactness with C depends on how `celt_log10` is compiled:
+        // without `FLOAT_APPROX` (harness default) it expands to
+        //   celt_log10(x) = 0.3010299957f * celt_log2(x)
+        //   celt_log2(x)  = (float)(1.442695040888963387 * log(x))
+        // — natural log done in double, rescaled, rounded to float,
+        // then scaled again by the f32 constant. Rust's `f32::log10`
+        // maps to libm `log10f` (single precision), which diverges.
+        // Emulate the two-stage C path so we match bit-for-bit.
         let mut ly = [0.0f32; NB_BANDS];
         let (mut log_max, mut follow) = (-2.0f32, -2.0f32);
         for i in 0..NB_BANDS {
-            ly[i] = (1e-2 + ex[i]).log10();
+            let arg = 1e-2f32 + ex[i];
+            let log2_f32 = (1.442695040888963387_f64 * (arg as f64).ln()) as f32;
+            ly[i] = 0.3010299957_f32 * log2_f32;
             ly[i] = fmax(log_max - 8.0, fmax(follow - 2.5, ly[i]));
             log_max = fmax(log_max, ly[i]);
             follow = fmax(follow - 2.5, ly[i]);

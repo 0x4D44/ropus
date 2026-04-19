@@ -12,12 +12,18 @@
 //! and `dred_rdovae_decode_qframe` in 8.5.
 
 use super::core::{
-    ACTIVATION_LINEAR, ACTIVATION_TANH, LinearLayer, WeightArray, compute_generic_conv1d,
-    compute_generic_conv1d_dilation, compute_generic_dense, compute_generic_gru, compute_glu,
-    linear_init, parse_weights,
+    ACTIVATION_LINEAR, ACTIVATION_TANH, LinearLayer, WeightArray, compute_activation,
+    compute_generic_conv1d, compute_generic_conv1d_dilation, compute_generic_dense,
+    compute_generic_gru, compute_glu, linear_init, parse_weights,
 };
 use super::embedded_weights::WEIGHTS_BLOB;
-use super::lpcnet::LPCNetEncState;
+use super::lpcnet::{LPCNetEncState, NB_TOTAL_FEATURES};
+use crate::celt::range_coder::RangeEncoder;
+use crate::dnn::dred_stats::{
+    dred_latent_dead_zone_q8, dred_latent_p0_q8, dred_latent_quant_scales_q8, dred_latent_r_q8,
+    dred_state_dead_zone_q8, dred_state_p0_q8, dred_state_quant_scales_q8, dred_state_r_q8,
+};
+use crate::types::float2int16;
 
 // ===========================================================================
 // Constants (match reference/dnn/dred_config.h + dred_rdovae_constants.h)
@@ -1684,24 +1690,42 @@ impl DREDEnc {
     }
 
     /// Load model weights from a serialised binary weight blob.
-    /// Matches C `dred_encoder_load_model`. Returns `Ok(())` on success;
-    /// `Err(-1)` on parse failure or a missing RDOVAE encoder layer.
-    // TODO(stage-8.6): mirror C `dred_encoder_load_model`'s composite load —
-    // also load LPCNet encoder-state weights (via the `lpcnet_encoder_load_model`
-    // equivalent) once `dred_compute_latents` needs them.
+    /// Matches C `dred_encoder_load_model` in `dred_encoder.c`:
+    /// first `init_rdovaeenc` from the parsed arrays, then
+    /// `lpcnet_encoder_load_model` (which re-parses internally and
+    /// populates the encoder's `pitchdnn` sub-model). Only when both
+    /// succeed is `loaded` flipped to `true`.
+    /// Returns `Ok(())` on success; `Err(-1)` on parse failure or a
+    /// missing RDOVAE/LPCNet weight array.
     pub fn load_model(&mut self, data: &[u8]) -> Result<(), i32> {
         let arrays = parse_weights(data)?;
         self.model = init_rdovaeenc(&arrays).map_err(|_| -1)?;
+        // Mirror C's second composite step — load the LPCNet encoder-state
+        // weights (currently the `pitchdnn` sub-model). `LPCNetEncState::
+        // load_model` returns 0 on success, non-zero on any parse or init
+        // failure.
+        if self.lpcnet_enc_state.load_model(data) != 0 {
+            self.loaded = false;
+            return Err(-1);
+        }
         self.loaded = true;
         self.reset();
         Ok(())
     }
 
     /// Zero the running state (not the model weights).
-    /// Matches C `dred_encoder_reset`'s memset-from-`DREDENC_RESET_START`.
+    /// Matches C `dred_encoder_reset`'s memset-from-`DREDENC_RESET_START`,
+    /// followed by `input_buffer_fill = DRED_SILK_ENCODER_DELAY` and the
+    /// sub-state re-inits (`lpcnet_encoder_init` + `DRED_rdovae_init_encoder`).
+    ///
+    /// Note: in the C reference `lpcnet_encoder_init` auto-loads the
+    /// compile-time pitchdnn weights when `USE_WEIGHTS_FILE` is undefined.
+    /// We don't replicate that here — the Rust composite flow relies on a
+    /// subsequent `load_model(blob)` to populate the LPCNet sub-model, and
+    /// `new()` chains them so external callers see the same end state.
     pub fn reset(&mut self) {
         self.input_buffer = [0.0; 2 * DRED_DFRAME_SIZE];
-        self.input_buffer_fill = 0;
+        self.input_buffer_fill = DRED_SILK_ENCODER_DELAY;
         self.dred_offset = 0;
         self.latent_offset = 0;
         self.last_extra_dred_offset = 0;
@@ -1710,6 +1734,593 @@ impl DREDEnc {
         self.state_buffer = [0.0; DRED_MAX_FRAMES * DRED_STATE_DIM];
         self.resample_mem = [0.0; RESAMPLING_ORDER + 1];
         self.rdovae_enc = RDOVAEEncState::default();
+    }
+
+    /// Resample a block of PCM from the encoder's native sample rate to the
+    /// internal 16 kHz DRED rate and append to `input_buffer`. Matches C
+    /// `dred_convert_to_16k` in `dred_encoder.c`:
+    ///
+    /// - The input is optionally zero-stuffed by `up` (to produce a polyphase
+    ///   pre-filter input), a signed-int16 quantisation ± a tiny dither, then
+    ///   run through one of four fixed ellip(7,.2,70) biquad cascades (one
+    ///   per supported source rate), and finally decimated by 3 on the 48 kHz
+    ///   path (or 3 after a ×4 upsample on 12 kHz, or 1:1 on 8/16 kHz).
+    ///
+    /// Only the 48 kHz (→ 16 kHz, decimate by 3 after bypass-upsample),
+    /// 24 kHz (→ 16 kHz, decimate by 3 after ×2 upsample), 16 kHz (passthrough),
+    /// 12 kHz (→ 16 kHz, decimate by 3 after ×4 upsample), and 8 kHz (→ 16 kHz,
+    /// direct 8→16 filter path) code paths are ported. `ENABLE_QEXT` / 96 kHz
+    /// is not ported (matches `harness-deep-plc`'s build defines).
+    ///
+    /// # Panics
+    ///
+    /// Debug-only: panics if `out.len() * self.fs != in_len * 16000` or if
+    /// `self.channels * in_len > MAX_DOWNMIX_BUFFER`. Matches the two
+    /// `celt_assert` guards in the C reference.
+    fn convert_to_16k(&mut self, pcm: &[f32], in_len: usize, out: &mut [f32], out_len: usize) {
+        // Mirror of C `MAX_DOWNMIX_BUFFER` with `ENABLE_QEXT` off.
+        const MAX_DOWNMIX_BUFFER: usize = 960 * 2;
+        let mut downmix = [0.0f32; MAX_DOWNMIX_BUFFER];
+
+        debug_assert!((self.channels as usize) * in_len <= MAX_DOWNMIX_BUFFER);
+        debug_assert_eq!(
+            in_len as i32 * 16000,
+            out_len as i32 * self.fs,
+            "in_len * 16000 must equal out_len * Fs"
+        );
+        let up: usize = match self.fs {
+            8000 => 2,
+            12000 => 4,
+            16000 => 1,
+            24000 => 2,
+            48000 => 1,
+            _ => unreachable!("unsupported Fs {} — Opus only allows 8/12/16/24/48 kHz", self.fs),
+        };
+        debug_assert!(up * in_len <= MAX_DOWNMIX_BUFFER);
+        // Zero-stuff at stride `up` so odd entries are 0 and even entries
+        // carry the ×up-scaled quantised mono mix. Matches C memset +
+        // strided overwrite.
+        for x in &mut downmix[..up * in_len] {
+            *x = 0.0;
+        }
+        if self.channels == 1 {
+            for i in 0..in_len {
+                // VERY_SMALL = 1e-30f in float mode. The tiny dither prevents
+                // denormals when the input is exactly zero; it's +ve-biased
+                // so it survives rounding.
+                downmix[up * i] = float2int16(up as f32 * pcm[i]) as f32 + 1.0e-30f32;
+            }
+        } else {
+            for i in 0..in_len {
+                let mono = 0.5 * up as f32 * (pcm[2 * i] + pcm[2 * i + 1]);
+                downmix[up * i] = float2int16(mono) as f32 + 1.0e-30f32;
+            }
+        }
+        match self.fs {
+            16000 => {
+                out[..out_len].copy_from_slice(&downmix[..out_len]);
+            }
+            48000 | 24000 => {
+                // ellip(7, .2, 70, 7750/24000)
+                const FILTER_B: [f32; 8] = [
+                    0.005873358047,
+                    0.012980854831,
+                    0.014531340042,
+                    0.014531340042,
+                    0.012980854831,
+                    0.005873358047,
+                    0.004523418224,
+                    0.0,
+                ];
+                const FILTER_A: [f32; 8] = [
+                    -3.878718597768,
+                    7.748834257468,
+                    -9.653651699533,
+                    8.007342726666,
+                    -4.379450178552,
+                    1.463182111810,
+                    -0.231720677804,
+                    0.0,
+                ];
+                const B0: f32 = 0.004523418224;
+                // In-place filter (in_ptr == out_ptr in the C source).
+                filter_df2t_inplace(
+                    &mut downmix[..up * in_len],
+                    B0,
+                    &FILTER_B,
+                    &FILTER_A,
+                    RESAMPLING_ORDER,
+                    &mut self.resample_mem,
+                );
+                // Decimate by 3.
+                for i in 0..out_len {
+                    out[i] = downmix[3 * i];
+                }
+            }
+            12000 => {
+                // ellip(7, .2, 70, 5800/24000)
+                const FILTER_B: [f32; 8] = [
+                    -0.001017101081,
+                    0.003673127243,
+                    0.001009165267,
+                    0.001009165267,
+                    0.003673127243,
+                    -0.001017101081,
+                    0.002033596776,
+                    0.0,
+                ];
+                const FILTER_A: [f32; 8] = [
+                    -4.930414411612,
+                    11.291643096504,
+                    -15.322037343815,
+                    13.216403930898,
+                    -7.220409219553,
+                    2.310550142771,
+                    -0.334338618782,
+                    0.0,
+                ];
+                const B0: f32 = 0.002033596776;
+                filter_df2t_inplace(
+                    &mut downmix[..up * in_len],
+                    B0,
+                    &FILTER_B,
+                    &FILTER_A,
+                    RESAMPLING_ORDER,
+                    &mut self.resample_mem,
+                );
+                for i in 0..out_len {
+                    out[i] = downmix[3 * i];
+                }
+            }
+            8000 => {
+                // ellip(7, .2, 70, 3900/8000)
+                const FILTER_B: [f32; 8] = [
+                    0.081670120929,
+                    0.180401598565,
+                    0.259391051971,
+                    0.259391051971,
+                    0.180401598565,
+                    0.081670120929,
+                    0.020109185709,
+                    0.0,
+                ];
+                const FILTER_A: [f32; 8] = [
+                    -1.393651933659,
+                    2.609789872676,
+                    -2.403541968806,
+                    2.056814957331,
+                    -1.148908574570,
+                    0.473001413788,
+                    -0.110359852412,
+                    0.0,
+                ];
+                const B0: f32 = 0.020109185709;
+                // Unlike the other paths, the 8 kHz filter writes directly
+                // into `out` (no decimation stage).
+                filter_df2t(
+                    &mut out[..out_len],
+                    &downmix[..up * in_len],
+                    B0,
+                    &FILTER_B,
+                    &FILTER_A,
+                    RESAMPLING_ORDER,
+                    &mut self.resample_mem,
+                );
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Process one 2*DRED_FRAME_SIZE = 320-sample (20 ms at 16 kHz) chunk
+    /// of input buffer: shift the latent/state ring buffers down one slot,
+    /// run two LPCNet feature-extraction frames, and push the 2×20-wide
+    /// feature concat through the RDOVAE encoder. Matches C
+    /// `dred_process_frame` in `dred_encoder.c`.
+    fn process_frame(&mut self) {
+        debug_assert!(self.loaded);
+
+        // Shift latents buffer: latents_buffer[DRED_LATENT_DIM..] <- latents_buffer[..-DRED_LATENT_DIM]
+        self.latents_buffer.copy_within(
+            0..(DRED_MAX_FRAMES - 1) * DRED_LATENT_DIM,
+            DRED_LATENT_DIM,
+        );
+        self.state_buffer.copy_within(
+            0..(DRED_MAX_FRAMES - 1) * DRED_STATE_DIM,
+            DRED_STATE_DIM,
+        );
+
+        // Two back-to-back LPCNet feature frames.
+        let mut feature_buffer = [0.0f32; 2 * NB_TOTAL_FEATURES];
+        let mut f0 = [0.0f32; NB_TOTAL_FEATURES];
+        let mut f1 = [0.0f32; NB_TOTAL_FEATURES];
+        self.lpcnet_enc_state
+            .compute_single_frame_features_float(&self.input_buffer[..DRED_FRAME_SIZE], &mut f0);
+        self.lpcnet_enc_state.compute_single_frame_features_float(
+            &self.input_buffer[DRED_FRAME_SIZE..2 * DRED_FRAME_SIZE],
+            &mut f1,
+        );
+        feature_buffer[..NB_TOTAL_FEATURES].copy_from_slice(&f0);
+        feature_buffer[NB_TOTAL_FEATURES..2 * NB_TOTAL_FEATURES].copy_from_slice(&f1);
+
+        // RDOVAE input is two concatenated DRED_NUM_FEATURES (=20) vectors
+        // — LPCNet emits 36 features per frame but the last 16 are LPC
+        // coefficients the RDOVAE encoder doesn't consume, so they're
+        // discarded here. Matches C:
+        //   OPUS_COPY(input_buffer, feature_buffer, DRED_NUM_FEATURES);
+        //   OPUS_COPY(input_buffer + DRED_NUM_FEATURES, feature_buffer + 36, DRED_NUM_FEATURES);
+        let mut rdovae_input = [0.0f32; 2 * DRED_NUM_FEATURES];
+        rdovae_input[..DRED_NUM_FEATURES]
+            .copy_from_slice(&feature_buffer[..DRED_NUM_FEATURES]);
+        rdovae_input[DRED_NUM_FEATURES..]
+            .copy_from_slice(&feature_buffer[NB_TOTAL_FEATURES..NB_TOTAL_FEATURES + DRED_NUM_FEATURES]);
+
+        // Write latent + state into the head of the ring buffers.
+        let (latent_head, _) = self.latents_buffer.split_at_mut(DRED_LATENT_DIM);
+        let (state_head, _) = self.state_buffer.split_at_mut(DRED_STATE_DIM);
+        self.rdovae_enc
+            .encode_dframe(&self.model, latent_head, state_head, &rdovae_input);
+
+        self.latents_buffer_fill =
+            (self.latents_buffer_fill + 1).min(DRED_NUM_REDUNDANCY_FRAMES as i32);
+    }
+
+    /// Resample a block of 48/24/16/12/8 kHz PCM to 16 kHz, buffer up in
+    /// `input_buffer`, and whenever we accumulate 2*DRED_FRAME_SIZE = 320
+    /// samples (20 ms at 16 kHz) run `process_frame` to emit one latent +
+    /// state pair. Matches C `dred_compute_latents`.
+    ///
+    /// `frame_size` is in samples at `self.fs` (not at 16 kHz).
+    /// `extra_delay` is the total SILK+CELT lookahead in samples at
+    /// `self.fs`, contributed by the Opus encoder's frame layout.
+    pub fn compute_latents(&mut self, pcm: &[f32], frame_size: i32, extra_delay: i32) {
+        debug_assert!(self.loaded);
+        // TODO(stage-8.x): the channel-stride pointer arithmetic below
+        // matches the C reference's pcm+1 / pcm+2 stride pattern in
+        // `convert_to_16k`, but bit-exactness has only been validated for
+        // mono input. Revisit against the C reference before enabling
+        // stereo DRED.
+        debug_assert!(
+            self.channels == 1,
+            "TODO(stage-8.x): verify DRED stereo against C ref"
+        );
+        // The C reference maintains `curr_offset16k` across the loop but
+        // never reads it after the initial `dred_offset` computation.
+        // Rust tracks that explicitly to avoid a dead-store warning;
+        // `#[allow]` on the read would still flag the write.
+        let curr_offset_16k =
+            40 + extra_delay * 16000 / self.fs - self.input_buffer_fill;
+        // `(a + 20) / 40` with floor semantics for positive and negative a.
+        // Matches C `(int)floor((curr_offset16k + 20.f) / 40.f)`.
+        self.dred_offset = ((curr_offset_16k as f32 + 20.0) / 40.0).floor() as i32;
+        self.latent_offset = 0;
+
+        let mut pcm_offset: usize = 0;
+        let mut frame_size_16k = (frame_size * 16000) / self.fs;
+        while frame_size_16k > 0 {
+            let process_size_16k = (2 * DRED_FRAME_SIZE as i32).min(frame_size_16k);
+            let process_size = process_size_16k * self.fs / 16000;
+            let channel_stride = self.channels as usize;
+            let pcm_slice = &pcm[pcm_offset * channel_stride
+                ..pcm_offset * channel_stride + process_size as usize * channel_stride];
+            let buf_start = self.input_buffer_fill as usize;
+            // Scratch copy: `convert_to_16k` takes an immutable `pcm` and a
+            // mutable `out` that cannot alias each other.
+            let mut scratch = [0.0f32; 2 * DRED_FRAME_SIZE];
+            self.convert_to_16k(
+                pcm_slice,
+                process_size as usize,
+                &mut scratch[..process_size_16k as usize],
+                process_size_16k as usize,
+            );
+            self.input_buffer[buf_start..buf_start + process_size_16k as usize]
+                .copy_from_slice(&scratch[..process_size_16k as usize]);
+            self.input_buffer_fill += process_size_16k;
+            if self.input_buffer_fill >= 2 * DRED_FRAME_SIZE as i32 {
+                // C does `curr_offset16k += 320` here but the variable is
+                // dead after this block; the Rust-side mutation is omitted.
+                self.process_frame();
+                self.input_buffer_fill -= 2 * DRED_FRAME_SIZE as i32;
+                // Shift remainder to the front. `copy_within` handles overlap.
+                if self.input_buffer_fill > 0 {
+                    self.input_buffer.copy_within(
+                        2 * DRED_FRAME_SIZE..2 * DRED_FRAME_SIZE + self.input_buffer_fill as usize,
+                        0,
+                    );
+                }
+                // 15 ms = 6 * 2.5 ms = ideal offset (vocoder look-ahead).
+                if self.dred_offset < 6 {
+                    self.dred_offset += 8;
+                } else {
+                    self.latent_offset += 1;
+                }
+            }
+            pcm_offset += process_size as usize;
+            frame_size_16k -= process_size_16k;
+        }
+    }
+
+    /// Range-code the accumulated latents + initial state into a DRED
+    /// extension payload. Matches C `dred_encode_silk_frame` in
+    /// `dred_encoder.c`.
+    ///
+    /// - `buf` is the output buffer, sized `max_bytes`. The raw DRED
+    ///   payload (no 2-byte `'D' + version` experimental prefix) is written
+    ///   starting at `buf[0]`.
+    /// - `max_chunks` caps the number of 40 ms latent chunks encoded
+    ///   (1 chunk = 2 consecutive 20 ms frames).
+    /// - `q0` is the base quantiser (0..15). `dQ` is an 8-value step
+    ///   selector; `qmax` clips the quantiser escalation.
+    /// - `activity_mem` is the 2.5 ms-resolution voice-activity ring buffer
+    ///   from the enclosing `OpusEncoder` (`4*DRED_MAX_FRAMES = 416` bytes).
+    ///   Entries come from the SILK VAD; we just read them.
+    ///
+    /// Returns the number of payload bytes actually written, or 0 when
+    /// budget was exhausted before a single chunk could be coded (or when
+    /// the only codeable region was silence).
+    pub fn encode_silk_frame(
+        &mut self,
+        buf: &mut [u8],
+        max_chunks: i32,
+        max_bytes: usize,
+        q0: i32,
+        d_q: i32,
+        qmax: i32,
+        activity_mem: &[u8],
+    ) -> i32 {
+        let buf_slice = &mut buf[..max_bytes];
+        let mut ec_encoder = RangeEncoder::new(buf_slice);
+
+        let mut latent_offset = self.latent_offset;
+        let mut extra_dred_offset: i32 = 0;
+        let mut delayed_dred = false;
+
+        // Delaying new DRED data when just out of silence because we
+        // already have the main Opus payload for that frame.
+        if activity_mem[0] != 0 && self.last_extra_dred_offset > 0 {
+            latent_offset = self.last_extra_dred_offset;
+            delayed_dred = true;
+            self.last_extra_dred_offset = 0;
+        }
+        while latent_offset < self.latents_buffer_fill
+            && !dred_voice_active(activity_mem, latent_offset)
+        {
+            latent_offset += 1;
+            extra_dred_offset += 1;
+        }
+        if !delayed_dred {
+            self.last_extra_dred_offset = extra_dred_offset;
+        }
+
+        // Entropy-coded header: quantiser base + step selector + offset.
+        ec_encoder.encode_uint(q0 as u32, 16);
+        ec_encoder.encode_uint(d_q as u32, 8);
+        let total_offset = 16 - (self.dred_offset - extra_dred_offset * 8);
+        debug_assert!(total_offset >= 0);
+        if total_offset > 31 {
+            ec_encoder.encode_uint(1, 2);
+            ec_encoder.encode_uint((total_offset >> 5) as u32, 256);
+            ec_encoder.encode_uint((total_offset & 31) as u32, 32);
+        } else {
+            ec_encoder.encode_uint(0, 2);
+            ec_encoder.encode_uint(total_offset as u32, 32);
+        }
+        debug_assert!(qmax >= q0);
+        if q0 < 14 && d_q > 0 {
+            // If you want to use qmax == q0, you should have set dQ = 0.
+            debug_assert!(qmax > q0);
+            let nvals = 15 - (q0 + 1);
+            let (fl, fh) = if qmax >= 15 {
+                (0, nvals)
+            } else {
+                (nvals + qmax - (q0 + 1), nvals + qmax - q0)
+            };
+            ec_encoder.encode(fl as u32, fh as u32, (2 * nvals) as u32);
+        }
+
+        let state_qoffset = (q0 as usize) * DRED_STATE_DIM;
+        let state_slice_start = (latent_offset as usize) * DRED_STATE_DIM;
+        // Snapshot state buffer read so we can pass it alongside a &mut
+        // encoder without a borrow conflict. State stays in self so the
+        // reference is live across the call.
+        let state_buf: Vec<f32> = self.state_buffer
+            [state_slice_start..state_slice_start + DRED_STATE_DIM]
+            .to_vec();
+        dred_encode_latents(
+            &mut ec_encoder,
+            &state_buf,
+            &dred_state_quant_scales_q8[state_qoffset..state_qoffset + DRED_STATE_DIM],
+            &dred_state_dead_zone_q8[state_qoffset..state_qoffset + DRED_STATE_DIM],
+            &dred_state_r_q8[state_qoffset..state_qoffset + DRED_STATE_DIM],
+            &dred_state_p0_q8[state_qoffset..state_qoffset + DRED_STATE_DIM],
+        );
+        if ec_encoder.tell() > 8 * max_bytes as i32 {
+            return 0;
+        }
+
+        // Snapshot encoder state (ec_bak) so we can roll back to the last
+        // voice-active chunk when we finish the loop. Matches C
+        // `ec_enc ec_bak = ec_encoder;`.
+        let mut ec_bak = ec_encoder.save_snapshot();
+
+        let mut prev_active = false;
+        let mut dred_encoded: i32 = 0;
+        let chunk_count_cap = 2 * max_chunks.min(self.latents_buffer_fill - latent_offset - 1);
+        let mut i = 0i32;
+        while i < chunk_count_cap {
+            let q_level = compute_quantizer(q0, d_q, qmax, i / 2);
+            let offset = (q_level as usize) * DRED_LATENT_DIM;
+            let latent_idx = (i + latent_offset) as usize;
+            let latent_slice_start = latent_idx * DRED_LATENT_DIM;
+            let latent_buf: Vec<f32> = self.latents_buffer
+                [latent_slice_start..latent_slice_start + DRED_LATENT_DIM]
+                .to_vec();
+            dred_encode_latents(
+                &mut ec_encoder,
+                &latent_buf,
+                &dred_latent_quant_scales_q8[offset..offset + DRED_LATENT_DIM],
+                &dred_latent_dead_zone_q8[offset..offset + DRED_LATENT_DIM],
+                &dred_latent_r_q8[offset..offset + DRED_LATENT_DIM],
+                &dred_latent_p0_q8[offset..offset + DRED_LATENT_DIM],
+            );
+            if ec_encoder.tell() > 8 * max_bytes as i32 {
+                // If we haven't been able to code one chunk, give up on
+                // DRED completely.
+                if i == 0 {
+                    return 0;
+                }
+                break;
+            }
+            let active = dred_voice_active(activity_mem, i + latent_offset);
+            if active || prev_active {
+                ec_bak = ec_encoder.save_snapshot();
+                dred_encoded = i + 2;
+            }
+            prev_active = active;
+            i += 2;
+        }
+
+        // Avoid sending empty DRED packets.
+        if dred_encoded == 0 || (dred_encoded <= 2 && extra_dred_offset != 0) {
+            return 0;
+        }
+        ec_encoder.restore_snapshot(&ec_bak);
+
+        let ec_buffer_fill = (ec_encoder.tell() + 7) / 8;
+        ec_encoder.shrink(ec_buffer_fill as u32);
+        ec_encoder.done();
+        ec_buffer_fill
+    }
+}
+
+// ===========================================================================
+// DRED coding helpers (free functions)
+// ===========================================================================
+
+/// Direct-form-II transposed 8-tap IIR filter with stride-1 input and
+/// stride-1 output. Matches C `filter_df2t` in `dred_encoder.c`.
+///
+/// `b0` is the leading feed-forward coefficient (x[i] → y[i] direct path),
+/// `filter_b[0..order]` are the remaining feed-forward coefficients mixed
+/// into the delay line, `filter_a[0..order]` are the (negated) feedback
+/// coefficients. `mem[0..order+1]` is the transposed-form state memory;
+/// `mem[order]` is always 0 (unused write slot).
+fn filter_df2t(
+    out: &mut [f32],
+    input: &[f32],
+    b0: f32,
+    filter_b: &[f32; 8],
+    filter_a: &[f32; 8],
+    order: usize,
+    mem: &mut [f32],
+) {
+    let len = out.len();
+    debug_assert!(input.len() >= len);
+    debug_assert!(mem.len() > order);
+    for i in 0..len {
+        let xi = input[i];
+        let yi = xi * b0 + mem[0];
+        let nyi = -yi;
+        for j in 0..order {
+            mem[j] = mem[j + 1] + filter_b[j] * xi + filter_a[j] * nyi;
+        }
+        out[i] = yi;
+    }
+}
+
+/// In-place variant of `filter_df2t`. The C source uses `in == out` at
+/// the 48/24/12 kHz call sites, which Rust's aliasing rules disallow via
+/// separate slices; this variant reads and writes the same buffer.
+fn filter_df2t_inplace(
+    io: &mut [f32],
+    b0: f32,
+    filter_b: &[f32; 8],
+    filter_a: &[f32; 8],
+    order: usize,
+    mem: &mut [f32],
+) {
+    let len = io.len();
+    debug_assert!(mem.len() > order);
+    for i in 0..len {
+        let xi = io[i];
+        let yi = xi * b0 + mem[0];
+        let nyi = -yi;
+        for j in 0..order {
+            mem[j] = mem[j + 1] + filter_b[j] * xi + filter_a[j] * nyi;
+        }
+        io[i] = yi;
+    }
+}
+
+/// Compute the per-chunk quantiser level. Matches C `compute_quantizer` in
+/// `dred_coding.c`.
+pub fn compute_quantizer(q0: i32, d_q: i32, qmax: i32, i: i32) -> i32 {
+    const D_Q_TABLE: [i32; 8] = [0, 2, 3, 4, 6, 8, 12, 16];
+    let quant = q0 + (D_Q_TABLE[d_q as usize] * i + 8) / 16;
+    if quant > qmax { qmax } else { quant }
+}
+
+/// VAD probe into the 2.5 ms-resolution `activity_mem` ring buffer. Matches
+/// C `dred_voice_active` in `dred_encoder.c`: a 20 ms chunk is "active" if
+/// any of its 8 2.5 ms sub-frames crossed the SILK VAD threshold.
+fn dred_voice_active(activity_mem: &[u8], offset: i32) -> bool {
+    let base = 8 * offset as usize;
+    for i in 0..16 {
+        if activity_mem[base + i] == 1 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Encode `dim` floats through the asymmetric deadzone quantiser + Laplace
+/// range coder. Matches C `dred_encode_latents` in `dred_encoder.c`.
+///
+/// `scale`, `dzone`, `r`, `p0` all point at `dim`-length u8 slices (per-
+/// dimension quantiser parameters from `dred_stats`). When `r[i] == 0` or
+/// `p0[i] == 255` the output bit is forced to zero (impossible dim), so
+/// no range-coder call is made for that dim.
+fn dred_encode_latents(
+    ec: &mut RangeEncoder,
+    x: &[f32],
+    scale: &[u8],
+    dzone: &[u8],
+    r: &[u8],
+    p0: &[u8],
+) {
+    let dim = x.len();
+    // DRED_LATENT_DIM = 25, DRED_STATE_DIM = 50 — allocate for the larger.
+    debug_assert!(dim <= DRED_STATE_DIM);
+    let mut q_arr = [0i32; DRED_STATE_DIM];
+    let mut xq_arr = [0.0f32; DRED_STATE_DIM];
+    let mut delta_arr = [0.0f32; DRED_STATE_DIM];
+    let mut deadzone_arr = [0.0f32; DRED_STATE_DIM];
+    const EPS: f32 = 0.1;
+
+    for i in 0..dim {
+        delta_arr[i] = dzone[i] as f32 * (1.0 / 256.0);
+        xq_arr[i] = x[i] * scale[i] as f32 * (1.0 / 256.0);
+        deadzone_arr[i] = xq_arr[i] / (delta_arr[i] + EPS);
+    }
+    compute_activation(&mut deadzone_arr[..dim], dim, ACTIVATION_TANH);
+    for i in 0..dim {
+        xq_arr[i] -= delta_arr[i] * deadzone_arr[i];
+        // `floor(0.5 + x)` — C uses this exact form; Rust `.floor()`
+        // matches the IEEE-754 round-towards-negative-infinity the C
+        // compilers emit. For negative half-integers (e.g. -2.5), C
+        // `floor(-2.0)` = -2, which matches Rust's `(-2.0_f32).floor()`.
+        q_arr[i] = (0.5 + xq_arr[i]).floor() as i32;
+    }
+    for i in 0..dim {
+        // Skip dims the stats say can't produce a nonzero output.
+        if r[i] == 0 || p0[i] == 255 {
+            q_arr[i] = 0;
+        } else {
+            ec.encode_laplace_p0(
+                q_arr[i],
+                (p0[i] as u16) << 7,
+                (r[i] as u16) << 7,
+            );
+        }
     }
 }
 
