@@ -1,6 +1,7 @@
 #[doc(hidden)]
 pub mod analysis;
 pub mod decoder;
+pub mod dred;
 pub mod encoder;
 pub mod extensions;
 pub(crate) mod mlp;

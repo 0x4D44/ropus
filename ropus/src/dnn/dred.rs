@@ -18,7 +18,7 @@ use super::core::{
 };
 use super::embedded_weights::WEIGHTS_BLOB;
 use super::lpcnet::{LPCNetEncState, NB_TOTAL_FEATURES};
-use crate::celt::range_coder::RangeEncoder;
+use crate::celt::range_coder::{RangeDecoder, RangeEncoder};
 use crate::dnn::dred_stats::{
     dred_latent_dead_zone_q8, dred_latent_p0_q8, dred_latent_quant_scales_q8, dred_latent_r_q8,
     dred_state_dead_zone_q8, dred_state_p0_q8, dred_state_quant_scales_q8, dred_state_r_q8,
@@ -2324,6 +2324,39 @@ fn dred_encode_latents(
     }
 }
 
+/// Decode `dim` floats through the inverse of `dred_encode_latents`. Matches
+/// C `dred_decode_latents` in `dred_decoder.c`.
+///
+/// `scale`, `r`, `p0` all point at `dim`-length u8 slices (per-dimension
+/// quantiser parameters from `dred_stats`). When `r[i] == 0` or
+/// `p0[i] == 255` the output is forced to zero — the encoder's matching
+/// skip path — so no range-coder call is made for that dim. Otherwise
+/// `q = ec_laplace_decode_p0(dec, p0<<7, r<<7)` and
+/// `x = q * 256 / (scale == 0 ? 1 : scale)`.
+fn dred_decode_latents(
+    dec: &mut RangeDecoder,
+    x: &mut [f32],
+    scale: &[u8],
+    r: &[u8],
+    p0: &[u8],
+) {
+    let dim = x.len();
+    debug_assert!(scale.len() >= dim);
+    debug_assert!(r.len() >= dim);
+    debug_assert!(p0.len() >= dim);
+    for i in 0..dim {
+        let q = if r[i] == 0 || p0[i] == 255 {
+            0
+        } else {
+            dec.decode_laplace_p0((p0[i] as u16) << 7, (r[i] as u16) << 7)
+        };
+        // C: `q*256.f/(scale[i] == 0 ? 1 : scale[i])`. Keep the exact same
+        // arithmetic order so the f32 result is bit-identical.
+        let s = if scale[i] == 0 { 1.0 } else { scale[i] as f32 };
+        x[i] = (q as f32) * 256.0 / s;
+    }
+}
+
 // ===========================================================================
 // OpusDred — decoded payload state
 // ===========================================================================
@@ -2352,6 +2385,126 @@ impl Default for OpusDred {
             process_stage: 0,
             dred_offset: 0,
         }
+    }
+}
+
+impl OpusDred {
+    /// Parse a DRED range-coded payload, recovering the initial state and
+    /// per-chunk latents. Matches C `dred_ec_decode` in `dred_decoder.c`.
+    ///
+    /// The input is the raw DRED payload bytes (the 2-byte
+    /// `'D' + DRED_EXPERIMENTAL_VERSION` extension prefix must already have
+    /// been stripped by the caller — see `opus_dred_parse`).
+    /// `min_feature_frames` caps how many latent chunks we consume so we
+    /// don't over-run the decoder's working buffer.
+    /// `dred_frame_offset` is the DRED position within a multi-frame Opus
+    /// packet (in 2.5 ms units), folded into the signalled `dred_offset`.
+    ///
+    /// On success this populates `self.state` (bit-exact recovery of the
+    /// encoder's 50-wide `initial_state` projection at quantiser level
+    /// `q0`) and `self.latents[0..nb_latents]` (each 26-wide: 25
+    /// latent floats + 1 trailing `q_level*.125 - 1` slot that
+    /// `decode_qframe` expects), sets `process_stage = 1`, and returns
+    /// the number of latent chunks decoded.
+    pub fn ec_decode(
+        &mut self,
+        bytes: &[u8],
+        min_feature_frames: i32,
+        dred_frame_offset: i32,
+    ) -> i32 {
+        // Since features are decoded in quadruples, DRED_NUM_REDUNDANCY_FRAMES
+        // must be even. Unlike C (celt_assert), Rust const-asserts at compile
+        // time.
+        const _: () = assert!(DRED_NUM_REDUNDANCY_FRAMES.is_multiple_of(2));
+
+        let mut dec = RangeDecoder::new(bytes);
+
+        // Header: q0 (0..15), dQ (0..7), optional offset-extension, signed
+        // dred_offset. Mirrors the encode-side layout in `encode_silk_frame`.
+        let q0 = dec.decode_uint(16) as i32;
+        let d_q = dec.decode_uint(8) as i32;
+        let extra_offset = if dec.decode_uint(2) != 0 {
+            32 * (dec.decode_uint(256) as i32)
+        } else {
+            0
+        };
+        // C: `dec->dred_offset = 16 - ec_dec_uint(&ec, 32) - extra_offset + dred_frame_offset`.
+        self.dred_offset =
+            16 - (dec.decode_uint(32) as i32) - extra_offset + dred_frame_offset;
+
+        // qmax: default 15 unless the encoder sent a smaller cap.
+        let mut qmax = 15i32;
+        if q0 < 14 && d_q > 0 {
+            // The distribution for the dQmax symbol is split evenly between
+            // zero (which implies qmax == 15) and larger values, with the
+            // probability of all larger values being uniform. Inverse of the
+            // encode-side symbol layout.
+            let nvals = 15 - (q0 + 1);
+            let ft = (2 * nvals) as u32;
+            let s = dec.decode(ft) as i32;
+            if s >= nvals {
+                qmax = q0 + (s - nvals) + 1;
+                dec.update(s as u32, (s + 1) as u32, ft);
+            } else {
+                dec.update(0, nvals as u32, ft);
+            }
+        }
+
+        // Decode the `initial_state` projection at quantiser level q0.
+        let state_qoffset = (q0 as usize) * DRED_STATE_DIM;
+        dred_decode_latents(
+            &mut dec,
+            &mut self.state,
+            &dred_state_quant_scales_q8[state_qoffset..state_qoffset + DRED_STATE_DIM],
+            &dred_state_r_q8[state_qoffset..state_qoffset + DRED_STATE_DIM],
+            &dred_state_p0_q8[state_qoffset..state_qoffset + DRED_STATE_DIM],
+        );
+
+        // Per-chunk latent decode. The encoder stored newest → oldest; this
+        // matches the C comment "decode newest to oldest and store oldest to
+        // newest". `num_bytes` is the raw byte length; the 7-bit trailing-
+        // slack fast-exit matches the C `FIXME`.
+        let num_bytes = bytes.len() as i32;
+        let cap = DRED_NUM_REDUNDANCY_FRAMES.min(((min_feature_frames + 1) / 2) as usize) as i32;
+        let mut i = 0i32;
+        while i < cap {
+            if 8 * num_bytes - dec.tell() <= 7 {
+                break;
+            }
+            let q_level = compute_quantizer(q0, d_q, qmax, i / 2);
+            let offset = (q_level as usize) * DRED_LATENT_DIM;
+            let chunk = (i / 2) as usize;
+            let base = chunk * (DRED_LATENT_DIM + 1);
+            dred_decode_latents(
+                &mut dec,
+                &mut self.latents[base..base + DRED_LATENT_DIM],
+                &dred_latent_quant_scales_q8[offset..offset + DRED_LATENT_DIM],
+                &dred_latent_r_q8[offset..offset + DRED_LATENT_DIM],
+                &dred_latent_p0_q8[offset..offset + DRED_LATENT_DIM],
+            );
+            // 26th slot stores the quantiser level encoded as a float in
+            // the exact form `decode_qframe` expects. Matches C.
+            self.latents[base + DRED_LATENT_DIM] = (q_level as f32) * 0.125 - 1.0;
+            i += 2;
+        }
+        self.process_stage = 1;
+        self.nb_latents = i / 2;
+        i / 2
+    }
+
+    /// Number of PCM samples this DRED payload can reconstruct at
+    /// `sampling_rate` Hz, clamped to zero. Mirrors C
+    /// `opus_dred_parse`'s return value in `opus_decoder.c:1570`:
+    /// `IMAX(0, nb_latents*sampling_rate/25 - dred_offset*sampling_rate/400)`.
+    ///
+    /// The two divisions are performed independently *before* the
+    /// subtraction (integer truncation applied to each term), matching the
+    /// C evaluation order exactly — combining them arithmetically would
+    /// lose bit-parity with the reference for non-divisible rates.
+    pub fn usable_samples(&self, sampling_rate: i32) -> u32 {
+        let a = (self.nb_latents as i64) * (sampling_rate as i64) / 25;
+        let b = (self.dred_offset as i64) * (sampling_rate as i64) / 400;
+        (a - b).max(0) as u32
     }
 }
 
@@ -2564,5 +2717,361 @@ mod tests {
             qframe.iter().any(|&v| v != 0.0),
             "qframe all zero — forward pass looks inert"
         );
+    }
+
+    /// Stage 8.7 round-trip test — encode synthetic latents + state through
+    /// the Rust encoder, decode with the Rust decoder, assert the recovered
+    /// floats match the values that `encode_silk_frame` would have written
+    /// into the bitstream (`q * 256 / scale`) bit-exact via `f32::to_bits()`.
+    ///
+    /// Because the encoder applies an asymmetric deadzone + tanh contraction
+    /// before rounding to an integer, generic input floats don't preserve
+    /// bit-exactly through the quantiser; the test's oracle is the
+    /// encoder's own `q` output, computed locally via `encode_side_q`
+    /// (which mirrors `dred_encode_latents` verbatim). Decode output is
+    /// then `q * 256 / (scale == 0 ? 1 : scale)`, which must equal the
+    /// decoder's output bit-for-bit.
+    ///
+    /// This test does NOT use RDOVAE — it feeds arbitrary floats straight
+    /// into the payload encoder's buffers, so it runs on a bare checkout
+    /// without weight blobs.
+    #[test]
+    fn ec_decode_roundtrip_matches_encoded_payload() {
+        const NUM_CHUNKS: i32 = 4;
+        let q0: i32 = 6;
+        let d_q: i32 = 0; // Keeps qmax handling on the trivial (qmax=15) path.
+        let qmax: i32 = 15;
+
+        // Deterministic xorshift latent + state inputs. Magnitudes large
+        // enough to produce nonzero `q` across many dims but far from
+        // saturating the u8 scale tables.
+        fn xorshift_float(seed: &mut u32) -> f32 {
+            *seed ^= *seed << 13;
+            *seed ^= *seed >> 17;
+            *seed ^= *seed << 5;
+            let s = (*seed as i32) as f64 / (i32::MAX as f64);
+            (s * 3.0) as f32
+        }
+
+        // Build a DREDEnc without touching the embedded blob path (we
+        // don't run RDOVAE). `loaded = true` sidesteps the encode-side
+        // guard if any; encode_silk_frame doesn't check it anyway but
+        // setting it avoids any defensive trip.
+        let mut enc = DREDEnc::new_unloaded(48000, 1);
+        enc.loaded = true;
+        enc.latent_offset = 0;
+        // Buffer fill cap: `chunk_count_cap = 2 * max_chunks.min(fill -
+        // offset - 1)` — with one slack chunk, NUM_CHUNKS all fit.
+        enc.latents_buffer_fill = 2 * NUM_CHUNKS + 2;
+        enc.dred_offset = 0;
+        enc.last_extra_dred_offset = 0;
+
+        // Seed state buffer (row q0) and each chunk's frame slot.
+        let mut seed = 0xC0FFEE_u32;
+        let mut state_input = [0.0f32; DRED_STATE_DIM];
+        for i in 0..DRED_STATE_DIM {
+            state_input[i] = xorshift_float(&mut seed);
+            enc.state_buffer[i] = state_input[i];
+        }
+        let mut latent_input = [[0.0f32; DRED_LATENT_DIM]; NUM_CHUNKS as usize];
+        for chunk in 0..(NUM_CHUNKS as usize) {
+            for i in 0..DRED_LATENT_DIM {
+                let x = xorshift_float(&mut seed);
+                latent_input[chunk][i] = x;
+                // Encoder consumes `latents_buffer[(2*chunk + latent_offset)
+                // * DRED_LATENT_DIM + i]` on chunk `chunk`.
+                enc.latents_buffer[2 * chunk * DRED_LATENT_DIM + i] = x;
+            }
+        }
+
+        // All-active VAD so no chunk is skipped for silence.
+        let activity_mem = vec![1u8; 4 * DRED_MAX_FRAMES];
+
+        // Compute expected post-decode floats = `q * 256 / scale` where
+        // `q` is what `dred_encode_latents` would have emitted. Uses the
+        // same tanh/deadzone/round path as the encoder; acts as an
+        // independent oracle against the decoder.
+        fn encode_side_q(x: &[f32], scale: &[u8], dzone: &[u8], r: &[u8], p0: &[u8]) -> Vec<i32> {
+            let dim = x.len();
+            let mut xq = vec![0.0f32; dim];
+            let mut delta = vec![0.0f32; dim];
+            let mut dz = vec![0.0f32; dim];
+            let eps = 0.1f32;
+            for i in 0..dim {
+                delta[i] = dzone[i] as f32 / 256.0;
+                xq[i] = x[i] * scale[i] as f32 / 256.0;
+                dz[i] = xq[i] / (delta[i] + eps);
+            }
+            for v in dz.iter_mut() {
+                *v = v.tanh();
+            }
+            let mut out = vec![0i32; dim];
+            for i in 0..dim {
+                let adjusted = xq[i] - delta[i] * dz[i];
+                let qi = (0.5 + adjusted).floor() as i32;
+                out[i] = if r[i] == 0 || p0[i] == 255 { 0 } else { qi };
+            }
+            out
+        }
+        fn dequantise(q: i32, scale: u8) -> f32 {
+            let s = if scale == 0 { 1.0 } else { scale as f32 };
+            (q as f32) * 256.0 / s
+        }
+
+        // State oracle at quantiser row q0.
+        let state_qoffset = (q0 as usize) * DRED_STATE_DIM;
+        let state_q = encode_side_q(
+            &state_input,
+            &dred_state_quant_scales_q8[state_qoffset..state_qoffset + DRED_STATE_DIM],
+            &dred_state_dead_zone_q8[state_qoffset..state_qoffset + DRED_STATE_DIM],
+            &dred_state_r_q8[state_qoffset..state_qoffset + DRED_STATE_DIM],
+            &dred_state_p0_q8[state_qoffset..state_qoffset + DRED_STATE_DIM],
+        );
+        let expected_state: Vec<f32> = (0..DRED_STATE_DIM)
+            .map(|i| dequantise(state_q[i], dred_state_quant_scales_q8[state_qoffset + i]))
+            .collect();
+
+        // Per-chunk latent oracles.
+        let mut expected_latents =
+            vec![[0.0f32; DRED_LATENT_DIM]; NUM_CHUNKS as usize];
+        for chunk in 0..(NUM_CHUNKS as usize) {
+            let q_level = compute_quantizer(q0, d_q, qmax, chunk as i32);
+            let latent_qoffset = (q_level as usize) * DRED_LATENT_DIM;
+            let q_chunk = encode_side_q(
+                &latent_input[chunk],
+                &dred_latent_quant_scales_q8[latent_qoffset..latent_qoffset + DRED_LATENT_DIM],
+                &dred_latent_dead_zone_q8[latent_qoffset..latent_qoffset + DRED_LATENT_DIM],
+                &dred_latent_r_q8[latent_qoffset..latent_qoffset + DRED_LATENT_DIM],
+                &dred_latent_p0_q8[latent_qoffset..latent_qoffset + DRED_LATENT_DIM],
+            );
+            for i in 0..DRED_LATENT_DIM {
+                expected_latents[chunk][i] =
+                    dequantise(q_chunk[i], dred_latent_quant_scales_q8[latent_qoffset + i]);
+            }
+        }
+
+        // Encode to bytes.
+        let mut payload = vec![0u8; DRED_MAX_DATA_SIZE];
+        let nbytes = enc.encode_silk_frame(
+            &mut payload,
+            NUM_CHUNKS,
+            DRED_MAX_DATA_SIZE,
+            q0,
+            d_q,
+            qmax,
+            &activity_mem,
+        );
+        assert!(
+            nbytes > 0,
+            "encoder produced empty payload — dred_voice_active or buffer fill wrong"
+        );
+
+        // Decode.
+        let mut dred = OpusDred::default();
+        let nb_chunks = dred.ec_decode(&payload[..nbytes as usize], 2 * NUM_CHUNKS, 0);
+        assert!(
+            nb_chunks >= 1,
+            "decoder recovered zero chunks from a nonempty payload"
+        );
+        assert_eq!(dred.process_stage, 1);
+        assert_eq!(dred.nb_latents, nb_chunks);
+
+        // Bit-exact state recovery.
+        for i in 0..DRED_STATE_DIM {
+            assert_eq!(
+                dred.state[i].to_bits(),
+                expected_state[i].to_bits(),
+                "state[{i}] mismatch: expected {:?} got {:?}",
+                expected_state[i],
+                dred.state[i],
+            );
+        }
+        // Bit-exact latent recovery per chunk.
+        for chunk in 0..(nb_chunks as usize) {
+            let base = chunk * (DRED_LATENT_DIM + 1);
+            for i in 0..DRED_LATENT_DIM {
+                assert_eq!(
+                    dred.latents[base + i].to_bits(),
+                    expected_latents[chunk][i].to_bits(),
+                    "latent[chunk={chunk}][dim={i}] mismatch: expected {:?} got {:?}",
+                    expected_latents[chunk][i],
+                    dred.latents[base + i],
+                );
+            }
+            // q_level signalling slot: `q_level*.125 - 1`.
+            let q_level = compute_quantizer(q0, d_q, qmax, chunk as i32);
+            let expected_q_tag = (q_level as f32) * 0.125 - 1.0;
+            assert_eq!(
+                dred.latents[base + DRED_LATENT_DIM].to_bits(),
+                expected_q_tag.to_bits(),
+                "chunk[{chunk}] q-tag mismatch",
+            );
+        }
+    }
+
+    /// Stage 8.7 branch-coverage test — drives at least one
+    /// quantised value with `|q| > 7`, so `ec_laplace_encode_p0` /
+    /// `ec_laplace_decode_p0` take the 7-symbol escape path (values
+    /// `>= 7` are coded by one or more "7" escape symbols followed by
+    /// the remainder; see `range_coder.rs::encode_laplace_p0`'s `v -= 7`
+    /// loop).
+    ///
+    /// The sibling `ec_decode_roundtrip_matches_encoded_payload` uses a
+    /// xorshift with peak `|x| ≈ 3.0`, which after deadzone contraction
+    /// never produces `|q| > 7`. This test amplifies the scale so the
+    /// escape branch is exercised on both encode and decode, and asserts
+    /// bit-exact recovery of every sample.
+    #[test]
+    fn ec_decode_roundtrip_exercises_laplace_escape_path() {
+        const NUM_CHUNKS: i32 = 4;
+        let q0: i32 = 6;
+        let d_q: i32 = 0;
+        let qmax: i32 = 15;
+
+        // Wide-amplitude xorshift: scale to ~15 so `xq = x * scale/256`
+        // with typical `scale ≈ 200` produces `|xq| ≈ 12`, well past the
+        // `|q| > 7` boundary on many dims. Deliberately bigger than the
+        // sibling test's 3.0 scale so the escape branch fires.
+        fn xorshift_float_big(seed: &mut u32) -> f32 {
+            *seed ^= *seed << 13;
+            *seed ^= *seed >> 17;
+            *seed ^= *seed << 5;
+            let s = (*seed as i32) as f64 / (i32::MAX as f64);
+            (s * 15.0) as f32
+        }
+
+        let mut enc = DREDEnc::new_unloaded(48000, 1);
+        enc.loaded = true;
+        enc.latent_offset = 0;
+        enc.latents_buffer_fill = 2 * NUM_CHUNKS + 2;
+        enc.dred_offset = 0;
+        enc.last_extra_dred_offset = 0;
+
+        let mut seed = 0xFEEDFACE_u32;
+        let mut state_input = [0.0f32; DRED_STATE_DIM];
+        for i in 0..DRED_STATE_DIM {
+            state_input[i] = xorshift_float_big(&mut seed);
+            enc.state_buffer[i] = state_input[i];
+        }
+        let mut latent_input = [[0.0f32; DRED_LATENT_DIM]; NUM_CHUNKS as usize];
+        for chunk in 0..(NUM_CHUNKS as usize) {
+            for i in 0..DRED_LATENT_DIM {
+                let x = xorshift_float_big(&mut seed);
+                latent_input[chunk][i] = x;
+                enc.latents_buffer[2 * chunk * DRED_LATENT_DIM + i] = x;
+            }
+        }
+
+        let activity_mem = vec![1u8; 4 * DRED_MAX_FRAMES];
+
+        // Same encoder-side oracle as the sibling test.
+        fn encode_side_q(x: &[f32], scale: &[u8], dzone: &[u8], r: &[u8], p0: &[u8]) -> Vec<i32> {
+            let dim = x.len();
+            let eps = 0.1f32;
+            let mut out = vec![0i32; dim];
+            for i in 0..dim {
+                let delta = dzone[i] as f32 / 256.0;
+                let xq = x[i] * scale[i] as f32 / 256.0;
+                let dz = (xq / (delta + eps)).tanh();
+                let adjusted = xq - delta * dz;
+                let qi = (0.5 + adjusted).floor() as i32;
+                out[i] = if r[i] == 0 || p0[i] == 255 { 0 } else { qi };
+            }
+            out
+        }
+        fn dequantise(q: i32, scale: u8) -> f32 {
+            let s = if scale == 0 { 1.0 } else { scale as f32 };
+            (q as f32) * 256.0 / s
+        }
+
+        let state_qoffset = (q0 as usize) * DRED_STATE_DIM;
+        let state_q = encode_side_q(
+            &state_input,
+            &dred_state_quant_scales_q8[state_qoffset..state_qoffset + DRED_STATE_DIM],
+            &dred_state_dead_zone_q8[state_qoffset..state_qoffset + DRED_STATE_DIM],
+            &dred_state_r_q8[state_qoffset..state_qoffset + DRED_STATE_DIM],
+            &dred_state_p0_q8[state_qoffset..state_qoffset + DRED_STATE_DIM],
+        );
+        let expected_state: Vec<f32> = (0..DRED_STATE_DIM)
+            .map(|i| dequantise(state_q[i], dred_state_quant_scales_q8[state_qoffset + i]))
+            .collect();
+
+        let mut expected_latents =
+            vec![[0.0f32; DRED_LATENT_DIM]; NUM_CHUNKS as usize];
+        let mut latent_q_grid =
+            vec![vec![0i32; DRED_LATENT_DIM]; NUM_CHUNKS as usize];
+        for chunk in 0..(NUM_CHUNKS as usize) {
+            let q_level = compute_quantizer(q0, d_q, qmax, chunk as i32);
+            let latent_qoffset = (q_level as usize) * DRED_LATENT_DIM;
+            let q_chunk = encode_side_q(
+                &latent_input[chunk],
+                &dred_latent_quant_scales_q8[latent_qoffset..latent_qoffset + DRED_LATENT_DIM],
+                &dred_latent_dead_zone_q8[latent_qoffset..latent_qoffset + DRED_LATENT_DIM],
+                &dred_latent_r_q8[latent_qoffset..latent_qoffset + DRED_LATENT_DIM],
+                &dred_latent_p0_q8[latent_qoffset..latent_qoffset + DRED_LATENT_DIM],
+            );
+            for i in 0..DRED_LATENT_DIM {
+                expected_latents[chunk][i] =
+                    dequantise(q_chunk[i], dred_latent_quant_scales_q8[latent_qoffset + i]);
+                latent_q_grid[chunk][i] = q_chunk[i];
+            }
+        }
+
+        // Branch-coverage precondition: at least one |q| > 7 across state
+        // or latents. Fails loudly if scaling drifts in the future so the
+        // test would silently stop exercising the escape path.
+        let state_hit = state_q.iter().any(|&q| q.abs() > 7);
+        let latent_hit = latent_q_grid
+            .iter()
+            .any(|chunk| chunk.iter().any(|&q| q.abs() > 7));
+        assert!(
+            state_hit || latent_hit,
+            "test preconditions drifted: no |q|>7 generated — escape path not exercised",
+        );
+
+        let mut payload = vec![0u8; DRED_MAX_DATA_SIZE];
+        let nbytes = enc.encode_silk_frame(
+            &mut payload,
+            NUM_CHUNKS,
+            DRED_MAX_DATA_SIZE,
+            q0,
+            d_q,
+            qmax,
+            &activity_mem,
+        );
+        assert!(nbytes > 0);
+
+        let mut dred = OpusDred::default();
+        let nb_chunks = dred.ec_decode(&payload[..nbytes as usize], 2 * NUM_CHUNKS, 0);
+        assert!(nb_chunks >= 1);
+        assert_eq!(dred.process_stage, 1);
+        assert_eq!(dred.nb_latents, nb_chunks);
+
+        for i in 0..DRED_STATE_DIM {
+            assert_eq!(
+                dred.state[i].to_bits(),
+                expected_state[i].to_bits(),
+                "state[{i}] mismatch on escape-path input: expected {:?} got {:?}",
+                expected_state[i],
+                dred.state[i],
+            );
+        }
+        for chunk in 0..(nb_chunks as usize) {
+            let base = chunk * (DRED_LATENT_DIM + 1);
+            for i in 0..DRED_LATENT_DIM {
+                assert_eq!(
+                    dred.latents[base + i].to_bits(),
+                    expected_latents[chunk][i].to_bits(),
+                    "latent[chunk={chunk}][dim={i}] mismatch on escape-path input",
+                );
+            }
+            let q_level = compute_quantizer(q0, d_q, qmax, chunk as i32);
+            let expected_q_tag = (q_level as f32) * 0.125 - 1.0;
+            assert_eq!(
+                dred.latents[base + DRED_LATENT_DIM].to_bits(),
+                expected_q_tag.to_bits(),
+                "chunk[{chunk}] q-tag mismatch",
+            );
+        }
     }
 }

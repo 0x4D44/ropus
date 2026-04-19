@@ -116,6 +116,32 @@ unsafe extern "C" {
     pub fn ropus_test_dredenc_copy_input_buffer(enc: *const c_void, dst: *mut f32, n: c_int);
     pub fn ropus_test_dredenc_copy_resample_mem(enc: *const c_void, dst: *mut f32, n: c_int);
     pub fn ropus_test_dredenc_copy_lpcnet_features(enc: *const c_void, dst: *mut f32, n: c_int);
+
+    // --- Stage 8.7 payload-level shims: direct buffer poke + C decoder ---
+    // Defined in `harness-deep-plc/dred_encode_shim.c`. Let the Rust
+    // differential test drive `dred_encode_silk_frame` on hand-synthesised
+    // latents/state (no RDOVAE upstream) and cross-check `dred_ec_decode`
+    // between C and Rust on the resulting byte buffer.
+    pub fn ropus_test_dredenc_set_state_buffer(enc: *mut c_void, src: *const f32, n: c_int);
+    pub fn ropus_test_dredenc_set_latents_buffer(enc: *mut c_void, src: *const f32, n: c_int);
+    pub fn ropus_test_dredenc_set_bookkeeping(
+        enc: *mut c_void,
+        latent_offset: c_int,
+        latents_buffer_fill: c_int,
+        dred_offset: c_int,
+        last_extra_dred_offset: c_int,
+    );
+    pub fn ropus_test_dred_ec_decode(
+        bytes: *const c_uchar,
+        num_bytes: c_int,
+        min_feature_frames: c_int,
+        dred_frame_offset: c_int,
+        out_state: *mut f32,
+        out_latents: *mut f32,
+        out_nb_latents: *mut c_int,
+        out_process_stage: *mut c_int,
+        out_dred_offset: *mut c_int,
+    ) -> c_int;
 }
 
 /// Thin RAII wrapper around the C float-mode decoder — used by the tier-2

@@ -20,7 +20,9 @@
 #include <string.h>
 
 #include "dred_encoder.h"
+#include "dred_decoder.h"
 #include "dred_config.h"
+#include "dred_rdovae_constants.h"
 #include "lpcnet.h"
 
 /* Defined by `dred_rdovae_enc_data.c`. */
@@ -134,4 +136,83 @@ void ropus_test_dredenc_copy_resample_mem(const void *enc, float *dst, int n) {
 void ropus_test_dredenc_copy_lpcnet_features(const void *enc, float *dst, int n) {
     const DREDEnc *e = (const DREDEnc *)enc;
     memcpy(dst, e->lpcnet_enc_state.features, n * sizeof(float));
+}
+
+/* ========================================================================
+ * Stage 8.7: payload-dump + C decoder entrypoints.
+ * ========================================================================
+ * The Rust C-differential test supplies synthetic latents + state arrays,
+ * wants the C encoder to produce a byte buffer from them, then wants to
+ * decode that same buffer with both C and Rust `dred_ec_decode` and
+ * cross-check. These helpers poke buffers directly into the DREDEnc
+ * struct without running the resample/LPCNet/RDOVAE upstream, so the
+ * test covers only the range-coder + quantiser logic (which is what 8.7
+ * owns).
+ */
+
+/* Overwrite the encoder's `state_buffer` with user-supplied floats.
+ * Only the first DRED_STATE_DIM floats are populated (the chunk being
+ * emitted starts at offset 0 when `latent_offset == 0`). */
+void ropus_test_dredenc_set_state_buffer(void *enc, const float *src, int n) {
+    DREDEnc *e = (DREDEnc *)enc;
+    memcpy(e->state_buffer, src, n * sizeof(float));
+}
+
+/* Overwrite the encoder's `latents_buffer` with user-supplied floats.
+ * Caller owns the layout (chunk `i` lives at `2 * i * DRED_LATENT_DIM`
+ * per the encoder's interleave). */
+void ropus_test_dredenc_set_latents_buffer(void *enc, const float *src, int n) {
+    DREDEnc *e = (DREDEnc *)enc;
+    memcpy(e->latents_buffer, src, n * sizeof(float));
+}
+
+/* Mutators for the non-RDOVAE bookkeeping that `dred_encode_silk_frame`
+ * reads. The test sets these to known values (usually zeros + a chosen
+ * `latents_buffer_fill`) rather than letting `dred_compute_latents`
+ * fill them in. */
+void ropus_test_dredenc_set_bookkeeping(
+    void *enc,
+    int latent_offset,
+    int latents_buffer_fill,
+    int dred_offset,
+    int last_extra_dred_offset
+) {
+    DREDEnc *e = (DREDEnc *)enc;
+    e->latent_offset = latent_offset;
+    e->latents_buffer_fill = latents_buffer_fill;
+    e->dred_offset = dred_offset;
+    e->last_extra_dred_offset = last_extra_dred_offset;
+}
+
+/* Run the C `dred_ec_decode` on a byte buffer and copy the resulting
+ * state + latents out to caller-owned slices. Returns `dec->nb_latents`
+ * (same as the C function). */
+int ropus_test_dred_ec_decode(
+    const unsigned char *bytes,
+    int num_bytes,
+    int min_feature_frames,
+    int dred_frame_offset,
+    float *out_state,           /* DRED_STATE_DIM floats */
+    float *out_latents,         /* (DRED_NUM_REDUNDANCY_FRAMES/2) * (DRED_LATENT_DIM+1) floats */
+    int *out_nb_latents,
+    int *out_process_stage,
+    int *out_dred_offset
+) {
+    OpusDRED dred;
+    memset(&dred, 0, sizeof(dred));
+    int ret = dred_ec_decode(&dred, bytes, num_bytes, min_feature_frames, dred_frame_offset);
+    if (out_state) {
+        memcpy(out_state, dred.state, DRED_STATE_DIM * sizeof(float));
+    }
+    if (out_latents) {
+        memcpy(
+            out_latents,
+            dred.latents,
+            (DRED_NUM_REDUNDANCY_FRAMES / 2) * (DRED_LATENT_DIM + 1) * sizeof(float)
+        );
+    }
+    if (out_nb_latents) *out_nb_latents = dred.nb_latents;
+    if (out_process_stage) *out_process_stage = dred.process_stage;
+    if (out_dred_offset) *out_dred_offset = dred.dred_offset;
+    return ret;
 }

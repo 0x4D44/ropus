@@ -247,6 +247,9 @@ fn main() {
         "dnn/dred_rdovae_stats_data.c",
         "dnn/dred_encoder.c",
         "dnn/dred_coding.c",
+        // Stage 8.7: need `dred_ec_decode` symbol for the C-diff test
+        // that parses encoder-emitted payloads back with the C decoder.
+        "dnn/dred_decoder.c",
     ];
 
     let mut build = cc::Build::new();
