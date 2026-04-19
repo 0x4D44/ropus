@@ -33,3 +33,6 @@ notes/*.log
 /tests/vectors/real_world/*.opus
 /tests/vectors/real_world/*.ogg
 /tests/vectors/real_world/*.webm
+
+# foobar2000 SDK (not redistributable; tools/fetch-fb2k-sdk.ps1 fetches it).
+/fb2k-ropus/sdk/
