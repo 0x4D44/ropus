@@ -344,10 +344,7 @@ mod unit_tests {
         // Test subcommand starts at index 5. Note: no explicit `--no-fail-fast`
         // here because `--ignore-run-fail` is mutually exclusive with it and
         // implies it internally.
-        assert_eq!(
-            &s[5..9],
-            &["test", "--workspace", "--lib", "--tests"]
-        );
+        assert_eq!(&s[5..9], &["test", "--workspace", "--lib", "--tests"]);
         // Trailing pass-through to libtest.
         assert_eq!(&s[9..], &["--", "--test-threads=1"]);
     }
