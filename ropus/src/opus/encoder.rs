@@ -6850,4 +6850,163 @@ mod tests {
             let _ = enc.encode(&pcm, 1920, &mut packet, 1500).unwrap();
         }
     }
+
+    // ==========================================================================
+    // CVBR observable-effect test (HLD deferred-work closeout section 2).
+    // Confirms that CeltEncoderCtl::SetVbrConstraint(1) actually shapes the
+    // packet-size distribution emitted by the CELT encoder, not just stores
+    // the flag. CELT-only VBR path is used because MODE_HYBRID forces CVBR=0
+    // by design (matches reference `opus_encoder.c`). Note: SILK-only mode
+    // does not consume `vbr_constraint` (it is only forwarded to the CELT
+    // encoder via `CeltEncoderCtl::SetVbrConstraint` at opus/encoder.rs:~2465),
+    // so this CELT-only test covers the full path where the flag has effect.
+    // ==========================================================================
+    /// Build a signal whose per-frame complexity varies strongly, so the
+    /// encoder's `vbr_reservoir` swings across frames. Alternates low-amplitude
+    /// tonal content, wide-band noise bursts, and louder transients — the sort
+    /// of pattern under which a true VBR encoder will produce noticeably wider
+    /// packet-size distribution than CVBR at the same target bitrate.
+    fn varying_complexity_pcm(num_frames: usize, frame_size: usize) -> Vec<Vec<i16>> {
+        (0..num_frames)
+            .map(|f| {
+                // Rotate through four regimes so successive frames see large
+                // complexity swings. CELT's dynalloc / vbr_reservoir reacts
+                // frame-to-frame; unrelated frames keep the reservoir moving.
+                let regime = f % 4;
+                (0..frame_size)
+                    .map(|i| {
+                        match regime {
+                            // Quiet tone: low-amplitude 500 Hz sine-ish.
+                            0 => {
+                                let phase = (i as i32).wrapping_mul(107) & 0x3FFF;
+                                ((phase - 0x2000) / 16) as i16
+                            }
+                            // Dense pseudo-noise burst: high entropy content.
+                            1 => {
+                                let v = ((i as i32)
+                                    .wrapping_mul(2654435761u32 as i32)
+                                    .wrapping_add((f as i32).wrapping_mul(374761393u32 as i32)))
+                                    >> 16;
+                                (v & 0x7FFF) as i16 - 16384
+                            }
+                            // Loud transient at frame start, decays toward end.
+                            2 => {
+                                let decay = (frame_size - i) as i32;
+                                let v = (20000 * decay / frame_size as i32)
+                                    .wrapping_mul(if i & 3 == 0 { 1 } else { -1 });
+                                v.clamp(-28000, 28000) as i16
+                            }
+                            // Mid-amplitude chirp.
+                            _ => {
+                                let freq = 3 + (f as i32 & 7);
+                                let phase = ((i as i32).wrapping_mul(freq)) & 0xFFF;
+                                ((phase - 0x800) * 6) as i16
+                            }
+                        }
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn encode_frames_collect_sizes(vbr_constraint: i32, frames: &[Vec<i16>]) -> Vec<usize> {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        assert_eq!(enc.set_force_mode(MODE_CELT_ONLY), OPUS_OK);
+        assert_eq!(enc.set_bitrate(64_000), OPUS_OK);
+        assert_eq!(enc.set_vbr(1), OPUS_OK);
+        assert_eq!(enc.set_vbr_constraint(vbr_constraint), OPUS_OK);
+        assert_eq!(enc.get_vbr_constraint(), vbr_constraint);
+        let frame_size = frames[0].len();
+        let mut packet = vec![0u8; 1500];
+        frames
+            .iter()
+            .map(|pcm| {
+                let cap = packet.len() as i32;
+                enc.encode(pcm, frame_size as i32, &mut packet, cap)
+                    .expect("encode") as usize
+            })
+            .collect()
+    }
+
+    /// Observable effect of `SetVbrConstraint(1)`: at the same target bitrate,
+    /// CVBR produces a narrower packet-size distribution than unconstrained
+    /// VBR on content whose per-frame complexity varies widely. The check is
+    /// on the (max - min) spread because CVBR's job is to cap peak sizes via
+    /// `ec_enc_shrink` in `celt_encode_core` once `vbr_reservoir` goes
+    /// negative (celt/encoder.rs:~2265, matching C celt_encoder.c:1941-1958).
+    #[test]
+    fn test_cvbr_narrows_packet_size_distribution_vs_vbr() {
+        let frame_size = 960; // 20 ms @ 48 kHz
+        let num_frames = 64;
+        let frames = varying_complexity_pcm(num_frames, frame_size);
+        assert_eq!(frames.len(), num_frames);
+
+        let vbr_sizes = encode_frames_collect_sizes(0, &frames);
+        let cvbr_sizes = encode_frames_collect_sizes(1, &frames);
+
+        // Skip the first few frames — CELT's VBR adapter uses an
+        // `alpha = 1/(vbr_count + 20)` smoothing where `vbr_count` increments
+        // per frame until 970 (celt/encoder.rs:~2889), so the first few frames
+        // see an outsized adaptation step. `vbr_reservoir` also needs a couple
+        // of frames to accumulate meaningful signed drift. skip=4 lands past
+        // both transients while leaving a large steady-state window.
+        let skip = 4;
+        let vbr_steady = &vbr_sizes[skip..];
+        let cvbr_steady = &cvbr_sizes[skip..];
+
+        let min_max_mean = |v: &[usize]| {
+            let mn = *v.iter().min().unwrap();
+            let mx = *v.iter().max().unwrap();
+            let sum: usize = v.iter().sum();
+            (mn, mx, sum / v.len())
+        };
+        let (vbr_min, vbr_max, vbr_mean) = min_max_mean(vbr_steady);
+        let (cvbr_min, cvbr_max, cvbr_mean) = min_max_mean(cvbr_steady);
+        let vbr_spread = vbr_max - vbr_min;
+        let cvbr_spread = cvbr_max - cvbr_min;
+        // Target bytes per packet at 64 kbps / 20 ms = 64000 * 0.020 / 8.
+        let target_bytes: usize = 160;
+
+        // Debug output (visible with `cargo test -- --nocapture`) for future
+        // tuning or regression diagnosis. Logged before the assertion so a
+        // failure still shows the full distribution.
+        eprintln!(
+            "CVBR-vs-VBR @ 64kbps CELT-only, {} frames (after skip={skip}), \
+             target={target_bytes}:\n  \
+             VBR:  min={vbr_min}  max={vbr_max}  mean={vbr_mean}  spread={vbr_spread}\n  \
+             CVBR: min={cvbr_min}  max={cvbr_max}  mean={cvbr_mean}  spread={cvbr_spread}",
+            num_frames - skip
+        );
+
+        // The core property: CVBR spread must be strictly smaller than VBR
+        // spread. If this ever fails, the flag is not actually shaping output.
+        assert!(
+            cvbr_spread < vbr_spread,
+            "CVBR packet-size spread should be narrower than VBR. \
+             VBR: min={vbr_min} max={vbr_max} spread={vbr_spread}; \
+             CVBR: min={cvbr_min} max={cvbr_max} spread={cvbr_spread}; \
+             vbr_sizes={vbr_sizes:?} cvbr_sizes={cvbr_sizes:?}"
+        );
+
+        // And the maximum single-packet size must be *strictly* capped by CVBR
+        // (the `max_allowed` clamp at celt/encoder.rs:2265 can only lower
+        // nb_compressed_bytes, never raise it). Strict inequality rules out a
+        // near-no-op where the peaks happen to tie.
+        assert!(
+            cvbr_max < vbr_max,
+            "CVBR peak packet size ({cvbr_max}) must be strictly below VBR peak ({vbr_max})"
+        );
+
+        // Guard against the "shrink-everything" tautology: the assertions
+        // above would pass even if CVBR pathologically clamped every packet
+        // down to a tiny size. Require the CVBR mean to stay within 3/4 of
+        // the target bitrate's bytes-per-packet budget, i.e. CVBR must still
+        // be spending a reasonable fraction of the requested rate.
+        assert!(
+            cvbr_mean * 4 >= target_bytes * 3,
+            "CVBR mean packet size ({cvbr_mean}) dropped below 3/4 of target \
+             ({target_bytes}); CVBR is shrinking everything rather than \
+             shaping the distribution"
+        );
+    }
 }
