@@ -3212,9 +3212,11 @@ mod tests {
         // reference sources on disk) is a separate, expected state
         // that this test tolerates via the outer `if`.
         if crate::dnn::embedded_weights::has_embedded_weights() {
+            // Stage 8.3: DRED weights now included by gen_weights_blob.c
+            // (generator policy change, not a tarball/SHA256 change).
             assert_eq!(
                 crate::dnn::embedded_weights::WEIGHTS_BLOB.len(),
-                6_560_576,
+                8_785_408,
                 "embedded blob size changed — xiph tarball drift? update \
                  WEIGHTS_SHA256 in tools/fetch-assets AND this assertion"
             );

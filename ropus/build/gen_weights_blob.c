@@ -1,10 +1,9 @@
 /* Custom driver for producing `weights_blob.bin` from xiph's compile-time
    weight tables — strictly for ropus's build.rs to invoke.
 
-   Derived from reference/dnn/write_lpcnet_weights.c, but narrowed to the
-   three models ropus actually consumes at runtime (PitchDNN, FARGAN,
-   PLC-predictor). Skipping DRED / OSCE keeps the blob small and avoids
-   dragging in tables we don't yet port (~12 MB combined).
+   Derived from reference/dnn/write_lpcnet_weights.c. Covers PitchDNN,
+   FARGAN, PLC-predictor, and (when ROPUS_HAVE_DRED_WEIGHTS is defined)
+   the DRED RDOVAE encoder + decoder. OSCE is still skipped.
 
    Compile with `-DDUMP_BINARY_WEIGHTS` so the xiph `*_data.c` files omit
    their `init_*` bodies — we only need the `*_arrays[]` tables, not any
@@ -30,6 +29,10 @@
 #include "pitchdnn_data.c"
 #include "fargan_data.c"
 #include "plc_data.c"
+#ifdef ROPUS_HAVE_DRED_WEIGHTS
+#include "dred_rdovae_enc_data.c"
+#include "dred_rdovae_dec_data.c"
+#endif
 
 /* Mirror of `write_weights` from reference/dnn/write_lpcnet_weights.c.
    Emits one WeightHead header (64 bytes) followed by `size` bytes of
@@ -67,6 +70,10 @@ int main(int argc, char **argv) {
     write_weights_table(pitchdnn_arrays, fout);
     write_weights_table(fargan_arrays, fout);
     write_weights_table(plcmodel_arrays, fout);
+#ifdef ROPUS_HAVE_DRED_WEIGHTS
+    write_weights_table(rdovaeenc_arrays, fout);
+    write_weights_table(rdovaedec_arrays, fout);
+#endif
     fclose(fout);
     return 0;
 }

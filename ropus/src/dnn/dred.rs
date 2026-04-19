@@ -1,0 +1,1193 @@
+//! DRED (Deep REDundancy) — skeleton.
+//!
+//! Mirrors the C reference:
+//! - `reference/dnn/dred_encoder.{c,h}`
+//! - `reference/dnn/dred_decoder.{c,h}`
+//! - `reference/dnn/dred_rdovae_enc.{c,h}` (+ `_data.{c,h}`)
+//! - `reference/dnn/dred_rdovae_dec.{c,h}` (+ `_data.{c,h}`)
+//!
+//! This stage (8.3 in the DRED-port HLD) lands only the data model:
+//! layer structs, state structs, and the blob-driven init paths. No
+//! forward-pass logic yet — `dred_rdovae_encode_dframe` lands in 8.4
+//! and `dred_rdovae_decode_qframe` in 8.5.
+
+use super::core::{LinearLayer, WeightArray, linear_init, parse_weights};
+use super::embedded_weights::WEIGHTS_BLOB;
+use super::lpcnet::LPCNetEncState;
+
+// ===========================================================================
+// Constants (match reference/dnn/dred_config.h + dred_rdovae_constants.h)
+// ===========================================================================
+
+pub const DRED_EXTENSION_ID: u32 = 126;
+pub const DRED_EXPERIMENTAL_VERSION: u32 = 12;
+pub const DRED_EXPERIMENTAL_BYTES: usize = 2;
+
+pub const DRED_MIN_BYTES: usize = 8;
+pub const DRED_SILK_ENCODER_DELAY: i32 = 79 + 12 - 80;
+pub const DRED_FRAME_SIZE: usize = 160;
+pub const DRED_DFRAME_SIZE: usize = 2 * DRED_FRAME_SIZE;
+pub const DRED_MAX_DATA_SIZE: usize = 1000;
+pub const DRED_ENC_Q0: i32 = 6;
+pub const DRED_ENC_Q1: i32 = 15;
+pub const DRED_MAX_LATENTS: usize = 26;
+pub const DRED_NUM_REDUNDANCY_FRAMES: usize = 2 * DRED_MAX_LATENTS;
+pub const DRED_MAX_FRAMES: usize = 4 * DRED_MAX_LATENTS;
+
+pub const DRED_NUM_FEATURES: usize = 20;
+pub const DRED_LATENT_DIM: usize = 25;
+pub const DRED_STATE_DIM: usize = 50;
+pub const DRED_PADDED_LATENT_DIM: usize = 32;
+pub const DRED_PADDED_STATE_DIM: usize = 56;
+pub const DRED_NUM_QUANTIZATION_LEVELS: usize = 16;
+
+pub const RESAMPLING_ORDER: usize = 8;
+
+// Encoder dimensions (dred_rdovae_enc_data.h).
+const ENC_DENSE1_OUT_SIZE: usize = 64;
+const ENC_ZDENSE_OUT_SIZE: usize = 32;
+const GDENSE2_OUT_SIZE: usize = 56;
+const GDENSE1_OUT_SIZE: usize = 128;
+const ENC_CONV_DENSE1_OUT_SIZE: usize = 64;
+const ENC_CONV_DENSE2_OUT_SIZE: usize = 64;
+const ENC_CONV_DENSE3_OUT_SIZE: usize = 64;
+const ENC_CONV_DENSE4_OUT_SIZE: usize = 64;
+const ENC_CONV_DENSE5_OUT_SIZE: usize = 64;
+
+const ENC_GRU1_STATE_SIZE: usize = 32;
+const ENC_GRU2_STATE_SIZE: usize = 32;
+const ENC_GRU3_STATE_SIZE: usize = 32;
+const ENC_GRU4_STATE_SIZE: usize = 32;
+const ENC_GRU5_STATE_SIZE: usize = 32;
+
+const ENC_CONV1_STATE_SIZE: usize = 64;
+const ENC_CONV2_STATE_SIZE: usize = 64;
+const ENC_CONV3_STATE_SIZE: usize = 64;
+const ENC_CONV4_STATE_SIZE: usize = 64;
+const ENC_CONV5_STATE_SIZE: usize = 64;
+
+// Decoder dimensions (dred_rdovae_dec_data.h).
+const DEC_DENSE1_OUT_SIZE: usize = 96;
+const DEC_GLU_OUT_SIZE: usize = 64;
+const DEC_HIDDEN_INIT_OUT_SIZE: usize = 128;
+const DEC_OUTPUT_OUT_SIZE: usize = 80;
+const DEC_CONV_DENSE_OUT_SIZE: usize = 32;
+const DEC_GRU_INIT_OUT_SIZE: usize = 320;
+const DEC_GRU_STATE_SIZE: usize = 64;
+
+const DEC_CONV_STATE_SIZE: usize = 32;
+
+// ===========================================================================
+// RDOVAE encoder model (struct-of-LinearLayer)
+// ===========================================================================
+
+/// RDOVAE encoder weights. Matches C `struct RDOVAEEnc`
+/// (`reference/dnn/dred_rdovae_enc_data.h`).
+#[derive(Clone, Debug, Default)]
+pub struct RDOVAEEnc {
+    pub enc_dense1: LinearLayer,
+    pub enc_zdense: LinearLayer,
+    pub gdense2: LinearLayer,
+    pub gdense1: LinearLayer,
+    pub enc_conv_dense1: LinearLayer,
+    pub enc_conv_dense2: LinearLayer,
+    pub enc_conv_dense3: LinearLayer,
+    pub enc_conv_dense4: LinearLayer,
+    pub enc_conv_dense5: LinearLayer,
+    pub enc_gru1_input: LinearLayer,
+    pub enc_gru1_recurrent: LinearLayer,
+    pub enc_gru2_input: LinearLayer,
+    pub enc_gru2_recurrent: LinearLayer,
+    pub enc_gru3_input: LinearLayer,
+    pub enc_gru3_recurrent: LinearLayer,
+    pub enc_gru4_input: LinearLayer,
+    pub enc_gru4_recurrent: LinearLayer,
+    pub enc_gru5_input: LinearLayer,
+    pub enc_gru5_recurrent: LinearLayer,
+    pub enc_conv1: LinearLayer,
+    pub enc_conv2: LinearLayer,
+    pub enc_conv3: LinearLayer,
+    pub enc_conv4: LinearLayer,
+    pub enc_conv5: LinearLayer,
+}
+
+/// Initialise the RDOVAE encoder from a parsed weight blob.
+/// Matches C `init_rdovaeenc` in `dred_rdovae_enc_data.c`.
+pub fn init_rdovaeenc(arrays: &[WeightArray]) -> Result<RDOVAEEnc, ()> {
+    // Plain float dense.
+    let enc_dense1 = linear_init(
+        arrays,
+        Some("enc_dense1_bias"),
+        None,
+        None,
+        Some("enc_dense1_weights_float"),
+        None,
+        None,
+        None,
+        40,
+        ENC_DENSE1_OUT_SIZE,
+    )?;
+
+    // Dense int8 (no sparse idx).
+    let enc_zdense = linear_init(
+        arrays,
+        Some("enc_zdense_bias"),
+        Some("enc_zdense_subias"),
+        Some("enc_zdense_weights_int8"),
+        Some("enc_zdense_weights_float"),
+        None,
+        None,
+        Some("enc_zdense_scale"),
+        544,
+        ENC_ZDENSE_OUT_SIZE,
+    )?;
+    let gdense2 = linear_init(
+        arrays,
+        Some("gdense2_bias"),
+        Some("gdense2_subias"),
+        Some("gdense2_weights_int8"),
+        Some("gdense2_weights_float"),
+        None,
+        None,
+        Some("gdense2_scale"),
+        128,
+        GDENSE2_OUT_SIZE,
+    )?;
+
+    // Sparse int8 (weights_idx).
+    let gdense1 = linear_init(
+        arrays,
+        Some("gdense1_bias"),
+        Some("gdense1_subias"),
+        Some("gdense1_weights_int8"),
+        Some("gdense1_weights_float"),
+        Some("gdense1_weights_idx"),
+        None,
+        Some("gdense1_scale"),
+        544,
+        GDENSE1_OUT_SIZE,
+    )?;
+
+    let enc_conv_dense1 = linear_init(
+        arrays,
+        Some("enc_conv_dense1_bias"),
+        Some("enc_conv_dense1_subias"),
+        Some("enc_conv_dense1_weights_int8"),
+        Some("enc_conv_dense1_weights_float"),
+        Some("enc_conv_dense1_weights_idx"),
+        None,
+        Some("enc_conv_dense1_scale"),
+        96,
+        ENC_CONV_DENSE1_OUT_SIZE,
+    )?;
+    let enc_conv_dense2 = linear_init(
+        arrays,
+        Some("enc_conv_dense2_bias"),
+        Some("enc_conv_dense2_subias"),
+        Some("enc_conv_dense2_weights_int8"),
+        Some("enc_conv_dense2_weights_float"),
+        Some("enc_conv_dense2_weights_idx"),
+        None,
+        Some("enc_conv_dense2_scale"),
+        192,
+        ENC_CONV_DENSE2_OUT_SIZE,
+    )?;
+    let enc_conv_dense3 = linear_init(
+        arrays,
+        Some("enc_conv_dense3_bias"),
+        Some("enc_conv_dense3_subias"),
+        Some("enc_conv_dense3_weights_int8"),
+        Some("enc_conv_dense3_weights_float"),
+        Some("enc_conv_dense3_weights_idx"),
+        None,
+        Some("enc_conv_dense3_scale"),
+        288,
+        ENC_CONV_DENSE3_OUT_SIZE,
+    )?;
+    let enc_conv_dense4 = linear_init(
+        arrays,
+        Some("enc_conv_dense4_bias"),
+        Some("enc_conv_dense4_subias"),
+        Some("enc_conv_dense4_weights_int8"),
+        Some("enc_conv_dense4_weights_float"),
+        Some("enc_conv_dense4_weights_idx"),
+        None,
+        Some("enc_conv_dense4_scale"),
+        384,
+        ENC_CONV_DENSE4_OUT_SIZE,
+    )?;
+    let enc_conv_dense5 = linear_init(
+        arrays,
+        Some("enc_conv_dense5_bias"),
+        Some("enc_conv_dense5_subias"),
+        Some("enc_conv_dense5_weights_int8"),
+        Some("enc_conv_dense5_weights_float"),
+        Some("enc_conv_dense5_weights_idx"),
+        None,
+        Some("enc_conv_dense5_scale"),
+        480,
+        ENC_CONV_DENSE5_OUT_SIZE,
+    )?;
+
+    // GRU input (sparse idx) + recurrent (dense int8, no idx).
+    let enc_gru1_input = linear_init(
+        arrays,
+        Some("enc_gru1_input_bias"),
+        Some("enc_gru1_input_subias"),
+        Some("enc_gru1_input_weights_int8"),
+        Some("enc_gru1_input_weights_float"),
+        Some("enc_gru1_input_weights_idx"),
+        None,
+        Some("enc_gru1_input_scale"),
+        64,
+        96,
+    )?;
+    let enc_gru1_recurrent = linear_init(
+        arrays,
+        Some("enc_gru1_recurrent_bias"),
+        Some("enc_gru1_recurrent_subias"),
+        Some("enc_gru1_recurrent_weights_int8"),
+        Some("enc_gru1_recurrent_weights_float"),
+        None,
+        None,
+        Some("enc_gru1_recurrent_scale"),
+        32,
+        96,
+    )?;
+    let enc_gru2_input = linear_init(
+        arrays,
+        Some("enc_gru2_input_bias"),
+        Some("enc_gru2_input_subias"),
+        Some("enc_gru2_input_weights_int8"),
+        Some("enc_gru2_input_weights_float"),
+        Some("enc_gru2_input_weights_idx"),
+        None,
+        Some("enc_gru2_input_scale"),
+        160,
+        96,
+    )?;
+    let enc_gru2_recurrent = linear_init(
+        arrays,
+        Some("enc_gru2_recurrent_bias"),
+        Some("enc_gru2_recurrent_subias"),
+        Some("enc_gru2_recurrent_weights_int8"),
+        Some("enc_gru2_recurrent_weights_float"),
+        None,
+        None,
+        Some("enc_gru2_recurrent_scale"),
+        32,
+        96,
+    )?;
+    let enc_gru3_input = linear_init(
+        arrays,
+        Some("enc_gru3_input_bias"),
+        Some("enc_gru3_input_subias"),
+        Some("enc_gru3_input_weights_int8"),
+        Some("enc_gru3_input_weights_float"),
+        Some("enc_gru3_input_weights_idx"),
+        None,
+        Some("enc_gru3_input_scale"),
+        256,
+        96,
+    )?;
+    let enc_gru3_recurrent = linear_init(
+        arrays,
+        Some("enc_gru3_recurrent_bias"),
+        Some("enc_gru3_recurrent_subias"),
+        Some("enc_gru3_recurrent_weights_int8"),
+        Some("enc_gru3_recurrent_weights_float"),
+        None,
+        None,
+        Some("enc_gru3_recurrent_scale"),
+        32,
+        96,
+    )?;
+    let enc_gru4_input = linear_init(
+        arrays,
+        Some("enc_gru4_input_bias"),
+        Some("enc_gru4_input_subias"),
+        Some("enc_gru4_input_weights_int8"),
+        Some("enc_gru4_input_weights_float"),
+        Some("enc_gru4_input_weights_idx"),
+        None,
+        Some("enc_gru4_input_scale"),
+        352,
+        96,
+    )?;
+    let enc_gru4_recurrent = linear_init(
+        arrays,
+        Some("enc_gru4_recurrent_bias"),
+        Some("enc_gru4_recurrent_subias"),
+        Some("enc_gru4_recurrent_weights_int8"),
+        Some("enc_gru4_recurrent_weights_float"),
+        None,
+        None,
+        Some("enc_gru4_recurrent_scale"),
+        32,
+        96,
+    )?;
+    let enc_gru5_input = linear_init(
+        arrays,
+        Some("enc_gru5_input_bias"),
+        Some("enc_gru5_input_subias"),
+        Some("enc_gru5_input_weights_int8"),
+        Some("enc_gru5_input_weights_float"),
+        Some("enc_gru5_input_weights_idx"),
+        None,
+        Some("enc_gru5_input_scale"),
+        448,
+        96,
+    )?;
+    let enc_gru5_recurrent = linear_init(
+        arrays,
+        Some("enc_gru5_recurrent_bias"),
+        Some("enc_gru5_recurrent_subias"),
+        Some("enc_gru5_recurrent_weights_int8"),
+        Some("enc_gru5_recurrent_weights_float"),
+        None,
+        None,
+        Some("enc_gru5_recurrent_scale"),
+        32,
+        96,
+    )?;
+
+    // Dense-int8 "conv" layers (no sparse idx).
+    let enc_conv1 = linear_init(
+        arrays,
+        Some("enc_conv1_bias"),
+        Some("enc_conv1_subias"),
+        Some("enc_conv1_weights_int8"),
+        Some("enc_conv1_weights_float"),
+        None,
+        None,
+        Some("enc_conv1_scale"),
+        128,
+        64,
+    )?;
+    let enc_conv2 = linear_init(
+        arrays,
+        Some("enc_conv2_bias"),
+        Some("enc_conv2_subias"),
+        Some("enc_conv2_weights_int8"),
+        Some("enc_conv2_weights_float"),
+        None,
+        None,
+        Some("enc_conv2_scale"),
+        128,
+        64,
+    )?;
+    let enc_conv3 = linear_init(
+        arrays,
+        Some("enc_conv3_bias"),
+        Some("enc_conv3_subias"),
+        Some("enc_conv3_weights_int8"),
+        Some("enc_conv3_weights_float"),
+        None,
+        None,
+        Some("enc_conv3_scale"),
+        128,
+        64,
+    )?;
+    let enc_conv4 = linear_init(
+        arrays,
+        Some("enc_conv4_bias"),
+        Some("enc_conv4_subias"),
+        Some("enc_conv4_weights_int8"),
+        Some("enc_conv4_weights_float"),
+        None,
+        None,
+        Some("enc_conv4_scale"),
+        128,
+        64,
+    )?;
+    let enc_conv5 = linear_init(
+        arrays,
+        Some("enc_conv5_bias"),
+        Some("enc_conv5_subias"),
+        Some("enc_conv5_weights_int8"),
+        Some("enc_conv5_weights_float"),
+        None,
+        None,
+        Some("enc_conv5_scale"),
+        128,
+        64,
+    )?;
+
+    Ok(RDOVAEEnc {
+        enc_dense1,
+        enc_zdense,
+        gdense2,
+        gdense1,
+        enc_conv_dense1,
+        enc_conv_dense2,
+        enc_conv_dense3,
+        enc_conv_dense4,
+        enc_conv_dense5,
+        enc_gru1_input,
+        enc_gru1_recurrent,
+        enc_gru2_input,
+        enc_gru2_recurrent,
+        enc_gru3_input,
+        enc_gru3_recurrent,
+        enc_gru4_input,
+        enc_gru4_recurrent,
+        enc_gru5_input,
+        enc_gru5_recurrent,
+        enc_conv1,
+        enc_conv2,
+        enc_conv3,
+        enc_conv4,
+        enc_conv5,
+    })
+}
+
+/// RDOVAE encoder running state. Matches C `struct RDOVAEEncStruct`
+/// (`reference/dnn/dred_rdovae_enc.h`). All state arrays start zeroed
+/// and `initialized` is set true once `dred_rdovae_encode_dframe`
+/// bootstraps the network (in stage 8.4).
+#[derive(Clone, Debug)]
+pub struct RDOVAEEncState {
+    pub initialized: bool,
+    pub gru1_state: [f32; ENC_GRU1_STATE_SIZE],
+    pub gru2_state: [f32; ENC_GRU2_STATE_SIZE],
+    pub gru3_state: [f32; ENC_GRU3_STATE_SIZE],
+    pub gru4_state: [f32; ENC_GRU4_STATE_SIZE],
+    pub gru5_state: [f32; ENC_GRU5_STATE_SIZE],
+    pub conv1_state: [f32; ENC_CONV1_STATE_SIZE],
+    pub conv2_state: [f32; 2 * ENC_CONV2_STATE_SIZE],
+    pub conv3_state: [f32; 2 * ENC_CONV3_STATE_SIZE],
+    pub conv4_state: [f32; 2 * ENC_CONV4_STATE_SIZE],
+    pub conv5_state: [f32; 2 * ENC_CONV5_STATE_SIZE],
+}
+
+impl Default for RDOVAEEncState {
+    fn default() -> Self {
+        Self {
+            initialized: false,
+            gru1_state: [0.0; ENC_GRU1_STATE_SIZE],
+            gru2_state: [0.0; ENC_GRU2_STATE_SIZE],
+            gru3_state: [0.0; ENC_GRU3_STATE_SIZE],
+            gru4_state: [0.0; ENC_GRU4_STATE_SIZE],
+            gru5_state: [0.0; ENC_GRU5_STATE_SIZE],
+            conv1_state: [0.0; ENC_CONV1_STATE_SIZE],
+            conv2_state: [0.0; 2 * ENC_CONV2_STATE_SIZE],
+            conv3_state: [0.0; 2 * ENC_CONV3_STATE_SIZE],
+            conv4_state: [0.0; 2 * ENC_CONV4_STATE_SIZE],
+            conv5_state: [0.0; 2 * ENC_CONV5_STATE_SIZE],
+        }
+    }
+}
+
+// ===========================================================================
+// RDOVAE decoder model (struct-of-LinearLayer)
+// ===========================================================================
+
+/// RDOVAE decoder weights. Matches C `struct RDOVAEDec`
+/// (`reference/dnn/dred_rdovae_dec_data.h`).
+#[derive(Clone, Debug, Default)]
+pub struct RDOVAEDec {
+    pub dec_dense1: LinearLayer,
+    pub dec_glu1: LinearLayer,
+    pub dec_glu2: LinearLayer,
+    pub dec_glu3: LinearLayer,
+    pub dec_glu4: LinearLayer,
+    pub dec_glu5: LinearLayer,
+    pub dec_hidden_init: LinearLayer,
+    pub dec_output: LinearLayer,
+    pub dec_conv_dense1: LinearLayer,
+    pub dec_conv_dense2: LinearLayer,
+    pub dec_conv_dense3: LinearLayer,
+    pub dec_conv_dense4: LinearLayer,
+    pub dec_conv_dense5: LinearLayer,
+    pub dec_gru_init: LinearLayer,
+    pub dec_gru1_input: LinearLayer,
+    pub dec_gru1_recurrent: LinearLayer,
+    pub dec_gru2_input: LinearLayer,
+    pub dec_gru2_recurrent: LinearLayer,
+    pub dec_gru3_input: LinearLayer,
+    pub dec_gru3_recurrent: LinearLayer,
+    pub dec_gru4_input: LinearLayer,
+    pub dec_gru4_recurrent: LinearLayer,
+    pub dec_gru5_input: LinearLayer,
+    pub dec_gru5_recurrent: LinearLayer,
+    pub dec_conv1: LinearLayer,
+    pub dec_conv2: LinearLayer,
+    pub dec_conv3: LinearLayer,
+    pub dec_conv4: LinearLayer,
+    pub dec_conv5: LinearLayer,
+}
+
+/// Initialise the RDOVAE decoder from a parsed weight blob.
+/// Matches C `init_rdovaedec` in `dred_rdovae_dec_data.c`.
+pub fn init_rdovaedec(arrays: &[WeightArray]) -> Result<RDOVAEDec, ()> {
+    let dec_dense1 = linear_init(
+        arrays,
+        Some("dec_dense1_bias"),
+        None,
+        None,
+        Some("dec_dense1_weights_float"),
+        None,
+        None,
+        None,
+        26,
+        DEC_DENSE1_OUT_SIZE,
+    )?;
+
+    let dec_glu1 = linear_init(
+        arrays,
+        Some("dec_glu1_bias"),
+        Some("dec_glu1_subias"),
+        Some("dec_glu1_weights_int8"),
+        Some("dec_glu1_weights_float"),
+        None,
+        None,
+        Some("dec_glu1_scale"),
+        64,
+        DEC_GLU_OUT_SIZE,
+    )?;
+    let dec_glu2 = linear_init(
+        arrays,
+        Some("dec_glu2_bias"),
+        Some("dec_glu2_subias"),
+        Some("dec_glu2_weights_int8"),
+        Some("dec_glu2_weights_float"),
+        None,
+        None,
+        Some("dec_glu2_scale"),
+        64,
+        DEC_GLU_OUT_SIZE,
+    )?;
+    let dec_glu3 = linear_init(
+        arrays,
+        Some("dec_glu3_bias"),
+        Some("dec_glu3_subias"),
+        Some("dec_glu3_weights_int8"),
+        Some("dec_glu3_weights_float"),
+        None,
+        None,
+        Some("dec_glu3_scale"),
+        64,
+        DEC_GLU_OUT_SIZE,
+    )?;
+    let dec_glu4 = linear_init(
+        arrays,
+        Some("dec_glu4_bias"),
+        Some("dec_glu4_subias"),
+        Some("dec_glu4_weights_int8"),
+        Some("dec_glu4_weights_float"),
+        None,
+        None,
+        Some("dec_glu4_scale"),
+        64,
+        DEC_GLU_OUT_SIZE,
+    )?;
+    let dec_glu5 = linear_init(
+        arrays,
+        Some("dec_glu5_bias"),
+        Some("dec_glu5_subias"),
+        Some("dec_glu5_weights_int8"),
+        Some("dec_glu5_weights_float"),
+        None,
+        None,
+        Some("dec_glu5_scale"),
+        64,
+        DEC_GLU_OUT_SIZE,
+    )?;
+
+    let dec_hidden_init = linear_init(
+        arrays,
+        Some("dec_hidden_init_bias"),
+        None,
+        None,
+        Some("dec_hidden_init_weights_float"),
+        None,
+        None,
+        None,
+        50,
+        DEC_HIDDEN_INIT_OUT_SIZE,
+    )?;
+
+    let dec_output = linear_init(
+        arrays,
+        Some("dec_output_bias"),
+        Some("dec_output_subias"),
+        Some("dec_output_weights_int8"),
+        Some("dec_output_weights_float"),
+        Some("dec_output_weights_idx"),
+        None,
+        Some("dec_output_scale"),
+        576,
+        DEC_OUTPUT_OUT_SIZE,
+    )?;
+
+    let dec_conv_dense1 = linear_init(
+        arrays,
+        Some("dec_conv_dense1_bias"),
+        Some("dec_conv_dense1_subias"),
+        Some("dec_conv_dense1_weights_int8"),
+        Some("dec_conv_dense1_weights_float"),
+        Some("dec_conv_dense1_weights_idx"),
+        None,
+        Some("dec_conv_dense1_scale"),
+        160,
+        DEC_CONV_DENSE_OUT_SIZE,
+    )?;
+    let dec_conv_dense2 = linear_init(
+        arrays,
+        Some("dec_conv_dense2_bias"),
+        Some("dec_conv_dense2_subias"),
+        Some("dec_conv_dense2_weights_int8"),
+        Some("dec_conv_dense2_weights_float"),
+        Some("dec_conv_dense2_weights_idx"),
+        None,
+        Some("dec_conv_dense2_scale"),
+        256,
+        DEC_CONV_DENSE_OUT_SIZE,
+    )?;
+    let dec_conv_dense3 = linear_init(
+        arrays,
+        Some("dec_conv_dense3_bias"),
+        Some("dec_conv_dense3_subias"),
+        Some("dec_conv_dense3_weights_int8"),
+        Some("dec_conv_dense3_weights_float"),
+        Some("dec_conv_dense3_weights_idx"),
+        None,
+        Some("dec_conv_dense3_scale"),
+        352,
+        DEC_CONV_DENSE_OUT_SIZE,
+    )?;
+    let dec_conv_dense4 = linear_init(
+        arrays,
+        Some("dec_conv_dense4_bias"),
+        Some("dec_conv_dense4_subias"),
+        Some("dec_conv_dense4_weights_int8"),
+        Some("dec_conv_dense4_weights_float"),
+        Some("dec_conv_dense4_weights_idx"),
+        None,
+        Some("dec_conv_dense4_scale"),
+        448,
+        DEC_CONV_DENSE_OUT_SIZE,
+    )?;
+    let dec_conv_dense5 = linear_init(
+        arrays,
+        Some("dec_conv_dense5_bias"),
+        Some("dec_conv_dense5_subias"),
+        Some("dec_conv_dense5_weights_int8"),
+        Some("dec_conv_dense5_weights_float"),
+        Some("dec_conv_dense5_weights_idx"),
+        None,
+        Some("dec_conv_dense5_scale"),
+        544,
+        DEC_CONV_DENSE_OUT_SIZE,
+    )?;
+
+    let dec_gru_init = linear_init(
+        arrays,
+        Some("dec_gru_init_bias"),
+        Some("dec_gru_init_subias"),
+        Some("dec_gru_init_weights_int8"),
+        Some("dec_gru_init_weights_float"),
+        Some("dec_gru_init_weights_idx"),
+        None,
+        Some("dec_gru_init_scale"),
+        128,
+        DEC_GRU_INIT_OUT_SIZE,
+    )?;
+
+    let dec_gru1_input = linear_init(
+        arrays,
+        Some("dec_gru1_input_bias"),
+        Some("dec_gru1_input_subias"),
+        Some("dec_gru1_input_weights_int8"),
+        Some("dec_gru1_input_weights_float"),
+        Some("dec_gru1_input_weights_idx"),
+        None,
+        Some("dec_gru1_input_scale"),
+        96,
+        192,
+    )?;
+    let dec_gru1_recurrent = linear_init(
+        arrays,
+        Some("dec_gru1_recurrent_bias"),
+        Some("dec_gru1_recurrent_subias"),
+        Some("dec_gru1_recurrent_weights_int8"),
+        Some("dec_gru1_recurrent_weights_float"),
+        None,
+        None,
+        Some("dec_gru1_recurrent_scale"),
+        64,
+        192,
+    )?;
+    let dec_gru2_input = linear_init(
+        arrays,
+        Some("dec_gru2_input_bias"),
+        Some("dec_gru2_input_subias"),
+        Some("dec_gru2_input_weights_int8"),
+        Some("dec_gru2_input_weights_float"),
+        Some("dec_gru2_input_weights_idx"),
+        None,
+        Some("dec_gru2_input_scale"),
+        192,
+        192,
+    )?;
+    let dec_gru2_recurrent = linear_init(
+        arrays,
+        Some("dec_gru2_recurrent_bias"),
+        Some("dec_gru2_recurrent_subias"),
+        Some("dec_gru2_recurrent_weights_int8"),
+        Some("dec_gru2_recurrent_weights_float"),
+        None,
+        None,
+        Some("dec_gru2_recurrent_scale"),
+        64,
+        192,
+    )?;
+    let dec_gru3_input = linear_init(
+        arrays,
+        Some("dec_gru3_input_bias"),
+        Some("dec_gru3_input_subias"),
+        Some("dec_gru3_input_weights_int8"),
+        Some("dec_gru3_input_weights_float"),
+        Some("dec_gru3_input_weights_idx"),
+        None,
+        Some("dec_gru3_input_scale"),
+        288,
+        192,
+    )?;
+    let dec_gru3_recurrent = linear_init(
+        arrays,
+        Some("dec_gru3_recurrent_bias"),
+        Some("dec_gru3_recurrent_subias"),
+        Some("dec_gru3_recurrent_weights_int8"),
+        Some("dec_gru3_recurrent_weights_float"),
+        None,
+        None,
+        Some("dec_gru3_recurrent_scale"),
+        64,
+        192,
+    )?;
+    let dec_gru4_input = linear_init(
+        arrays,
+        Some("dec_gru4_input_bias"),
+        Some("dec_gru4_input_subias"),
+        Some("dec_gru4_input_weights_int8"),
+        Some("dec_gru4_input_weights_float"),
+        Some("dec_gru4_input_weights_idx"),
+        None,
+        Some("dec_gru4_input_scale"),
+        384,
+        192,
+    )?;
+    let dec_gru4_recurrent = linear_init(
+        arrays,
+        Some("dec_gru4_recurrent_bias"),
+        Some("dec_gru4_recurrent_subias"),
+        Some("dec_gru4_recurrent_weights_int8"),
+        Some("dec_gru4_recurrent_weights_float"),
+        None,
+        None,
+        Some("dec_gru4_recurrent_scale"),
+        64,
+        192,
+    )?;
+    let dec_gru5_input = linear_init(
+        arrays,
+        Some("dec_gru5_input_bias"),
+        Some("dec_gru5_input_subias"),
+        Some("dec_gru5_input_weights_int8"),
+        Some("dec_gru5_input_weights_float"),
+        Some("dec_gru5_input_weights_idx"),
+        None,
+        Some("dec_gru5_input_scale"),
+        480,
+        192,
+    )?;
+    let dec_gru5_recurrent = linear_init(
+        arrays,
+        Some("dec_gru5_recurrent_bias"),
+        Some("dec_gru5_recurrent_subias"),
+        Some("dec_gru5_recurrent_weights_int8"),
+        Some("dec_gru5_recurrent_weights_float"),
+        None,
+        None,
+        Some("dec_gru5_recurrent_scale"),
+        64,
+        192,
+    )?;
+
+    let dec_conv1 = linear_init(
+        arrays,
+        Some("dec_conv1_bias"),
+        Some("dec_conv1_subias"),
+        Some("dec_conv1_weights_int8"),
+        Some("dec_conv1_weights_float"),
+        None,
+        None,
+        Some("dec_conv1_scale"),
+        64,
+        DEC_CONV_DENSE_OUT_SIZE,
+    )?;
+    let dec_conv2 = linear_init(
+        arrays,
+        Some("dec_conv2_bias"),
+        Some("dec_conv2_subias"),
+        Some("dec_conv2_weights_int8"),
+        Some("dec_conv2_weights_float"),
+        None,
+        None,
+        Some("dec_conv2_scale"),
+        64,
+        DEC_CONV_DENSE_OUT_SIZE,
+    )?;
+    let dec_conv3 = linear_init(
+        arrays,
+        Some("dec_conv3_bias"),
+        Some("dec_conv3_subias"),
+        Some("dec_conv3_weights_int8"),
+        Some("dec_conv3_weights_float"),
+        None,
+        None,
+        Some("dec_conv3_scale"),
+        64,
+        DEC_CONV_DENSE_OUT_SIZE,
+    )?;
+    let dec_conv4 = linear_init(
+        arrays,
+        Some("dec_conv4_bias"),
+        Some("dec_conv4_subias"),
+        Some("dec_conv4_weights_int8"),
+        Some("dec_conv4_weights_float"),
+        None,
+        None,
+        Some("dec_conv4_scale"),
+        64,
+        DEC_CONV_DENSE_OUT_SIZE,
+    )?;
+    let dec_conv5 = linear_init(
+        arrays,
+        Some("dec_conv5_bias"),
+        Some("dec_conv5_subias"),
+        Some("dec_conv5_weights_int8"),
+        Some("dec_conv5_weights_float"),
+        None,
+        None,
+        Some("dec_conv5_scale"),
+        64,
+        DEC_CONV_DENSE_OUT_SIZE,
+    )?;
+
+    Ok(RDOVAEDec {
+        dec_dense1,
+        dec_glu1,
+        dec_glu2,
+        dec_glu3,
+        dec_glu4,
+        dec_glu5,
+        dec_hidden_init,
+        dec_output,
+        dec_conv_dense1,
+        dec_conv_dense2,
+        dec_conv_dense3,
+        dec_conv_dense4,
+        dec_conv_dense5,
+        dec_gru_init,
+        dec_gru1_input,
+        dec_gru1_recurrent,
+        dec_gru2_input,
+        dec_gru2_recurrent,
+        dec_gru3_input,
+        dec_gru3_recurrent,
+        dec_gru4_input,
+        dec_gru4_recurrent,
+        dec_gru5_input,
+        dec_gru5_recurrent,
+        dec_conv1,
+        dec_conv2,
+        dec_conv3,
+        dec_conv4,
+        dec_conv5,
+    })
+}
+
+/// RDOVAE decoder running state. Matches C `struct RDOVAEDecStruct`
+/// (`reference/dnn/dred_rdovae_dec.h`).
+#[derive(Clone, Debug)]
+pub struct RDOVAEDecState {
+    pub initialized: bool,
+    pub gru1_state: [f32; DEC_GRU_STATE_SIZE],
+    pub gru2_state: [f32; DEC_GRU_STATE_SIZE],
+    pub gru3_state: [f32; DEC_GRU_STATE_SIZE],
+    pub gru4_state: [f32; DEC_GRU_STATE_SIZE],
+    pub gru5_state: [f32; DEC_GRU_STATE_SIZE],
+    pub conv1_state: [f32; DEC_CONV_STATE_SIZE],
+    pub conv2_state: [f32; DEC_CONV_STATE_SIZE],
+    pub conv3_state: [f32; DEC_CONV_STATE_SIZE],
+    pub conv4_state: [f32; DEC_CONV_STATE_SIZE],
+    pub conv5_state: [f32; DEC_CONV_STATE_SIZE],
+}
+
+impl Default for RDOVAEDecState {
+    fn default() -> Self {
+        Self {
+            initialized: false,
+            gru1_state: [0.0; DEC_GRU_STATE_SIZE],
+            gru2_state: [0.0; DEC_GRU_STATE_SIZE],
+            gru3_state: [0.0; DEC_GRU_STATE_SIZE],
+            gru4_state: [0.0; DEC_GRU_STATE_SIZE],
+            gru5_state: [0.0; DEC_GRU_STATE_SIZE],
+            conv1_state: [0.0; DEC_CONV_STATE_SIZE],
+            conv2_state: [0.0; DEC_CONV_STATE_SIZE],
+            conv3_state: [0.0; DEC_CONV_STATE_SIZE],
+            conv4_state: [0.0; DEC_CONV_STATE_SIZE],
+            conv5_state: [0.0; DEC_CONV_STATE_SIZE],
+        }
+    }
+}
+
+// ===========================================================================
+// DREDEnc — full encoder-side DRED state
+// ===========================================================================
+
+/// DRED encoder state. Matches C `DREDEnc`
+/// (`reference/dnn/dred_encoder.h`).
+///
+/// Holds the RDOVAE model + running state, an LPCNet feature extractor,
+/// a 48→16 kHz resample memory, and the sliding buffers that feed the
+/// RDOVAE at its native 16 kHz / 20 ms cadence. Populated as of stage
+/// 8.3; the encode forward pass and payload emission land in 8.6.
+#[derive(Clone, Debug)]
+pub struct DREDEnc {
+    pub model: RDOVAEEnc,
+    pub lpcnet_enc_state: LPCNetEncState,
+    pub rdovae_enc: RDOVAEEncState,
+    pub loaded: bool,
+    pub fs: i32,
+    pub channels: i32,
+
+    pub input_buffer: [f32; 2 * DRED_DFRAME_SIZE],
+    pub input_buffer_fill: i32,
+    pub dred_offset: i32,
+    pub latent_offset: i32,
+    pub last_extra_dred_offset: i32,
+    pub latents_buffer: [f32; DRED_MAX_FRAMES * DRED_LATENT_DIM],
+    pub latents_buffer_fill: i32,
+    pub state_buffer: [f32; DRED_MAX_FRAMES * DRED_STATE_DIM],
+    pub resample_mem: [f32; RESAMPLING_ORDER + 1],
+}
+
+impl Default for DREDEnc {
+    fn default() -> Self {
+        Self {
+            model: RDOVAEEnc::default(),
+            lpcnet_enc_state: LPCNetEncState::default(),
+            rdovae_enc: RDOVAEEncState::default(),
+            loaded: false,
+            fs: 0,
+            channels: 0,
+            input_buffer: [0.0; 2 * DRED_DFRAME_SIZE],
+            input_buffer_fill: 0,
+            dred_offset: 0,
+            latent_offset: 0,
+            last_extra_dred_offset: 0,
+            latents_buffer: [0.0; DRED_MAX_FRAMES * DRED_LATENT_DIM],
+            latents_buffer_fill: 0,
+            state_buffer: [0.0; DRED_MAX_FRAMES * DRED_STATE_DIM],
+            resample_mem: [0.0; RESAMPLING_ORDER + 1],
+        }
+    }
+}
+
+impl DREDEnc {
+    /// Construct a fresh DRED encoder with all runtime state zeroed.
+    ///
+    /// If the crate-embedded `WEIGHTS_BLOB` contains the RDOVAE encoder
+    /// layers (built from `reference/dnn/dred_rdovae_enc_data.c` via
+    /// `ropus/build/gen_weights_blob.c`), the model is populated and
+    /// `loaded` is set `true`. Otherwise the encoder is returned
+    /// unloaded — `loaded` stays `false` and the caller must invoke
+    /// `load_model` with a user-provided blob before DRED payloads can
+    /// be emitted. Matches the C `dred_encoder_init` + `opus_decoder`
+    /// auto-load pattern established by stage 7b.1.5.
+    pub fn new(fs: i32, channels: i32) -> Self {
+        let mut enc = Self {
+            fs,
+            channels,
+            ..Self::default()
+        };
+        if !WEIGHTS_BLOB.is_empty() {
+            let _ = enc.load_model(WEIGHTS_BLOB);
+        }
+        enc
+    }
+
+    /// Construct a DREDEnc without attempting an embedded-blob load.
+    /// Useful for tests and for call-sites that will always set the
+    /// blob explicitly via a later `load_model`.
+    pub fn new_unloaded(fs: i32, channels: i32) -> Self {
+        Self {
+            fs,
+            channels,
+            ..Self::default()
+        }
+    }
+
+    /// Load model weights from a serialised binary weight blob.
+    /// Matches C `dred_encoder_load_model`. Returns `Ok(())` on success;
+    /// `Err(-1)` on parse failure or a missing RDOVAE encoder layer.
+    // TODO(stage-8.6): mirror C `dred_encoder_load_model`'s composite load —
+    // also load LPCNet encoder-state weights (via the `lpcnet_encoder_load_model`
+    // equivalent) once `dred_compute_latents` needs them.
+    pub fn load_model(&mut self, data: &[u8]) -> Result<(), i32> {
+        let arrays = parse_weights(data)?;
+        self.model = init_rdovaeenc(&arrays).map_err(|_| -1)?;
+        self.loaded = true;
+        self.reset();
+        Ok(())
+    }
+
+    /// Zero the running state (not the model weights).
+    /// Matches C `dred_encoder_reset`'s memset-from-`DREDENC_RESET_START`.
+    pub fn reset(&mut self) {
+        self.input_buffer = [0.0; 2 * DRED_DFRAME_SIZE];
+        self.input_buffer_fill = 0;
+        self.dred_offset = 0;
+        self.latent_offset = 0;
+        self.last_extra_dred_offset = 0;
+        self.latents_buffer = [0.0; DRED_MAX_FRAMES * DRED_LATENT_DIM];
+        self.latents_buffer_fill = 0;
+        self.state_buffer = [0.0; DRED_MAX_FRAMES * DRED_STATE_DIM];
+        self.resample_mem = [0.0; RESAMPLING_ORDER + 1];
+        self.rdovae_enc = RDOVAEEncState::default();
+    }
+}
+
+// ===========================================================================
+// OpusDred — decoded payload state
+// ===========================================================================
+
+/// Decoded DRED payload state. Matches C `struct OpusDRED`
+/// (`reference/dnn/dred_decoder.h`). Stores the decoded latents /
+/// state that the RDOVAE decoder turns into reconstructed LPCNet
+/// features, ready for the FARGAN last-mile (stage 7b seam).
+#[derive(Clone, Debug)]
+pub struct OpusDred {
+    pub fec_features: [f32; 2 * DRED_NUM_REDUNDANCY_FRAMES * DRED_NUM_FEATURES],
+    pub state: [f32; DRED_STATE_DIM],
+    pub latents: [f32; (DRED_NUM_REDUNDANCY_FRAMES / 2) * (DRED_LATENT_DIM + 1)],
+    pub nb_latents: i32,
+    pub process_stage: i32,
+    pub dred_offset: i32,
+}
+
+impl Default for OpusDred {
+    fn default() -> Self {
+        Self {
+            fec_features: [0.0; 2 * DRED_NUM_REDUNDANCY_FRAMES * DRED_NUM_FEATURES],
+            state: [0.0; DRED_STATE_DIM],
+            latents: [0.0; (DRED_NUM_REDUNDANCY_FRAMES / 2) * (DRED_LATENT_DIM + 1)],
+            nb_latents: 0,
+            process_stage: 0,
+            dred_offset: 0,
+        }
+    }
+}
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Confirm the blob format — when the crate ships with DRED weights
+    /// embedded — parses through both RDOVAE init paths without panic.
+    /// No-op (skipped) when the blob is empty, which happens on bare
+    /// checkouts that haven't fetched the reference DNN data files.
+    #[test]
+    fn embedded_blob_initialises_rdovae_enc_and_dec() {
+        if WEIGHTS_BLOB.is_empty() {
+            // Empty blob path — nothing to validate. Explicit so CI
+            // doesn't silently pass on a misconfigured tree.
+            eprintln!(
+                "dred::tests: WEIGHTS_BLOB empty — skipping RDOVAE init check \
+                 (run `cargo run -p fetch-assets -- weights` to populate)."
+            );
+            return;
+        }
+
+        let arrays = parse_weights(WEIGHTS_BLOB).expect("parse_weights blob");
+        assert!(!arrays.is_empty(), "blob parsed but empty");
+
+        init_rdovaeenc(&arrays).expect(
+            "init_rdovaeenc: blob missing a required RDOVAE encoder weight array — \
+             check that gen_weights_blob.c emits rdovaeenc_arrays",
+        );
+        init_rdovaedec(&arrays).expect(
+            "init_rdovaedec: blob missing a required RDOVAE decoder weight array — \
+             check that gen_weights_blob.c emits rdovaedec_arrays",
+        );
+    }
+
+    #[test]
+    fn dred_enc_default_state_is_zeroed() {
+        let enc = DREDEnc::new_unloaded(48000, 1);
+        assert!(!enc.loaded);
+        assert_eq!(enc.fs, 48000);
+        assert_eq!(enc.channels, 1);
+        assert_eq!(enc.input_buffer_fill, 0);
+        assert_eq!(enc.dred_offset, 0);
+        assert!(enc.input_buffer.iter().all(|&x| x == 0.0));
+        assert!(enc.latents_buffer.iter().all(|&x| x == 0.0));
+        assert!(enc.state_buffer.iter().all(|&x| x == 0.0));
+        assert!(!enc.rdovae_enc.initialized);
+    }
+
+    #[test]
+    fn dred_new_attempts_embedded_load_and_reports_status() {
+        // Stable regardless of whether the embedded blob is present —
+        // new() never panics, and `loaded` accurately reflects whether
+        // weights were found.
+        let enc = DREDEnc::new(48000, 2);
+        if WEIGHTS_BLOB.is_empty() {
+            assert!(!enc.loaded);
+        } else {
+            assert!(
+                enc.loaded,
+                "embedded blob is present but RDOVAE enc init didn't populate the model"
+            );
+        }
+    }
+
+    #[test]
+    fn load_model_rejects_empty_blob() {
+        let mut enc = DREDEnc::new_unloaded(48000, 1);
+        assert_eq!(enc.load_model(&[]), Err(-1));
+        assert!(!enc.loaded);
+    }
+
+    #[test]
+    fn opus_dred_default_is_zeroed() {
+        let d = OpusDred::default();
+        assert_eq!(d.nb_latents, 0);
+        assert_eq!(d.process_stage, 0);
+        assert_eq!(d.dred_offset, 0);
+        assert!(d.fec_features.iter().all(|&x| x == 0.0));
+        assert!(d.state.iter().all(|&x| x == 0.0));
+        assert!(d.latents.iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn constants_match_c_reference() {
+        assert_eq!(DRED_EXTENSION_ID, 126);
+        assert_eq!(DRED_EXPERIMENTAL_VERSION, 12);
+        assert_eq!(DRED_FRAME_SIZE, 160);
+        assert_eq!(DRED_DFRAME_SIZE, 320);
+        assert_eq!(DRED_MAX_LATENTS, 26);
+        assert_eq!(DRED_NUM_REDUNDANCY_FRAMES, 52);
+        assert_eq!(DRED_MAX_FRAMES, 104);
+        assert_eq!(DRED_NUM_FEATURES, 20);
+        assert_eq!(DRED_LATENT_DIM, 25);
+        assert_eq!(DRED_STATE_DIM, 50);
+    }
+}

@@ -31,16 +31,20 @@ fn main() {
     let ref_dir = repo_root.join("reference");
     let dnn_dir = ref_dir.join("dnn");
 
-    // Declare the three data files + the custom driver as rerun triggers,
+    // Declare the data files + the custom driver as rerun triggers,
     // so a weights refetch re-embeds without needing `cargo clean`.
     for rel in [
         "dnn/pitchdnn_data.c",
         "dnn/fargan_data.c",
         "dnn/plc_data.c",
+        "dnn/dred_rdovae_enc_data.c",
+        "dnn/dred_rdovae_dec_data.c",
         "dnn/nnet.h",
         "dnn/pitchdnn_data.h",
         "dnn/fargan_data.h",
         "dnn/plc_data.h",
+        "dnn/dred_rdovae_enc_data.h",
+        "dnn/dred_rdovae_dec_data.h",
     ] {
         println!("cargo:rerun-if-changed={}", ref_dir.join(rel).display());
     }
@@ -64,7 +68,21 @@ fn main() {
         return;
     }
 
-    if let Err(e) = try_build_blob(&manifest_dir, &ref_dir, &driver, &blob_path, &out_dir) {
+    // DRED's RDOVAE data files ship from the same xiph tarball but are
+    // optional — older fetches may lack them. Enable their inclusion in
+    // the blob only when both files are on disk so a partial tree still
+    // builds (without DRED weights embedded).
+    let have_dred = dnn_dir.join("dred_rdovae_enc_data.c").exists()
+        && dnn_dir.join("dred_rdovae_dec_data.c").exists();
+
+    if let Err(e) = try_build_blob(
+        &manifest_dir,
+        &ref_dir,
+        &driver,
+        &blob_path,
+        &out_dir,
+        have_dred,
+    ) {
         println!(
             "cargo:warning=ropus: failed to build embedded weights blob ({e}); \
              leaving blob empty. Neural PLC will require an explicit \
@@ -87,18 +105,24 @@ fn try_build_blob(
     driver: &Path,
     blob_path: &Path,
     out_dir: &Path,
+    have_dred: bool,
 ) -> Result<(), String> {
     // Locate the host C toolchain via `cc`. Using a fresh `cc::Build`
     // per this script (rather than `cargo:rustc-link-lib`) keeps this
     // step contained — we link an exe, not a staticlib, and we don't
     // want this object to end up in the final rlib.
-    let tool = cc::Build::new()
+    let mut builder = cc::Build::new();
+    builder
         .cargo_metadata(false) // don't spam cargo with -L/-l for a one-off exe
         .warnings(false)
         .include(ref_dir.join("include"))
         .include(ref_dir.join("celt"))
         .include(ref_dir.join("dnn"))
-        .define("DUMP_BINARY_WEIGHTS", None)
+        .define("DUMP_BINARY_WEIGHTS", None);
+    if have_dred {
+        builder.define("ROPUS_HAVE_DRED_WEIGHTS", None);
+    }
+    let tool = builder
         .try_get_compiler()
         .map_err(|e| format!("cc::Build::try_get_compiler failed: {e}"))?;
 
