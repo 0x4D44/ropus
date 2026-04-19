@@ -22,12 +22,15 @@
 //! real include becomes a no-op.
 //!
 //! `test_opus_encode.c` also calls `regression_test()`, defined upstream in
-//! `opus_encode_regressions.c`. That file exercises surround and projection
-//! encoding — both out of scope (see the `publish-as-crate` HLD's non-goals).
-//! We substitute our own no-op stub (`src/regression_test_stub.c`) so the
-//! link resolves without dragging in surround/ambisonics paths. This is a
-//! deviation: we lose coverage of the specific historical regressions, but
-//! the main test body still runs.
+//! `opus_encode_regressions.c`. With Pieces A+B's capi surface now wired,
+//! we compile that file verbatim into the encode test's static lib so the
+//! 11 historical crash repros (7 unconditional + 3 `!DISABLE_FLOAT_API` +
+//! `projection_overflow`) run against our codec. The 5 `ENABLE_QEXT` /
+//! `ENABLE_DRED`-guarded repros compile out — both macros stay undefined
+//! for the whole conformance build, matching the rest of the suite.
+//! `opus_encode_regressions.c` also does `#include "../src/opus_private.h"`,
+//! so the same `/FI` / `-include` force-include trick used for
+//! `test_opus_encode.c` applies when it compiles as an extra.
 
 use std::path::PathBuf;
 
@@ -77,7 +80,7 @@ fn main() {
             SrcDir::Tests,
             "test_opus_encode.c",
             "test_opus_encode",
-            &["src/regression_test_stub.c"],
+            &["reference/tests/opus_encode_regressions.c"],
         ),
         (SrcDir::Tests, "test_opus_extensions.c", "test_opus_extensions", &[]),
         // Piece A — IETF vectors via opus_demo + opus_compare.

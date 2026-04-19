@@ -9,10 +9,11 @@
 //! `opus_multistream_packet_pad`, `opus_multistream_packet_unpad`, and
 //! `opus_packet_parse` as part of the loop.
 //!
-//! `test_opus_encode.c` also calls `regression_test()` (supplied upstream
-//! by `opus_encode_regressions.c`). That file exercises surround-mode and
-//! ambisonic-projection encoders, both out of scope. `build.rs` substitutes
-//! our own no-op stub so the link resolves without pulling those paths in.
+//! `test_opus_encode.c` also calls `regression_test()`, defined upstream in
+//! `opus_encode_regressions.c`. With Pieces A+B landed, `build.rs` compiles
+//! that file as an extra so the 11 historical crash repros (7 unconditional
+//! + 3 float-API + 1 projection overflow) run against our codec. The five
+//! `ENABLE_QEXT`/`ENABLE_DRED`-guarded repros compile out.
 //!
 //! This file is its own `[[test]]` binary (cargo auto-discovery). Running
 //! under `-- --test-threads=1` is required; the reference tests share
@@ -27,9 +28,10 @@ unsafe extern "C" {
     fn test_opus_encode_main(argc: c_int, argv: *const *const c_char) -> c_int;
 }
 
-/// Pull every `#[unsafe(no_mangle)]` symbol `test_opus_encode.c` (and our
-/// `regression_test_stub.c`) can resolve out of the `capi` rlib. Exhaustive
-/// — we prefer over-linking to a mysterious undefined symbol at link time.
+/// Pull every `#[unsafe(no_mangle)]` symbol `test_opus_encode.c` and the
+/// `opus_encode_regressions.c` extra can resolve out of the `capi` rlib.
+/// Exhaustive — we prefer over-linking to a mysterious undefined symbol at
+/// link time.
 fn force_link() {
     // Library-level
     black_box(mdopus_capi::opus_strerror as *const ());
@@ -117,6 +119,28 @@ fn force_link() {
     black_box(mdopus_capi::ctl::mdopus_ms_decoder_ctl_get_int as *const ());
     black_box(mdopus_capi::ctl::mdopus_ms_decoder_ctl_get_uint32 as *const ());
     black_box(mdopus_capi::ctl::mdopus_ms_decoder_ctl_get_decoder_state as *const ());
+
+    // Projection encoder — pulled in by `opus_encode_regressions.c`'s
+    // `projection_overflow{,2,3}` repros. Decoder surface is not touched
+    // by regression_test() but we force-link it for parity with the
+    // projection test binary (keeps the symbol set closed).
+    black_box(
+        mdopus_capi::projection::opus_projection_ambisonics_encoder_get_size as *const (),
+    );
+    black_box(
+        mdopus_capi::projection::opus_projection_ambisonics_encoder_create as *const (),
+    );
+    black_box(mdopus_capi::projection::opus_projection_ambisonics_encoder_init as *const ());
+    black_box(mdopus_capi::projection::opus_projection_encoder_destroy as *const ());
+    black_box(mdopus_capi::projection::opus_projection_encode as *const ());
+    black_box(mdopus_capi::projection::opus_projection_encode_float as *const ());
+    black_box(mdopus_capi::ctl::mdopus_proj_encoder_ctl_reset as *const ());
+    black_box(mdopus_capi::ctl::mdopus_proj_encoder_ctl_set_int as *const ());
+    black_box(mdopus_capi::ctl::mdopus_proj_encoder_ctl_get_int as *const ());
+    black_box(mdopus_capi::ctl::mdopus_proj_encoder_ctl_get_uint32 as *const ());
+    black_box(
+        mdopus_capi::ctl::mdopus_proj_encoder_ctl_get_demixing_matrix as *const (),
+    );
 }
 
 #[test]
