@@ -505,6 +505,23 @@ unsafe extern "C" {
         consec_transient: *mut opus_int32,
     );
 
+    pub fn debug_get_celt_encoder_state_ext(
+        enc: *mut OpusEncoder,
+        stereo_saving: *mut opus_int32,
+        hf_average: *mut opus_int32,
+        spec_avg: *mut opus_int32,
+        intensity: *mut opus_int32,
+        overlap_max: *mut opus_int32,
+        vbr_reservoir: *mut opus_int32,
+        vbr_drift: *mut opus_int32,
+        vbr_offset: *mut opus_int32,
+        vbr_count: *mut opus_int32,
+        preemph_mem_e_0: *mut opus_int32,
+        preemph_mem_e_1: *mut opus_int32,
+        preemph_mem_d_0: *mut opus_int32,
+        preemph_mem_d_1: *mut opus_int32,
+    );
+
     pub fn debug_dump_silk_plc_state(
         dec: *mut OpusDecoder,
         rand_scale_q14: *mut opus_int16,

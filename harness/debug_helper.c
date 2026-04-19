@@ -10,6 +10,7 @@
 #include "celt/vq.h"
 #include "celt/mdct.h"
 #include "celt/cpu_support.h"
+#include "src/analysis.h"
 
 #include <stdio.h>
 #include <stddef.h>
@@ -251,6 +252,19 @@ struct CELTEncoder_trace {
     opus_int16 prefilter_gain;
     int prefilter_tapset;
     int consec_transient;
+    AnalysisInfo analysis;
+    SILKInfo silk_info;
+    opus_val32 preemph_memE[2];
+    opus_val32 preemph_memD[2];
+    opus_int32 vbr_reservoir;
+    opus_int32 vbr_drift;
+    opus_int32 vbr_offset;
+    opus_int32 vbr_count;
+    opus_val32 overlap_max;
+    opus_val16 stereo_saving;
+    int intensity;
+    celt_glog *energy_mask;
+    celt_glog spec_avg;
 };
 
 void debug_get_celt_encoder_state(OpusEncoder *enc,
@@ -279,6 +293,43 @@ void debug_get_celt_encoder_state(OpusEncoder *enc,
     *tonal_average = celt->tonal_average;
     *last_coded_bands = celt->lastCodedBands;
     *consec_transient = celt->consec_transient;
+}
+
+/* INSTRUMENT: Get extended CELT encoder state for cross-codec bit-exactness
+ * investigation. Covers the post-reset long-running accumulators that are
+ * candidates for sub-ULP drift between C and Rust. */
+void debug_get_celt_encoder_state_ext(OpusEncoder *enc,
+    opus_int32 *stereo_saving,   /* int16_t in C — promoted to i32 for FFI */
+    opus_int32 *hf_average,
+    opus_int32 *spec_avg,
+    opus_int32 *intensity,
+    opus_int32 *overlap_max,
+    opus_int32 *vbr_reservoir,
+    opus_int32 *vbr_drift,
+    opus_int32 *vbr_offset,
+    opus_int32 *vbr_count,
+    opus_int32 *preemph_memE_0,
+    opus_int32 *preemph_memE_1,
+    opus_int32 *preemph_memD_0,
+    opus_int32 *preemph_memD_1)
+{
+    OpusEncoderOffsets *hdr = (OpusEncoderOffsets *)enc;
+    struct CELTEncoder_trace *celt =
+        (struct CELTEncoder_trace *)((char *)enc + hdr->celt_enc_offset);
+
+    *stereo_saving = (opus_int32)celt->stereo_saving;
+    *hf_average = celt->hf_average;
+    *spec_avg = celt->spec_avg;
+    *intensity = celt->intensity;
+    *overlap_max = celt->overlap_max;
+    *vbr_reservoir = celt->vbr_reservoir;
+    *vbr_drift = celt->vbr_drift;
+    *vbr_offset = celt->vbr_offset;
+    *vbr_count = celt->vbr_count;
+    *preemph_memE_0 = celt->preemph_memE[0];
+    *preemph_memE_1 = celt->preemph_memE[1];
+    *preemph_memD_0 = celt->preemph_memD[0];
+    *preemph_memD_1 = celt->preemph_memD[1];
 }
 
 /* ======================================================================
@@ -720,7 +771,12 @@ int debug_get_celt_old_log_e(OpusDecoder *opus_dec, opus_int32 *out_log_e, opus_
 }
 
 /* Extract encoder internal state for comparison.
- * Requires knowing the struct layout from opus_encoder.c. */
+ * Requires knowing the struct layout from opus_encoder.c.
+ *
+ * Must exactly match `struct OpusEncoder` from `reference/src/opus_encoder.c`
+ * under our build config (FIXED_POINT, !DISABLE_FLOAT_API, !ENABLE_DRED,
+ * !ENABLE_QEXT). Any mismatch shifts every field offset and produces
+ * garbage reads for callers that reach past the early pre-reset fields. */
 typedef struct {
     opus_int32 celt_enc_offset;
     opus_int32 silk_enc_offset;
@@ -746,6 +802,10 @@ typedef struct {
     int arch;
     int use_dtx;
     int fec_config;
+    /* Float analysis (FLOAT_API enabled). Matches reference/src/opus_encoder.c
+     * lines 104-106: `#ifndef DISABLE_FLOAT_API ... TonalityAnalysisState
+     * analysis; #endif`. Must appear BEFORE OPUS_ENCODER_RESET_START. */
+    TonalityAnalysisState analysis;
     /* OPUS_ENCODER_RESET_START */
     int stream_channels;
     opus_int16 hybrid_stereo_width_Q14;
@@ -754,7 +814,48 @@ typedef struct {
     opus_int32 hp_mem[4];
     int mode;
     int prev_mode;
+    int prev_channels;
+    int prev_framesize;
+    int bandwidth;
+    int auto_bandwidth;
+    int silk_bw_switch;
+    int first;
+    celt_glog *energy_masking;
+    /* StereoWidthState width_mem: XX, XY, YY (i32); smoothed_width, max_follower (i16). */
+    opus_val32 width_mem_XX;
+    opus_val32 width_mem_XY;
+    opus_val32 width_mem_YY;
+    opus_val16 width_mem_smoothed_width;
+    opus_val16 width_mem_max_follower;
+    int detected_bandwidth;
 } OpusEncoderTrace;
+
+/* INSTRUMENT: Return the Opus-level width_mem accumulators plus
+ * hybrid_stereo_width_Q14 for bit-exactness diagnostics. */
+void debug_get_opus_stereo_state(OpusEncoder *enc,
+    opus_int32 *hybrid_stereo_width_q14,
+    opus_int32 *width_xx,
+    opus_int32 *width_xy,
+    opus_int32 *width_yy,
+    opus_int32 *width_smoothed,
+    opus_int32 *width_max_follower,
+    opus_int32 *detected_bandwidth,
+    opus_int32 *mode,
+    opus_int32 *prev_mode,
+    opus_int32 *bandwidth)
+{
+    OpusEncoderTrace *st = (OpusEncoderTrace *)enc;
+    *hybrid_stereo_width_q14 = (opus_int32)st->hybrid_stereo_width_Q14;
+    *width_xx = st->width_mem_XX;
+    *width_xy = st->width_mem_XY;
+    *width_yy = st->width_mem_YY;
+    *width_smoothed = (opus_int32)st->width_mem_smoothed_width;
+    *width_max_follower = (opus_int32)st->width_mem_max_follower;
+    *detected_bandwidth = st->detected_bandwidth;
+    *mode = st->mode;
+    *prev_mode = st->prev_mode;
+    *bandwidth = st->bandwidth;
+}
 
 void debug_get_encoder_hp_state(OpusEncoder *enc,
     opus_int32 *hp_mem_out,

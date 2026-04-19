@@ -2932,3 +2932,410 @@ const SILK_STEREO_NB_60MS_FRAME: [u8; 349] = [
     0x37,
 ];
 
+// =============================================================================
+// Stage 6.4b round 2: CELT encoder long-running state field divergence.
+//
+// Prior agent conclusively proved analysis module is bit-exact against the C
+// reference for the exact music_48k_stereo.wav content at 300 frames.
+// All 5 CELT-side + 4 Opus-side consumption sites audited.
+// Yet `ropus-compare encode` shows 457 DIFFER (first at frame 90) on the
+// same WAV. Hypothesis: a long-running CELT encoder accumulator drifts
+// between C and Rust. This test does parallel opus_encode on both sides
+// frame-by-frame, extracts a set of suspect CELT fields from each side,
+// and reports the first divergence.
+//
+// Ignored by default — it's a diagnostic, not an acceptance test.
+// =============================================================================
+
+/// Find the first CELT encoder state field that diverges between C and Rust
+/// during parallel encoding of music_48k_stereo.wav under ropus-compare's
+/// default config (OPUS_APPLICATION_AUDIO, bitrate 64 kbps, complexity 10,
+/// VBR off).
+#[test]
+#[ignore = "diagnostic for Stage 6.4 bit-exactness; run with --include-ignored"]
+fn diag_celt_encoder_state_divergence_music() {
+    use ropus::opus::encoder::{CeltEncoderStateExt, OpusEncoderStereoSnapshot};
+    const OPUS_APPLICATION_AUDIO: c_int = 2049;
+
+    // Local FFI declarations for the debug_helper extractors (the bindings
+    // module is inside `harness/src/` and not accessible from tests).
+    unsafe extern "C" {
+        fn debug_get_celt_encoder_state_ext(
+            enc: *mut u8,
+            stereo_saving: *mut i32,
+            hf_average: *mut i32,
+            spec_avg: *mut i32,
+            intensity: *mut i32,
+            overlap_max: *mut i32,
+            vbr_reservoir: *mut i32,
+            vbr_drift: *mut i32,
+            vbr_offset: *mut i32,
+            vbr_count: *mut i32,
+            preemph_mem_e_0: *mut i32,
+            preemph_mem_e_1: *mut i32,
+            preemph_mem_d_0: *mut i32,
+            preemph_mem_d_1: *mut i32,
+        );
+        fn debug_get_celt_encoder_state(
+            enc: *mut u8,
+            delayed_intra: *mut i32,
+            loss_rate: *mut i32,
+            prefilter_period: *mut i32,
+            prefilter_gain: *mut i32,
+            prefilter_tapset: *mut i32,
+            force_intra: *mut i32,
+            spread_decision: *mut i32,
+            tonal_average: *mut i32,
+            last_coded_bands: *mut i32,
+            consec_transient: *mut i32,
+        );
+        fn debug_get_opus_stereo_state(
+            enc: *mut u8,
+            hybrid_stereo_width_q14: *mut i32,
+            width_xx: *mut i32,
+            width_xy: *mut i32,
+            width_yy: *mut i32,
+            width_smoothed: *mut i32,
+            width_max_follower: *mut i32,
+            detected_bandwidth: *mut i32,
+            mode: *mut i32,
+            prev_mode: *mut i32,
+            bandwidth: *mut i32,
+        );
+    }
+
+    // Load music_48k_stereo.wav the same way test_analysis_run_matches_c_reference_real_music
+    // does.
+    let wav_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("tests")
+        .join("vectors")
+        .join("music_48k_stereo.wav");
+    let data = std::fs::read(&wav_path).expect("load music_48k_stereo.wav");
+    assert!(data.len() >= 44);
+    assert_eq!(&data[0..4], b"RIFF");
+    let channels = u16::from_le_bytes([data[22], data[23]]) as i32;
+    let sample_rate = u32::from_le_bytes([data[24], data[25], data[26], data[27]]) as i32;
+    assert_eq!(sample_rate, 48000);
+    assert_eq!(channels, 2);
+
+    // Find "data" chunk.
+    let mut pos = 12;
+    let mut pcm_bytes: &[u8] = &[];
+    while pos + 8 <= data.len() {
+        let chunk_size = u32::from_le_bytes([
+            data[pos + 4],
+            data[pos + 5],
+            data[pos + 6],
+            data[pos + 7],
+        ]) as usize;
+        if &data[pos..pos + 4] == b"data" {
+            pcm_bytes = &data[pos + 8..pos + 8 + chunk_size];
+            break;
+        }
+        pos += 8 + chunk_size;
+        if !chunk_size.is_multiple_of(2) {
+            pos += 1;
+        }
+    }
+    assert!(!pcm_bytes.is_empty(), "no data chunk");
+
+    // PCM as i16.
+    let pcm: Vec<i16> = pcm_bytes
+        .chunks_exact(2)
+        .map(|b| i16::from_le_bytes([b[0], b[1]]))
+        .collect();
+
+    let frame_size: i32 = sample_rate / 50; // 20 ms = 960
+    let samples_per_frame = frame_size as usize * channels as usize;
+    let num_frames = (pcm.len() / samples_per_frame).min(120); // up to frame 119
+
+    // --- create both encoders with ropus-compare's default config ---
+    const BITRATE: i32 = 64_000;
+    const COMPLEXITY: c_int = 10;
+    let application = OPUS_APPLICATION_AUDIO;
+
+    let c_enc = unsafe {
+        let mut err: c_int = 0;
+        let enc = opus_encoder_create(sample_rate, channels as c_int, application, &mut err);
+        assert!(!enc.is_null() && err == 0);
+        opus_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, BITRATE);
+        opus_encoder_ctl(enc, OPUS_SET_VBR_REQUEST, 0 as c_int);
+        opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY_REQUEST, COMPLEXITY);
+        enc
+    };
+
+    let mut rust_enc =
+        OpusEncoder::new(sample_rate, channels, application).expect("rust enc");
+    rust_enc.set_bitrate(BITRATE);
+    rust_enc.set_vbr(0);
+    rust_enc.set_complexity(COMPLEXITY);
+
+    // Accumulator fields to compare each frame. Field name must match the
+    // `CeltEncoderStateExt` Rust struct and C trace extractor.
+    struct CState {
+        stereo_saving: i32,
+        hf_average: i32,
+        spec_avg: i32,
+        intensity: i32,
+        overlap_max: i32,
+        vbr_reservoir: i32,
+        vbr_drift: i32,
+        vbr_offset: i32,
+        vbr_count: i32,
+        preemph_mem_e: [i32; 2],
+        preemph_mem_d: [i32; 2],
+        delayed_intra: i32,
+        tonal_average: i32,
+        last_coded_bands: i32,
+        tapset_decision: i32,
+        spread_decision: i32,
+        rng: u32,
+        consec_transient: i32,
+    }
+
+    let snap_c = |enc: *mut u8| -> CState {
+        let mut stereo_saving = 0;
+        let mut hf_average = 0;
+        let mut spec_avg = 0;
+        let mut intensity = 0;
+        let mut overlap_max = 0;
+        let mut vbr_reservoir = 0;
+        let mut vbr_drift = 0;
+        let mut vbr_offset = 0;
+        let mut vbr_count = 0;
+        let mut pme0 = 0;
+        let mut pme1 = 0;
+        let mut pmd0 = 0;
+        let mut pmd1 = 0;
+        unsafe {
+            debug_get_celt_encoder_state_ext(
+                enc,
+                &mut stereo_saving,
+                &mut hf_average,
+                &mut spec_avg,
+                &mut intensity,
+                &mut overlap_max,
+                &mut vbr_reservoir,
+                &mut vbr_drift,
+                &mut vbr_offset,
+                &mut vbr_count,
+                &mut pme0,
+                &mut pme1,
+                &mut pmd0,
+                &mut pmd1,
+            );
+        }
+        let mut delayed_intra = 0;
+        let mut loss_rate = 0;
+        let mut pf_period = 0;
+        let mut pf_gain = 0;
+        let mut pf_tapset = 0;
+        let mut force_intra = 0;
+        let mut spread_decision = 0;
+        let mut tonal_average = 0;
+        let mut last_coded_bands = 0;
+        let mut consec_transient = 0;
+        unsafe {
+            debug_get_celt_encoder_state(
+                enc,
+                &mut delayed_intra,
+                &mut loss_rate,
+                &mut pf_period,
+                &mut pf_gain,
+                &mut pf_tapset,
+                &mut force_intra,
+                &mut spread_decision,
+                &mut tonal_average,
+                &mut last_coded_bands,
+                &mut consec_transient,
+            );
+        }
+        CState {
+            stereo_saving,
+            hf_average,
+            spec_avg,
+            intensity,
+            overlap_max,
+            vbr_reservoir,
+            vbr_drift,
+            vbr_offset,
+            vbr_count,
+            preemph_mem_e: [pme0, pme1],
+            preemph_mem_d: [pmd0, pmd1],
+            delayed_intra,
+            tonal_average,
+            last_coded_bands,
+            tapset_decision: 0, // Not extracted; reserved for future use.
+            spread_decision,
+            rng: 0, // Not extracted; reserved for future use.
+            consec_transient,
+        }
+    };
+
+    fn snap_rs(snap: CeltEncoderStateExt) -> CState {
+        CState {
+            stereo_saving: snap.stereo_saving,
+            hf_average: snap.hf_average,
+            spec_avg: snap.spec_avg,
+            intensity: snap.intensity,
+            overlap_max: snap.overlap_max,
+            vbr_reservoir: snap.vbr_reservoir,
+            vbr_drift: snap.vbr_drift,
+            vbr_offset: snap.vbr_offset,
+            vbr_count: snap.vbr_count,
+            preemph_mem_e: snap.preemph_mem_e,
+            preemph_mem_d: snap.preemph_mem_d,
+            delayed_intra: snap.delayed_intra,
+            tonal_average: snap.tonal_average,
+            last_coded_bands: snap.last_coded_bands,
+            tapset_decision: snap.tapset_decision,
+            spread_decision: snap.spread_decision,
+            rng: snap.rng,
+            consec_transient: snap.consec_transient,
+        }
+    }
+
+    let mut first_divergence: Option<(usize, String)> = None;
+
+    for f in 0..num_frames {
+        let start = f * samples_per_frame;
+        let end = start + samples_per_frame;
+        let frame_pcm = &pcm[start..end];
+
+        // Encode in C.
+        let c_out_len = unsafe {
+            let mut out = vec![0u8; 4000];
+            let n =
+                opus_encode(c_enc, frame_pcm.as_ptr(), frame_size, out.as_mut_ptr(), 4000);
+            assert!(n > 0, "C encode failed frame={f} ret={n}");
+            n
+        };
+
+        // Encode in Rust.
+        let mut rust_out = vec![0u8; 4000];
+        let rust_n = rust_enc
+            .encode(frame_pcm, frame_size, &mut rust_out, 4000)
+            .unwrap_or_else(|e| panic!("Rust encode failed frame={f} err={e}"));
+
+        let _ = c_out_len;
+        let _ = rust_n;
+
+        // Snapshot both sides AFTER the frame.
+        let c = snap_c(c_enc);
+        let r = snap_rs(
+            rust_enc
+                .get_celt_state_ext()
+                .expect("rust celt_state_ext must be Some"),
+        );
+
+        // Compare each field; report first divergence.
+        macro_rules! check {
+            ($name:ident) => {
+                if c.$name != r.$name {
+                    let msg = format!(
+                        "frame {:3}: {:<20} C={:12} R={:12} diff={}",
+                        f,
+                        stringify!($name),
+                        c.$name,
+                        r.$name,
+                        c.$name - r.$name,
+                    );
+                    eprintln!("{msg}");
+                    if first_divergence.is_none() {
+                        first_divergence = Some((f, msg));
+                    }
+                }
+            };
+        }
+        check!(stereo_saving);
+        check!(hf_average);
+        check!(spec_avg);
+        check!(intensity);
+        check!(overlap_max);
+        check!(vbr_reservoir);
+        check!(vbr_drift);
+        check!(vbr_offset);
+        check!(vbr_count);
+        check!(delayed_intra);
+        check!(tonal_average);
+        check!(last_coded_bands);
+        check!(spread_decision);
+        check!(consec_transient);
+
+        // --- Opus-level stereo-width and mode state ---
+        let mut c_hybrid = 0;
+        let mut c_xx = 0;
+        let mut c_xy = 0;
+        let mut c_yy = 0;
+        let mut c_smoothed = 0;
+        let mut c_max_follower = 0;
+        let mut c_detected_bw = 0;
+        let mut c_mode = 0;
+        let mut c_prev_mode = 0;
+        let mut c_bandwidth = 0;
+        unsafe {
+            debug_get_opus_stereo_state(
+                c_enc,
+                &mut c_hybrid,
+                &mut c_xx,
+                &mut c_xy,
+                &mut c_yy,
+                &mut c_smoothed,
+                &mut c_max_follower,
+                &mut c_detected_bw,
+                &mut c_mode,
+                &mut c_prev_mode,
+                &mut c_bandwidth,
+            );
+        }
+        let r_opus: OpusEncoderStereoSnapshot = rust_enc.get_opus_stereo_state();
+        macro_rules! check_opus {
+            ($c:expr, $r:expr, $name:literal) => {
+                if $c != $r {
+                    let msg = format!(
+                        "frame {:3}: opus.{:<18} C={:12} R={:12}",
+                        f, $name, $c, $r
+                    );
+                    eprintln!("{msg}");
+                    if first_divergence.is_none() {
+                        first_divergence = Some((f, msg));
+                    }
+                }
+            };
+        }
+        check_opus!(c_hybrid, r_opus.hybrid_stereo_width_q14, "hybrid_sw_Q14");
+        check_opus!(c_xx, r_opus.width_xx, "width_xx");
+        check_opus!(c_xy, r_opus.width_xy, "width_xy");
+        check_opus!(c_yy, r_opus.width_yy, "width_yy");
+        check_opus!(c_smoothed, r_opus.width_smoothed, "width_smoothed");
+        check_opus!(c_max_follower, r_opus.width_max_follower, "width_max_foll");
+        check_opus!(c_detected_bw, r_opus.detected_bandwidth, "detected_bw");
+        check_opus!(c_mode, r_opus.mode, "mode");
+        check_opus!(c_prev_mode, r_opus.prev_mode, "prev_mode");
+        check_opus!(c_bandwidth, r_opus.bandwidth, "bandwidth");
+        // preemph_mem_e[] intentionally excluded: it holds a cosmetic
+        // representation difference (Rust stores x, C stores coef0*x/2^15)
+        // that produces identical preemphasis OUTPUT samples but differing
+        // state values. Ruled out in 2026.04.10 CELT bug-fix journal.
+        if c.preemph_mem_d != r.preemph_mem_d {
+            let msg = format!(
+                "frame {:3}: preemph_mem_d      C={:?} R={:?}",
+                f, c.preemph_mem_d, r.preemph_mem_d
+            );
+            eprintln!("{msg}");
+            if first_divergence.is_none() {
+                first_divergence = Some((f, msg));
+            }
+        }
+    }
+
+    unsafe { opus_encoder_destroy(c_enc) };
+
+    if let Some((f, msg)) = first_divergence {
+        eprintln!("\n=== First divergence at frame {f} ===\n  {msg}");
+    } else {
+        eprintln!("\nNo CELT encoder state divergence detected in first {num_frames} frames");
+    }
+}
+

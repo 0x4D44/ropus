@@ -221,6 +221,48 @@ pub struct SilkEncoderSnapshot {
     pub input_quality_bands_q15: i32,
 }
 
+/// Snapshot of long-running CELT-encoder state used for cross-codec
+/// bit-exactness diagnostics. Mirrors the suspect accumulator fields
+/// from `OpusCustomEncoder` in `reference/celt/celt_encoder.c`.
+#[doc(hidden)]
+pub struct CeltEncoderStateExt {
+    pub stereo_saving: i32,
+    pub hf_average: i32,
+    pub spec_avg: i32,
+    pub intensity: i32,
+    pub overlap_max: i32,
+    pub vbr_reservoir: i32,
+    pub vbr_drift: i32,
+    pub vbr_offset: i32,
+    pub vbr_count: i32,
+    pub preemph_mem_e: [i32; 2],
+    pub preemph_mem_d: [i32; 2],
+    pub delayed_intra: i32,
+    pub tonal_average: i32,
+    pub last_coded_bands: i32,
+    pub tapset_decision: i32,
+    pub spread_decision: i32,
+    pub rng: u32,
+    pub consec_transient: i32,
+}
+
+/// Snapshot of long-running Opus-layer stereo-width state plus mode flags.
+/// Mirrors `width_mem`, `hybrid_stereo_width_Q14`, `detected_bandwidth`,
+/// and `mode`/`prev_mode`/`bandwidth` in the C `OpusEncoder`.
+#[doc(hidden)]
+pub struct OpusEncoderStereoSnapshot {
+    pub hybrid_stereo_width_q14: i32,
+    pub width_xx: i32,
+    pub width_xy: i32,
+    pub width_yy: i32,
+    pub width_smoothed: i32,
+    pub width_max_follower: i32,
+    pub detected_bandwidth: i32,
+    pub mode: i32,
+    pub prev_mode: i32,
+    pub bandwidth: i32,
+}
+
 /// Opus encoder state.
 pub struct OpusEncoder {
     // --- Immutable after init ---
@@ -3620,6 +3662,54 @@ impl OpusEncoder {
             speech_activity_q8: s.speech_activity_q8,
             signal_type: s.indices.signal_type as i32,
             input_quality_bands_q15: s.input_quality_bands_q15[0],
+        })
+    }
+
+    /// Opus-layer stereo-width + mode snapshot for bit-exactness
+    /// diagnostics. Mirrors the C `width_mem`, `hybrid_stereo_width_Q14`,
+    /// `detected_bandwidth`, and mode/bandwidth fields.
+    #[doc(hidden)]
+    pub fn get_opus_stereo_state(&self) -> OpusEncoderStereoSnapshot {
+        OpusEncoderStereoSnapshot {
+            hybrid_stereo_width_q14: self.hybrid_stereo_width_q14 as i32,
+            width_xx: self.width_mem.xx,
+            width_xy: self.width_mem.xy,
+            width_yy: self.width_mem.yy,
+            width_smoothed: self.width_mem.smoothed_width,
+            width_max_follower: self.width_mem.max_follower,
+            detected_bandwidth: self.detected_bandwidth,
+            mode: self.mode,
+            prev_mode: self.prev_mode,
+            bandwidth: self.bandwidth,
+        }
+    }
+
+    /// Extended CELT encoder state snapshot for bit-exactness diagnostics.
+    /// Mirrors the suspect long-running accumulator fields that are candidates
+    /// for sub-ULP drift versus the C reference. Returns None if the CELT
+    /// encoder has not been allocated.
+    #[doc(hidden)]
+    pub fn get_celt_state_ext(&self) -> Option<CeltEncoderStateExt> {
+        let celt = self.celt_enc.as_ref()?;
+        Some(CeltEncoderStateExt {
+            stereo_saving: celt.stereo_saving,
+            hf_average: celt.hf_average,
+            spec_avg: celt.spec_avg,
+            intensity: celt.intensity,
+            overlap_max: celt.overlap_max,
+            vbr_reservoir: celt.vbr_reservoir,
+            vbr_drift: celt.vbr_drift,
+            vbr_offset: celt.vbr_offset,
+            vbr_count: celt.vbr_count,
+            preemph_mem_e: celt.preemph_mem_e,
+            preemph_mem_d: celt.preemph_mem_d,
+            delayed_intra: celt.delayed_intra,
+            tonal_average: celt.tonal_average,
+            last_coded_bands: celt.last_coded_bands,
+            tapset_decision: celt.tapset_decision,
+            spread_decision: celt.spread_decision,
+            rng: celt.rng,
+            consec_transient: celt.consec_transient,
         })
     }
 }

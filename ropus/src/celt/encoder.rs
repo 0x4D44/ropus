@@ -594,8 +594,11 @@ fn compute_mdcts(
 
 /// Apply pre-emphasis filter to PCM input.
 ///
-/// Matches C `celt_preemphasis()` from `celt_encoder.c`.
-/// Uses the simple first-order pre-emphasis: y[n] = x[n] - coef * x[n-1].
+/// Matches C `celt_preemphasis()` from `celt_encoder.c` (fast path). The
+/// state representation must match C exactly: `mem` holds
+/// `MULT16_32_Q15(coef0, x_prev)`, NOT `x_prev` itself. Both forms produce
+/// identical output samples, but downstream diagnostic tooling (and a
+/// belt-and-braces match against the C encoder state) assumes the C form.
 pub fn celt_preemphasis(
     pcm: &[i16],
     pcm_offset: usize,
@@ -612,17 +615,19 @@ pub fn celt_preemphasis(
     let nu = n as usize;
     let ccu = cc as usize;
 
-    // Fast path: no upsampling, simple first-order pre-emphasis
+    // Fast path: no upsampling, simple first-order pre-emphasis.
+    // Matches C celt_encoder.c:570-580 — keeps mem = MULT16_32_Q15(coef0, x_prev).
     if upsample == 1 {
         let mut m = *mem;
         for i in 0..nu {
             let x = shl32(pcm[(pcm_offset + i * ccu) as usize] as i32, SIG_SHIFT);
-            inp[inp_offset + i] = x - mult16_32_q15(coef0, m);
-            m = x;
+            inp[inp_offset + i] = x - m;
+            m = mult16_32_q15(coef0, x);
         }
         *mem = m;
     } else {
-        // Upsampling path: insert zeros between samples
+        // Upsampling path: insert zeros between samples.
+        // Mirrors the C upsample loop at celt_encoder.c:636-644.
         let mut m = *mem;
         let mut j = 0usize;
         for i in 0..nu {
@@ -633,8 +638,8 @@ pub fn celt_preemphasis(
             } else {
                 0i32
             };
-            inp[inp_offset + i] = x - mult16_32_q15(coef0, m);
-            m = x;
+            inp[inp_offset + i] = x - m;
+            m = mult16_32_q15(coef0, x);
         }
         *mem = m;
     }
@@ -4136,8 +4141,10 @@ mod tests {
 
     #[test]
     fn test_pin_celt_preemphasis_fast_path() {
-        // celt_preemphasis: upsample=1 (fast path), mono, 8 samples
-        // Standard Opus pre-emphasis coef: 0.85 in Q15 = 27853
+        // celt_preemphasis: upsample=1 (fast path), mono, 8 samples.
+        // Standard Opus pre-emphasis coef: 0.85 in Q15 = 27853.
+        // Filter: inp[i] = x[i] - m; m = MULT16_32_Q15(coef0, x[i]) after each
+        // iter, so saved mem = coef0 * x_last / 2^15 (NOT x_last itself).
         let coef: [i32; 4] = [qconst16(0.85, 15), 0, 0, 0];
         let pcm: Vec<i16> = vec![1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000];
         let mut inp = vec![0i32; 8];
@@ -4145,7 +4152,7 @@ mod tests {
 
         celt_preemphasis(&pcm, 0, &mut inp, 0, 8, 1, 1, &coef, &mut mem, 0);
 
-        // y[n] = x[n]<<SIG_SHIFT - coef * y[n-1], where SIG_SHIFT=12
+        // Sample-level outputs unchanged; only `mem` scaling differs.
         assert_eq!(inp[0], 4096000);  // 1000 << 12 = 4096000, mem was 0
         assert_eq!(inp[1], 4710375);
         assert_eq!(inp[2], 5324750);
@@ -4154,13 +4161,16 @@ mod tests {
         assert_eq!(inp[5], 7167875);
         assert_eq!(inp[6], 7782250);
         assert_eq!(inp[7], 8396625);
-        assert_eq!(mem, 32768000); // 8000 << 12
+        // mem = MULT16_32_Q15(27853, 8000<<12) = 27853 * 1000 = 27_853_000
+        assert_eq!(mem, 27_853_000);
     }
 
     #[test]
     fn test_pin_celt_preemphasis_upsample() {
-        // celt_preemphasis: upsample=2 path, mono, 8 output samples (4 PCM samples)
-        // Every other output gets a real sample; the rest are zero-inserted
+        // celt_preemphasis: upsample=2 path, mono, 8 output samples (4 PCM samples).
+        // Every other output gets a real sample; the rest are zero-inserted.
+        // Filter: inp[i] = x - m; m = MULT16_32_Q15(coef0, x) — applies even
+        // when the current x is a zero-insert, so mem ends up scaled by coef0.
         let coef: [i32; 4] = [qconst16(0.85, 15), 0, 0, 0];
         let pcm: Vec<i16> = vec![1000, 2000, 3000, 4000];
         let mut inp = vec![0i32; 8];
@@ -4170,14 +4180,15 @@ mod tests {
 
         // Even indices get real samples, odd indices get zero-inserted
         assert_eq!(inp[0], 4096000);    // 1000 << 12, mem=0
-        assert_eq!(inp[1], -3481625);   // 0 - coef * 4096000
-        assert_eq!(inp[2], 8192000);    // 2000 << 12, prev was 0
+        assert_eq!(inp[1], -3481625);   // 0 - coef * 4096000 (old mem after iter 0)
+        assert_eq!(inp[2], 8192000);    // 2000 << 12, mem was 0 (post zero-insert)
         assert_eq!(inp[3], -6963250);   // 0 - coef * 8192000
         assert_eq!(inp[4], 12288000);   // 3000 << 12
         assert_eq!(inp[5], -10444875);  // 0 - coef * 12288000
         assert_eq!(inp[6], 16384000);   // 4000 << 12
         assert_eq!(inp[7], -13926500);  // 0 - coef * 16384000
-        assert_eq!(mem, 0); // last sample was a zero-insert
+        // Final m = MULT16_32_Q15(coef0, 0) = 0 (last iter's x is a zero-insert)
+        assert_eq!(mem, 0);
     }
 
     #[test]
