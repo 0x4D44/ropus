@@ -1,3 +1,4 @@
-//! Container helpers (currently Ogg-only).
+//! Container helpers (Ogg framing + picture packing).
 
 pub mod ogg;
+pub mod picture;
