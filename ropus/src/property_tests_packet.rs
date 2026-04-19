@@ -56,10 +56,10 @@ proptest! {
         match opus_packet_get_nb_frames(&pkt) {
             Ok(nb_frames) => {
                 let spf = opus_packet_get_samples_per_frame(&pkt, fs);
-                match opus_packet_get_nb_samples(&pkt, fs) {
-                    Ok(ns) => prop_assert_eq!(nb_frames * spf, ns),
-                    // nb_samples can fail if total > 120ms — that's fine
-                    Err(_) => {}
+                // nb_samples can fail if total > 120ms — that's fine; we only
+                // check the relation when it succeeds.
+                if let Ok(ns) = opus_packet_get_nb_samples(&pkt, fs) {
+                    prop_assert_eq!(nb_frames * spf, ns);
                 }
             }
             Err(_) => {

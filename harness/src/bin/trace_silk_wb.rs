@@ -39,8 +39,8 @@ fn rust_silk_indices(dec: &OpusDecoder) -> RustSilkIndices {
         ],
         nlsf_indices: {
             let mut arr = [0i32; 17];
-            for i in 0..17 {
-                arr[i] = idx.nlsf_indices[i] as i32;
+            for (slot, &v) in arr.iter_mut().zip(idx.nlsf_indices.iter()) {
+                *slot = v as i32;
             }
             arr
         },
@@ -639,8 +639,13 @@ fn phase2_traced_decode(packet: &[u8], sample_rate: i32, channels: i32) {
 
     // 8. Show pulses around the divergence point (sample 173 = subframe 2, i=13)
     println!("\n  --- C traced pulses around divergence (samples 155-185) ---");
-    for i in 155..185.min(frame_len) {
-        let p = c_pulses[i];
+    let start = 155;
+    let end = 185.min(frame_len);
+    for (i, &p) in c_pulses[start..end]
+        .iter()
+        .enumerate()
+        .map(|(off, v)| (start + off, v))
+    {
         let mark = if i == 173 { " <-- DIVERGE POINT" } else { "" };
         if p != 0 || i == 173 {
             println!("    pulse[{:3}] = {:3}{}", i, p, mark);

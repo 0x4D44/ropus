@@ -154,8 +154,8 @@ fn test_lpc_inverse_pred_gain_matches_c_reference() {
         ("garbage_ff", vec![0x0FFFu16 as i16; 16]),
         ("extreme_mixed", {
             let mut v = vec![0i16; 16];
-            for i in 0..16 {
-                v[i] = ((i as i32 * 8191 + 3) % 8191 - 4095) as i16;
+            for (i, slot) in v.iter_mut().enumerate() {
+                *slot = ((i as i32 * 8191 + 3) % 8191 - 4095) as i16;
             }
             v
         }),
@@ -177,9 +177,8 @@ fn test_lpc_inverse_pred_gain_matches_c_reference() {
     // Also brute-force random-looking patterns
     for seed in 0u32..1000 {
         let mut coeffs = [0i16; 16];
-        for i in 0..16 {
-            let v = ((seed.wrapping_mul(2654435761).wrapping_add(i as u32 * 7919)) >> 16) as i16;
-            coeffs[i] = v;
+        for (i, slot) in coeffs.iter_mut().enumerate() {
+            *slot = ((seed.wrapping_mul(2654435761).wrapping_add(i as u32 * 7919)) >> 16) as i16;
         }
         let rust_result = silk_lpc_inverse_pred_gain(&coeffs, 16);
         let c_result = unsafe { silk_LPC_inverse_pred_gain_c(coeffs.as_ptr(), 16) };
@@ -1939,13 +1938,7 @@ fn rust_downmix_float(
     const SIG_CLAMP_MIN: f32 = -268_435_456.0;
     #[inline(always)]
     fn float2sig(x: f32) -> i32 {
-        let mut y = x * FLOAT2SIG_MULT;
-        if y > SIG_CLAMP_MAX {
-            y = SIG_CLAMP_MAX;
-        }
-        if y < SIG_CLAMP_MIN {
-            y = SIG_CLAMP_MIN;
-        }
+        let y = (x * FLOAT2SIG_MULT).clamp(SIG_CLAMP_MIN, SIG_CLAMP_MAX);
         // float2int uses round-half-even (matches `lrintf` on Windows).
         y.round_ties_even() as i32
     }

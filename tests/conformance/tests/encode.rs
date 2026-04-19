@@ -11,8 +11,8 @@
 //!
 //! `test_opus_encode.c` also calls `regression_test()`, defined upstream in
 //! `opus_encode_regressions.c`. With Pieces A+B landed, `build.rs` compiles
-//! that file as an extra so the 11 historical crash repros (7 unconditional
-//! + 3 float-API + 1 projection overflow) run against our codec. The five
+//! that file as an extra so the 11 historical crash repros (7 unconditional,
+//! 3 float-API, 1 projection overflow) run against our codec. The five
 //! `ENABLE_QEXT`/`ENABLE_DRED`-guarded repros compile out.
 //!
 //! This file is its own `[[test]]` binary (cargo auto-discovery). Running

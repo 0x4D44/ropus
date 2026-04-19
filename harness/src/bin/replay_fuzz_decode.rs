@@ -384,18 +384,18 @@ fn main() {
         if let Some(f) = scan_file(p, &fingerprints) {
             findings.push(f);
         }
-        if let Ok(bytes) = fs::read(p) {
-            if bytes.len() >= 3 {
-                let sr_idx = (bytes[0] as usize) % SAMPLE_RATES.len();
-                let sr = SAMPLE_RATES[sr_idx];
-                let ch: i32 = if bytes[1] & 1 == 0 { 1 } else { 2 };
-                let pkt = &bytes[2..];
-                if !pkt.is_empty() && is_celt_only_packet(pkt) {
-                    celt_only_total += 1;
-                    for (i, &(tsr, tch, tpl, _tns)) in TARGETS.iter().enumerate() {
-                        if tsr == sr && tch == ch && tpl == pkt.len() {
-                            matched_total[i] += 1;
-                        }
+        if let Ok(bytes) = fs::read(p)
+            && bytes.len() >= 3
+        {
+            let sr_idx = (bytes[0] as usize) % SAMPLE_RATES.len();
+            let sr = SAMPLE_RATES[sr_idx];
+            let ch: i32 = if bytes[1] & 1 == 0 { 1 } else { 2 };
+            let pkt = &bytes[2..];
+            if !pkt.is_empty() && is_celt_only_packet(pkt) {
+                celt_only_total += 1;
+                for (i, &(tsr, tch, tpl, _tns)) in TARGETS.iter().enumerate() {
+                    if tsr == sr && tch == ch && tpl == pkt.len() {
+                        matched_total[i] += 1;
                     }
                 }
             }

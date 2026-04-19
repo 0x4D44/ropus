@@ -10029,7 +10029,7 @@ fn cmd_repro_bug_a() {
             }
 
             // Show context around first divergence
-            let start = if idx >= 5 { idx - 5 } else { 0 };
+            let start = idx.saturating_sub(5);
             let end = (idx + 20).min(rust_pcm.len());
             println!("\n  Context (samples {}..{}):", start, end);
             for i in start..end {
@@ -10071,7 +10071,11 @@ fn cmd_repro_bug_b() {
         sample_rate, channels, application, bitrate, complexity, num_frames
     );
 
-    // Try several PCM patterns
+    // Try several PCM patterns. Each pattern's PCM generator is a boxed
+    // closure — the type is deliberately inline rather than aliased; clippy
+    // flags it as `type_complexity`, but a named alias made `'static`-bound
+    // inference interact poorly with the closures that capture `sample_rate`.
+    #[allow(clippy::type_complexity)]
     let patterns: Vec<(&str, Box<dyn Fn(usize) -> i16>)> = vec![
         ("silence", Box::new(|_| 0i16)),
         (
@@ -10115,7 +10119,7 @@ fn cmd_repro_bug_b() {
     for (name, pcm_fn) in &patterns {
         // Generate PCM for all frames
         let total_samples = frame_size as usize * num_frames;
-        let pcm: Vec<i16> = (0..total_samples).map(|i| pcm_fn(i)).collect();
+        let pcm: Vec<i16> = (0..total_samples).map(pcm_fn).collect();
         let pcm_frames: Vec<&[i16]> = pcm.chunks_exact(frame_size as usize).collect();
 
         // Rust encode

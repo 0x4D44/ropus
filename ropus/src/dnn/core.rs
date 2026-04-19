@@ -2908,7 +2908,7 @@ mod tests {
                 name: "sp_fw".into(),
                 weight_type: WEIGHT_TYPE_FLOAT,
                 size: SPARSE_BLOCK_SIZE * 1 * 4,
-                data: f32_bytes(&vec![2.0f32; SPARSE_BLOCK_SIZE]),
+                data: f32_bytes(&[2.0f32; SPARSE_BLOCK_SIZE]),
             },
             WeightArray {
                 name: "sp_scale".into(),

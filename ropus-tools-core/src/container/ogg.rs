@@ -139,10 +139,10 @@ impl OpusTags {
     /// strictly `KEY=value`, and one malformed line shouldn't hide the rest.
     pub fn get(&self, key: &str) -> Option<&str> {
         for c in &self.comments {
-            if let Some((k, v)) = c.split_once('=') {
-                if k.eq_ignore_ascii_case(key) {
-                    return Some(v);
-                }
+            if let Some((k, v)) = c.split_once('=')
+                && k.eq_ignore_ascii_case(key)
+            {
+                return Some(v);
             }
         }
         None

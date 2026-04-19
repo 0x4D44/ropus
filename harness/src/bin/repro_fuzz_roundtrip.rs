@@ -134,7 +134,11 @@ fn decode_toc(toc: u8, label: &str) {
     } else if config < 16 {
         // Hybrid
         let bw = if config < 14 { "SWB" } else { "FB" };
-        let dur = if config % 2 == 0 { "10ms" } else { "20ms" };
+        let dur = if config.is_multiple_of(2) {
+            "10ms"
+        } else {
+            "20ms"
+        };
         ("Hybrid", bw, dur)
     } else {
         // CELT-only

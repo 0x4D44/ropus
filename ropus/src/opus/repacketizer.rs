@@ -3952,7 +3952,7 @@ mod tests {
         fn parse_packet_last_size_over_1275_rejected() {
             // Code 0 with remaining > 1275 → line 226 branch.
             let mut big = vec![0x08u8];
-            big.extend(std::iter::repeat(0u8).take(1280));
+            big.extend(std::iter::repeat_n(0u8, 1280));
             assert!(parse_packet(&big, big.len() as i32, false).is_err());
         }
 

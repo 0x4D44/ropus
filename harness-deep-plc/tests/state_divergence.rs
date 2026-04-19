@@ -162,7 +162,7 @@ fn snapshot(c: &CRefFloatDecoder, r_dec: &RopusDecoder) -> Snapshot {
     // So the last 32 samples = [ltp_mem_length-32 .. ltp_mem_length).
     let ltp_mem_c = c.silk_ltp_mem_length();
     let tail_len = 32;
-    let offset_c = (ltp_mem_c - tail_len) as i32;
+    let offset_c = ltp_mem_c - tail_len;
     let c_out = c.silk_out_buf(offset_c, tail_len);
     // Rust mirror
     let ltp_mem_r = cs_r.ltp_mem_length;

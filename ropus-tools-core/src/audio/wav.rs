@@ -206,7 +206,7 @@ mod tests {
         let fact_size = u32::from_le_bytes([bytes[42], bytes[43], bytes[44], bytes[45]]);
         assert_eq!(fact_size, 4);
         let frames = u32::from_le_bytes([bytes[46], bytes[47], bytes[48], bytes[49]]);
-        assert_eq!(frames, samples.len() as u32 / 1);
+        assert_eq!(frames, samples.len() as u32);
 
         // data chunk next.
         assert_eq!(&bytes[50..54], b"data");

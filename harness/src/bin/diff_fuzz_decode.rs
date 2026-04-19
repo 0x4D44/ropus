@@ -208,7 +208,7 @@ fn parse_code3_vbr_sizes(packet: &[u8]) -> Option<(Vec<i32>, usize)> {
     }
     let mut sizes = vec![0i32; count];
     let mut last_size = remaining;
-    for i in 0..count - 1 {
+    for slot in sizes.iter_mut().take(count - 1) {
         if pos >= packet.len() {
             return None;
         }
@@ -227,7 +227,7 @@ fn parse_code3_vbr_sizes(packet: &[u8]) -> Option<(Vec<i32>, usize)> {
         if sz > remaining {
             return None;
         }
-        sizes[i] = sz;
+        *slot = sz;
         last_size -= bytes + sz;
     }
     if !(0..=1275).contains(&last_size) {
@@ -513,58 +513,102 @@ fn analyze(path: &Path) {
         // Find first non-DTX and last non-DTX sub-frames.
         let first_real = sizes.iter().position(|&s| s > 1);
         let last_real = sizes.iter().rposition(|&s| s > 1);
-        if let (Some(fr), Some(lr)) = (first_real, last_real) {
-            if fr != lr {
-                let mut off = payload_off;
-                for &s in &sizes[..fr] {
-                    off += s as usize;
-                }
-                let first_payload = packet[off..off + sizes[fr] as usize].to_vec();
-                let mut off2 = payload_off;
-                for &s in &sizes[..lr] {
-                    off2 += s as usize;
-                }
-                let last_payload = packet[off2..off2 + sizes[lr] as usize].to_vec();
-                println!("\n  --- minimal repro: 1 normal + k PLC + 1 normal ---");
-                println!(
-                    "  first sub-frame [{}] sz={}, last [{}] sz={}",
-                    fr, sizes[fr], lr, sizes[lr]
-                );
-                // First, with k=1, dump full PCM and CELT state after each step.
-                {
-                    println!("\n  --- step-by-step k=1 dump (with state) ---");
-                    let mut rd = OpusDecoder::new(sample_rate, channels).unwrap();
-                    let cd = unsafe {
-                        let mut e: c_int = 0;
-                        let d = bindings::opus_decoder_create(sample_rate, channels, &mut e);
-                        assert!(!d.is_null() && e == 0);
-                        d
-                    };
-                    let max_pcm = spf as usize * channels as usize;
-                    let mut rb = vec![0i16; max_pcm];
-                    let mut cb = vec![0i16; max_pcm];
+        if let (Some(fr), Some(lr)) = (first_real, last_real)
+            && fr != lr
+        {
+            let mut off = payload_off;
+            for &s in &sizes[..fr] {
+                off += s as usize;
+            }
+            let first_payload = packet[off..off + sizes[fr] as usize].to_vec();
+            let mut off2 = payload_off;
+            for &s in &sizes[..lr] {
+                off2 += s as usize;
+            }
+            let last_payload = packet[off2..off2 + sizes[lr] as usize].to_vec();
+            println!("\n  --- minimal repro: 1 normal + k PLC + 1 normal ---");
+            println!(
+                "  first sub-frame [{}] sz={}, last [{}] sz={}",
+                fr, sizes[fr], lr, sizes[lr]
+            );
+            // First, with k=1, dump full PCM and CELT state after each step.
+            {
+                println!("\n  --- step-by-step k=1 dump (with state) ---");
+                let mut rd = OpusDecoder::new(sample_rate, channels).unwrap();
+                let cd = unsafe {
+                    let mut e: c_int = 0;
+                    let d = bindings::opus_decoder_create(sample_rate, channels, &mut e);
+                    assert!(!d.is_null() && e == 0);
+                    d
+                };
+                let max_pcm = spf as usize * channels as usize;
+                let mut rb = vec![0i16; max_pcm];
+                let mut cb = vec![0i16; max_pcm];
 
-                    println!("  state at fresh decoder:");
-                    compare_celt_state("FRESH", &rd, cd, 21);
+                println!("  state at fresh decoder:");
+                compare_celt_state("FRESH", &rd, cd, 21);
 
-                    let p1 = synth_code0_packet(toc, &first_payload);
-                    let _ = rd.decode(Some(&p1), &mut rb, spf, false);
-                    let _ = unsafe {
-                        bindings::opus_decode(
-                            cd,
-                            p1.as_ptr(),
-                            p1.len() as i32,
-                            cb.as_mut_ptr(),
-                            spf,
-                            0,
-                        )
-                    };
-                    let n = spf as usize * channels as usize;
-                    let neq = rb[..n] == cb[..n];
-                    println!("  after p1 normal: pcm_eq={neq}");
-                    let _ = compare_celt_state("AFTER_P1", &rd, cd, 21);
+                let p1 = synth_code0_packet(toc, &first_payload);
+                let _ = rd.decode(Some(&p1), &mut rb, spf, false);
+                let _ = unsafe {
+                    bindings::opus_decode(cd, p1.as_ptr(), p1.len() as i32, cb.as_mut_ptr(), spf, 0)
+                };
+                let n = spf as usize * channels as usize;
+                let neq = rb[..n] == cb[..n];
+                println!("  after p1 normal: pcm_eq={neq}");
+                let _ = compare_celt_state("AFTER_P1", &rd, cd, 21);
 
-                    let plc1 = vec![toc & !0x3];
+                let plc1 = vec![toc & !0x3];
+                let _ = rd.decode(Some(&plc1), &mut rb, spf, false);
+                let _ = unsafe {
+                    bindings::opus_decode(
+                        cd,
+                        plc1.as_ptr(),
+                        plc1.len() as i32,
+                        cb.as_mut_ptr(),
+                        spf,
+                        0,
+                    )
+                };
+                let neq = rb[..n] == cb[..n];
+                println!("  after PLC1     : pcm_eq={neq}");
+                let _ = compare_celt_state("AFTER_PLC1", &rd, cd, 21);
+
+                let p2 = synth_code0_packet(toc, &last_payload);
+                let _ = rd.decode(Some(&p2), &mut rb, spf, false);
+                let _ = unsafe {
+                    bindings::opus_decode(cd, p2.as_ptr(), p2.len() as i32, cb.as_mut_ptr(), spf, 0)
+                };
+                let neq = rb[..n] == cb[..n];
+                let first_diff = rb[..n].iter().zip(cb[..n].iter()).position(|(a, b)| a != b);
+                println!("  after p2 normal: pcm_eq={neq} first_diff_idx={first_diff:?}");
+                let _ = compare_celt_state("AFTER_P2", &rd, cd, 21);
+                unsafe { bindings::opus_decoder_destroy(cd) };
+            }
+
+            for k in [0usize, 1, 2, 3, 4, 5, 8, 12].iter().copied() {
+                let mut rd = OpusDecoder::new(sample_rate, channels).unwrap();
+                let cd = unsafe {
+                    let mut e: c_int = 0;
+                    let d = bindings::opus_decoder_create(sample_rate, channels, &mut e);
+                    assert!(!d.is_null() && e == 0);
+                    d
+                };
+                let max_pcm = spf as usize * channels as usize;
+                let mut rb = vec![0i16; max_pcm];
+                let mut cb = vec![0i16; max_pcm];
+
+                // 1 normal
+                let p1 = synth_code0_packet(toc, &first_payload);
+                let _ = rd.decode(Some(&p1), &mut rb, spf, false);
+                let _ = unsafe {
+                    bindings::opus_decode(cd, p1.as_ptr(), p1.len() as i32, cb.as_mut_ptr(), spf, 0)
+                };
+
+                // k PLC frames (use a 1-byte size-1 packet → triggers PLC inside decode_frame)
+                // PLC is triggered by len <= 1, so feed a 1-byte packet.
+                let plc1 = vec![toc & !0x3]; // single byte = TOC only, len=1
+                for _ in 0..k {
                     let _ = rd.decode(Some(&plc1), &mut rb, spf, false);
                     let _ = unsafe {
                         bindings::opus_decode(
@@ -576,102 +620,30 @@ fn analyze(path: &Path) {
                             0,
                         )
                     };
-                    let neq = rb[..n] == cb[..n];
-                    println!("  after PLC1     : pcm_eq={neq}");
-                    let _ = compare_celt_state("AFTER_PLC1", &rd, cd, 21);
-
-                    let p2 = synth_code0_packet(toc, &last_payload);
-                    let _ = rd.decode(Some(&p2), &mut rb, spf, false);
-                    let _ = unsafe {
-                        bindings::opus_decode(
-                            cd,
-                            p2.as_ptr(),
-                            p2.len() as i32,
-                            cb.as_mut_ptr(),
-                            spf,
-                            0,
-                        )
-                    };
-                    let neq = rb[..n] == cb[..n];
-                    let first_diff = rb[..n].iter().zip(cb[..n].iter()).position(|(a, b)| a != b);
-                    println!("  after p2 normal: pcm_eq={neq} first_diff_idx={first_diff:?}");
-                    let _ = compare_celt_state("AFTER_P2", &rd, cd, 21);
-                    unsafe { bindings::opus_decoder_destroy(cd) };
                 }
 
-                for k in [0usize, 1, 2, 3, 4, 5, 8, 12].iter().copied() {
-                    let mut rd = OpusDecoder::new(sample_rate, channels).unwrap();
-                    let cd = unsafe {
-                        let mut e: c_int = 0;
-                        let d = bindings::opus_decoder_create(sample_rate, channels, &mut e);
-                        assert!(!d.is_null() && e == 0);
-                        d
-                    };
-                    let max_pcm = spf as usize * channels as usize;
-                    let mut rb = vec![0i16; max_pcm];
-                    let mut cb = vec![0i16; max_pcm];
+                // Final normal
+                let p2 = synth_code0_packet(toc, &last_payload);
+                let r_n = rd.decode(Some(&p2), &mut rb, spf, false).unwrap_or(-1);
+                let c_n = unsafe {
+                    bindings::opus_decode(cd, p2.as_ptr(), p2.len() as i32, cb.as_mut_ptr(), spf, 0)
+                };
 
-                    // 1 normal
-                    let p1 = synth_code0_packet(toc, &first_payload);
-                    let _ = rd.decode(Some(&p1), &mut rb, spf, false);
-                    let _ = unsafe {
-                        bindings::opus_decode(
-                            cd,
-                            p1.as_ptr(),
-                            p1.len() as i32,
-                            cb.as_mut_ptr(),
-                            spf,
-                            0,
-                        )
-                    };
+                let n = r_n as usize * channels as usize;
+                let eq = r_n == c_n && rb[..n] == cb[..n];
+                let first_diff = if eq {
+                    String::new()
+                } else {
+                    let i = rb[..n]
+                        .iter()
+                        .zip(cb[..n].iter())
+                        .position(|(a, b)| a != b)
+                        .unwrap_or(0);
+                    format!(" first_div@{i} rust={} c={}", rb[i], cb[i])
+                };
+                println!("    k={k:2} {}{}", if eq { "==" } else { "!=" }, first_diff);
 
-                    // k PLC frames (use a 1-byte size-1 packet → triggers PLC inside decode_frame)
-                    // PLC is triggered by len <= 1, so feed a 1-byte packet.
-                    let plc1 = vec![toc & !0x3]; // single byte = TOC only, len=1
-                    for _ in 0..k {
-                        let _ = rd.decode(Some(&plc1), &mut rb, spf, false);
-                        let _ = unsafe {
-                            bindings::opus_decode(
-                                cd,
-                                plc1.as_ptr(),
-                                plc1.len() as i32,
-                                cb.as_mut_ptr(),
-                                spf,
-                                0,
-                            )
-                        };
-                    }
-
-                    // Final normal
-                    let p2 = synth_code0_packet(toc, &last_payload);
-                    let r_n = rd.decode(Some(&p2), &mut rb, spf, false).unwrap_or(-1);
-                    let c_n = unsafe {
-                        bindings::opus_decode(
-                            cd,
-                            p2.as_ptr(),
-                            p2.len() as i32,
-                            cb.as_mut_ptr(),
-                            spf,
-                            0,
-                        )
-                    };
-
-                    let n = r_n as usize * channels as usize;
-                    let eq = r_n == c_n && rb[..n] == cb[..n];
-                    let first_diff = if eq {
-                        String::new()
-                    } else {
-                        let i = rb[..n]
-                            .iter()
-                            .zip(cb[..n].iter())
-                            .position(|(a, b)| a != b)
-                            .unwrap_or(0);
-                        format!(" first_div@{i} rust={} c={}", rb[i], cb[i])
-                    };
-                    println!("    k={k:2} {}{}", if eq { "==" } else { "!=" }, first_diff);
-
-                    unsafe { bindings::opus_decoder_destroy(cd) };
-                }
+                unsafe { bindings::opus_decoder_destroy(cd) };
             }
         }
     }

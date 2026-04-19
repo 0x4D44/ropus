@@ -94,7 +94,7 @@ fn main() {
         let cfg = toc >> 3;
         let stereo = (toc >> 2) & 1;
         let code = toc & 0x3;
-        if frame_no >= 595 && frame_no <= 605 {
+        if (595..=605).contains(&frame_no) {
             eprintln!(
                 "frame {}: len={} toc=0x{:02x} cfg={} stereo={} code={} rn={}",
                 frame_no,

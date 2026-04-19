@@ -204,6 +204,11 @@ fn get_c_extended_state(enc: *mut bindings::OpusEncoder, channel: i32) -> Extend
     s
 }
 
+// Field-by-field mutation after Default::default() is intentional here:
+// ExtendedState has ~40 fields, several of them fixed-size arrays that
+// get filled in loops below. Inlining every assignment into the struct
+// literal would triple the line count for no readability gain.
+#[allow(clippy::field_reassign_with_default)]
 fn get_rust_extended_state(enc: &RustOpusEncoder, channel: usize) -> ExtendedState {
     let silk = enc.silk_encoder().expect("SILK encoder not allocated");
     let ch = &silk.state_fxx[channel];
@@ -355,9 +360,7 @@ fn get_rust_interframe_state(enc: &RustOpusEncoder, channel: usize) -> RustInter
     let st = &ch.s_cmn;
 
     let mut prev_nlsfq_q15 = [0i16; 16];
-    for i in 0..16 {
-        prev_nlsfq_q15[i] = st.prev_nlsfq_q15[i];
-    }
+    prev_nlsfq_q15.copy_from_slice(&st.prev_nlsfq_q15);
 
     RustInterframeState {
         last_gain_index: ch.s_shape.last_gain_index as i32,

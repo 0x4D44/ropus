@@ -894,7 +894,7 @@ fn coverage_cbr_constraint_padding() {
 #[test]
 fn coverage_comprehensive_encoder_sweep() {
     // (rate, ch, app, mode, bw, bitrate, vbr, frame_ms, complexity, signal)
-    let configs: &[(
+    type SweepCfg = (
         i32,
         i32,
         i32,
@@ -905,7 +905,8 @@ fn coverage_comprehensive_encoder_sweep() {
         i32,
         i32,
         Option<i32>,
-    )] = &[
+    );
+    let configs: &[SweepCfg] = &[
         // 16kHz SILK mono at different complexities
         (
             16000,
