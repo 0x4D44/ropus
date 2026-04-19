@@ -188,6 +188,91 @@ impl OpusDREDDecoder {
         dred.process_stage = 2;
         OPUS_OK
     }
+
+    // =======================================================================
+    // Stage 8.9 — FARGAN reconstruction seam
+    // =======================================================================
+    //
+    // The three `decode*` methods below mirror C's
+    // `opus_decoder_dred_decode{,24,_float}` in
+    // `reference/src/opus_decoder.c:1609-1691`. C routes through
+    // `opus_decode_native(..., dred, dred_offset)`, which then calls
+    // `fargan_synthesise_frame` on the DRED-derived features to produce
+    // PCM. Until Stage 7 ports FARGAN (see
+    // `wrk_docs/2026.04.19 - HLD - dred-port.md` §Stage 7 coordination
+    // and §Staging row 8.9), the audio-reconstruction last mile is
+    // unavailable. The joint Stage 7 follow-up commit replaces the
+    // `Err(OPUS_UNIMPLEMENTED)` return in each body with the actual
+    // FARGAN-backed decode path.
+    //
+    // C places these methods on `OpusDecoder` (they need the classical
+    // decoder's channel count, preemph state, resampler state, etc. for
+    // the final render). Pending Stage 7, they live here on
+    // `OpusDREDDecoder` so the seam stays scoped to `opus/dred.rs`; the
+    // follow-up commit is free to relocate them onto `OpusDecoder` when
+    // the real body lands.
+
+    /// Reconstruct 16-bit PCM from a parsed DRED payload. Stage 8.9 stub.
+    ///
+    /// Will eventually drive FARGAN synthesis from `dred.fec_features`
+    /// and render `frame_size` samples per channel into `pcm`. Currently
+    /// returns [`OPUS_UNIMPLEMENTED`] because FARGAN is Stage 7's
+    /// deliverable; see `wrk_docs/2026.04.19 - HLD - dred-port.md`
+    /// §Stage 7 coordination.
+    ///
+    /// Mirrors C `opus_decoder_dred_decode` at
+    /// `reference/src/opus_decoder.c:1609`.
+    pub fn decode(
+        &self,
+        _dred: &OpusDred,
+        _dred_offset: i32,
+        _pcm: &mut [i16],
+        _frame_size: i32,
+    ) -> Result<i32, i32> {
+        Err(OPUS_UNIMPLEMENTED)
+    }
+
+    /// Reconstruct 24-bit PCM (packed into `i32`) from a parsed DRED
+    /// payload. Stage 8.9 stub.
+    ///
+    /// Will eventually drive FARGAN synthesis from `dred.fec_features`
+    /// and render `frame_size` samples per channel into `pcm`. Currently
+    /// returns [`OPUS_UNIMPLEMENTED`] because FARGAN is Stage 7's
+    /// deliverable; see `wrk_docs/2026.04.19 - HLD - dred-port.md`
+    /// §Stage 7 coordination.
+    ///
+    /// Mirrors C `opus_decoder_dred_decode24` at
+    /// `reference/src/opus_decoder.c:1643`.
+    pub fn decode24(
+        &self,
+        _dred: &OpusDred,
+        _dred_offset: i32,
+        _pcm: &mut [i32],
+        _frame_size: i32,
+    ) -> Result<i32, i32> {
+        Err(OPUS_UNIMPLEMENTED)
+    }
+
+    /// Reconstruct floating-point PCM from a parsed DRED payload. Stage
+    /// 8.9 stub.
+    ///
+    /// Will eventually drive FARGAN synthesis from `dred.fec_features`
+    /// and render `frame_size` samples per channel into `pcm`. Currently
+    /// returns [`OPUS_UNIMPLEMENTED`] because FARGAN is Stage 7's
+    /// deliverable; see `wrk_docs/2026.04.19 - HLD - dred-port.md`
+    /// §Stage 7 coordination.
+    ///
+    /// Mirrors C `opus_decoder_dred_decode_float` at
+    /// `reference/src/opus_decoder.c:1677`.
+    pub fn decode_float(
+        &self,
+        _dred: &OpusDred,
+        _dred_offset: i32,
+        _pcm: &mut [f32],
+        _frame_size: i32,
+    ) -> Result<i32, i32> {
+        Err(OPUS_UNIMPLEMENTED)
+    }
 }
 
 // ===========================================================================
@@ -448,5 +533,38 @@ mod tests {
     #[test]
     fn compute_quantizer_reachable_from_dred_scope() {
         assert_eq!(compute_quantizer(0, 0, 15, 0), 0);
+    }
+
+    // Stage 8.9 — FARGAN reconstruction seam stubs. These three tests
+    // pin the returned error so Stage 7's follow-up commit sees a
+    // visible failure when it replaces the stubs with real bodies
+    // (the new `Ok(...)` return will trip every assertion below, and
+    // whoever wires FARGAN then has to update these alongside the
+    // implementation).
+    #[test]
+    fn decode_returns_unimplemented() {
+        let dec = OpusDREDDecoder::new();
+        let dred = OpusDred::default();
+        let mut pcm = [0i16; 960];
+        let err = dec.decode(&dred, 0, &mut pcm, 960).unwrap_err();
+        assert_eq!(err, OPUS_UNIMPLEMENTED);
+    }
+
+    #[test]
+    fn decode24_returns_unimplemented() {
+        let dec = OpusDREDDecoder::new();
+        let dred = OpusDred::default();
+        let mut pcm = [0i32; 960];
+        let err = dec.decode24(&dred, 0, &mut pcm, 960).unwrap_err();
+        assert_eq!(err, OPUS_UNIMPLEMENTED);
+    }
+
+    #[test]
+    fn decode_float_returns_unimplemented() {
+        let dec = OpusDREDDecoder::new();
+        let dred = OpusDred::default();
+        let mut pcm = [0.0f32; 960];
+        let err = dec.decode_float(&dred, 0, &mut pcm, 960).unwrap_err();
+        assert_eq!(err, OPUS_UNIMPLEMENTED);
     }
 }
