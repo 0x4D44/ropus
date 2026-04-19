@@ -574,6 +574,29 @@ impl OpusDecoder {
         // CELT signalling off (Opus handles framing)
         dec.celt_dec.set_signalling(false);
 
+        // Auto-load the compile-time default weight blob if build.rs was
+        // able to produce one from the xiph reference sources. Matches C
+        // `opus_decoder_init` behaviour under `!USE_WEIGHTS_FILE`
+        // (`reference/dnn/lpcnet_plc.c:58`), which runs
+        // `init_plcmodel(..., plcmodel_arrays)` on the compile-time
+        // tables and `celt_assert`s the return. A failure here means the
+        // embedded blob is malformed — a build-config bug, not a runtime
+        // condition — so we `debug_assert!` to surface it in tests and
+        // debug builds rather than silently falling back to classical
+        // PLC. Release builds still leave `loaded=false` on failure so
+        // shipped code keeps decoding, but the loud-fail in CI catches
+        // drift early.
+        if crate::dnn::embedded_weights::has_embedded_weights() {
+            let ret = dec
+                .lpcnet
+                .load_model(crate::dnn::embedded_weights::WEIGHTS_BLOB);
+            debug_assert_eq!(
+                ret, 0,
+                "embedded weight blob is malformed — rebuild from a fresh \
+                 reference/dnn/ tree (cargo run -p fetch-assets -- weights)"
+            );
+        }
+
         Ok(dec)
     }
 
@@ -591,12 +614,14 @@ impl OpusDecoder {
 
         self.celt_dec.reset();
         self.silk_dec.init();
-        // Full LPCNet state wipe including weights. `LPCNetPLCState::reset`
-        // clears `enc` (pitchdnn), `fargan`, and flips `loaded = false`
-        // so callers must re-issue `set_dnn_blob` after a decoder reset
-        // before the neural PLC path is reachable again. This matches
-        // `opus_decoder_init`'s semantics for DEEP_PLC rebuilds: reset
-        // is treated as "new decoder", not "keep weights, drop history".
+        // Clear runtime PLC history (FEC queue, analysis buffers, GRU
+        // states, cont_features) but *preserve* loaded model weights.
+        // Mirrors C `lpcnet_plc_reset` (`reference/dnn/lpcnet_plc.c:45`),
+        // which only zeros from `LPCNET_PLC_RESET_START` onwards. A
+        // user's `set_dnn_blob(custom)` therefore survives `reset()`,
+        // and a decoder that started with embedded defaults keeps them —
+        // matches the C ABI semantic that reset wipes stream state, not
+        // model configuration.
         self.lpcnet.reset();
     }
 
@@ -605,26 +630,26 @@ impl OpusDecoder {
     /// Mirrors C's `OPUS_SET_DNN_BLOB_REQUEST` CTL
     /// (`reference/src/opus_decoder.c:1218`).
     ///
-    /// **Stage 7b.1 scope note — parse validation only.** The blob is
-    /// parsed and structurally validated, but the downstream model
-    /// fields (LPCNet / PitchDNN) are **not** populated from the parsed
-    /// arrays — the name-to-field dispatch port is Stage 7b.1.5 scope.
-    /// With this release, `LPCNetPLCState.loaded` therefore stays
-    /// `false` after a successful call, and the SILK / CELT decoders
-    /// fall through to the classical pitch/noise PLC on lost frames.
-    /// FARGAN weights *are* populated (its init dispatcher is already
-    /// ported) but the lost-frame gate on `loaded` keeps it dormant.
+    /// On success, populates the three neural PLC sub-models — the PLC
+    /// prediction network (`plc_dense_in`, two GRUs, `plc_dense_out`),
+    /// the PitchDNN estimator, and FARGAN synthesis — and flips
+    /// `LPCNetPLCState.loaded = true`. From that point on, lost frames
+    /// in CELT-only or hybrid mode take the `FRAME_PLC_NEURAL` branch
+    /// (provided `complexity >= 5`, which the C reference uses as the
+    /// deep-PLC gate). Without a successful `set_dnn_blob`, every lost
+    /// frame falls through to the classical pitch/noise PLC — exactly
+    /// the C reference's `!st->loaded` branch.
     ///
-    /// Returning `Ok(())` on a parseable blob still matches the C CTL
-    /// contract — callers treat success as "weights accepted"; the
-    /// gate flip to run the neural path lands in Stage 7b.1.5.
+    /// Unknown weight records in the blob (for example the DRED /
+    /// OSCE tables that xiph's `write_lpcnet_weights` emits alongside
+    /// PLC weights) are silently ignored. This matches the C
+    /// `find_array_check` semantics and keeps the runtime path working
+    /// against the superset blob the upstream tarball ships.
     ///
     /// Errors:
-    /// - `OPUS_BAD_ARG` for a malformed / incomplete blob.
-    // TODO(stage-7b.1.5): once `LPCNetState::load_model` performs the
-    // full name-to-field dispatch, the `loaded` gate inside
-    // `LPCNetPLCState::load_model` flips to `true` and the neural PLC
-    // path becomes live. No change expected to this function's signature.
+    /// - `OPUS_BAD_ARG` for a malformed blob, or one missing a required
+    ///   weight name / size combination for any of the three
+    ///   sub-models.
     pub fn set_dnn_blob(&mut self, data: &[u8]) -> Result<(), i32> {
         match self.lpcnet.load_model(data) {
             0 => Ok(()),
@@ -1575,6 +1600,15 @@ impl OpusDecoder {
         self.range_final = 0;
         self.silk_dec.init();
         self.celt_dec.reset();
+    }
+
+    /// Test-only accessor for the CELT decoder's last-frame-type marker.
+    /// Exposed so integration tests can verify which PLC branch
+    /// (`FRAME_PLC_PERIODIC`, `FRAME_PLC_NOISE`, `FRAME_PLC_NEURAL`,
+    /// `FRAME_DRED`) actually executed on the most recent decode.
+    #[cfg(test)]
+    pub(crate) fn celt_last_frame_type(&self) -> i32 {
+        self.celt_dec.last_frame_type
     }
 }
 
@@ -3103,17 +3137,20 @@ mod tests {
         assert!(dec.set_complexity(11).is_err());
     }
 
-    /// Exercises the Stage 7b.1 `OpusDecoder::set_dnn_blob` plumbing.
-    /// A malformed blob must be rejected (mirrors C's `opus_decoder_ctl`
-    /// returning `OPUS_BAD_ARG` on a weights-parse failure) and a
-    /// structurally-valid LPCNet PLC blob — the same one the lpcnet
-    /// unit tests synthesise — must pass parse validation.
+    /// Exercises `OpusDecoder::set_dnn_blob` end-to-end: malformed
+    /// blobs rejected with `OPUS_BAD_ARG` (mirrors C's
+    /// `opus_decoder_ctl` returning `OPUS_BAD_ARG` on parse failure),
+    /// empty blobs rejected, and a structurally-valid PLC blob loads
+    /// all three sub-models (PLC prediction layers, PitchDNN, FARGAN)
+    /// so `LPCNetPLCState.loaded` stays `true` — the gate the SILK /
+    /// CELT neural PLC paths read.
     ///
-    /// Stage 7b.1 "honest gap": the blob is parsed but model fields
-    /// aren't populated (that's 7b.1.5). The neural path therefore
-    /// stays gated off even after `Ok(())`; the next test below
-    /// (`test_decoder_does_not_panic_under_loss`) relies on that
-    /// invariant.
+    /// When the compile-time embedded weight blob is non-empty
+    /// (i.e. `reference/dnn/*_data.c` was on disk at build time), the
+    /// decoder starts with `loaded=true` already. A malformed
+    /// `set_dnn_blob` call can wipe it, because `load_model` clears
+    /// layers as it re-initialises — the test accounts for both
+    /// starting states by reloading a valid blob at the end.
     #[test]
     fn test_decoder_ctl_set_dnn_blob_loads_real_blob() {
         let mut dec = OpusDecoder::new(48000, 1).unwrap();
@@ -3125,6 +3162,217 @@ mod tests {
         // exercises the same parse → init path C uses for real weights.
         let blob = crate::dnn::lpcnet::test_support::make_plc_weight_blob();
         assert_eq!(dec.set_dnn_blob(&blob), Ok(()));
+        // Successful load must flip `loaded` (or keep it set, if the
+        // compile-time embed already did). Either way, the neural PLC
+        // path is active after this point.
+        assert!(
+            dec.lpcnet.loaded,
+            "successful set_dnn_blob must enable neural PLC"
+        );
+    }
+
+    /// Covers the partial-success failure path inside
+    /// `LPCNetPLCState::load_model`: when a blob lacks required weights
+    /// for one of the three sub-models, `load_model` returns non-zero
+    /// and `loaded` stays `false` (or flips to `false` if it was
+    /// previously set). Prevents a silent half-populated state where
+    /// e.g. PitchDNN weights from the new blob coexist with stale
+    /// FARGAN weights from a prior call.
+    #[test]
+    fn test_decoder_set_dnn_blob_rejects_partial_blob() {
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        // PitchDNN-only blob misses FARGAN and PLC weights, so
+        // init_fargan / init_plcmodel will fail to find required
+        // records and `load_model` returns non-zero.
+        let partial_blob = crate::dnn::lpcnet::test_support::make_pitchdnn_weight_blob();
+        assert_eq!(dec.set_dnn_blob(&partial_blob), Err(OPUS_BAD_ARG));
+        assert!(
+            !dec.lpcnet.loaded,
+            "partial blob must leave neural PLC disabled, regardless of \
+             whether the decoder started with embedded weights loaded"
+        );
+    }
+
+    /// Confirms the compile-time embedded weight blob auto-loads on
+    /// `OpusDecoder::new()` when `reference/dnn/*_data.c` was present
+    /// during the build. When build.rs couldn't locate the reference
+    /// sources, the blob is empty and this test is vacuously satisfied
+    /// (mirroring the crates.io-without-fetch-assets scenario).
+    ///
+    /// Also pins the blob size (golden-value) when embedded — a change
+    /// means either the weights tarball was rev'd or the generator
+    /// logic drifted, both of which warrant explicit review before
+    /// shipping.
+    #[test]
+    fn test_decoder_neural_plc_activates_with_default_weights() {
+        // Golden-size assertion on the embedded blob. Catches silent
+        // tarball drift — if `fetch-assets`'s WEIGHTS_SHA256 changes or
+        // our gen_weights_blob.c's record-emit logic shifts, this
+        // assertion fails and forces a conscious update. Empty (no
+        // reference sources on disk) is a separate, expected state
+        // that this test tolerates via the outer `if`.
+        if crate::dnn::embedded_weights::has_embedded_weights() {
+            assert_eq!(
+                crate::dnn::embedded_weights::WEIGHTS_BLOB.len(),
+                6_560_576,
+                "embedded blob size changed — xiph tarball drift? update \
+                 WEIGHTS_SHA256 in tools/fetch-assets AND this assertion"
+            );
+        }
+
+        let dec = OpusDecoder::new(48000, 1).unwrap();
+        if crate::dnn::embedded_weights::has_embedded_weights() {
+            assert!(
+                dec.lpcnet.loaded,
+                "a fresh decoder must auto-load the embedded weight blob \
+                 so neural PLC is armed out-of-the-box"
+            );
+        } else {
+            assert!(
+                !dec.lpcnet.loaded,
+                "without an embedded blob, the fresh decoder falls back to \
+                 classical PLC until the caller supplies weights"
+            );
+        }
+    }
+
+    /// `OpusDecoder::reset()` wipes stream history (FEC queue, FFT
+    /// buffers, `pcm` ring, GRU states, etc.) but **preserves loaded
+    /// model weights** — both the `loaded` gate and the content of
+    /// `self.model` / `self.fargan.model` / `self.enc.pitchdnn.model`
+    /// survive. Matches C `lpcnet_plc_reset`
+    /// (`reference/dnn/lpcnet_plc.c:45`), which only `OPUS_CLEAR`s from
+    /// `LPCNET_PLC_RESET_START` onwards; the `model` / `loaded` /
+    /// `fargan` / `enc` fields sit before that marker and are
+    /// intentionally untouched.
+    ///
+    /// Semantic consequence: a user's `set_dnn_blob(custom_blob)`
+    /// followed by `reset()` does *not* silently revert to the
+    /// compile-time defaults — the custom weights stay live until the
+    /// caller explicitly swaps them back. Previous behaviour that
+    /// re-loaded the embedded blob on every reset was a deviation from
+    /// the C ABI; this test locks in the fix.
+    #[test]
+    fn test_decoder_reset_preserves_weights() {
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        let blob = crate::dnn::lpcnet::test_support::make_plc_weight_blob();
+        dec.set_dnn_blob(&blob).expect("weight blob should load");
+        assert!(dec.lpcnet.loaded, "precondition: weights loaded");
+
+        dec.reset();
+
+        // Weights must survive reset regardless of whether the
+        // compile-time embedded blob exists — the user's custom blob
+        // is what's live, and reset doesn't erase model state.
+        assert!(
+            dec.lpcnet.loaded,
+            "reset must preserve loaded weights — user-supplied blob \
+             should survive a stream-history wipe"
+        );
+    }
+
+    /// Confirms the **neural PLC path actually executes and produces
+    /// audible output** under loss, rather than silently falling back
+    /// to the classical PLC *or* running the neural branch against
+    /// a mis-bound name-to-field mapping that compiles but emits
+    /// silence. Two assertions:
+    ///
+    /// 1. `FRAME_PLC_NEURAL` branch ran (gate wired, complexity>=5,
+    ///    weights loaded).
+    /// 2. PCM output is non-zero *and* has an RMS above a floor — if
+    ///    `init_plcmodel` / `init_fargan` / `init_pitchdnn` had a
+    ///    permutation in their weight-name dispatch, `linear_init`
+    ///    would still populate *something* for every layer and the
+    ///    synthesis would run, but the output would be garbage /
+    ///    silence. The RMS floor catches that failure mode.
+    ///
+    /// Only runs when the compile-time embedded blob is present;
+    /// otherwise the synthetic zero-weight blob produces silence by
+    /// construction and there's no bound that distinguishes correct
+    /// from broken. Stage 7b.2 adds cross-reference parity checks.
+    #[test]
+    fn test_decoder_neural_plc_branch_runs_under_loss() {
+        use crate::opus::encoder::{OPUS_APPLICATION_AUDIO, OpusEncoder};
+        const FRAME_PLC_NEURAL: i32 = 4;
+
+        if !crate::dnn::embedded_weights::has_embedded_weights() {
+            // Without real weights this test would assert silence — a
+            // tautology that hides the failure mode it's meant to catch.
+            // Skip cleanly; Stage 7b.2's harness covers the weights-
+            // absent scenario via tier-2 SNR instead.
+            eprintln!(
+                "skipping test_decoder_neural_plc_branch_runs_under_loss: \
+                 no embedded weights"
+            );
+            return;
+        }
+
+        let fs = 48000;
+        let frame_size = fs / 50; // 20 ms
+        let mut enc = OpusEncoder::new(fs, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        enc.set_bitrate(96000);
+        enc.set_force_mode(MODE_CELT_ONLY);
+
+        let mut dec = OpusDecoder::new(fs, 1).unwrap();
+        assert!(dec.set_complexity(5).is_ok());
+        // Use the embedded real weights auto-loaded by `new` — no
+        // synthetic-blob indirection. `assert!(dec.lpcnet.loaded)`
+        // confirms the pre-condition the Stage 7b.1.5 compile-time
+        // default buys us.
+        assert!(dec.lpcnet.loaded, "precondition: neural PLC enabled");
+
+        // Prime the decoder with good CELT frames so the neural PLC gate
+        // sees a fully-initialised history when loss kicks in.
+        let mut out = vec![0i16; frame_size as usize];
+        for seed in 0..4 {
+            let pcm = crate::coverage_tests::patterned_pcm_i16(
+                frame_size as usize,
+                1,
+                seed,
+            );
+            let mut pkt = vec![0u8; 1500];
+            let len = enc.encode(&pcm, frame_size, &mut pkt, 1500).unwrap();
+            dec.decode(Some(&pkt[..len as usize]), &mut out, frame_size, false)
+                .expect("good-frame decode");
+        }
+
+        // Drop a packet; the decoder must pick FRAME_PLC_NEURAL.
+        dec.decode(None, &mut out, frame_size, false)
+            .expect("PLC decode");
+        assert_eq!(
+            dec.celt_last_frame_type(),
+            FRAME_PLC_NEURAL,
+            "CELT PLC must take the neural branch when complexity>=5 \
+             and weights are loaded"
+        );
+
+        // Output must be audibly non-silent. Catches the silent-failure
+        // mode: if the weight-name dispatch were permuted, FARGAN would
+        // still synthesise something, but it'd be either zeros or
+        // incoherent garbage averaging near zero.
+        assert!(
+            out.iter().any(|&s| s != 0),
+            "neural PLC output is all zero — weights likely not loaded \
+             correctly"
+        );
+        // RMS floor: loose enough that the bound holds across the range
+        // of "real weights do sensible things" but tight enough that a
+        // silent / near-silent output fails. The bound was calibrated
+        // against the embedded blob on this checkout; if a future
+        // refetch changes the weights and this drops below 50, verify
+        // the new output is still reasonable speech before relaxing.
+        let sum_sq: u64 = out.iter().map(|&s| (s as i64 * s as i64) as u64).sum();
+        let rms = ((sum_sq as f64) / (out.len() as f64)).sqrt();
+        // On this checkout the embedded real weights produce RMS
+        // ≈ 1440 against the patterned test signal; 500 is the floor
+        // that still catches the silent/near-silent failure modes
+        // (zeroed weights ~0, name-permutation garbage < 100) without
+        // being so tight a legitimate tarball refresh trips it.
+        assert!(
+            rms > 500.0,
+            "neural PLC RMS too low ({rms:.1}) — weight-name mapping \
+             permutation would pass branch assertion but fail this"
+        );
     }
 
     /// Lossless sanity: after loading a valid weight blob, a no-loss

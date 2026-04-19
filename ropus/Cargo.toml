@@ -1,6 +1,6 @@
 [package]
 name = "ropus"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Rust port of the xiph Opus audio codec (fixed-point), bit-exact against the reference."
@@ -10,10 +10,24 @@ readme = "README.md"
 keywords = ["opus", "audio", "codec", "dsp"]
 categories = ["multimedia::audio", "multimedia::encoding"]
 authors = ["Martin Davidson <martingdavidson@gmail.com>"]
-include = ["src/**/*", "examples/**/*", "Cargo.toml", "README.md", "LICENSE"]
+include = [
+    "src/**/*",
+    "examples/**/*",
+    "build.rs",
+    "build/**/*",
+    "Cargo.toml",
+    "README.md",
+    "LICENSE",
+]
 
 [dependencies]
 wide = "0.7"
+
+[build-dependencies]
+# Used by build.rs only to compile + run a tiny weight-blob generator
+# when the xiph reference sources are present. Builds without a C
+# toolchain still succeed — the blob is emitted empty in that case.
+cc = "1"
 
 [dev-dependencies]
 proptest = "1"

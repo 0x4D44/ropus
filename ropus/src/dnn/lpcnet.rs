@@ -7,9 +7,9 @@
 //! Double precision is used where the C reference uses `double`.
 
 use super::core::{
-    ACTIVATION_LINEAR, ACTIVATION_SIGMOID, ACTIVATION_TANH, LinearLayer, compute_activation,
-    compute_generic_conv1d, compute_generic_dense, compute_generic_gru, compute_linear, lin2ulaw,
-    log2_approx, lpcnet_exp, parse_weights, ulaw2lin,
+    ACTIVATION_LINEAR, ACTIVATION_SIGMOID, ACTIVATION_TANH, LinearLayer, WeightArray,
+    compute_activation, compute_generic_conv1d, compute_generic_dense, compute_generic_gru,
+    compute_linear, lin2ulaw, linear_init, log2_approx, lpcnet_exp, parse_weights, ulaw2lin,
 };
 
 // ===========================================================================
@@ -1137,10 +1137,151 @@ pub struct PLCModel {
 }
 
 /// PLC prediction GRU state.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct PLCNetState {
     pub gru1_state: Vec<f32>,
     pub gru2_state: Vec<f32>,
+}
+
+impl Default for PLCNetState {
+    /// Matches C `PLCNetState` in `reference/dnn/lpcnet_private.h:45-47`
+    /// where the GRU states are fixed-size `float[PLC_GRU{1,2}_STATE_SIZE]`
+    /// arrays (both 192, per `reference/dnn/plc_data.h:18,22`). Rust uses
+    /// `Vec` for dynamic sizing elsewhere in the DNN port, so we size
+    /// them here to keep `compute_generic_gru` — which slices
+    /// `state[..recurrent_weights.nb_inputs]` — happy on a fresh state.
+    fn default() -> Self {
+        Self {
+            gru1_state: vec![0.0; PLC_GRU1_STATE_SIZE],
+            gru2_state: vec![0.0; PLC_GRU2_STATE_SIZE],
+        }
+    }
+}
+
+/// PLC GRU state dimensions — match `reference/dnn/plc_data.h:18,22`.
+pub const PLC_GRU1_STATE_SIZE: usize = 192;
+pub const PLC_GRU2_STATE_SIZE: usize = 192;
+
+// PLC model dimensions — match the xiph dump_plc.py schema recorded in
+// `reference/dnn/plc_data.c`'s `init_plcmodel` body. Holding them as
+// named constants keeps the `init_plcmodel` port one-to-one with the C.
+const PLC_DENSE_IN_IN: usize = 57;
+const PLC_DENSE_IN_OUT: usize = 128;
+const PLC_GRU1_INPUT_IN: usize = 128;
+const PLC_GRU1_INPUT_OUT: usize = 576;
+const PLC_GRU1_RECURRENT_IN: usize = 192;
+const PLC_GRU1_RECURRENT_OUT: usize = 576;
+const PLC_GRU2_INPUT_IN: usize = 192;
+const PLC_GRU2_INPUT_OUT: usize = 576;
+const PLC_GRU2_RECURRENT_IN: usize = 192;
+const PLC_GRU2_RECURRENT_OUT: usize = 576;
+const PLC_DENSE_OUT_IN: usize = 192;
+const PLC_DENSE_OUT_OUT: usize = 20;
+
+/// Populate a `PLCModel` from parsed named weight arrays.
+///
+/// Rust port of the auto-generated C `init_plcmodel` in
+/// `reference/dnn/plc_data.c`. The seven `linear_init` invocations below
+/// mirror the C one-to-one, including the exact weight-name strings — so
+/// a weight blob produced by xiph's `write_lpcnet_weights` populates the
+/// same layers with the same data.
+///
+/// Returns `Err(())` when any required weight is missing or has an
+/// unexpected size. Matches C's behaviour: silent about extra (unknown)
+/// weights, loud about missing/wrong-sized ones.
+pub fn init_plcmodel(arrays: &[WeightArray]) -> Result<PLCModel, ()> {
+    // plc_dense_in: float-only dense layer, with bias.
+    let plc_dense_in = linear_init(
+        arrays,
+        Some("plc_dense_in_bias"),
+        None,
+        None,
+        Some("plc_dense_in_weights_float"),
+        None,
+        None,
+        None,
+        PLC_DENSE_IN_IN,
+        PLC_DENSE_IN_OUT,
+    )?;
+
+    // plc_dense_out: float-only dense layer, with bias.
+    let plc_dense_out = linear_init(
+        arrays,
+        Some("plc_dense_out_bias"),
+        None,
+        None,
+        Some("plc_dense_out_weights_float"),
+        None,
+        None,
+        None,
+        PLC_DENSE_OUT_IN,
+        PLC_DENSE_OUT_OUT,
+    )?;
+
+    // plc_gru1_input: quantized GRU input projection with bias.
+    let plc_gru1_input = linear_init(
+        arrays,
+        Some("plc_gru1_input_bias"),
+        Some("plc_gru1_input_subias"),
+        Some("plc_gru1_input_weights_int8"),
+        Some("plc_gru1_input_weights_float"),
+        None,
+        None,
+        Some("plc_gru1_input_scale"),
+        PLC_GRU1_INPUT_IN,
+        PLC_GRU1_INPUT_OUT,
+    )?;
+
+    // plc_gru1_recurrent: quantized GRU recurrent projection with bias.
+    let plc_gru1_recurrent = linear_init(
+        arrays,
+        Some("plc_gru1_recurrent_bias"),
+        Some("plc_gru1_recurrent_subias"),
+        Some("plc_gru1_recurrent_weights_int8"),
+        Some("plc_gru1_recurrent_weights_float"),
+        None,
+        None,
+        Some("plc_gru1_recurrent_scale"),
+        PLC_GRU1_RECURRENT_IN,
+        PLC_GRU1_RECURRENT_OUT,
+    )?;
+
+    // plc_gru2_input: quantized GRU input projection with bias.
+    let plc_gru2_input = linear_init(
+        arrays,
+        Some("plc_gru2_input_bias"),
+        Some("plc_gru2_input_subias"),
+        Some("plc_gru2_input_weights_int8"),
+        Some("plc_gru2_input_weights_float"),
+        None,
+        None,
+        Some("plc_gru2_input_scale"),
+        PLC_GRU2_INPUT_IN,
+        PLC_GRU2_INPUT_OUT,
+    )?;
+
+    // plc_gru2_recurrent: quantized GRU recurrent projection with bias.
+    let plc_gru2_recurrent = linear_init(
+        arrays,
+        Some("plc_gru2_recurrent_bias"),
+        Some("plc_gru2_recurrent_subias"),
+        Some("plc_gru2_recurrent_weights_int8"),
+        Some("plc_gru2_recurrent_weights_float"),
+        None,
+        None,
+        Some("plc_gru2_recurrent_scale"),
+        PLC_GRU2_RECURRENT_IN,
+        PLC_GRU2_RECURRENT_OUT,
+    )?;
+
+    Ok(PLCModel {
+        plc_dense_in,
+        plc_gru1_input,
+        plc_gru1_recurrent,
+        plc_gru2_input,
+        plc_gru2_recurrent,
+        plc_dense_out,
+    })
 }
 
 // ===========================================================================
@@ -1186,6 +1327,19 @@ impl PitchDNNState {
             Err(e) => e,
         }
     }
+    /// Build the inner `PitchDnn` model from pre-parsed arrays without
+    /// mutating state. Caller commits via `apply_loaded_model`.
+    /// Enables atomic multi-sub-model loads from a single parse.
+    pub(crate) fn try_init(
+        arrays: &[crate::dnn::core::WeightArray],
+    ) -> Result<super::pitchdnn::PitchDnn, ()> {
+        super::pitchdnn::init_pitchdnn(arrays)
+    }
+    /// Commit a pre-built `PitchDnn` model as the new weights.
+    pub(crate) fn apply_loaded_model(&mut self, model: super::pitchdnn::PitchDnn) {
+        self.inner.model = model;
+        self.loaded = true;
+    }
     pub fn compute(&mut self, if_features: &[f32], xcorr_features: &[f32]) -> f32 {
         if !self.loaded {
             return 0.0;
@@ -1206,6 +1360,18 @@ impl FARGANState {
     }
     pub fn load_model(&mut self, data: &[u8]) -> i32 {
         self.inner.load_model(data)
+    }
+    /// Build the inner `FarganModel` from pre-parsed arrays without
+    /// mutating state. Caller commits via `apply_loaded_model`.
+    /// Enables atomic multi-sub-model loads from a single parse.
+    pub(crate) fn try_init(
+        arrays: &[crate::dnn::core::WeightArray],
+    ) -> Result<super::fargan::FarganModel, ()> {
+        super::fargan::init_fargan(arrays)
+    }
+    /// Commit a pre-built `FarganModel` as the new weights.
+    pub(crate) fn apply_loaded_model(&mut self, model: super::fargan::FarganModel) {
+        self.inner.model = model;
     }
     pub fn cont(&mut self, pcm: &[f32], features: &[f32]) {
         self.inner.cont(pcm, features);
@@ -1986,21 +2152,40 @@ impl LPCNetPLCState {
         self.reset();
     }
 
-    /// Drop all dynamic state back to `Self::default()` equivalence.
+    /// Drop the per-stream runtime history, preserving loaded model
+    /// weights and the `loaded` gate.
     ///
-    /// Crucially this resets **both** `self.enc` (via `LPCNetEncState::new()`
-    /// which wipes pitchdnn weights) **and** `self.fargan` (via
-    /// `FARGANState::init()`), plus forces `self.loaded = false`. The
-    /// previous implementation reset `enc` while leaving `fargan` and
-    /// `loaded` intact, which meant a post-reset `conceal()` would
-    /// synthesise against stale FARGAN weights but zeroed LPCNet /
-    /// PitchDNN weights — a silent-corruption path. Post-reset state
-    /// must match post-new state so callers have one invariant to
-    /// reason about.
+    /// Mirrors C `lpcnet_plc_reset` (`reference/dnn/lpcnet_plc.c:45`),
+    /// which `OPUS_CLEAR`s from `LPCNET_PLC_RESET_START` onwards —
+    /// the `fec` array. Fields *before* that marker in the C struct
+    /// (`reference/dnn/lpcnet_private.h:50-71`) — `model`, `fargan`,
+    /// `enc`, `loaded`, `arch` — survive the reset. C then explicitly
+    /// re-initialises `enc` via `lpcnet_encoder_init` (which preserves
+    /// PitchDNN weights but re-zeros encoder history buffers) and
+    /// zero-fills `pcm` / `blend` / `loss_count` / `analysis_gap` /
+    /// `analysis_pos` / `predict_pos` to their post-init values.
+    ///
+    /// Semantic consequence: a user-supplied `set_dnn_blob(custom)`
+    /// followed by `reset()` keeps the custom weights live. The
+    /// previous implementation wiped weights and re-applied embedded
+    /// defaults, which silently reverted the user's override.
     pub fn reset(&mut self) {
+        // Zero encoder runtime state while keeping its PitchDNN
+        // weights. Rust doesn't have a `LPCNET_PLC_RESET_START`
+        // marker, but `LPCNetEncState::new()` intentionally preserves
+        // the `pitchdnn` field structure: the enclosing `PitchDNNState`
+        // stays loaded because we keep `self.enc.pitchdnn` across this
+        // call. We only overwrite the analysis/FFT buffers.
+        let preserved_pitchdnn = std::mem::take(&mut self.enc.pitchdnn);
         self.enc = LPCNetEncState::new();
-        self.fargan.init();
-        self.loaded = false;
+        self.enc.pitchdnn = preserved_pitchdnn;
+
+        // `self.model`, `self.fargan`, `self.loaded`, `self.arch` are
+        // intentionally NOT touched here — they sit before
+        // `LPCNET_PLC_RESET_START` in the C layout.
+
+        // Runtime history — everything from `fec` onwards in the C
+        // struct.
         self.pcm.fill(0.0);
         self.blend = 0;
         self.loss_count = 0;
@@ -2019,37 +2204,84 @@ impl LPCNetPLCState {
         self.plc_bak = [PLCNetState::default(), PLCNetState::default()];
     }
 
-    /// Parse the weight blob and run as much population as the current
-    /// port supports. Returns 0 when the blob format is valid (so CTL
-    /// callers get `Ok(())`); returns -1 on a malformed blob.
+    /// Parse the weight blob and populate every sub-model required for
+    /// the neural PLC path.
     ///
-    /// **Stage 7b.1 honest-gap contract:** parsing succeeds but the
-    /// `self.model` (PLC GRUs + dense layers) and `self.enc.nnet`
-    /// layers are not populated — those name→field mappings land in
-    /// Stage 7b.1.5. `self.loaded` therefore stays `false` after this
-    /// call, which is the flag the SILK / CELT neural PLC paths gate
-    /// on. The result: neural PLC stays switched off and callers fall
-    /// through to the classical pitch/noise PLC without panicking or
-    /// silent-corrupting output against blank model layers.
+    /// Mirrors C `lpcnet_plc_load_model` (`reference/dnn/lpcnet_plc.c:75`):
     ///
-    /// FARGAN is the one sub-network whose `load_model` actually
-    /// populates (`init_fargan` implements the name dispatch), so we
-    /// still call it to keep its state consistent with what a
-    /// populated C reference would hold after the same blob.
-    // TODO(stage-7b.1.5): flip `self.loaded = true` once
-    // `LPCNetState::load_model` populates model fields from the parsed
-    // arrays. At that point also verify every neural path still
-    // short-circuits cleanly when load_model was never called.
+    /// 1. `init_plcmodel` — populates `self.model` (6 linear layers for
+    ///    the PLC prediction GRUs and dense layers) from
+    ///    `plcmodel_arrays`-style records.
+    /// 2. `lpcnet_encoder_load_model` — delegates to
+    ///    `pitchdnn_load_model` to populate the neural pitch estimator.
+    /// 3. `fargan_load_model` — populates the FARGAN synthesis model.
+    ///
+    /// `self.loaded = true` is set **only** when all three succeed, so
+    /// the SILK / CELT neural PLC path (which gates on `loaded`) runs
+    /// with a fully populated state or not at all. A partial success
+    /// leaves `loaded = false` and the caller falls through to the
+    /// classical pitch/noise PLC on lost frames.
+    ///
+    /// Returns 0 on full success, non-zero on parse or population
+    /// failure. The error code matches the step that failed, so a
+    /// missing FARGAN record (for example) surfaces as -1 from
+    /// `fargan.load_model`, not swallowed by an upstream step.
+    ///
+    /// Unknown / unused weight records are accepted silently (matches
+    /// C semantics): the live tarball blob bundles DRED and OSCE
+    /// weights we don't yet consume, and rejecting them would break
+    /// the runtime path for no benefit.
     pub fn load_model(&mut self, data: &[u8]) -> i32 {
-        let ret = self.enc.load_model(data);
-        if ret != 0 {
-            return ret;
-        }
-        let ret2 = self.fargan.load_model(data);
-        if ret2 != 0 {
-            return ret2;
-        }
-        // Intentionally do NOT set `self.loaded = true`. See contract above.
+        // Parse the blob once so every sub-model sees the same arrays
+        // without paying the parse cost three times. Keeps behaviour
+        // identical to the C reference, which calls `parse_weights`
+        // once in `lpcnet_plc_load_model`.
+        let arrays = match parse_weights(data) {
+            Ok(a) => a,
+            Err(e) => {
+                // Parse failure — we haven't mutated state yet, so the
+                // previously-loaded weights stay live. Also clear the
+                // gate: the caller's intent was to swap weights, and
+                // leaving `loaded=true` on a failed swap would be a
+                // lie about which weights are active.
+                self.loaded = false;
+                return e;
+            }
+        };
+
+        // Atomic-load: build all three sub-models into locals first;
+        // only commit to `self.*` after every build succeeds. This
+        // prevents a "chimera" state where (e.g.) new PLC layers
+        // coexist with stale FARGAN weights after a mid-load failure.
+        let new_plc_model = match init_plcmodel(&arrays) {
+            Ok(m) => m,
+            Err(()) => {
+                self.loaded = false;
+                return -1;
+            }
+        };
+        let new_pitchdnn_model = match PitchDNNState::try_init(&arrays) {
+            Ok(m) => m,
+            Err(()) => {
+                self.loaded = false;
+                return -1;
+            }
+        };
+        let new_fargan_model = match FARGANState::try_init(&arrays) {
+            Ok(m) => m,
+            Err(()) => {
+                self.loaded = false;
+                return -1;
+            }
+        };
+
+        // Commit point — past here, `self` is fully-populated with a
+        // consistent set of weights. Nothing can fail between the
+        // three commits (they are infallible moves).
+        self.model = new_plc_model;
+        self.enc.pitchdnn.apply_loaded_model(new_pitchdnn_model);
+        self.fargan.apply_loaded_model(new_fargan_model);
+        self.loaded = true;
         0
     }
 
@@ -2431,11 +2663,51 @@ pub(crate) mod test_support {
         append_float_record(blob, "sig_net_sig_dense_out_scale", 40);
     }
 
-    /// A full PLC weight blob combining the PitchDNN + FARGAN records
-    /// so `LPCNetPLCState::load_model` returns `Ok(())`.
+    /// Append synthetic (zeroed) PLC-model weight records in the order
+    /// expected by `init_plcmodel`. Sizes match the dimensions in
+    /// `reference/dnn/plc_data.c` (57→128 dense, 128/192/192→576 GRUs,
+    /// 192→20 output dense).
+    fn append_plc_model_zero_weight_records(blob: &mut Vec<u8>) {
+        // plc_dense_in: Linear(57 -> 128), float-only.
+        append_float_record(blob, "plc_dense_in_bias", 128);
+        append_float_record(blob, "plc_dense_in_weights_float", 57 * 128);
+
+        // plc_dense_out: Linear(192 -> 20), float-only.
+        append_float_record(blob, "plc_dense_out_bias", 20);
+        append_float_record(blob, "plc_dense_out_weights_float", 192 * 20);
+
+        // plc_gru1_input: Linear(128 -> 576), quantized with bias.
+        append_float_record(blob, "plc_gru1_input_bias", 576);
+        append_int8_record(blob, "plc_gru1_input_weights_int8", 128 * 576);
+        append_float_record(blob, "plc_gru1_input_subias", 576);
+        append_float_record(blob, "plc_gru1_input_scale", 576);
+
+        // plc_gru1_recurrent: Linear(192 -> 576), quantized with bias.
+        append_float_record(blob, "plc_gru1_recurrent_bias", 576);
+        append_int8_record(blob, "plc_gru1_recurrent_weights_int8", 192 * 576);
+        append_float_record(blob, "plc_gru1_recurrent_subias", 576);
+        append_float_record(blob, "plc_gru1_recurrent_scale", 576);
+
+        // plc_gru2_input: Linear(192 -> 576), quantized with bias.
+        append_float_record(blob, "plc_gru2_input_bias", 576);
+        append_int8_record(blob, "plc_gru2_input_weights_int8", 192 * 576);
+        append_float_record(blob, "plc_gru2_input_subias", 576);
+        append_float_record(blob, "plc_gru2_input_scale", 576);
+
+        // plc_gru2_recurrent: Linear(192 -> 576), quantized with bias.
+        append_float_record(blob, "plc_gru2_recurrent_bias", 576);
+        append_int8_record(blob, "plc_gru2_recurrent_weights_int8", 192 * 576);
+        append_float_record(blob, "plc_gru2_recurrent_subias", 576);
+        append_float_record(blob, "plc_gru2_recurrent_scale", 576);
+    }
+
+    /// A full PLC weight blob combining PitchDNN + FARGAN + PLC-model
+    /// records so `LPCNetPLCState::load_model` returns `Ok(())` and
+    /// `loaded` flips to `true`.
     pub(crate) fn make_plc_weight_blob() -> Vec<u8> {
         let mut blob = make_pitchdnn_weight_blob();
         append_fargan_zero_weight_records(&mut blob);
+        append_plc_model_zero_weight_records(&mut blob);
         blob
     }
 }
