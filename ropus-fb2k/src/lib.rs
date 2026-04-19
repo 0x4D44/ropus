@@ -39,6 +39,21 @@
 
 #![allow(clippy::missing_safety_doc)]
 
+// Safety guard: the `test-panic` feature exposes a stable-named
+// `extern "C"` hook (`ropus_fb2k_test_set_panic_flag`) that, once armed,
+// makes the next `decode_next` call panic deep in the stack. That's
+// deliberate for the `ffi_guard!` integration test in `tests/roundtrip.rs`,
+// but shipping a release cdylib with this feature on would hand a trivial
+// DoS primitive to any caller that can reach the symbol. Fail the build
+// if anyone tries to combine the two.
+#[cfg(all(feature = "test-panic", not(debug_assertions)))]
+compile_error!(
+    "the `test-panic` feature must not be enabled in release builds — \
+     it exposes a stable extern \"C\" hook (`ropus_fb2k_test_set_panic_flag`) \
+     that triggers a panic inside `decode_next`, which a caller could \
+     weaponise. enable only with default cargo profiles (dev/test)."
+);
+
 use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 

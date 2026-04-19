@@ -19,9 +19,10 @@ use ropus::OpusDecoder;
 
 use common::{
     build_opus_fixture, build_opus_fixture_audio_source,
-    build_opus_fixture_with_audio_packets, last_error_string, minimal_opus_fixture,
-    open_from_bytes, open_from_bytes_info_only, open_from_bytes_without_seek,
-    opus_fixture_with_artist_alice, read_tags_collect, surround_family_fixture, MemIo,
+    build_opus_fixture_with_audio_packets, build_opus_head, last_error_string,
+    minimal_opus_fixture, open_from_bytes, open_from_bytes_info_only,
+    open_from_bytes_without_seek, opus_fixture_with_artist_alice, read_tags_collect,
+    surround_family_fixture, MemIo, FIXTURE_STREAM_SERIAL,
 };
 
 use ropus_fb2k::{
@@ -52,13 +53,21 @@ fn open_rejects_garbage() {
 
 // ---------------------------------------------------------------------------
 // Truncating a *valid* fixture at various points must surface a clean
-// negative status — never a panic (`-6 INTERNAL`), never UB. Garbage bytes
-// would fail the OpusHead magic at byte 0 and never reach the length-check
-// discipline in `tags::read_u32_le` / `tags::take` or the second-page
-// handling in the reader; this test forces those paths by feeding partial
-// real bytes. Acceptable codes are `-4 INVALID_STREAM` (parser detected
-// corruption) or `-2 IO` (read returned short before the parser could
-// react).
+// negative status — never a panic (`-6 INTERNAL`), never UB. Every cut in
+// this test lands inside an Ogg page (mid-header or mid-body), so the `ogg`
+// crate's short-page detection catches the problem before our OpusHead /
+// OpusTags parser ever sees a packet. Acceptable codes are `-4 INVALID_STREAM`
+// (parser detected corruption) or `-2 IO` (read returned short before the
+// parser could react).
+//
+// The `tags::read_u32_le` / `tags::take` length-check discipline (vendor
+// or comment length larger than the packet) is NOT exercised by these cuts
+// — the ogg crate rejects the short page first. Coverage for that parser
+// path lives in:
+//   * `corrupt_opus_tags_body_rejected_invalid_stream` below, which wraps a
+//     hand-crafted malformed body in a valid Ogg page so the parser sees it;
+//   * `src/tags.rs::tests::rejects_truncated_comment_length` at the unit
+//     level.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -109,6 +118,64 @@ fn open_rejects_truncated_valid_fixture() {
             last_error_string()
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// A valid Ogg page carrying a malformed `OpusTags` body (vendor_length wildly
+// exceeds the packet size) must surface INVALID_STREAM from the parser's
+// length-check discipline (`tags::read_u32_le` / `tags::take`), not from Ogg
+// framing. Complements `open_rejects_truncated_valid_fixture` (which only
+// tests page-level short reads) and the unit test
+// `src/tags.rs::tests::rejects_truncated_comment_length`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn corrupt_opus_tags_body_rejected_invalid_stream() {
+    use ogg::writing::{PacketWriteEndInfo, PacketWriter};
+
+    // Hand-craft a malformed OpusTags packet body: magic + `vendor_length =
+    // u32::MAX - 5` + no actual vendor bytes. `tags::read_u32_le` reads the
+    // length, `tags::take` then checks `cur.len() < n` and returns
+    // `TagError::Truncated`, which maps to INVALID_STREAM.
+    let mut bad_tags = Vec::with_capacity(16);
+    bad_tags.extend_from_slice(b"OpusTags");
+    bad_tags.extend_from_slice(&(u32::MAX - 5).to_le_bytes());
+
+    // Wrap the page-1 OpusHead and page-2 corrupt-body packet in valid Ogg
+    // framing via the same `ogg::PacketWriter` the healthy fixtures use, so
+    // the page headers and CRCs are correct — the only malformation is
+    // inside the OpusTags packet payload.
+    let mut out = Vec::with_capacity(256);
+    let mut writer = PacketWriter::new(&mut out);
+    writer
+        .write_packet(
+            build_opus_head(2, 48_000, 312),
+            FIXTURE_STREAM_SERIAL,
+            PacketWriteEndInfo::EndPage,
+            0,
+        )
+        .expect("write OpusHead page");
+    writer
+        .write_packet(
+            bad_tags,
+            FIXTURE_STREAM_SERIAL,
+            PacketWriteEndInfo::EndStream,
+            0,
+        )
+        .expect("write corrupt OpusTags page");
+    drop(writer);
+
+    let (_io, handle) = open_from_bytes(out);
+    assert!(
+        handle.is_null(),
+        "malformed OpusTags body must not parse as a valid stream"
+    );
+    let code = unsafe { ropus_fb2k::ropus_fb2k_last_error_code() };
+    assert_eq!(
+        code, ROPUS_FB2K_INVALID_STREAM,
+        "corrupt vendor length must surface as INVALID_STREAM (last_error={:?})",
+        last_error_string()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1160,6 +1227,21 @@ unsafe extern "C" {
 fn panic_in_decode_surfaces_internal_code() {
     use ropus_fb2k::ROPUS_FB2K_INTERNAL;
 
+    // RAII guard: if any assertion below panics before we reach the manual
+    // disarm, cargo's test runner may reuse this OS thread for a subsequent
+    // test on the same thread, and the armed panic flag would fire inside
+    // that unrelated test's `decode_next` call — producing a confusing
+    // secondary failure that hides the original. Drop-order guarantees the
+    // flag is cleared on *any* exit path (pass, assertion panic, or
+    // early-return), so parallel / sequential reuse is always safe.
+    struct DisarmPanicFlag;
+    impl Drop for DisarmPanicFlag {
+        fn drop(&mut self) {
+            unsafe { ropus_fb2k_test_set_panic_flag(false) };
+        }
+    }
+    let _guard = DisarmPanicFlag;
+
     let (_io, handle) = open_from_bytes(minimal_opus_fixture().to_vec());
     assert!(!handle.is_null(), "fixture must open");
 
@@ -1194,8 +1276,7 @@ fn panic_in_decode_surfaces_internal_code() {
         "last_error message must mention 'internal panic'; got {msg:?}"
     );
 
-    // Disarm so subsequent tests in the same thread don't trip.
-    unsafe { ropus_fb2k_test_set_panic_flag(false) };
+    // Flag is disarmed by `_guard`'s Drop impl; no manual call needed here.
     unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
 }
 
