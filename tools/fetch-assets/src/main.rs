@@ -32,8 +32,7 @@ use sha2::{Digest, Sha256};
 const OPUS_REF_URL: &str = "https://github.com/xiph/opus.git";
 const OPUS_REF_COMMIT: &str = "788cc89ce4f2c42025d8c70ec1b4457dc89cd50f";
 
-const WEIGHTS_SHA256: &str =
-    "a5177ec6fb7d15058e99e57029746100121f68e4890b1467d4094aa336b6013e";
+const WEIGHTS_SHA256: &str = "a5177ec6fb7d15058e99e57029746100121f68e4890b1467d4094aa336b6013e";
 const WEIGHTS_URL: &str = "https://media.xiph.org/opus/models/opus_data-\
                            a5177ec6fb7d15058e99e57029746100121f68e4890b1467d4094aa336b6013e.tar.gz";
 
@@ -114,23 +113,22 @@ fn fetch_reference(repo_root: &Path) -> Result<(), String> {
 
     require_tool("git")?;
 
-    println!("[reference] cloning {OPUS_REF_URL} into {}...", ref_dir.display());
-    run(
-        Command::new("git")
-            .arg("clone")
-            .arg("--no-checkout")
-            .arg(OPUS_REF_URL)
-            .arg(&ref_dir),
-    )?;
+    println!(
+        "[reference] cloning {OPUS_REF_URL} into {}...",
+        ref_dir.display()
+    );
+    run(Command::new("git")
+        .arg("clone")
+        .arg("--no-checkout")
+        .arg(OPUS_REF_URL)
+        .arg(&ref_dir))?;
 
     println!("[reference] checking out {OPUS_REF_COMMIT}...");
-    run(
-        Command::new("git")
-            .arg("-C")
-            .arg(&ref_dir)
-            .arg("checkout")
-            .arg(OPUS_REF_COMMIT),
-    )?;
+    run(Command::new("git")
+        .arg("-C")
+        .arg(&ref_dir)
+        .arg("checkout")
+        .arg(OPUS_REF_COMMIT))?;
 
     println!("[reference] OK (commit {})", &OPUS_REF_COMMIT[..10]);
     Ok(())
@@ -164,7 +162,10 @@ fn fetch_weights(repo_root: &Path) -> Result<(), String> {
 
     let marker = ref_dir.join(format!(".opus_data-{WEIGHTS_SHA256}.installed"));
     if marker.exists() {
-        println!("[weights] already installed (marker {} present)", marker.display());
+        println!(
+            "[weights] already installed (marker {} present)",
+            marker.display()
+        );
         return Ok(());
     }
 
@@ -187,16 +188,14 @@ fn fetch_weights(repo_root: &Path) -> Result<(), String> {
     if need_download {
         println!("[weights] downloading {WEIGHTS_URL}");
         println!("[weights] (~135 MB; curl will show progress below)");
-        run(
-            Command::new("curl")
-                .arg("--fail")
-                .arg("--location")
-                .arg("--retry")
-                .arg("3")
-                .arg("--output")
-                .arg(&tarball)
-                .arg(WEIGHTS_URL),
-        )?;
+        run(Command::new("curl")
+            .arg("--fail")
+            .arg("--location")
+            .arg("--retry")
+            .arg("3")
+            .arg("--output")
+            .arg(&tarball)
+            .arg(WEIGHTS_URL))?;
 
         println!("[weights] verifying sha256...");
         match verify_sha256(&tarball, WEIGHTS_SHA256) {
@@ -213,13 +212,11 @@ fn fetch_weights(repo_root: &Path) -> Result<(), String> {
     }
 
     println!("[weights] extracting into {}/...", ref_dir.display());
-    run(
-        Command::new("tar")
-            .arg("-xzf")
-            .arg(&tarball)
-            .arg("-C")
-            .arg(&ref_dir),
-    )?;
+    run(Command::new("tar")
+        .arg("-xzf")
+        .arg(&tarball)
+        .arg("-C")
+        .arg(&ref_dir))?;
 
     // Touch marker so subsequent runs short-circuit without re-hashing the tarball.
     fs::write(&marker, WEIGHTS_SHA256)
@@ -238,7 +235,9 @@ fn require_tool(name: &str) -> Result<(), String> {
         .arg("--version")
         .output()
         .map(|_| ())
-        .map_err(|e| format!("required tool `{name}` not found on PATH ({e}); install it and retry"))
+        .map_err(|e| {
+            format!("required tool `{name}` not found on PATH ({e}); install it and retry")
+        })
 }
 
 fn run(cmd: &mut Command) -> Result<(), String> {

@@ -18,16 +18,15 @@ use ogg::reading::PacketReader;
 use ropus::OpusDecoder;
 
 use common::{
-    build_opus_fixture, build_opus_fixture_audio_source,
+    FIXTURE_STREAM_SERIAL, MemIo, build_opus_fixture, build_opus_fixture_audio_source,
     build_opus_fixture_with_audio_packets, build_opus_head, last_error_string,
-    minimal_opus_fixture, open_from_bytes, open_from_bytes_info_only,
-    open_from_bytes_without_seek, opus_fixture_with_artist_alice, read_tags_collect,
-    surround_family_fixture, MemIo, FIXTURE_STREAM_SERIAL,
+    minimal_opus_fixture, open_from_bytes, open_from_bytes_info_only, open_from_bytes_without_seek,
+    opus_fixture_with_artist_alice, read_tags_collect, surround_family_fixture,
 };
 
 use ropus_fb2k::{
-    RopusFb2kInfo, ROPUS_FB2K_ABORTED, ROPUS_FB2K_BAD_ARG, ROPUS_FB2K_INVALID_STREAM,
-    ROPUS_FB2K_IO, ROPUS_FB2K_UNSUPPORTED,
+    ROPUS_FB2K_ABORTED, ROPUS_FB2K_BAD_ARG, ROPUS_FB2K_INVALID_STREAM, ROPUS_FB2K_IO,
+    ROPUS_FB2K_UNSUPPORTED, RopusFb2kInfo,
 };
 
 // ---------------------------------------------------------------------------
@@ -45,7 +44,8 @@ fn open_rejects_garbage() {
 
     let code = unsafe { ropus_fb2k::ropus_fb2k_last_error_code() };
     assert_eq!(
-        code, ROPUS_FB2K_INVALID_STREAM,
+        code,
+        ROPUS_FB2K_INVALID_STREAM,
         "garbage must surface as INVALID_STREAM (last_error={:?})",
         last_error_string()
     );
@@ -106,9 +106,7 @@ fn open_rejects_truncated_valid_fixture() {
         let (_io, handle) = open_from_bytes(truncated);
         if !handle.is_null() {
             unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
-            panic!(
-                "cut={cut} (fixture len={len}) must not parse as a valid stream"
-            );
+            panic!("cut={cut} (fixture len={len}) must not parse as a valid stream");
         }
         let code = unsafe { ropus_fb2k::ropus_fb2k_last_error_code() };
         assert!(
@@ -172,7 +170,8 @@ fn corrupt_opus_tags_body_rejected_invalid_stream() {
     );
     let code = unsafe { ropus_fb2k::ropus_fb2k_last_error_code() };
     assert_eq!(
-        code, ROPUS_FB2K_INVALID_STREAM,
+        code,
+        ROPUS_FB2K_INVALID_STREAM,
         "corrupt vendor length must surface as INVALID_STREAM (last_error={:?})",
         last_error_string()
     );
@@ -196,7 +195,10 @@ fn open_parses_header() {
         info.pre_skip > 0,
         "encoder always reports non-zero pre_skip (typically 312)"
     );
-    assert!(info.rg_track_gain.is_nan(), "ReplayGain stays NaN until tag mapping lands");
+    assert!(
+        info.rg_track_gain.is_nan(),
+        "ReplayGain stays NaN until tag mapping lands"
+    );
 
     unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
 }
@@ -218,9 +220,7 @@ fn open_parses_tags() {
         "expected synthetic VENDOR entry in {pairs:?}"
     );
     assert!(
-        pairs
-            .iter()
-            .any(|(k, v)| k == "ARTIST" && v == "Alice"),
+        pairs.iter().any(|(k, v)| k == "ARTIST" && v == "Alice"),
         "expected ARTIST=Alice in {pairs:?}"
     );
 
@@ -237,7 +237,11 @@ fn empty_comment_block_reports_only_vendor() {
     assert!(!handle.is_null(), "valid fixture must parse");
 
     let pairs = read_tags_collect(handle);
-    assert_eq!(pairs.len(), 1, "only the synthetic VENDOR entry; got {pairs:?}");
+    assert_eq!(
+        pairs.len(),
+        1,
+        "only the synthetic VENDOR entry; got {pairs:?}"
+    );
     assert_eq!(pairs[0].0, "VENDOR");
 
     unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
@@ -266,9 +270,7 @@ fn metadata_block_picture_is_filtered_from_callback() {
     );
     // The surrounding comments still make it through.
     assert!(
-        pairs
-            .iter()
-            .any(|(k, v)| k == "ARTIST" && v == "Alice"),
+        pairs.iter().any(|(k, v)| k == "ARTIST" && v == "Alice"),
         "ARTIST should survive filtering; got {pairs:?}"
     );
 
@@ -286,7 +288,8 @@ fn open_rejects_mapping_family_1() {
 
     let code = unsafe { ropus_fb2k::ropus_fb2k_last_error_code() };
     assert_eq!(
-        code, ROPUS_FB2K_UNSUPPORTED,
+        code,
+        ROPUS_FB2K_UNSUPPORTED,
         "family 1 must surface as UNSUPPORTED (last_error={:?})",
         last_error_string()
     );
@@ -323,7 +326,12 @@ fn seek_to_zero_succeeds() {
     assert!(!handle.is_null());
 
     let rc_seek = unsafe { ropus_fb2k::ropus_fb2k_seek(handle, 0) };
-    assert_eq!(rc_seek, 0, "seek(0) must succeed (last_error={:?})", last_error_string());
+    assert_eq!(
+        rc_seek,
+        0,
+        "seek(0) must succeed (last_error={:?})",
+        last_error_string()
+    );
 
     unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
 }
@@ -386,7 +394,10 @@ fn decode_wiring_matches_direct_ogg_path() {
         path_a, path_b,
         "fb2k decode stream must equal direct OpusDecoder stream bit-for-bit"
     );
-    assert!(!path_a.is_empty(), "fixture must produce some decoded samples");
+    assert!(
+        !path_a.is_empty(),
+        "fixture must produce some decoded samples"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -401,9 +412,7 @@ fn decode_returns_zero_at_eof() {
     let mut scratch = vec![0f32; 5760 * 2];
     // Drain every non-zero return first.
     loop {
-        let rc = unsafe {
-            ropus_fb2k::ropus_fb2k_decode_next(handle, scratch.as_mut_ptr(), 5760)
-        };
+        let rc = unsafe { ropus_fb2k::ropus_fb2k_decode_next(handle, scratch.as_mut_ptr(), 5760) };
         assert!(
             rc >= 0,
             "decode_next must not error before EOF (got {rc}, last_error={:?})",
@@ -414,9 +423,7 @@ fn decode_returns_zero_at_eof() {
         }
     }
     // Subsequent calls keep returning 0.
-    let rc = unsafe {
-        ropus_fb2k::ropus_fb2k_decode_next(handle, scratch.as_mut_ptr(), 5760)
-    };
+    let rc = unsafe { ropus_fb2k::ropus_fb2k_decode_next(handle, scratch.as_mut_ptr(), 5760) };
     assert_eq!(rc, 0, "post-EOF decode_next stays at 0");
 
     unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
@@ -437,7 +444,11 @@ fn decode_propagates_abort() {
     let io = MemIo::new(bytes);
     let fb2k_io = io.io();
     let handle = unsafe { ropus_fb2k::ropus_fb2k_open(&fb2k_io, 0) };
-    assert!(!handle.is_null(), "open must succeed (last_error={:?})", last_error_string());
+    assert!(
+        !handle.is_null(),
+        "open must succeed (last_error={:?})",
+        last_error_string()
+    );
 
     // Flip the abort flag now. The next decode call will poll it on the
     // very first `check_abort` inside `CallbackReader` and unwind with -3.
@@ -454,10 +465,11 @@ fn decode_propagates_abort() {
     let abort_calls_before = io.abort_calls();
 
     let mut scratch = vec![0f32; 5760 * 2];
-    let rc = unsafe {
-        ropus_fb2k::ropus_fb2k_decode_next(handle, scratch.as_mut_ptr(), 5760)
-    };
-    assert_eq!(rc, ROPUS_FB2K_ABORTED, "decode_next must surface -3 ABORTED");
+    let rc = unsafe { ropus_fb2k::ropus_fb2k_decode_next(handle, scratch.as_mut_ptr(), 5760) };
+    assert_eq!(
+        rc, ROPUS_FB2K_ABORTED,
+        "decode_next must surface -3 ABORTED"
+    );
 
     let code = unsafe { ropus_fb2k::ropus_fb2k_last_error_code() };
     assert_eq!(code, ROPUS_FB2K_ABORTED);
@@ -480,9 +492,7 @@ fn decode_rejects_small_buffer() {
     assert!(!handle.is_null());
 
     let mut scratch = vec![0f32; 4096 * 2];
-    let rc = unsafe {
-        ropus_fb2k::ropus_fb2k_decode_next(handle, scratch.as_mut_ptr(), 4096)
-    };
+    let rc = unsafe { ropus_fb2k::ropus_fb2k_decode_next(handle, scratch.as_mut_ptr(), 4096) };
     assert_eq!(rc, ROPUS_FB2K_BAD_ARG);
 
     let code = unsafe { ropus_fb2k::ropus_fb2k_last_error_code() };
@@ -507,12 +517,8 @@ fn info_populates_total_samples() {
     // value is exact rather than encoder-dependent.
     const PACKETS: usize = 20;
     const PRE_SKIP: u16 = 312;
-    let bytes = build_opus_fixture_with_audio_packets(
-        "ropus-fb2k-test",
-        &[],
-        PACKETS,
-        Some(PRE_SKIP),
-    );
+    let bytes =
+        build_opus_fixture_with_audio_packets("ropus-fb2k-test", &[], PACKETS, Some(PRE_SKIP));
     let (_io, handle) = open_from_bytes(bytes);
     assert!(
         !handle.is_null(),
@@ -548,12 +554,8 @@ fn info_populates_nominal_bitrate() {
     // or a stale sentinel, would miss this window by orders of magnitude.
     const PACKETS: usize = 20;
     const PRE_SKIP: u16 = 312;
-    let bytes = build_opus_fixture_with_audio_packets(
-        "ropus-fb2k-test",
-        &[],
-        PACKETS,
-        Some(PRE_SKIP),
-    );
+    let bytes =
+        build_opus_fixture_with_audio_packets("ropus-fb2k-test", &[], PACKETS, Some(PRE_SKIP));
     let file_size = bytes.len() as u64;
     let total_samples = (PACKETS as u64) * 960 - PRE_SKIP as u64;
     let expected = (file_size * 8 * 48_000 / total_samples) as i32;
@@ -629,8 +631,14 @@ fn info_without_seek_returns_zero_total_samples() {
     let mut info = zeroed_info();
     let rc = unsafe { ropus_fb2k::ropus_fb2k_get_info(handle, &mut info) };
     assert_eq!(rc, 0);
-    assert_eq!(info.total_samples, 0, "unseekable stream reports zero duration");
-    assert_eq!(info.nominal_bitrate, -1, "unseekable stream reports unknown bitrate");
+    assert_eq!(
+        info.total_samples, 0,
+        "unseekable stream reports zero duration"
+    );
+    assert_eq!(
+        info.nominal_bitrate, -1,
+        "unseekable stream reports unknown bitrate"
+    );
 
     unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
 }
@@ -704,10 +712,12 @@ fn seek_round_trip_within_tolerance() {
     let mut post_seek: Vec<f32> = Vec::with_capacity(WINDOW_SAMPLES * 2);
     let mut buf = vec![0f32; 5760 * 2];
     while post_seek.len() < WINDOW_SAMPLES * 2 {
-        let rc = unsafe {
-            ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760)
-        };
-        assert!(rc > 0, "decode_next after seek returned {rc} (last_error={:?})", last_error_string());
+        let rc = unsafe { ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760) };
+        assert!(
+            rc > 0,
+            "decode_next after seek returned {rc} (last_error={:?})",
+            last_error_string()
+        );
         post_seek.extend_from_slice(&buf[..rc as usize * 2]);
     }
     post_seek.truncate(WINDOW_SAMPLES * 2);
@@ -755,15 +765,18 @@ fn seek_to_zero_is_valid() {
     let (_io, handle) = open_from_bytes(bytes);
     assert!(!handle.is_null());
     let rc = unsafe { ropus_fb2k::ropus_fb2k_seek(handle, 0) };
-    assert_eq!(rc, 0, "seek(0) must return OK (last_error={:?})", last_error_string());
+    assert_eq!(
+        rc,
+        0,
+        "seek(0) must return OK (last_error={:?})",
+        last_error_string()
+    );
 
     // The very first decode_next after seek(0) must produce samples —
     // confirms the lazy decoder init + reset path runs through to real
     // output.
     let mut buf = vec![0f32; 5760 * 2];
-    let first = unsafe {
-        ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760)
-    };
+    let first = unsafe { ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760) };
     assert!(
         first > 0,
         "first decode_next after seek(0) must return samples, got {first}"
@@ -773,9 +786,7 @@ fn seek_to_zero_is_valid() {
 
     // Drain the rest.
     loop {
-        let rc = unsafe {
-            ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760)
-        };
+        let rc = unsafe { ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760) };
         assert!(rc >= 0);
         if rc == 0 {
             break;
@@ -825,9 +836,7 @@ fn seek_zero_after_decode_rewinds() {
         let (_io, handle) = open_from_bytes(bytes.clone());
         assert!(!handle.is_null());
         let mut buf = vec![0f32; 5760 * 2];
-        let n = unsafe {
-            ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760)
-        };
+        let n = unsafe { ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760) };
         assert!(n > 0, "fresh-handle first decode must produce samples");
         let captured: Vec<f32> = buf[..n as usize * 2].to_vec();
         unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
@@ -842,21 +851,20 @@ fn seek_zero_after_decode_rewinds() {
     assert!(!handle.is_null());
     let mut buf = vec![0f32; 5760 * 2];
 
-    let first_decode = unsafe {
-        ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760)
-    };
+    let first_decode =
+        unsafe { ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760) };
     assert!(first_decode > 0, "pre-seek decode must produce samples");
 
     let rc = unsafe { ropus_fb2k::ropus_fb2k_seek(handle, 0) };
     assert_eq!(
-        rc, 0,
+        rc,
+        0,
         "seek(0) after decode must return OK (last_error={:?})",
         last_error_string()
     );
 
-    let post_seek_first = unsafe {
-        ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760)
-    };
+    let post_seek_first =
+        unsafe { ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760) };
     assert!(
         post_seek_first > 0,
         "first decode after seek(0) must produce samples, got {post_seek_first}"
@@ -873,7 +881,8 @@ fn seek_zero_after_decode_rewinds() {
     );
     let got = &buf[..post_seek_first as usize * 2];
     assert_eq!(
-        got, fresh_buf.as_slice(),
+        got,
+        fresh_buf.as_slice(),
         "post-seek samples must match fresh-handle samples bit-for-bit"
     );
 
@@ -893,12 +902,8 @@ fn seek_to_nonzero_then_decode() {
     const PACKETS: usize = 30;
     const PRE_SKIP: u16 = 312;
     const SAMPLES_PER_PACKET: usize = 960;
-    let bytes = build_opus_fixture_with_audio_packets(
-        "ropus-fb2k-test",
-        &[],
-        PACKETS,
-        Some(PRE_SKIP),
-    );
+    let bytes =
+        build_opus_fixture_with_audio_packets("ropus-fb2k-test", &[], PACKETS, Some(PRE_SKIP));
 
     // Reference: contiguous decode. Length = PACKETS*960 - pre_skip per
     // channel × 2 channels.
@@ -919,9 +924,7 @@ fn seek_to_nonzero_then_decode() {
     let mut post: Vec<f32> = Vec::with_capacity(WINDOW_PER_CH * 2);
     let mut buf = vec![0f32; 5760 * 2];
     while post.len() < WINDOW_PER_CH * 2 {
-        let rc = unsafe {
-            ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760)
-        };
+        let rc = unsafe { ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760) };
         assert!(rc > 0, "decode_next after seek returned {rc}");
         post.extend_from_slice(&buf[..rc as usize * 2]);
     }
@@ -958,10 +961,13 @@ fn seek_past_end_clamps() {
     assert!(info.total_samples > 0);
 
     // Seek way past the end.
-    let rc_seek = unsafe {
-        ropus_fb2k::ropus_fb2k_seek(handle, info.total_samples + 10_000)
-    };
-    assert_eq!(rc_seek, 0, "seek past end must clamp (last_error={:?})", last_error_string());
+    let rc_seek = unsafe { ropus_fb2k::ropus_fb2k_seek(handle, info.total_samples + 10_000) };
+    assert_eq!(
+        rc_seek,
+        0,
+        "seek past end must clamp (last_error={:?})",
+        last_error_string()
+    );
 
     // After clamp + pre-roll discard, decode_next drains the tail of the
     // fixture and then returns 0 (EOF). Any post-seek samples are
@@ -969,9 +975,7 @@ fn seek_past_end_clamps() {
     let mut total_post_seek = 0usize;
     let mut buf = vec![0f32; 5760 * 2];
     loop {
-        let rc = unsafe {
-            ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760)
-        };
+        let rc = unsafe { ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760) };
         assert!(rc >= 0, "decode after clamp returned {rc}");
         if rc == 0 {
             break;
@@ -1002,7 +1006,11 @@ fn seek_past_end_clamps() {
 fn seek_on_unseekable_returns_invalid_stream_even_for_zero() {
     let bytes = build_opus_fixture_with_audio_packets("ropus-fb2k-test", &[], 20, Some(312));
     let (_io, handle) = open_from_bytes_without_seek(bytes, 0);
-    assert!(!handle.is_null(), "unseekable open must succeed: {}", last_error_string());
+    assert!(
+        !handle.is_null(),
+        "unseekable open must succeed: {}",
+        last_error_string()
+    );
 
     // Both a non-zero target (used to be rejected) and zero (used to be
     // silently accepted as a no-op) must now consistently return INVALID_STREAM.
@@ -1039,14 +1047,21 @@ fn seek_propagates_abort_during_index_build() {
     let io = MemIo::new(bytes);
     let fb2k_io = io.io();
     let handle = unsafe { ropus_fb2k::ropus_fb2k_open(&fb2k_io, 0) };
-    assert!(!handle.is_null(), "open must succeed: {}", last_error_string());
+    assert!(
+        !handle.is_null(),
+        "open must succeed: {}",
+        last_error_string()
+    );
 
     // Flip abort now; first seek builds the index, which polls abort via
     // CallbackReader on every read.
     io.set_aborting();
 
     let rc = unsafe { ropus_fb2k::ropus_fb2k_seek(handle, 10_000) };
-    assert_eq!(rc, ROPUS_FB2K_ABORTED, "seek during index build must surface -3");
+    assert_eq!(
+        rc, ROPUS_FB2K_ABORTED,
+        "seek during index build must surface -3"
+    );
     let code = unsafe { ropus_fb2k::ropus_fb2k_last_error_code() };
     assert_eq!(code, ROPUS_FB2K_ABORTED);
 
@@ -1067,7 +1082,11 @@ fn seek_during_abort_recovery_no_panic() {
     let io = MemIo::new(bytes);
     let fb2k_io = io.io();
     let handle = unsafe { ropus_fb2k::ropus_fb2k_open(&fb2k_io, 0) };
-    assert!(!handle.is_null(), "open must succeed: {}", last_error_string());
+    assert!(
+        !handle.is_null(),
+        "open must succeed: {}",
+        last_error_string()
+    );
 
     // First seek aborts mid-scan.
     io.set_aborting();
@@ -1125,8 +1144,8 @@ fn rg_legacy_overrides_r128() {
     let bytes = build_opus_fixture(
         "v",
         &[
-            ("R128_TRACK_GAIN", "-1280"),           // would map to 0 dB
-            ("REPLAYGAIN_TRACK_GAIN", "-6.75 dB"),  // should win
+            ("R128_TRACK_GAIN", "-1280"),          // would map to 0 dB
+            ("REPLAYGAIN_TRACK_GAIN", "-6.75 dB"), // should win
         ],
     );
     let (_io, handle) = open_from_bytes(bytes);
@@ -1198,9 +1217,7 @@ fn rg_malformed_tag_is_nan() {
     // Decode/playback still works after a malformed tag — bad metadata
     // must not break the audio path.
     let mut buf = vec![0f32; 5760 * 2];
-    let rc = unsafe {
-        ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760)
-    };
+    let rc = unsafe { ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760) };
     assert!(rc >= 0, "decode must still work; got {rc}");
 
     unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
@@ -1254,9 +1271,7 @@ fn panic_in_decode_surfaces_internal_code() {
     //   * stash a "internal panic" message in the last-error string slot.
     unsafe { ropus_fb2k_test_set_panic_flag(true) };
     let mut buf = vec![0f32; 5760 * 2];
-    let rc = unsafe {
-        ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760)
-    };
+    let rc = unsafe { ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760) };
     // Per-entry sentinel — ffi_guard!'s on_panic for decode_next is BAD_ARG.
     assert_eq!(
         rc, ROPUS_FB2K_BAD_ARG,
@@ -1312,9 +1327,7 @@ fn decode_through_fb2k(bytes: Vec<u8>) -> Vec<f32> {
     let mut out = Vec::new();
     let mut buf = vec![0f32; 5760 * ch];
     loop {
-        let rc = unsafe {
-            ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760)
-        };
+        let rc = unsafe { ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760) };
         assert!(rc >= 0, "path-A decode failure {rc}");
         if rc == 0 {
             break;
@@ -1362,4 +1375,3 @@ fn decode_reference_direct(bytes: &[u8]) -> Vec<f32> {
     }
     out
 }
-

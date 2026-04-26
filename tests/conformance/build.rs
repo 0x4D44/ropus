@@ -44,6 +44,27 @@ fn main() {
     let ref_tests = repo_root.join("reference").join("tests");
     let ref_src = repo_root.join("reference").join("src");
 
+    // Always declare the cfg so rustc's cfg-checking accepts it.
+    println!("cargo:rustc-check-cfg=cfg(no_reference)");
+    println!(
+        "cargo:rerun-if-changed={}",
+        ref_tests.join("test_opus_api.c").display()
+    );
+
+    // No reference source tree → stub out the whole conformance suite so
+    // `cargo build` at the workspace root succeeds on a fresh clone. Each
+    // test file gates its body behind `cfg(not(no_reference))`, so the
+    // `cargo test` pipeline just reports 0 tests until fetch-assets runs.
+    if !ref_tests.join("test_opus_api.c").exists() {
+        println!("cargo:rustc-cfg=no_reference");
+        println!(
+            "cargo:warning=ropus-conformance: reference tests not found under {} — \
+             conformance suite stubbed out. Run `cargo run -p fetch-assets -- reference` to enable.",
+            ref_tests.display()
+        );
+        return;
+    }
+
     let include_dir = manifest_dir.join("include");
     let private_h = include_dir.join("opus_private.h");
 
@@ -73,7 +94,12 @@ fn main() {
     // "src/" (our own stubs) and relative to `repo_root` otherwise (for
     // reference upstream sources like `reference/src/mapping_matrix.c`).
     let tests: &[(SrcDir, &str, &str, &[&str])] = &[
-        (SrcDir::Tests, "test_opus_padding.c", "test_opus_padding", &[]),
+        (
+            SrcDir::Tests,
+            "test_opus_padding.c",
+            "test_opus_padding",
+            &[],
+        ),
         (SrcDir::Tests, "test_opus_decode.c", "test_opus_decode", &[]),
         (SrcDir::Tests, "test_opus_api.c", "test_opus_api", &[]),
         (
@@ -82,7 +108,12 @@ fn main() {
             "test_opus_encode",
             &["reference/tests/opus_encode_regressions.c"],
         ),
-        (SrcDir::Tests, "test_opus_extensions.c", "test_opus_extensions", &[]),
+        (
+            SrcDir::Tests,
+            "test_opus_extensions.c",
+            "test_opus_extensions",
+            &[],
+        ),
         // Piece A — IETF vectors via opus_demo + opus_compare.
         //
         // `opus_demo.c` pulls in DRED symbols unconditionally; we replace
@@ -228,10 +259,7 @@ fn main() {
         build.compile(stem);
         println!("cargo:rerun-if-changed={}", src_path.display());
         for extra in *extras {
-            println!(
-                "cargo:rerun-if-changed={}",
-                resolve_extra(extra).display()
-            );
+            println!("cargo:rerun-if-changed={}", resolve_extra(extra).display());
         }
     }
 

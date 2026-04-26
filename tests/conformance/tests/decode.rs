@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! Conformance test: `reference/tests/test_opus_decode.c`.
 //!
 //! Exercises PLC, zero-length input, null pointer handling, CTL behaviour

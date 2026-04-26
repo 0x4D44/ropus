@@ -9,6 +9,10 @@
 //! under `!USE_WEIGHTS_FILE`).
 
 #![allow(non_camel_case_types, dead_code)]
+// When `build.rs` can't find `reference/` it sets `cfg(no_reference)` so the
+// workspace still builds on a fresh clone. In that mode the whole FFI
+// surface compiles to nothing; consumers cfg-gate behind the same flag.
+#![cfg(not(no_reference))]
 
 use std::os::raw::{c_int, c_uchar, c_void};
 
@@ -179,10 +183,7 @@ unsafe extern "C" {
         out: *mut opus_int32,
         max_count: c_int,
     ) -> c_int;
-    pub fn peek_silk_plc_prev_gain_top(
-        opus_st: *const OpusDecoder,
-        out: *mut opus_int32,
-    ) -> c_int;
+    pub fn peek_silk_plc_prev_gain_top(opus_st: *const OpusDecoder, out: *mut opus_int32) -> c_int;
     pub fn peek_silk_plc_pitch(opus_st: *const OpusDecoder) -> opus_int32;
     pub fn peek_silk_plc_rand_scale(opus_st: *const OpusDecoder) -> opus_int32;
     pub fn peek_silk_plc_last_lost(opus_st: *const OpusDecoder) -> c_int;
@@ -278,8 +279,7 @@ impl CRefFloatDecoder {
     /// `complexity >= 5` (`reference/src/opus_decoder.c:443`); default is 0
     /// on a freshly-created decoder. Matches our ropus contract.
     pub fn set_complexity(&mut self, complexity: i32) -> Result<(), i32> {
-        let ret =
-            unsafe { opus_decoder_ctl(self.ptr, OPUS_SET_COMPLEXITY_REQUEST, complexity) };
+        let ret = unsafe { opus_decoder_ctl(self.ptr, OPUS_SET_COMPLEXITY_REQUEST, complexity) };
         if ret == OPUS_OK { Ok(()) } else { Err(ret) }
     }
 

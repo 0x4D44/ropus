@@ -66,12 +66,19 @@ struct Args {
     /// Linear-dB gain applied to f32 PCM samples before playback.
     /// Range `[-128.0, 128.0]` (matches libopus `OPUS_SET_GAIN`);
     /// 0.0 is a no-op. NaN / ±∞ are rejected.
-    #[arg(long, value_name = "DB", default_value_t = 0.0, allow_hyphen_values = true)]
+    #[arg(
+        long,
+        value_name = "DB",
+        default_value_t = 0.0,
+        allow_hyphen_values = true
+    )]
     gain: f32,
 }
 
 fn main() -> ExitCode {
-    let PreludeFlags { quiet, no_color: _, .. } = prelude::run_prelude();
+    let PreludeFlags {
+        quiet, no_color: _, ..
+    } = prelude::run_prelude();
     if !quiet {
         ui::print_banner(
             env!("CARGO_PKG_NAME"),

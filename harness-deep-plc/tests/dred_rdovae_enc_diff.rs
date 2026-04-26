@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! Stage 8.4 differential test — RDOVAE encoder forward pass.
 //!
 //! Tier 1 target (per `wrk_docs/2026.04.19 - HLD - dred-port.md` staging
@@ -142,12 +143,7 @@ fn rdovae_encode_dframe_matches_c_reference() {
         // --- Rust forward pass ---
         let mut r_latents = vec![0.0f32; DRED_LATENT_DIM];
         let mut r_initial_state = vec![0.0f32; DRED_STATE_DIM];
-        rust_state.encode_dframe(
-            &rust_model,
-            &mut r_latents,
-            &mut r_initial_state,
-            &input,
-        );
+        rust_state.encode_dframe(&rust_model, &mut r_latents, &mut r_initial_state, &input);
 
         // Tier 1 — bit-exact. `to_bits()` comparison handles NaN / -0.0
         // edge cases without tripping PartialEq quirks.

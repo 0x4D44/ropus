@@ -106,7 +106,10 @@ mod tests {
                 break;
             }
         }
-        assert!(any_diff, "different seeds must not produce identical streams");
+        assert!(
+            any_diff,
+            "different seeds must not produce identical streams"
+        );
     }
 
     #[test]
@@ -164,9 +167,7 @@ mod tests {
         // Same input + same seed must produce bit-identical output. This is
         // what makes `--packet-loss N` and dither-on runs reproducible for
         // diff-testing.
-        let samples: Vec<f32> = (0..1024)
-            .map(|i| ((i as f32) * 0.01).sin() * 0.5)
-            .collect();
+        let samples: Vec<f32> = (0..1024).map(|i| ((i as f32) * 0.01).sin() * 0.5).collect();
 
         let mut rng1 = Xorshift32::new(DITHER_SEED);
         let out1 = quantize_to_i16(&samples, true, &mut rng1);

@@ -24,9 +24,9 @@ pub fn downmix_to_mono(interleaved: &[f32], channels: usize) -> Result<Vec<f32>>
             }
             Ok(out)
         }
-        n => bail!(
-            "--downmix mono cannot handle {n}-channel input (only 1 or 2 channels supported)"
-        ),
+        n => {
+            bail!("--downmix mono cannot handle {n}-channel input (only 1 or 2 channels supported)")
+        }
     }
 }
 

@@ -12,7 +12,9 @@ use colored::*;
 use ropus::{DecodeMode, Decoder as RopusDecoder};
 
 use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{CODEC_TYPE_NULL, CODEC_TYPE_OPUS, Decoder as SymphoniaDecoder, DecoderOptions};
+use symphonia::core::codecs::{
+    CODEC_TYPE_NULL, CODEC_TYPE_OPUS, Decoder as SymphoniaDecoder, DecoderOptions,
+};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::{MediaSource, MediaSourceStream};
@@ -53,7 +55,10 @@ enum CodecPipeline {
 
 pub fn decode_to_f32(path: &Path) -> Result<DecodedAudio> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let hint_ext = path.extension().and_then(|e| e.to_str()).map(str::to_string);
+    let hint_ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_string);
     decode_reader(Box::new(file), hint_ext.as_deref())
         .with_context(|| format!("decoding {}", path.display()))
 }
@@ -67,10 +72,7 @@ pub fn decode_to_f32(path: &Path) -> Result<DecodedAudio> {
 /// sniffing, which is why `MediaSource` requires `Seek`. Wrapping stdin in a
 /// `Cursor<Vec<u8>>` (buffered up-front) satisfies that requirement, at the
 /// cost of buffering the whole input in memory.
-pub fn decode_reader(
-    source: Box<dyn MediaSource>,
-    hint_ext: Option<&str>,
-) -> Result<DecodedAudio> {
+pub fn decode_reader(source: Box<dyn MediaSource>, hint_ext: Option<&str>) -> Result<DecodedAudio> {
     let mss = MediaSourceStream::new(source, Default::default());
 
     let mut hint = Hint::new();
@@ -201,7 +203,8 @@ pub fn decode_reader(
                 if opus_scratch.len() != max_per_ch * *ch {
                     opus_scratch = vec![0f32; max_per_ch * *ch];
                 }
-                let n = match dec.decode_float(&packet.data, &mut opus_scratch, DecodeMode::Normal) {
+                let n = match dec.decode_float(&packet.data, &mut opus_scratch, DecodeMode::Normal)
+                {
                     Ok(n) => n,
                     Err(e) => {
                         // Match the native path: swallow per-packet decode

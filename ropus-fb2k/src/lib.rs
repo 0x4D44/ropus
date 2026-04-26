@@ -351,10 +351,7 @@ pub unsafe extern "C" fn ropus_fb2k_read_tags(
             // Filter cover-art blobs at the reporting boundary (not in the
             // parser), so the raw comment is still available to anyone
             // pulling `ParsedTags::iter()` directly.
-            if FILTERED_TAG_KEYS
-                .iter()
-                .any(|f| k.eq_ignore_ascii_case(f))
-            {
+            if FILTERED_TAG_KEYS.iter().any(|f| k.eq_ignore_ascii_case(f)) {
                 continue;
             }
             if !emit_tag(cb, ctx, k, v) {

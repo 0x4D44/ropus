@@ -321,8 +321,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
         // byte of the first audio page. Used by the seek path as the
         // starting point for the page-index walk.
         let mut bare_reader = packet_reader.into_inner();
-        let audio_start_offset =
-            bare_reader.stream_position().map_err(classify_io_error)?;
+        let audio_start_offset = bare_reader.stream_position().map_err(classify_io_error)?;
 
         // --- Reverse-scan for last granule ---------------------------------
         //
@@ -339,7 +338,8 @@ impl<R: Read + Seek> OggOpusReader<R> {
                     size,
                 )?;
                 let mut fresh = PacketReader::new(bare_reader);
-                fresh.seek_bytes(SeekFrom::Start(audio_start_offset))
+                fresh
+                    .seek_bytes(SeekFrom::Start(audio_start_offset))
                     .map_err(classify_io_error)?;
                 (fresh, total_samples, nominal_bitrate)
             }
@@ -440,12 +440,9 @@ impl<R: Read + Seek> OggOpusReader<R> {
         // library scans that never decode; re-using `decode_scratch` across
         // calls keeps the audio-thread path allocation-free.
         if self.decoder.is_none() {
-            let dec = OpusDecoder::new(OPUS_SAMPLE_RATE_HZ, channels as i32)
-                .map_err(|code| {
-                    ReaderError::InvalidStream(format!(
-                        "OpusDecoder init failed (code {code})"
-                    ))
-                })?;
+            let dec = OpusDecoder::new(OPUS_SAMPLE_RATE_HZ, channels as i32).map_err(|code| {
+                ReaderError::InvalidStream(format!("OpusDecoder init failed (code {code})"))
+            })?;
             self.decoder = Some(dec);
             self.decode_scratch = vec![0f32; MAX_FRAME_SAMPLES_PER_CH * channels];
         }
@@ -503,9 +500,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
             // Advance the counter by *every* sample the decoder produced —
             // both discarded and kept. The counter models the decoder's
             // absolute output position, which is what the next seek wants.
-            self.next_sample_abs_pos = self
-                .next_sample_abs_pos
-                .saturating_add(decoded as u64);
+            self.next_sample_abs_pos = self.next_sample_abs_pos.saturating_add(decoded as u64);
 
             if kept == 0 {
                 // Packet entirely consumed by discard — grab the next one.
@@ -636,11 +631,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
         // all entries have start_granule > rewind_to we fall back to
         // index[0] (rewind to the very start).
         let pp = index.partition_point(|e| e.start_granule <= rewind_to);
-        let start_page = if pp == 0 {
-            index[0]
-        } else {
-            index[pp - 1]
-        };
+        let start_page = if pp == 0 { index[0] } else { index[pp - 1] };
 
         // Take the PacketReader apart so we can reposition the bare reader,
         // then re-seat a fresh PacketReader at the new offset. A fresh
@@ -655,7 +646,8 @@ impl<R: Read + Seek> OggOpusReader<R> {
             .seek(SeekFrom::Start(start_page.byte_offset))
             .map_err(classify_io_error)?;
         let mut fresh = PacketReader::new(bare_reader);
-        fresh.seek_bytes(SeekFrom::Start(start_page.byte_offset))
+        fresh
+            .seek_bytes(SeekFrom::Start(start_page.byte_offset))
             .map_err(classify_io_error)?;
         self.packet_reader = Some(fresh);
 
@@ -695,7 +687,8 @@ impl<R: Read + Seek> OggOpusReader<R> {
             .seek(SeekFrom::Start(self.audio_start_offset))
             .map_err(classify_io_error)?;
         let mut fresh = PacketReader::new(bare_reader);
-        fresh.seek_bytes(SeekFrom::Start(self.audio_start_offset))
+        fresh
+            .seek_bytes(SeekFrom::Start(self.audio_start_offset))
             .map_err(classify_io_error)?;
         self.packet_reader = Some(fresh);
 
@@ -722,9 +715,9 @@ impl<R: Read + Seek> OggOpusReader<R> {
     /// Preserves the current `PacketReader`'s view by seating a fresh one
     /// over the same bare reader at the same byte position on return.
     fn build_page_index(&mut self) -> Result<(), ReaderError> {
-        let file_size = self.file_size.ok_or_else(|| {
-            ReaderError::Unsupported("stream is not seekable".into())
-        })?;
+        let file_size = self
+            .file_size
+            .ok_or_else(|| ReaderError::Unsupported("stream is not seekable".into()))?;
 
         let packet_reader = self
             .packet_reader
@@ -816,8 +809,8 @@ fn scan_pages<R: Read + Seek>(
         }
 
         let absgp = u64::from_le_bytes([
-            header[6], header[7], header[8], header[9],
-            header[10], header[11], header[12], header[13],
+            header[6], header[7], header[8], header[9], header[10], header[11], header[12],
+            header[13],
         ]);
         let serial = u32::from_le_bytes([header[14], header[15], header[16], header[17]]);
         let page_segments = header[26] as usize;
@@ -962,12 +955,7 @@ fn read_last_granule<R: Read + Seek>(
                 buf[i + 12],
                 buf[i + 13],
             ]);
-            let serial = u32::from_le_bytes([
-                buf[i + 14],
-                buf[i + 15],
-                buf[i + 16],
-                buf[i + 17],
-            ]);
+            let serial = u32::from_le_bytes([buf[i + 14], buf[i + 15], buf[i + 16], buf[i + 17]]);
             if serial == target_serial {
                 if absgp == UNKNOWN_GRANULE {
                     return Ok(None);
@@ -994,9 +982,7 @@ fn parse_opus_head(data: &[u8]) -> Result<OpusHead, ReaderError> {
         )));
     }
     if &data[..8] != b"OpusHead" {
-        return Err(ReaderError::InvalidStream(
-            "OpusHead magic missing".into(),
-        ));
+        return Err(ReaderError::InvalidStream("OpusHead magic missing".into()));
     }
     let version = data[8];
     if version == 0 || (version & 0xF0) != 0 {

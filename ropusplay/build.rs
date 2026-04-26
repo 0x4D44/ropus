@@ -15,7 +15,9 @@ fn main() {
         println!("cargo:rerun-if-changed=../.git/HEAD");
     }
 
-    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    let now = chrono::Utc::now()
+        .format("%Y-%m-%d %H:%M:%S UTC")
+        .to_string();
     println!("cargo:rustc-env=BUILD_TIMESTAMP={now}");
 
     // Optional: short git SHA for the banner. If git isn't installed, we

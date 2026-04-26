@@ -86,8 +86,7 @@ pub fn read<P: AsRef<Path>>(path: P) -> Result<Wav, Box<dyn Error>> {
                 }
                 format_tag = u16::from_le_bytes([fmt[0], fmt[1]]);
                 channels = u16::from_le_bytes([fmt[2], fmt[3]]);
-                sample_rate =
-                    u32::from_le_bytes([fmt[4], fmt[5], fmt[6], fmt[7]]);
+                sample_rate = u32::from_le_bytes([fmt[4], fmt[5], fmt[6], fmt[7]]);
                 bits_per_sample = u16::from_le_bytes([fmt[14], fmt[15]]);
 
                 // WAVE_FORMAT_EXTENSIBLE: parse the extension and validate the
@@ -95,9 +94,7 @@ pub fn read<P: AsRef<Path>>(path: P) -> Result<Wav, Box<dyn Error>> {
                 // is KSDATAFORMAT_SUBTYPE_PCM and the valid bits is 16.
                 if format_tag == 0xFFFE {
                     if size < 18 {
-                        return Err(
-                            "WAVE_FORMAT_EXTENSIBLE fmt chunk missing cbSize".into(),
-                        );
+                        return Err("WAVE_FORMAT_EXTENSIBLE fmt chunk missing cbSize".into());
                     }
                     let cb_size = u16::from_le_bytes([fmt[16], fmt[17]]);
                     if cb_size < 22 {
@@ -107,9 +104,7 @@ pub fn read<P: AsRef<Path>>(path: P) -> Result<Wav, Box<dyn Error>> {
                         .into());
                     }
                     if size < 40 {
-                        return Err(
-                            "WAVE_FORMAT_EXTENSIBLE fmt chunk truncated".into(),
-                        );
+                        return Err("WAVE_FORMAT_EXTENSIBLE fmt chunk truncated".into());
                     }
                     let valid_bits = u16::from_le_bytes([fmt[18], fmt[19]]);
                     // dwChannelMask at fmt[20..24] — acknowledged but not enforced.
@@ -174,10 +169,7 @@ pub fn read<P: AsRef<Path>>(path: P) -> Result<Wav, Box<dyn Error>> {
         .into());
     }
     if bits_per_sample != 16 {
-        return Err(format!(
-            "unsupported sample width {bits_per_sample} bits (need 16)"
-        )
-        .into());
+        return Err(format!("unsupported sample width {bits_per_sample} bits (need 16)").into());
     }
     if channels != 1 && channels != 2 {
         return Err(format!("unsupported channel count {channels} (need 1 or 2)").into());
@@ -199,7 +191,11 @@ pub fn read<P: AsRef<Path>>(path: P) -> Result<Wav, Box<dyn Error>> {
         samples.push(i16::from_le_bytes([pair[0], pair[1]]));
     }
 
-    Ok(Wav { sample_rate, channels, samples })
+    Ok(Wav {
+        sample_rate,
+        channels,
+        samples,
+    })
 }
 
 /// Write a 16-bit PCM WAV. `samples` are interleaved.

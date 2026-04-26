@@ -203,7 +203,11 @@ fn stdout_has_no_banner_pollution() {
     }
 
     let output = child.wait_with_output().expect("wait_with_output");
-    assert!(output.status.success(), "ropusenc failed: {:?}", output.status);
+    assert!(
+        output.status.success(),
+        "ropusenc failed: {:?}",
+        output.status
+    );
 
     // First four bytes of stdout are the Ogg magic. No leading ANSI, no
     // leading text.

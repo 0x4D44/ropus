@@ -157,15 +157,35 @@ pub fn denormalise_band_simd(x: &[i32], out: &mut [i32], len: usize, g: i32, shi
         // Scalar path using i64 intermediates — the `wide` crate's i32x4 can't
         // do the 64-bit multiply-shift we need, so we unroll 4 scalar ops which
         // the compiler can still auto-vectorize with the right instruction mix.
-        uc_set!(out, base,     pshr32(mult32_32_q31(shl32(uc!(x, base),     pre_shift), g), shift));
-        uc_set!(out, base + 1, pshr32(mult32_32_q31(shl32(uc!(x, base + 1), pre_shift), g), shift));
-        uc_set!(out, base + 2, pshr32(mult32_32_q31(shl32(uc!(x, base + 2), pre_shift), g), shift));
-        uc_set!(out, base + 3, pshr32(mult32_32_q31(shl32(uc!(x, base + 3), pre_shift), g), shift));
+        uc_set!(
+            out,
+            base,
+            pshr32(mult32_32_q31(shl32(uc!(x, base), pre_shift), g), shift)
+        );
+        uc_set!(
+            out,
+            base + 1,
+            pshr32(mult32_32_q31(shl32(uc!(x, base + 1), pre_shift), g), shift)
+        );
+        uc_set!(
+            out,
+            base + 2,
+            pshr32(mult32_32_q31(shl32(uc!(x, base + 2), pre_shift), g), shift)
+        );
+        uc_set!(
+            out,
+            base + 3,
+            pshr32(mult32_32_q31(shl32(uc!(x, base + 3), pre_shift), g), shift)
+        );
     }
 
     let tail = chunks * 4;
     for i in 0..remainder {
-        uc_set!(out, tail + i, pshr32(mult32_32_q31(shl32(uc!(x, tail + i), pre_shift), g), shift));
+        uc_set!(
+            out,
+            tail + i,
+            pshr32(mult32_32_q31(shl32(uc!(x, tail + i), pre_shift), g), shift)
+        );
     }
 }
 

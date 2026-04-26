@@ -114,14 +114,7 @@ pub(crate) fn sigmoid_approx(x: f32) -> f32 {
 /// (outer `i`, inner `j`) and column-stride indexing of the C source so
 /// accumulation rounding matches bit-for-bit.
 #[inline]
-fn gemm_accum(
-    out: &mut [f32],
-    weights: &[i8],
-    rows: i32,
-    cols: i32,
-    col_stride: i32,
-    x: &[f32],
-) {
+fn gemm_accum(out: &mut [f32], weights: &[i8], rows: i32, cols: i32, col_stride: i32, x: &[f32]) {
     let rows = rows as usize;
     let cols = cols as usize;
     let col_stride = col_stride as usize;
@@ -208,22 +201,8 @@ pub(crate) fn analysis_compute_gru(gru: &AnalysisGRULayer, state: &mut [f32], in
     for i in 0..n_us {
         r[i] = gru.bias[n_us + i] as f32;
     }
-    gemm_accum(
-        &mut r,
-        &gru.input_weights[n_us..],
-        n,
-        m,
-        stride,
-        input,
-    );
-    gemm_accum(
-        &mut r,
-        &gru.recurrent_weights[n_us..],
-        n,
-        n,
-        stride,
-        state,
-    );
+    gemm_accum(&mut r, &gru.input_weights[n_us..], n, m, stride, input);
+    gemm_accum(&mut r, &gru.recurrent_weights[n_us..], n, n, stride, state);
     for i in 0..n_us {
         r[i] = sigmoid_approx(WEIGHTS_SCALE * r[i]);
     }
@@ -235,14 +214,7 @@ pub(crate) fn analysis_compute_gru(gru: &AnalysisGRULayer, state: &mut [f32], in
     for i in 0..n_us {
         tmp[i] = state[i] * r[i];
     }
-    gemm_accum(
-        &mut h,
-        &gru.input_weights[2 * n_us..],
-        n,
-        m,
-        stride,
-        input,
-    );
+    gemm_accum(&mut h, &gru.input_weights[2 * n_us..], n, m, stride, input);
     gemm_accum(
         &mut h,
         &gru.recurrent_weights[2 * n_us..],
@@ -304,20 +276,7 @@ mod tests {
         //  * Edge cases that hit the MIN32/MAX32 clamp (|y| > 1).
         //  * Sign symmetry: tansig_approx(-x) should mirror tansig_approx(x).
         let inputs: [f32; 15] = [
-            0.0,
-            1e-6,
-            -1e-6,
-            0.5,
-            -0.5,
-            1.0,
-            -1.0,
-            2.5,
-            -2.5,
-            8.0,
-            -8.0,
-            1e6,
-            -1e6,
-            0.123_456,
+            0.0, 1e-6, -1e-6, 0.5, -0.5, 1.0, -1.0, 2.5, -2.5, 8.0, -8.0, 1e6, -1e6, 0.123_456,
             -0.987_654,
         ];
         for &x in inputs.iter() {
@@ -348,9 +307,7 @@ mod tests {
 
     #[test]
     fn test_sigmoid_approx_matches_c() {
-        let inputs: [f32; 11] = [
-            0.0, 1.0, -1.0, 2.0, -2.0, 4.0, -4.0, 10.0, -10.0, 0.5, -0.5,
-        ];
+        let inputs: [f32; 11] = [0.0, 1.0, -1.0, 2.0, -2.0, 4.0, -4.0, 10.0, -10.0, 0.5, -0.5];
         for &x in inputs.iter() {
             let got = sigmoid_approx(x);
             let expected = sigmoid_approx_c_reference(x);
@@ -464,31 +421,25 @@ mod tests {
     //   * `recurrent_weights` follows the same per-row gate slicing.
     static GRU_BIAS: [i8; 12] = [
         // z-gate (update) biases, neurons 0..3
-        3, -5, 7, -11,
-        // r-gate (reset) biases
-        -2, 4, -6, 8,
-        // h-gate (output) biases
+        3, -5, 7, -11, // r-gate (reset) biases
+        -2, 4, -6, 8, // h-gate (output) biases
         9, -13, 1, -3,
     ];
 
     static GRU_INPUT_WEIGHTS: [i8; 36] = [
         // j=0 row: z[0..4]             r[0..4]             h[0..4]
-        1, -2, 3, -4,        10, -11, 12, -13,     20, -21, 22, -23,
-        // j=1 row
-        5, -6, 7, -8,        14, -15, 16, -17,     24, -25, 26, -27,
+        1, -2, 3, -4, 10, -11, 12, -13, 20, -21, 22, -23, // j=1 row
+        5, -6, 7, -8, 14, -15, 16, -17, 24, -25, 26, -27,
         // j=2 row (includes i8 extremes to exercise sign handling)
-        9, -10, 127, -128,   18, -19, 64, -64,     28, -29, 30, -31,
+        9, -10, 127, -128, 18, -19, 64, -64, 28, -29, 30, -31,
     ];
 
     static GRU_RECURRENT_WEIGHTS: [i8; 48] = [
         // j=0 row (self-loop to neuron 0):   z[0..4]       r[0..4]       h[0..4]
-        2, -3, 4, -5,        11, -12, 13, -14,     21, -22, 23, -24,
-        // j=1 row
-        6, -7, 8, -9,        15, -16, 17, -18,     25, -26, 27, -28,
-        // j=2 row
-        10, -11, 12, -13,    19, -20, 21, -22,     29, -30, 31, -32,
-        // j=3 row (more i8 extremes)
-        14, -15, 127, -128,  23, -24, 126, -127,   33, -34, 35, -36,
+        2, -3, 4, -5, 11, -12, 13, -14, 21, -22, 23, -24, // j=1 row
+        6, -7, 8, -9, 15, -16, 17, -18, 25, -26, 27, -28, // j=2 row
+        10, -11, 12, -13, 19, -20, 21, -22, 29, -30, 31, -32, // j=3 row (more i8 extremes)
+        14, -15, 127, -128, 23, -24, 126, -127, 33, -34, 35, -36,
     ];
 
     /// Independent replica of `analysis_compute_gru` using only the
@@ -550,8 +501,7 @@ mod tests {
             &tmp[..n],
         );
         for i in 0..n {
-            h[i] = z[i] * state[i]
-                + (1.0 - z[i]) * tansig_approx_c_reference(WEIGHTS_SCALE * h[i]);
+            h[i] = z[i] * state[i] + (1.0 - z[i]) * tansig_approx_c_reference(WEIGHTS_SCALE * h[i]);
         }
         for i in 0..n {
             state[i] = h[i];

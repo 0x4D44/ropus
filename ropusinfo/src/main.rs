@@ -42,7 +42,9 @@ struct Args {
 }
 
 fn main() -> ExitCode {
-    let PreludeFlags { quiet, no_color: _, .. } = prelude::run_prelude();
+    let PreludeFlags {
+        quiet, no_color: _, ..
+    } = prelude::run_prelude();
     // `--query` implicitly disables the banner regardless of `--quiet`, per
     // the HLD. Sniff argv for `--query` or `-q …` here so we don't print the
     // banner before clap has had a chance to parse. We explicitly exclude a
@@ -55,10 +57,9 @@ fn main() -> ExitCode {
     // value is honoured; the banner is cosmetic overspill, not a correctness
     // issue.
     let raw: Vec<String> = std::env::args().collect();
-    let has_query = raw
-        .iter()
-        .enumerate()
-        .any(|(i, a)| a == "--query" || a.starts_with("--query=") || (a == "-q" && i + 1 < raw.len()));
+    let has_query = raw.iter().enumerate().any(|(i, a)| {
+        a == "--query" || a.starts_with("--query=") || (a == "-q" && i + 1 < raw.len())
+    });
 
     if !quiet && !has_query {
         ui::print_banner(

@@ -295,19 +295,20 @@ fn coverage_dtx_silence_detection() {
         let mut pkt = vec![0u8; 1500];
         enc.encode(&pcm, 960, &mut pkt, 1500).unwrap();
     }
-    // Then encode silence → should eventually emit DTX packets
+    // Then encode silence → should eventually emit DTX packets, but the
+    // primary contract of this test is just "encoding 20 frames of silence
+    // with DTX enabled does not panic"; whether DTX actually fires on the
+    // first 20 frames depends on internal adaptation state and isn't
+    // asserted here.
     let silence = vec![0i16; 960];
-    let mut dtx_found = false;
     for _ in 0..20 {
         let mut pkt = vec![0u8; 1500];
         let len = enc.encode(&silence, 960, &mut pkt, 1500).unwrap();
         if len == 1 {
-            dtx_found = true;
+            // DTX frame observed — further iterations would add no signal.
             break;
         }
     }
-    // DTX may or may not trigger depending on internal state; just ensure encoding works
-    assert!(dtx_found || true); // Non-strict: encoding without panic is the goal
 }
 
 #[test]
@@ -893,7 +894,7 @@ fn coverage_cbr_constraint_padding() {
 #[test]
 fn coverage_comprehensive_encoder_sweep() {
     // (rate, ch, app, mode, bw, bitrate, vbr, frame_ms, complexity, signal)
-    let configs: &[(
+    type SweepCfg = (
         i32,
         i32,
         i32,
@@ -904,7 +905,8 @@ fn coverage_comprehensive_encoder_sweep() {
         i32,
         i32,
         Option<i32>,
-    )] = &[
+    );
+    let configs: &[SweepCfg] = &[
         // 16kHz SILK mono at different complexities
         (
             16000,

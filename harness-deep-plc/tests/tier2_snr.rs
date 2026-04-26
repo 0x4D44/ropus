@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! Stage 7b.2 tier-2 acceptance — DEEP_PLC output quality comparison.
 //!
 //! Test plan (from `wrk_journals/2026.04.19 - JRN - stage7-dnn-wiring-supervisor.md`
@@ -21,8 +22,10 @@
 //! classical decode path (see its inline comment for the tuned threshold
 //! — float-mode C vs fixed-Rust is not bit-exact on classical decode).
 
+use ropus::{
+    OPUS_APPLICATION_VOIP, OPUS_OK, OpusDecoder as RopusDecoder, OpusEncoder as RopusEncoder,
+};
 use ropus_harness_deep_plc::CRefFloatDecoder;
-use ropus::{OpusDecoder as RopusDecoder, OpusEncoder as RopusEncoder, OPUS_APPLICATION_VOIP, OPUS_OK};
 
 const FS: i32 = 48_000;
 const CHANNELS: i32 = 1;
@@ -216,7 +219,10 @@ fn dnn_plc_tier2_snr_above_50db() {
         TOTAL_FRAMES
     );
     let n_lost = (0..packets.len()).filter(|&i| is_lost(i)).count();
-    assert!(n_lost > 5, "loss pattern lost only {n_lost} packets — not meaningful");
+    assert!(
+        n_lost > 5,
+        "loss pattern lost only {n_lost} packets — not meaningful"
+    );
 
     let pcm_c = decode_with_c_float(&packets, is_lost);
     let pcm_rust = decode_with_ropus(&packets, is_lost);

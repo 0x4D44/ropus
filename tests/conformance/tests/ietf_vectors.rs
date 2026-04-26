@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! Conformance test: IETF RFC 6716 / RFC 8251 bitstream vectors.
 //!
 //! This test drives `opus_demo -d` against the 12 IETF test vector

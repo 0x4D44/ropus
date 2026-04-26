@@ -9,7 +9,12 @@ Note: the workspace directory on disk is still named `mdopus/` — only the crat
 
 ## Project Status
 
-All 26 modules ported and passing bit-exact comparison tests against the C reference.
+All 26 modules ported. Tier-1 (bit-exact against the C reference) on range
+coder, CELT primitives, integer paths, RDOVAE forward pass, and the DRED
+range-coded payload. Tier-2 (SNR-bounded, typically >= 50/60 dB) where
+float-path drift exists: Analysis, LPCNet features, DEEP_PLC, and DRED
+WAV-level reconstruction.
+
 Currently in the **integration** phase — full encode/decode round-trip validation.
 
 ## Architecture
@@ -35,10 +40,9 @@ mdopus/                     # workspace root (disk name)
 │   ├── conformance/        # workspace member: conformance suite
 │   ├── fuzz/               # cargo-fuzz targets (excluded from workspace)
 │   └── vectors/            # deterministic WAV fixtures
-├── assets/                 # Architecture docs and code review notes per module
 ├── tools/                  # Coordinator, integration scripts, bisect/trace utilities
-├── notes/                  # Working scratchpad and investigation logs
-├── wrk_docs/ wrk_journals/ # HLDs and investigation journals
+├── wrk_docs/               # HLDs and design docs (design_docs/ holds per-module architecture + review notes)
+├── wrk_journals/           # Investigation journals
 └── logs/                   # Coordinator run logs (git-ignored)
 ```
 

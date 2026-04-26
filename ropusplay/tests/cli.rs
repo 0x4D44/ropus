@@ -40,10 +40,7 @@ fn list_devices_prints_lines_and_exits_zero() {
         return;
     }
 
-    let lines: Vec<&str> = stdout
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .collect();
+    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
     assert!(
         !lines.is_empty(),
         "expected at least one device line on stdout; stdout={stdout:?} stderr={stderr:?}"

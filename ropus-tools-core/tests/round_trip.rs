@@ -20,11 +20,18 @@ use ropus_tools_core::options::{DecodeOptions, EncodeOptions};
 /// layout emitted by our own WAV writer — good enough for test fixtures.
 fn read_pcm16_wav(path: &std::path::Path) -> (Vec<i16>, u32, u16) {
     let bytes = std::fs::read(path).expect("read WAV");
-    assert!(bytes.len() >= 44, "WAV shorter than canonical 44-byte header");
+    assert!(
+        bytes.len() >= 44,
+        "WAV shorter than canonical 44-byte header"
+    );
     let channels = u16::from_le_bytes([bytes[22], bytes[23]]);
     let sample_rate = u32::from_le_bytes([bytes[24], bytes[25], bytes[26], bytes[27]]);
     // data chunk starts at offset 36 with "data" + u32 size, samples follow at 44.
-    assert_eq!(&bytes[36..40], b"data", "expected canonical data chunk at 36");
+    assert_eq!(
+        &bytes[36..40],
+        b"data",
+        "expected canonical data chunk at 36"
+    );
     let data_len = u32::from_le_bytes([bytes[40], bytes[41], bytes[42], bytes[43]]) as usize;
     let end = (44 + data_len).min(bytes.len());
     let raw = &bytes[44..end];
@@ -113,8 +120,11 @@ fn encode_then_decode_48k_sine_round_trips_with_snr_above_20_db() {
     let n = in_samples.len().min(out_samples.len());
     assert!(n > 0, "no overlapping samples to compare");
 
-    let sig_power: f64 =
-        in_samples[..n].iter().map(|&x| (x as f64).powi(2)).sum::<f64>() / n as f64;
+    let sig_power: f64 = in_samples[..n]
+        .iter()
+        .map(|&x| (x as f64).powi(2))
+        .sum::<f64>()
+        / n as f64;
     let noise_power: f64 = in_samples[..n]
         .iter()
         .zip(&out_samples[..n])
@@ -202,20 +212,14 @@ fn encode_with_metadata_flags_round_trips_tags() {
         serial: None,
         picture_path: None,
         vendor: "ropus-tools-core-test".to_string(),
-        comments: vec![
-            "ARTIST=X".to_string(),
-            "TITLE=Y".to_string(),
-        ],
+        comments: vec!["ARTIST=X".to_string(), "TITLE=Y".to_string()],
     };
     commands::encode(enc_opts).expect("encode with tags");
 
     let tags = read_opus_tags_from_file(&tmp_opus);
     assert_eq!(tags.get("ARTIST"), Some("X"), "artist round-tripped");
     assert_eq!(tags.get("TITLE"), Some("Y"), "title round-tripped");
-    assert_eq!(
-        tags.vendor, "ropus-tools-core-test",
-        "vendor round-tripped"
-    );
+    assert_eq!(tags.vendor, "ropus-tools-core-test", "vendor round-tripped");
 
     let _ = std::fs::remove_file(&tmp_opus);
 }
@@ -506,7 +510,10 @@ fn decode_float_round_trip_produces_valid_wav() {
     assert_eq!(&bytes[50..54], b"data");
     let data_bytes = u32::from_le_bytes([bytes[54], bytes[55], bytes[56], bytes[57]]) as usize;
     assert!(data_bytes > 0, "float WAV must contain sample data");
-    assert!(data_bytes.is_multiple_of(4), "data size must be multiple of 4 bytes");
+    assert!(
+        data_bytes.is_multiple_of(4),
+        "data size must be multiple of 4 bytes"
+    );
 
     let _ = std::fs::remove_file(&opus_path);
     let _ = std::fs::remove_file(&wav_out);
@@ -648,7 +655,10 @@ fn decode_packet_loss_zero_is_bit_identical_to_no_flag() {
 
     let a = std::fs::read(&wav_default).expect("read a");
     let b = std::fs::read(&wav_explicit).expect("read b");
-    assert_eq!(a, b, "packet_loss_pct=0 must match no-flag output byte-for-byte");
+    assert_eq!(
+        a, b,
+        "packet_loss_pct=0 must match no-flag output byte-for-byte"
+    );
 
     let _ = std::fs::remove_file(&opus_path);
     let _ = std::fs::remove_file(&wav_default);

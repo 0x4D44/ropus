@@ -50,13 +50,9 @@
 use crate::celt::fft::{KissFftCpx, KissFftState, opus_fft};
 use crate::celt::mdct::MDCT_48000_960;
 use crate::celt::modes::CELTMode;
-use crate::types::{
-    SIG_SHIFT, add32, half32, mult16_32_q15, qconst16, sub32,
-};
+use crate::types::{SIG_SHIFT, add32, half32, mult16_32_q15, qconst16, sub32};
 
-use super::mlp::{
-    MAX_NEURONS, analysis_compute_dense, analysis_compute_gru,
-};
+use super::mlp::{MAX_NEURONS, analysis_compute_dense, analysis_compute_gru};
 use super::mlp_data::{LAYER0, LAYER1, LAYER2};
 
 /// Matches C's fallback `#define M_PI 3.141592653` in reference/src/analysis.c:49-50.
@@ -196,72 +192,378 @@ pub type DownmixFunc =
 /// 8x16 type-II DCT matrix used for BFCC extraction.
 /// Matches `analysis.c:57-74` (128 float constants, row-major 8 rows x 16 cols).
 static DCT_TABLE: [f32; 128] = [
-    0.250000_f32, 0.250000_f32, 0.250000_f32, 0.250000_f32, 0.250000_f32, 0.250000_f32,
-    0.250000_f32, 0.250000_f32, 0.250000_f32, 0.250000_f32, 0.250000_f32, 0.250000_f32,
-    0.250000_f32, 0.250000_f32, 0.250000_f32, 0.250000_f32, 0.351851_f32, 0.338330_f32,
-    0.311806_f32, 0.273300_f32, 0.224292_f32, 0.166664_f32, 0.102631_f32, 0.034654_f32,
-    -0.034654_f32, -0.102631_f32, -0.166664_f32, -0.224292_f32, -0.273300_f32, -0.311806_f32,
-    -0.338330_f32, -0.351851_f32, 0.346760_f32, 0.293969_f32, 0.196424_f32, 0.068975_f32,
-    -0.068975_f32, -0.196424_f32, -0.293969_f32, -0.346760_f32, -0.346760_f32, -0.293969_f32,
-    -0.196424_f32, -0.068975_f32, 0.068975_f32, 0.196424_f32, 0.293969_f32, 0.346760_f32,
-    0.338330_f32, 0.224292_f32, 0.034654_f32, -0.166664_f32, -0.311806_f32, -0.351851_f32,
-    -0.273300_f32, -0.102631_f32, 0.102631_f32, 0.273300_f32, 0.351851_f32, 0.311806_f32,
-    0.166664_f32, -0.034654_f32, -0.224292_f32, -0.338330_f32, 0.326641_f32, 0.135299_f32,
-    -0.135299_f32, -0.326641_f32, -0.326641_f32, -0.135299_f32, 0.135299_f32, 0.326641_f32,
-    0.326641_f32, 0.135299_f32, -0.135299_f32, -0.326641_f32, -0.326641_f32, -0.135299_f32,
-    0.135299_f32, 0.326641_f32, 0.311806_f32, 0.034654_f32, -0.273300_f32, -0.338330_f32,
-    -0.102631_f32, 0.224292_f32, 0.351851_f32, 0.166664_f32, -0.166664_f32, -0.351851_f32,
-    -0.224292_f32, 0.102631_f32, 0.338330_f32, 0.273300_f32, -0.034654_f32, -0.311806_f32,
-    0.293969_f32, -0.068975_f32, -0.346760_f32, -0.196424_f32, 0.196424_f32, 0.346760_f32,
-    0.068975_f32, -0.293969_f32, -0.293969_f32, 0.068975_f32, 0.346760_f32, 0.196424_f32,
-    -0.196424_f32, -0.346760_f32, -0.068975_f32, 0.293969_f32, 0.273300_f32, -0.166664_f32,
-    -0.338330_f32, 0.034654_f32, 0.351851_f32, 0.102631_f32, -0.311806_f32, -0.224292_f32,
-    0.224292_f32, 0.311806_f32, -0.102631_f32, -0.351851_f32, -0.034654_f32, 0.338330_f32,
-    0.166664_f32, -0.273300_f32,
+    0.250000_f32,
+    0.250000_f32,
+    0.250000_f32,
+    0.250000_f32,
+    0.250000_f32,
+    0.250000_f32,
+    0.250000_f32,
+    0.250000_f32,
+    0.250000_f32,
+    0.250000_f32,
+    0.250000_f32,
+    0.250000_f32,
+    0.250000_f32,
+    0.250000_f32,
+    0.250000_f32,
+    0.250000_f32,
+    0.351851_f32,
+    0.338330_f32,
+    0.311806_f32,
+    0.273300_f32,
+    0.224292_f32,
+    0.166664_f32,
+    0.102631_f32,
+    0.034654_f32,
+    -0.034654_f32,
+    -0.102631_f32,
+    -0.166664_f32,
+    -0.224292_f32,
+    -0.273300_f32,
+    -0.311806_f32,
+    -0.338330_f32,
+    -0.351851_f32,
+    0.346760_f32,
+    0.293969_f32,
+    0.196424_f32,
+    0.068975_f32,
+    -0.068975_f32,
+    -0.196424_f32,
+    -0.293969_f32,
+    -0.346760_f32,
+    -0.346760_f32,
+    -0.293969_f32,
+    -0.196424_f32,
+    -0.068975_f32,
+    0.068975_f32,
+    0.196424_f32,
+    0.293969_f32,
+    0.346760_f32,
+    0.338330_f32,
+    0.224292_f32,
+    0.034654_f32,
+    -0.166664_f32,
+    -0.311806_f32,
+    -0.351851_f32,
+    -0.273300_f32,
+    -0.102631_f32,
+    0.102631_f32,
+    0.273300_f32,
+    0.351851_f32,
+    0.311806_f32,
+    0.166664_f32,
+    -0.034654_f32,
+    -0.224292_f32,
+    -0.338330_f32,
+    0.326641_f32,
+    0.135299_f32,
+    -0.135299_f32,
+    -0.326641_f32,
+    -0.326641_f32,
+    -0.135299_f32,
+    0.135299_f32,
+    0.326641_f32,
+    0.326641_f32,
+    0.135299_f32,
+    -0.135299_f32,
+    -0.326641_f32,
+    -0.326641_f32,
+    -0.135299_f32,
+    0.135299_f32,
+    0.326641_f32,
+    0.311806_f32,
+    0.034654_f32,
+    -0.273300_f32,
+    -0.338330_f32,
+    -0.102631_f32,
+    0.224292_f32,
+    0.351851_f32,
+    0.166664_f32,
+    -0.166664_f32,
+    -0.351851_f32,
+    -0.224292_f32,
+    0.102631_f32,
+    0.338330_f32,
+    0.273300_f32,
+    -0.034654_f32,
+    -0.311806_f32,
+    0.293969_f32,
+    -0.068975_f32,
+    -0.346760_f32,
+    -0.196424_f32,
+    0.196424_f32,
+    0.346760_f32,
+    0.068975_f32,
+    -0.293969_f32,
+    -0.293969_f32,
+    0.068975_f32,
+    0.346760_f32,
+    0.196424_f32,
+    -0.196424_f32,
+    -0.346760_f32,
+    -0.068975_f32,
+    0.293969_f32,
+    0.273300_f32,
+    -0.166664_f32,
+    -0.338330_f32,
+    0.034654_f32,
+    0.351851_f32,
+    0.102631_f32,
+    -0.311806_f32,
+    -0.224292_f32,
+    0.224292_f32,
+    0.311806_f32,
+    -0.102631_f32,
+    -0.351851_f32,
+    -0.034654_f32,
+    0.338330_f32,
+    0.166664_f32,
+    -0.273300_f32,
 ];
 
 /// 240-sample analysis window (sine-shaped). Matches `analysis.c:76-107`.
 static ANALYSIS_WINDOW: [f32; 240] = [
-    0.000043_f32, 0.000171_f32, 0.000385_f32, 0.000685_f32, 0.001071_f32, 0.001541_f32,
-    0.002098_f32, 0.002739_f32, 0.003466_f32, 0.004278_f32, 0.005174_f32, 0.006156_f32,
-    0.007222_f32, 0.008373_f32, 0.009607_f32, 0.010926_f32, 0.012329_f32, 0.013815_f32,
-    0.015385_f32, 0.017037_f32, 0.018772_f32, 0.020590_f32, 0.022490_f32, 0.024472_f32,
-    0.026535_f32, 0.028679_f32, 0.030904_f32, 0.033210_f32, 0.035595_f32, 0.038060_f32,
-    0.040604_f32, 0.043227_f32, 0.045928_f32, 0.048707_f32, 0.051564_f32, 0.054497_f32,
-    0.057506_f32, 0.060591_f32, 0.063752_f32, 0.066987_f32, 0.070297_f32, 0.073680_f32,
-    0.077136_f32, 0.080665_f32, 0.084265_f32, 0.087937_f32, 0.091679_f32, 0.095492_f32,
-    0.099373_f32, 0.103323_f32, 0.107342_f32, 0.111427_f32, 0.115579_f32, 0.119797_f32,
-    0.124080_f32, 0.128428_f32, 0.132839_f32, 0.137313_f32, 0.141849_f32, 0.146447_f32,
-    0.151105_f32, 0.155823_f32, 0.160600_f32, 0.165435_f32, 0.170327_f32, 0.175276_f32,
-    0.180280_f32, 0.185340_f32, 0.190453_f32, 0.195619_f32, 0.200838_f32, 0.206107_f32,
-    0.211427_f32, 0.216797_f32, 0.222215_f32, 0.227680_f32, 0.233193_f32, 0.238751_f32,
-    0.244353_f32, 0.250000_f32, 0.255689_f32, 0.261421_f32, 0.267193_f32, 0.273005_f32,
-    0.278856_f32, 0.284744_f32, 0.290670_f32, 0.296632_f32, 0.302628_f32, 0.308658_f32,
-    0.314721_f32, 0.320816_f32, 0.326941_f32, 0.333097_f32, 0.339280_f32, 0.345492_f32,
-    0.351729_f32, 0.357992_f32, 0.364280_f32, 0.370590_f32, 0.376923_f32, 0.383277_f32,
-    0.389651_f32, 0.396044_f32, 0.402455_f32, 0.408882_f32, 0.415325_f32, 0.421783_f32,
-    0.428254_f32, 0.434737_f32, 0.441231_f32, 0.447736_f32, 0.454249_f32, 0.460770_f32,
-    0.467298_f32, 0.473832_f32, 0.480370_f32, 0.486912_f32, 0.493455_f32, 0.500000_f32,
-    0.506545_f32, 0.513088_f32, 0.519630_f32, 0.526168_f32, 0.532702_f32, 0.539230_f32,
-    0.545751_f32, 0.552264_f32, 0.558769_f32, 0.565263_f32, 0.571746_f32, 0.578217_f32,
-    0.584675_f32, 0.591118_f32, 0.597545_f32, 0.603956_f32, 0.610349_f32, 0.616723_f32,
-    0.623077_f32, 0.629410_f32, 0.635720_f32, 0.642008_f32, 0.648271_f32, 0.654508_f32,
-    0.660720_f32, 0.666903_f32, 0.673059_f32, 0.679184_f32, 0.685279_f32, 0.691342_f32,
-    0.697372_f32, 0.703368_f32, 0.709330_f32, 0.715256_f32, 0.721144_f32, 0.726995_f32,
-    0.732807_f32, 0.738579_f32, 0.744311_f32, 0.750000_f32, 0.755647_f32, 0.761249_f32,
-    0.766807_f32, 0.772320_f32, 0.777785_f32, 0.783203_f32, 0.788573_f32, 0.793893_f32,
-    0.799162_f32, 0.804381_f32, 0.809547_f32, 0.814660_f32, 0.819720_f32, 0.824724_f32,
-    0.829673_f32, 0.834565_f32, 0.839400_f32, 0.844177_f32, 0.848895_f32, 0.853553_f32,
-    0.858151_f32, 0.862687_f32, 0.867161_f32, 0.871572_f32, 0.875920_f32, 0.880203_f32,
-    0.884421_f32, 0.888573_f32, 0.892658_f32, 0.896677_f32, 0.900627_f32, 0.904508_f32,
-    0.908321_f32, 0.912063_f32, 0.915735_f32, 0.919335_f32, 0.922864_f32, 0.926320_f32,
-    0.929703_f32, 0.933013_f32, 0.936248_f32, 0.939409_f32, 0.942494_f32, 0.945503_f32,
-    0.948436_f32, 0.951293_f32, 0.954072_f32, 0.956773_f32, 0.959396_f32, 0.961940_f32,
-    0.964405_f32, 0.966790_f32, 0.969096_f32, 0.971321_f32, 0.973465_f32, 0.975528_f32,
-    0.977510_f32, 0.979410_f32, 0.981228_f32, 0.982963_f32, 0.984615_f32, 0.986185_f32,
-    0.987671_f32, 0.989074_f32, 0.990393_f32, 0.991627_f32, 0.992778_f32, 0.993844_f32,
-    0.994826_f32, 0.995722_f32, 0.996534_f32, 0.997261_f32, 0.997902_f32, 0.998459_f32,
-    0.998929_f32, 0.999315_f32, 0.999615_f32, 0.999829_f32, 0.999957_f32, 1.000000_f32,
+    0.000043_f32,
+    0.000171_f32,
+    0.000385_f32,
+    0.000685_f32,
+    0.001071_f32,
+    0.001541_f32,
+    0.002098_f32,
+    0.002739_f32,
+    0.003466_f32,
+    0.004278_f32,
+    0.005174_f32,
+    0.006156_f32,
+    0.007222_f32,
+    0.008373_f32,
+    0.009607_f32,
+    0.010926_f32,
+    0.012329_f32,
+    0.013815_f32,
+    0.015385_f32,
+    0.017037_f32,
+    0.018772_f32,
+    0.020590_f32,
+    0.022490_f32,
+    0.024472_f32,
+    0.026535_f32,
+    0.028679_f32,
+    0.030904_f32,
+    0.033210_f32,
+    0.035595_f32,
+    0.038060_f32,
+    0.040604_f32,
+    0.043227_f32,
+    0.045928_f32,
+    0.048707_f32,
+    0.051564_f32,
+    0.054497_f32,
+    0.057506_f32,
+    0.060591_f32,
+    0.063752_f32,
+    0.066987_f32,
+    0.070297_f32,
+    0.073680_f32,
+    0.077136_f32,
+    0.080665_f32,
+    0.084265_f32,
+    0.087937_f32,
+    0.091679_f32,
+    0.095492_f32,
+    0.099373_f32,
+    0.103323_f32,
+    0.107342_f32,
+    0.111427_f32,
+    0.115579_f32,
+    0.119797_f32,
+    0.124080_f32,
+    0.128428_f32,
+    0.132839_f32,
+    0.137313_f32,
+    0.141849_f32,
+    0.146447_f32,
+    0.151105_f32,
+    0.155823_f32,
+    0.160600_f32,
+    0.165435_f32,
+    0.170327_f32,
+    0.175276_f32,
+    0.180280_f32,
+    0.185340_f32,
+    0.190453_f32,
+    0.195619_f32,
+    0.200838_f32,
+    0.206107_f32,
+    0.211427_f32,
+    0.216797_f32,
+    0.222215_f32,
+    0.227680_f32,
+    0.233193_f32,
+    0.238751_f32,
+    0.244353_f32,
+    0.250000_f32,
+    0.255689_f32,
+    0.261421_f32,
+    0.267193_f32,
+    0.273005_f32,
+    0.278856_f32,
+    0.284744_f32,
+    0.290670_f32,
+    0.296632_f32,
+    0.302628_f32,
+    0.308658_f32,
+    0.314721_f32,
+    0.320816_f32,
+    0.326941_f32,
+    0.333097_f32,
+    0.339280_f32,
+    0.345492_f32,
+    0.351729_f32,
+    0.357992_f32,
+    0.364280_f32,
+    0.370590_f32,
+    0.376923_f32,
+    0.383277_f32,
+    0.389651_f32,
+    0.396044_f32,
+    0.402455_f32,
+    0.408882_f32,
+    0.415325_f32,
+    0.421783_f32,
+    0.428254_f32,
+    0.434737_f32,
+    0.441231_f32,
+    0.447736_f32,
+    0.454249_f32,
+    0.460770_f32,
+    0.467298_f32,
+    0.473832_f32,
+    0.480370_f32,
+    0.486912_f32,
+    0.493455_f32,
+    0.500000_f32,
+    0.506545_f32,
+    0.513088_f32,
+    0.519630_f32,
+    0.526168_f32,
+    0.532702_f32,
+    0.539230_f32,
+    0.545751_f32,
+    0.552264_f32,
+    0.558769_f32,
+    0.565263_f32,
+    0.571746_f32,
+    0.578217_f32,
+    0.584675_f32,
+    0.591118_f32,
+    0.597545_f32,
+    0.603956_f32,
+    0.610349_f32,
+    0.616723_f32,
+    0.623077_f32,
+    0.629410_f32,
+    0.635720_f32,
+    0.642008_f32,
+    0.648271_f32,
+    0.654508_f32,
+    0.660720_f32,
+    0.666903_f32,
+    0.673059_f32,
+    0.679184_f32,
+    0.685279_f32,
+    0.691342_f32,
+    0.697372_f32,
+    0.703368_f32,
+    0.709330_f32,
+    0.715256_f32,
+    0.721144_f32,
+    0.726995_f32,
+    0.732807_f32,
+    0.738579_f32,
+    0.744311_f32,
+    0.750000_f32,
+    0.755647_f32,
+    0.761249_f32,
+    0.766807_f32,
+    0.772320_f32,
+    0.777785_f32,
+    0.783203_f32,
+    0.788573_f32,
+    0.793893_f32,
+    0.799162_f32,
+    0.804381_f32,
+    0.809547_f32,
+    0.814660_f32,
+    0.819720_f32,
+    0.824724_f32,
+    0.829673_f32,
+    0.834565_f32,
+    0.839400_f32,
+    0.844177_f32,
+    0.848895_f32,
+    0.853553_f32,
+    0.858151_f32,
+    0.862687_f32,
+    0.867161_f32,
+    0.871572_f32,
+    0.875920_f32,
+    0.880203_f32,
+    0.884421_f32,
+    0.888573_f32,
+    0.892658_f32,
+    0.896677_f32,
+    0.900627_f32,
+    0.904508_f32,
+    0.908321_f32,
+    0.912063_f32,
+    0.915735_f32,
+    0.919335_f32,
+    0.922864_f32,
+    0.926320_f32,
+    0.929703_f32,
+    0.933013_f32,
+    0.936248_f32,
+    0.939409_f32,
+    0.942494_f32,
+    0.945503_f32,
+    0.948436_f32,
+    0.951293_f32,
+    0.954072_f32,
+    0.956773_f32,
+    0.959396_f32,
+    0.961940_f32,
+    0.964405_f32,
+    0.966790_f32,
+    0.969096_f32,
+    0.971321_f32,
+    0.973465_f32,
+    0.975528_f32,
+    0.977510_f32,
+    0.979410_f32,
+    0.981228_f32,
+    0.982963_f32,
+    0.984615_f32,
+    0.986185_f32,
+    0.987671_f32,
+    0.989074_f32,
+    0.990393_f32,
+    0.991627_f32,
+    0.992778_f32,
+    0.993844_f32,
+    0.994826_f32,
+    0.995722_f32,
+    0.996534_f32,
+    0.997261_f32,
+    0.997902_f32,
+    0.998459_f32,
+    0.998929_f32,
+    0.999315_f32,
+    0.999615_f32,
+    0.999829_f32,
+    0.999957_f32,
+    1.000000_f32,
 ];
 
 /// Tonality-band edges (bin indices into the 480-pt FFT output).
@@ -272,8 +574,15 @@ static TBANDS: [i32; NB_TBANDS + 1] = [
 
 /// Feature-stddev bias. Matches `analysis.c:410-413`.
 static STD_FEATURE_BIAS: [f32; 9] = [
-    5.684947_f32, 3.475288_f32, 1.770634_f32, 1.599784_f32, 3.773215_f32,
-    2.163313_f32, 1.260756_f32, 1.116868_f32, 1.918795_f32,
+    5.684947_f32,
+    3.475288_f32,
+    1.770634_f32,
+    1.599784_f32,
+    3.773215_f32,
+    2.163313_f32,
+    1.260756_f32,
+    1.116868_f32,
+    1.918795_f32,
 ];
 
 // ===========================================================================
@@ -543,8 +852,7 @@ fn fast_atan2f(y: f32, x: f32) -> f32 {
         -x * y * (y2 + CA * x2) / den + (if y < 0.0 { -CE } else { CE })
     } else {
         let den = (x2 + CB * y2) * (x2 + CC * y2);
-        x * y * (x2 + CA * y2) / den
-            + (if y < 0.0 { -CE } else { CE })
+        x * y * (x2 + CA * y2) / den + (if y < 0.0 { -CE } else { CE })
             - (if x * y < 0.0 { -CE } else { CE })
     }
 }
@@ -579,12 +887,7 @@ fn is_digital_silence32(pcm: &[i32]) -> bool {
 /// third-order state that captures the high-pass residual. The fixed-point
 /// math uses `MULT16_32_Q15(QCONST16(c, 15), Y)` which in Rust is
 /// `mult16_32_q15(qconst16(c, 15), y)`.
-fn silk_resampler_down2_hp(
-    state: &mut [i32; 3],
-    out: &mut [i32],
-    inp: &[i32],
-    in_len: i32,
-) -> i32 {
+fn silk_resampler_down2_hp(state: &mut [i32; 3], out: &mut [i32], inp: &[i32], in_len: i32) -> i32 {
     let len2 = in_len / 2;
     let mut hp_ener: i64 = 0;
 
@@ -592,7 +895,7 @@ fn silk_resampler_down2_hp(
     // `QCONST16(...)` intent without constructing the qconst on every
     // iteration).
     let c0: i32 = qconst16(0.6074371_f64, 15); // 19906
-    let c1: i32 = qconst16(0.15063_f64, 15);   // 4936
+    let c1: i32 = qconst16(0.15063_f64, 15); // 4936
 
     for k in 0..len2 as usize {
         // Even input sample
@@ -733,11 +1036,7 @@ fn downmix_and_resample(
 /// output frame length in samples at the original (external) rate; it's
 /// divided down by `Fs/400` to advance the read position in
 /// subframe-of-2.5ms increments.
-pub fn tonality_get_info(
-    tonal: &mut TonalityAnalysisState,
-    info_out: &mut AnalysisInfo,
-    len: i32,
-) {
+pub fn tonality_get_info(tonal: &mut TonalityAnalysisState, info_out: &mut AnalysisInfo, len: i32) {
     let mut pos = tonal.read_pos;
     let mut curr_lookahead = tonal.write_pos - tonal.read_pos;
     if curr_lookahead < 0 {
@@ -803,10 +1102,7 @@ pub fn tonality_get_info(
         }
         info_out.bandwidth = imax(info_out.bandwidth, tonal.info[pos as usize].bandwidth);
     }
-    info_out.tonality = fmax32(
-        tonality_avg / tonality_count as f32,
-        tonality_max - 0.2_f32,
-    );
+    info_out.tonality = fmax32(tonality_avg / tonality_count as f32, tonality_max - 0.2_f32);
 
     let mut mpos = pos0;
     let mut vpos = pos0;
@@ -1194,8 +1490,7 @@ fn tonality_analysis(
         // double, cast back. Rust `f32::ln` is single-precision and
         // can differ by ULPs from this chain, so go via f64 explicitly.
         log_e_band[b] = ((e + 1e-10_f32) as f64).ln() as f32;
-        band_log2[b + 1] =
-            0.5_f32 * 1.442695_f32 * ((e + 1e-10_f32) as f64).ln() as f32;
+        band_log2[b + 1] = 0.5_f32 * 1.442695_f32 * ((e + 1e-10_f32) as f64).ln() as f32;
         tonal.log_e_frames[tonal.e_count as usize][b] = log_e_band[b];
         if tonal.count == 0 {
             tonal.high_e[b] = log_e_band[b];
@@ -1219,8 +1514,8 @@ fn tonality_analysis(
             tonal.low_e[b] = log_e_band[b];
             tonal.high_e[b] = fmin32(tonal.low_e[b] + 15.0_f32, tonal.high_e[b]);
         }
-        relative_e += (log_e_band[b] - tonal.low_e[b])
-            / (1e-5_f32 + (tonal.high_e[b] - tonal.low_e[b]));
+        relative_e +=
+            (log_e_band[b] - tonal.low_e[b]) / (1e-5_f32 + (tonal.high_e[b] - tonal.low_e[b]));
 
         let mut l1: f32 = 0.0;
         let mut l2: f32 = 0.0;
@@ -1277,15 +1572,16 @@ fn tonality_analysis(
     leakage_from[0] = band_log2[0];
     leakage_to[0] = band_log2[0] - LEAKAGE_OFFSET;
     for b in 1..(NB_TBANDS + 1) {
-        let leak_slope =
-            LEAKAGE_SLOPE * (TBANDS[b] - TBANDS[b - 1]) as f32 / 4.0_f32;
+        let leak_slope = LEAKAGE_SLOPE * (TBANDS[b] - TBANDS[b - 1]) as f32 / 4.0_f32;
         leakage_from[b] = fmin16(leakage_from[b - 1] + leak_slope, band_log2[b]);
-        leakage_to[b] = fmax16(leakage_to[b - 1] - leak_slope, band_log2[b] - LEAKAGE_OFFSET);
+        leakage_to[b] = fmax16(
+            leakage_to[b - 1] - leak_slope,
+            band_log2[b] - LEAKAGE_OFFSET,
+        );
     }
     // C loops `for (b=NB_TBANDS-2; b>=0; b--)` — reverse Rust range.
     for b in (0..=(NB_TBANDS - 2)).rev() {
-        let leak_slope =
-            LEAKAGE_SLOPE * (TBANDS[b + 1] - TBANDS[b]) as f32 / 4.0_f32;
+        let leak_slope = LEAKAGE_SLOPE * (TBANDS[b + 1] - TBANDS[b]) as f32 / 4.0_f32;
         leakage_from[b] = fmin16(leakage_from[b + 1] + leak_slope, leakage_from[b]);
         leakage_to[b] = fmax16(leakage_to[b + 1] - leak_slope, leakage_to[b]);
     }
@@ -1361,9 +1657,7 @@ fn tonality_analysis(
         tonal.mean_e[b] = fmax32((1.0_f32 - alpha_e2) * tonal.mean_e[b], e);
         let em = fmax32(e, tonal.mean_e[b]);
         let width = (band_end - band_start) as f32;
-        if e * 1e9_f32 > max_e
-            && (em > 3.0_f32 * noise_floor * width || e > noise_floor * width)
-        {
+        if e * 1e9_f32 > max_e && (em > 3.0_f32 * noise_floor * width || e > noise_floor * width) {
             bandwidth = b as i32 + 1;
         }
         let masked_thresh = if tonal.prev_bandwidth >= (b as i32 + 1) {
@@ -1382,7 +1676,11 @@ fn tonality_analysis(
     // The block below reuses that `b`, writing `mean_e[NB_TBANDS]` and
     // `is_masked[NB_TBANDS]`. We mirror those indices explicitly.
     if tonal.fs == 48_000 {
-        let noise_ratio: f32 = if tonal.prev_bandwidth == 20 { 10.0_f32 } else { 30.0_f32 };
+        let noise_ratio: f32 = if tonal.prev_bandwidth == 20 {
+            10.0_f32
+        } else {
+            30.0_f32
+        };
         let mut e = hp_ener * (1.0_f32 / (60.0_f32 * 60.0_f32));
         // silk_resampler_down2_hp() shifted right by an extra 8 bits.
         e *= 256.0_f32 * (1.0_f32 / Q15ONE_F32) * (1.0_f32 / Q15ONE_F32);
@@ -1394,7 +1692,11 @@ fn tonality_analysis(
         {
             bandwidth = 20;
         }
-        let masked_thresh = if tonal.prev_bandwidth == 20 { 0.01_f32 } else { 0.05_f32 };
+        let masked_thresh = if tonal.prev_bandwidth == 20 {
+            0.01_f32
+        } else {
+            0.05_f32
+        };
         is_masked[NB_TBANDS] = (e < masked_thresh * bandwidth_mask) as i32;
     }
 
@@ -1406,7 +1708,10 @@ fn tonality_analysis(
     // Final masking cleanup on the candidate bandwidth.
     if bandwidth == 20 && is_masked[NB_TBANDS] != 0 {
         bandwidth -= 2;
-    } else if bandwidth > 0 && bandwidth <= NB_TBANDS as i32 && is_masked[(bandwidth - 1) as usize] != 0 {
+    } else if bandwidth > 0
+        && bandwidth <= NB_TBANDS as i32
+        && is_masked[(bandwidth - 1) as usize] != 0
+    {
         bandwidth -= 1;
     }
     if tonal.count <= 2 {
@@ -1445,8 +1750,7 @@ fn tonality_analysis(
         relative_e = 0.5_f32;
     }
     frame_noisiness /= NB_TBANDS as f32;
-    tonal.info[info_slot].activity =
-        frame_noisiness + (1.0_f32 - frame_noisiness) * relative_e;
+    tonal.info[info_slot].activity = frame_noisiness + (1.0_f32 - frame_noisiness) * relative_e;
     frame_tonality = max_frame_tonality / (NB_TBANDS - NB_TONAL_SKIP_BANDS) as f32;
     frame_tonality = fmax16(frame_tonality, tonal.prev_tonality * 0.8_f32);
     tonal.prev_tonality = frame_tonality;
@@ -1470,8 +1774,8 @@ fn tonality_analysis(
     }
 
     for i in 0..4 {
-        features[4 + i] =
-            0.63246_f32 * (bfcc[i] - tonal.mem[i + 24]) + 0.31623_f32 * (tonal.mem[i] - tonal.mem[i + 16]);
+        features[4 + i] = 0.63246_f32 * (bfcc[i] - tonal.mem[i + 24])
+            + 0.31623_f32 * (tonal.mem[i] - tonal.mem[i + 16]);
     }
     for i in 0..3 {
         features[8 + i] = 0.53452_f32 * (bfcc[i] + tonal.mem[i + 24])
@@ -1868,6 +2172,65 @@ mod tests {
                 assert!(info.bandwidth >= 0 && info.bandwidth <= 20);
                 assert!(info.max_pitch_ratio.is_finite());
             }
+        }
+    }
+
+    /// Bug L (campaign 9): the per-band loop's `frame_tonality -=` branch
+    /// fires for `b in (NB_TBANDS - NB_TONAL_SKIP_BANDS)..NB_TBANDS`. The
+    /// pre-fix expression `band_tonality[b - NB_TBANDS + NB_TONAL_SKIP_BANDS]`
+    /// underflows `usize` because `b < NB_TBANDS` inside the loop — the
+    /// cargo-fuzz profile with overflow-checks panics on the subtraction;
+    /// release builds silently wrap to a huge index and OOB-panic on the
+    /// array access. The fix reorders to `b + NB_TONAL_SKIP_BANDS - NB_TBANDS`.
+    #[test]
+    fn test_bug_l_frame_tonality_index_never_underflows() {
+        // Enumerate every b admitted by the guard and verify the fixed
+        // expression (the one currently in source) stays within bounds.
+        // If someone reintroduces the `b - NB_TBANDS` form, the analysis
+        // integration tests above panic in release; this test is a direct
+        // invariant check that documents the bug.
+        for b in (NB_TBANDS - NB_TONAL_SKIP_BANDS)..NB_TBANDS {
+            let idx = b + NB_TONAL_SKIP_BANDS - NB_TBANDS;
+            assert!(
+                idx < NB_TBANDS,
+                "b={b} idx={idx} exceeds NB_TBANDS={NB_TBANDS}"
+            );
+        }
+
+        // Drive run_analysis with enough data to trigger the per-band loop
+        // at the config Bug L panicked on (Fs=48 kHz, analysis path). The
+        // pre-fix source panics before we get here; fixed source completes.
+        let mut state = TonalityAnalysisState::new();
+        tonality_analysis_init(&mut state, 48_000);
+        let mut info = AnalysisInfo::zeroed();
+
+        // Full-amplitude noise for 5 frames = 50 ms, well past the 30 ms
+        // inmem-fill threshold that gates the FFT-and-tonality path.
+        let mut rng: u64 = 0x0BADCAFE_0BADCAFE;
+        for _ in 0..5 {
+            let pcm: Vec<f32> = (0..480)
+                .map(|_| {
+                    rng = rng
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    ((rng >> 33) as i32 as f32) / (i32::MAX as f32)
+                })
+                .collect();
+            let pcm_bytes = f32_to_bytes(&pcm);
+            run_analysis(
+                &mut state,
+                &MODE_48000_960_120,
+                Some(&pcm_bytes),
+                480,
+                480,
+                0,
+                -2,
+                1,
+                48_000,
+                16,
+                test_downmix_float,
+                &mut info,
+            );
         }
     }
 }

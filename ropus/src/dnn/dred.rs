@@ -639,10 +639,14 @@ impl RDOVAEEncState {
             &mut self.gru1_state,
             &buffer[..ENC_DENSE1_OUT_SIZE],
         );
-        buffer[output_index..output_index + ENC_GRU1_OUT_SIZE]
-            .copy_from_slice(&self.gru1_state);
+        buffer[output_index..output_index + ENC_GRU1_OUT_SIZE].copy_from_slice(&self.gru1_state);
         output_index += ENC_GRU1_OUT_SIZE;
-        conv1_cond_init(&mut self.conv1_state, ENC_CONV1_IN_SIZE, 1, &mut self.initialized);
+        conv1_cond_init(
+            &mut self.conv1_state,
+            ENC_CONV1_IN_SIZE,
+            1,
+            &mut self.initialized,
+        );
         compute_generic_dense(
             &model.enc_conv_dense1,
             &mut conv_tmp[..ENC_CONV_DENSE1_OUT_SIZE],
@@ -668,10 +672,14 @@ impl RDOVAEEncState {
             &mut self.gru2_state,
             &buffer[..model.enc_gru2_input.nb_inputs],
         );
-        buffer[output_index..output_index + ENC_GRU2_OUT_SIZE]
-            .copy_from_slice(&self.gru2_state);
+        buffer[output_index..output_index + ENC_GRU2_OUT_SIZE].copy_from_slice(&self.gru2_state);
         output_index += ENC_GRU2_OUT_SIZE;
-        conv1_cond_init(&mut self.conv2_state, ENC_CONV2_IN_SIZE, 2, &mut self.initialized);
+        conv1_cond_init(
+            &mut self.conv2_state,
+            ENC_CONV2_IN_SIZE,
+            2,
+            &mut self.initialized,
+        );
         compute_generic_dense(
             &model.enc_conv_dense2,
             &mut conv_tmp[..ENC_CONV_DENSE2_OUT_SIZE],
@@ -698,10 +706,14 @@ impl RDOVAEEncState {
             &mut self.gru3_state,
             &buffer[..model.enc_gru3_input.nb_inputs],
         );
-        buffer[output_index..output_index + ENC_GRU3_OUT_SIZE]
-            .copy_from_slice(&self.gru3_state);
+        buffer[output_index..output_index + ENC_GRU3_OUT_SIZE].copy_from_slice(&self.gru3_state);
         output_index += ENC_GRU3_OUT_SIZE;
-        conv1_cond_init(&mut self.conv3_state, ENC_CONV3_IN_SIZE, 2, &mut self.initialized);
+        conv1_cond_init(
+            &mut self.conv3_state,
+            ENC_CONV3_IN_SIZE,
+            2,
+            &mut self.initialized,
+        );
         compute_generic_dense(
             &model.enc_conv_dense3,
             &mut conv_tmp[..ENC_CONV_DENSE3_OUT_SIZE],
@@ -728,10 +740,14 @@ impl RDOVAEEncState {
             &mut self.gru4_state,
             &buffer[..model.enc_gru4_input.nb_inputs],
         );
-        buffer[output_index..output_index + ENC_GRU4_OUT_SIZE]
-            .copy_from_slice(&self.gru4_state);
+        buffer[output_index..output_index + ENC_GRU4_OUT_SIZE].copy_from_slice(&self.gru4_state);
         output_index += ENC_GRU4_OUT_SIZE;
-        conv1_cond_init(&mut self.conv4_state, ENC_CONV4_IN_SIZE, 2, &mut self.initialized);
+        conv1_cond_init(
+            &mut self.conv4_state,
+            ENC_CONV4_IN_SIZE,
+            2,
+            &mut self.initialized,
+        );
         compute_generic_dense(
             &model.enc_conv_dense4,
             &mut conv_tmp[..ENC_CONV_DENSE4_OUT_SIZE],
@@ -758,10 +774,14 @@ impl RDOVAEEncState {
             &mut self.gru5_state,
             &buffer[..model.enc_gru5_input.nb_inputs],
         );
-        buffer[output_index..output_index + ENC_GRU5_OUT_SIZE]
-            .copy_from_slice(&self.gru5_state);
+        buffer[output_index..output_index + ENC_GRU5_OUT_SIZE].copy_from_slice(&self.gru5_state);
         output_index += ENC_GRU5_OUT_SIZE;
-        conv1_cond_init(&mut self.conv5_state, ENC_CONV5_IN_SIZE, 2, &mut self.initialized);
+        conv1_cond_init(
+            &mut self.conv5_state,
+            ENC_CONV5_IN_SIZE,
+            2,
+            &mut self.initialized,
+        );
         compute_generic_dense(
             &model.enc_conv_dense5,
             &mut conv_tmp[..ENC_CONV_DENSE5_OUT_SIZE],
@@ -793,12 +813,7 @@ impl RDOVAEEncState {
         latents[..DRED_LATENT_DIM].copy_from_slice(&padded_latents[..DRED_LATENT_DIM]);
 
         // Initial-state projection: gdense1 (tanh) -> gdense2 (linear).
-        compute_generic_dense(
-            &model.gdense1,
-            &mut state_hidden,
-            &buffer,
-            ACTIVATION_TANH,
-        );
+        compute_generic_dense(&model.gdense1, &mut state_hidden, &buffer, ACTIVATION_TANH);
         compute_generic_dense(
             &model.gdense2,
             &mut padded_state,
@@ -1381,12 +1396,7 @@ impl RDOVAEDecState {
     /// `DEC_OUTPUT_OUT_SIZE`, or if the input has fewer than
     /// `DEC_DENSE1_IN_SIZE` elements. In release builds the slice indexing
     /// panics on its own if the caller violates the contract.
-    pub fn decode_qframe(
-        &mut self,
-        model: &RDOVAEDec,
-        qframe: &mut [f32],
-        input: &[f32],
-    ) {
+    pub fn decode_qframe(&mut self, model: &RDOVAEDec, qframe: &mut [f32], input: &[f32]) {
         debug_assert!(input.len() >= DEC_DENSE1_IN_SIZE);
         debug_assert!(qframe.len() >= DEC_OUTPUT_OUT_SIZE);
 
@@ -1774,7 +1784,10 @@ impl DREDEnc {
             16000 => 1,
             24000 => 2,
             48000 => 1,
-            _ => unreachable!("unsupported Fs {} — Opus only allows 8/12/16/24/48 kHz", self.fs),
+            _ => unreachable!(
+                "unsupported Fs {} — Opus only allows 8/12/16/24/48 kHz",
+                self.fs
+            ),
         };
         debug_assert!(up * in_len <= MAX_DOWNMIX_BUFFER);
         // Zero-stuff at stride `up` so odd entries are 0 and even entries
@@ -1920,14 +1933,10 @@ impl DREDEnc {
         debug_assert!(self.loaded);
 
         // Shift latents buffer: latents_buffer[DRED_LATENT_DIM..] <- latents_buffer[..-DRED_LATENT_DIM]
-        self.latents_buffer.copy_within(
-            0..(DRED_MAX_FRAMES - 1) * DRED_LATENT_DIM,
-            DRED_LATENT_DIM,
-        );
-        self.state_buffer.copy_within(
-            0..(DRED_MAX_FRAMES - 1) * DRED_STATE_DIM,
-            DRED_STATE_DIM,
-        );
+        self.latents_buffer
+            .copy_within(0..(DRED_MAX_FRAMES - 1) * DRED_LATENT_DIM, DRED_LATENT_DIM);
+        self.state_buffer
+            .copy_within(0..(DRED_MAX_FRAMES - 1) * DRED_STATE_DIM, DRED_STATE_DIM);
 
         // Two back-to-back LPCNet feature frames.
         let mut feature_buffer = [0.0f32; 2 * NB_TOTAL_FEATURES];
@@ -1949,10 +1958,10 @@ impl DREDEnc {
         //   OPUS_COPY(input_buffer, feature_buffer, DRED_NUM_FEATURES);
         //   OPUS_COPY(input_buffer + DRED_NUM_FEATURES, feature_buffer + 36, DRED_NUM_FEATURES);
         let mut rdovae_input = [0.0f32; 2 * DRED_NUM_FEATURES];
-        rdovae_input[..DRED_NUM_FEATURES]
-            .copy_from_slice(&feature_buffer[..DRED_NUM_FEATURES]);
-        rdovae_input[DRED_NUM_FEATURES..]
-            .copy_from_slice(&feature_buffer[NB_TOTAL_FEATURES..NB_TOTAL_FEATURES + DRED_NUM_FEATURES]);
+        rdovae_input[..DRED_NUM_FEATURES].copy_from_slice(&feature_buffer[..DRED_NUM_FEATURES]);
+        rdovae_input[DRED_NUM_FEATURES..].copy_from_slice(
+            &feature_buffer[NB_TOTAL_FEATURES..NB_TOTAL_FEATURES + DRED_NUM_FEATURES],
+        );
 
         // Write latent + state into the head of the ring buffers.
         let (latent_head, _) = self.latents_buffer.split_at_mut(DRED_LATENT_DIM);
@@ -1987,8 +1996,7 @@ impl DREDEnc {
         // never reads it after the initial `dred_offset` computation.
         // Rust tracks that explicitly to avoid a dead-store warning;
         // `#[allow]` on the read would still flag the write.
-        let curr_offset_16k =
-            40 + extra_delay * 16000 / self.fs - self.input_buffer_fill;
+        let curr_offset_16k = 40 + extra_delay * 16000 / self.fs - self.input_buffer_fill;
         // `(a + 20) / 40` with floor semantics for positive and negative a.
         // Matches C `(int)floor((curr_offset16k + 20.f) / 40.f)`.
         self.dred_offset = ((curr_offset_16k as f32 + 20.0) / 40.0).floor() as i32;
@@ -2122,9 +2130,8 @@ impl DREDEnc {
         // Snapshot state buffer read so we can pass it alongside a &mut
         // encoder without a borrow conflict. State stays in self so the
         // reference is live across the call.
-        let state_buf: Vec<f32> = self.state_buffer
-            [state_slice_start..state_slice_start + DRED_STATE_DIM]
-            .to_vec();
+        let state_buf: Vec<f32> =
+            self.state_buffer[state_slice_start..state_slice_start + DRED_STATE_DIM].to_vec();
         dred_encode_latents(
             &mut ec_encoder,
             &state_buf,
@@ -2315,11 +2322,7 @@ fn dred_encode_latents(
         if r[i] == 0 || p0[i] == 255 {
             q_arr[i] = 0;
         } else {
-            ec.encode_laplace_p0(
-                q_arr[i],
-                (p0[i] as u16) << 7,
-                (r[i] as u16) << 7,
-            );
+            ec.encode_laplace_p0(q_arr[i], (p0[i] as u16) << 7, (r[i] as u16) << 7);
         }
     }
 }
@@ -2333,13 +2336,7 @@ fn dred_encode_latents(
 /// skip path — so no range-coder call is made for that dim. Otherwise
 /// `q = ec_laplace_decode_p0(dec, p0<<7, r<<7)` and
 /// `x = q * 256 / (scale == 0 ? 1 : scale)`.
-fn dred_decode_latents(
-    dec: &mut RangeDecoder,
-    x: &mut [f32],
-    scale: &[u8],
-    r: &[u8],
-    p0: &[u8],
-) {
+fn dred_decode_latents(dec: &mut RangeDecoder, x: &mut [f32], scale: &[u8], r: &[u8], p0: &[u8]) {
     let dim = x.len();
     debug_assert!(scale.len() >= dim);
     debug_assert!(r.len() >= dim);
@@ -2429,8 +2426,7 @@ impl OpusDred {
             0
         };
         // C: `dec->dred_offset = 16 - ec_dec_uint(&ec, 32) - extra_offset + dred_frame_offset`.
-        self.dred_offset =
-            16 - (dec.decode_uint(32) as i32) - extra_offset + dred_frame_offset;
+        self.dred_offset = 16 - (dec.decode_uint(32) as i32) - extra_offset + dred_frame_offset;
 
         // qmax: default 15 unless the encoder sent a smaller cap.
         let mut qmax = 15i32;
@@ -2621,9 +2617,7 @@ mod tests {
     #[test]
     fn encode_dframe_liveness_check() {
         if WEIGHTS_BLOB.is_empty() {
-            eprintln!(
-                "dred::tests: WEIGHTS_BLOB empty — skipping encode_dframe smoke test."
-            );
+            eprintln!("dred::tests: WEIGHTS_BLOB empty — skipping encode_dframe smoke test.");
             return;
         }
         let arrays = parse_weights(WEIGHTS_BLOB).expect("parse_weights blob");
@@ -2677,9 +2671,7 @@ mod tests {
     #[test]
     fn decode_qframe_liveness_check() {
         if WEIGHTS_BLOB.is_empty() {
-            eprintln!(
-                "dred::tests: WEIGHTS_BLOB empty — skipping decode_qframe smoke test."
-            );
+            eprintln!("dred::tests: WEIGHTS_BLOB empty — skipping decode_qframe smoke test.");
             return;
         }
         let arrays = parse_weights(WEIGHTS_BLOB).expect("parse_weights blob");
@@ -2832,8 +2824,7 @@ mod tests {
             .collect();
 
         // Per-chunk latent oracles.
-        let mut expected_latents =
-            vec![[0.0f32; DRED_LATENT_DIM]; NUM_CHUNKS as usize];
+        let mut expected_latents = vec![[0.0f32; DRED_LATENT_DIM]; NUM_CHUNKS as usize];
         for chunk in 0..(NUM_CHUNKS as usize) {
             let q_level = compute_quantizer(q0, d_q, qmax, chunk as i32);
             let latent_qoffset = (q_level as usize) * DRED_LATENT_DIM;
@@ -2996,10 +2987,8 @@ mod tests {
             .map(|i| dequantise(state_q[i], dred_state_quant_scales_q8[state_qoffset + i]))
             .collect();
 
-        let mut expected_latents =
-            vec![[0.0f32; DRED_LATENT_DIM]; NUM_CHUNKS as usize];
-        let mut latent_q_grid =
-            vec![vec![0i32; DRED_LATENT_DIM]; NUM_CHUNKS as usize];
+        let mut expected_latents = vec![[0.0f32; DRED_LATENT_DIM]; NUM_CHUNKS as usize];
+        let mut latent_q_grid = vec![vec![0i32; DRED_LATENT_DIM]; NUM_CHUNKS as usize];
         for chunk in 0..(NUM_CHUNKS as usize) {
             let q_level = compute_quantizer(q0, d_q, qmax, chunk as i32);
             let latent_qoffset = (q_level as usize) * DRED_LATENT_DIM;

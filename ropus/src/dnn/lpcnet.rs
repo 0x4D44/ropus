@@ -2510,12 +2510,7 @@ impl LPCNetPLCState {
 pub(crate) mod test_support {
     use crate::dnn::core;
 
-    fn append_weight_record(
-        blob: &mut Vec<u8>,
-        name: &str,
-        weight_type: i32,
-        payload_len: usize,
-    ) {
+    fn append_weight_record(blob: &mut Vec<u8>, name: &str, weight_type: i32, payload_len: usize) {
         let mut record = vec![0u8; core::WEIGHT_BLOCK_SIZE + payload_len];
         record[4..8].copy_from_slice(&core::WEIGHT_BLOB_VERSION.to_ne_bytes());
         record[8..12].copy_from_slice(&weight_type.to_ne_bytes());

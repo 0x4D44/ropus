@@ -119,10 +119,7 @@ unsafe fn resolve_handle_ref<'a>(
     Some(unsafe { &*inner })
 }
 
-unsafe fn install_handle(
-    dst: *mut OpusRepacketizerHandle,
-    inner: *mut OpusRepacketizer<'static>,
-) {
+unsafe fn install_handle(dst: *mut OpusRepacketizerHandle, inner: *mut OpusRepacketizer<'static>) {
     // SAFETY: dst points to zeroed storage of size REPACKETIZER_STORAGE_SIZE.
     unsafe {
         (*dst).magic = REPACKETIZER_HANDLE_MAGIC;

@@ -57,7 +57,7 @@ pub unsafe extern "C" fn opus_packet_extensions_count(
         // Without this, pathological inputs bypass the ffi_guard-friendly
         // BAD_ARG path and may panic inside the iterator, which ffi_guard
         // would then surface as OPUS_INTERNAL_ERROR.
-        if nb_frames < 0 || nb_frames > 48 {
+        if !(0..=48).contains(&nb_frames) {
             return OPUS_BAD_ARG;
         }
         if len <= 0 {
@@ -82,7 +82,7 @@ pub unsafe extern "C" fn opus_packet_extensions_count_ext(
     nb_frames: c_int,
 ) -> i32 {
     ffi_guard!(OPUS_INTERNAL_ERROR, {
-        if nb_frames < 0 || nb_frames > 48 {
+        if !(0..=48).contains(&nb_frames) {
             return OPUS_BAD_ARG;
         }
         if nb_frames > 0 && nb_frame_exts.is_null() {
@@ -133,7 +133,7 @@ pub unsafe extern "C" fn opus_packet_extensions_parse(
         if cap > 0 && extensions.is_null() {
             return OPUS_BAD_ARG;
         }
-        if nb_frames < 0 || nb_frames > 48 {
+        if !(0..=48).contains(&nb_frames) {
             return OPUS_BAD_ARG;
         }
         if data.is_null() || len <= 0 {
@@ -241,7 +241,7 @@ pub unsafe extern "C" fn opus_packet_extensions_parse_ext(
         if cap > 0 && extensions.is_null() {
             return OPUS_BAD_ARG;
         }
-        if nb_frames < 0 || nb_frames > 48 {
+        if !(0..=48).contains(&nb_frames) {
             return OPUS_BAD_ARG;
         }
         if nb_frames > 0 && nb_frame_exts.is_null() {

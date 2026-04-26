@@ -51,7 +51,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-use ropus::{OpusEncoder, OPUS_APPLICATION_VOIP, OPUS_OK};
+use ropus::{OPUS_APPLICATION_VOIP, OPUS_OK, OpusEncoder};
 
 // ---------------------------------------------------------------------------
 // Constants — mirror tier2_snr.rs exactly so the loss pattern and packet set
@@ -320,10 +320,7 @@ fn ctrl_fixed_vs_float_classical_snr() {
     eprintln!("===");
     eprintln!("  n_lost          = {n_lost}");
     eprintln!("  total samples   = {}", pcm_fixed.len());
-    eprintln!(
-        "  SNR(fixed vs float, classical PLC) = {:.2} dB",
-        snr
-    );
+    eprintln!("  SNR(fixed vs float, classical PLC) = {:.2} dB", snr);
     eprintln!("  first divergent sample index = {first_diverge:?}");
     eprintln!("===");
 

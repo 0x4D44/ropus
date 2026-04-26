@@ -22,9 +22,6 @@ exclude = ["tests/fuzz", "reference"]
 overflow-checks = false
 panic = "unwind"
 
-[profile.test]
-panic = "unwind"
-
 [profile.release]
 # ThinLTO beats FatLTO by ~6-8pp on encode across the board, and PGO is
 # a wash-to-negative on top. See wrk_journals/2026.04.19 - JRN - lto-pgo-bakeoff.md

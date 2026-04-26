@@ -688,6 +688,25 @@ impl Decoder {
         Ok(Self { inner })
     }
 
+    /// Load DNN weights for neural packet-loss concealment (LPCNet + FARGAN).
+    ///
+    /// By default the crate embeds weights from the xiph reference sources at
+    /// build time if they are on disk (typically via
+    /// `cargo run -p fetch-assets -- weights` in-tree development). When
+    /// installed from crates.io the embedded blob is empty, and neural PLC
+    /// stays disabled unless a caller supplies a blob here; lost frames then
+    /// take the classical pitch/noise PLC branch.
+    ///
+    /// The blob format is xiph's `write_lpcnet_weights` output. Unknown
+    /// records (for example DRED or OSCE tables packed into the same tarball)
+    /// are silently ignored, matching the C reference's `find_array_check`
+    /// semantics.
+    pub fn set_dnn_blob(&mut self, data: &[u8]) -> Result<(), DecoderInitError> {
+        self.inner
+            .set_dnn_blob(data)
+            .map_err(DecoderInitError::from_code)
+    }
+
     /// Decode a packet to 16-bit PCM. An empty `packet` triggers PLC
     /// (packet-loss concealment) — pass the next valid packet when available.
     ///
@@ -772,7 +791,11 @@ impl Decoder {
 }
 
 fn packet_arg(packet: &[u8]) -> Option<&[u8]> {
-    if packet.is_empty() { None } else { Some(packet) }
+    if packet.is_empty() {
+        None
+    } else {
+        Some(packet)
+    }
 }
 
 // ===========================================================================
@@ -782,6 +805,40 @@ fn packet_arg(packet: &[u8]) -> Option<&[u8]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- Thread-safety contract: Encoder and Decoder are Send + Sync ----
+    //
+    // This is a compile-time assertion — if the inner codec state ever grows
+    // a !Send / !Sync field (e.g., Rc, RefCell, raw pointer), the README's
+    // thread-safety claim would silently drift and this test would fail to
+    // compile. Keep it here so the claim stays honest.
+
+    #[test]
+    fn encoder_decoder_are_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Encoder>();
+        assert_send_sync::<Decoder>();
+    }
+
+    #[test]
+    fn decoder_set_dnn_blob_rejects_garbage() {
+        let mut decoder = Decoder::new(48_000, Channels::Mono).unwrap();
+        // A short garbage blob can't parse as xiph's weight-record format;
+        // the wrapped OpusDecoder returns OPUS_BAD_ARG, which the facade
+        // lifts to DecoderInitError::BadArg.
+        assert_eq!(
+            decoder.set_dnn_blob(&[0u8; 4]),
+            Err(DecoderInitError::BadArg),
+        );
+    }
+
+    #[test]
+    fn decoder_set_dnn_blob_accepts_empty_blob() {
+        let mut decoder = Decoder::new(48_000, Channels::Mono).unwrap();
+        // An empty blob is the build-without-weights default; it should
+        // either succeed (no-op) or fail cleanly with BadArg — never panic.
+        let _ = decoder.set_dnn_blob(&[]);
+    }
 
     // ---- as_c_int round-trips against the existing OPUS_* constants ----
 
@@ -794,7 +851,10 @@ mod tests {
         // Application
         assert_eq!(Application::Voip.as_c_int(), OPUS_APPLICATION_VOIP);
         assert_eq!(Application::Audio.as_c_int(), OPUS_APPLICATION_AUDIO);
-        assert_eq!(Application::RestrictedLowDelay.as_c_int(), OPUS_APPLICATION_RESTRICTED_LOWDELAY);
+        assert_eq!(
+            Application::RestrictedLowDelay.as_c_int(),
+            OPUS_APPLICATION_RESTRICTED_LOWDELAY
+        );
 
         // Bitrate
         assert_eq!(Bitrate::Auto.as_c_int(), OPUS_AUTO);
@@ -810,7 +870,10 @@ mod tests {
         assert_eq!(Bandwidth::Narrowband.as_c_int(), OPUS_BANDWIDTH_NARROWBAND);
         assert_eq!(Bandwidth::Mediumband.as_c_int(), OPUS_BANDWIDTH_MEDIUMBAND);
         assert_eq!(Bandwidth::Wideband.as_c_int(), OPUS_BANDWIDTH_WIDEBAND);
-        assert_eq!(Bandwidth::Superwideband.as_c_int(), OPUS_BANDWIDTH_SUPERWIDEBAND);
+        assert_eq!(
+            Bandwidth::Superwideband.as_c_int(),
+            OPUS_BANDWIDTH_SUPERWIDEBAND
+        );
         assert_eq!(Bandwidth::Fullband.as_c_int(), OPUS_BANDWIDTH_FULLBAND);
         assert_eq!(Bandwidth::Auto.as_c_int(), OPUS_AUTO);
 
@@ -837,32 +900,74 @@ mod tests {
     #[test]
     fn error_enums_from_code_round_trip() {
         // EncoderBuildError
-        assert_eq!(EncoderBuildError::from_code(OPUS_BAD_ARG), EncoderBuildError::BadArg);
-        assert_eq!(EncoderBuildError::from_code(OPUS_INTERNAL_ERROR), EncoderBuildError::Internal);
+        assert_eq!(
+            EncoderBuildError::from_code(OPUS_BAD_ARG),
+            EncoderBuildError::BadArg
+        );
+        assert_eq!(
+            EncoderBuildError::from_code(OPUS_INTERNAL_ERROR),
+            EncoderBuildError::Internal
+        );
         // Positive guard: 0 (OPUS_OK) and any other >=0 value land in Unknown.
-        assert_eq!(EncoderBuildError::from_code(0), EncoderBuildError::Unknown(0));
-        assert_eq!(EncoderBuildError::from_code(-99_999), EncoderBuildError::Unknown(-99_999));
+        assert_eq!(
+            EncoderBuildError::from_code(0),
+            EncoderBuildError::Unknown(0)
+        );
+        assert_eq!(
+            EncoderBuildError::from_code(-99_999),
+            EncoderBuildError::Unknown(-99_999)
+        );
 
         // EncodeError
         assert_eq!(EncodeError::from_code(OPUS_BAD_ARG), EncodeError::BadArg);
-        assert_eq!(EncodeError::from_code(OPUS_BUFFER_TOO_SMALL), EncodeError::BufferTooSmall);
-        assert_eq!(EncodeError::from_code(OPUS_INTERNAL_ERROR), EncodeError::Internal);
+        assert_eq!(
+            EncodeError::from_code(OPUS_BUFFER_TOO_SMALL),
+            EncodeError::BufferTooSmall
+        );
+        assert_eq!(
+            EncodeError::from_code(OPUS_INTERNAL_ERROR),
+            EncodeError::Internal
+        );
         assert_eq!(EncodeError::from_code(0), EncodeError::Unknown(0));
-        assert_eq!(EncodeError::from_code(-99_999), EncodeError::Unknown(-99_999));
+        assert_eq!(
+            EncodeError::from_code(-99_999),
+            EncodeError::Unknown(-99_999)
+        );
 
         // DecoderInitError
-        assert_eq!(DecoderInitError::from_code(OPUS_BAD_ARG), DecoderInitError::BadArg);
-        assert_eq!(DecoderInitError::from_code(OPUS_INTERNAL_ERROR), DecoderInitError::Internal);
+        assert_eq!(
+            DecoderInitError::from_code(OPUS_BAD_ARG),
+            DecoderInitError::BadArg
+        );
+        assert_eq!(
+            DecoderInitError::from_code(OPUS_INTERNAL_ERROR),
+            DecoderInitError::Internal
+        );
         assert_eq!(DecoderInitError::from_code(0), DecoderInitError::Unknown(0));
-        assert_eq!(DecoderInitError::from_code(-99_999), DecoderInitError::Unknown(-99_999));
+        assert_eq!(
+            DecoderInitError::from_code(-99_999),
+            DecoderInitError::Unknown(-99_999)
+        );
 
         // DecodeError
         assert_eq!(DecodeError::from_code(OPUS_BAD_ARG), DecodeError::BadArg);
-        assert_eq!(DecodeError::from_code(OPUS_BUFFER_TOO_SMALL), DecodeError::BufferTooSmall);
-        assert_eq!(DecodeError::from_code(OPUS_INTERNAL_ERROR), DecodeError::Internal);
-        assert_eq!(DecodeError::from_code(OPUS_INVALID_PACKET), DecodeError::InvalidPacket);
+        assert_eq!(
+            DecodeError::from_code(OPUS_BUFFER_TOO_SMALL),
+            DecodeError::BufferTooSmall
+        );
+        assert_eq!(
+            DecodeError::from_code(OPUS_INTERNAL_ERROR),
+            DecodeError::Internal
+        );
+        assert_eq!(
+            DecodeError::from_code(OPUS_INVALID_PACKET),
+            DecodeError::InvalidPacket
+        );
         assert_eq!(DecodeError::from_code(0), DecodeError::Unknown(0));
-        assert_eq!(DecodeError::from_code(-99_999), DecodeError::Unknown(-99_999));
+        assert_eq!(
+            DecodeError::from_code(-99_999),
+            DecodeError::Unknown(-99_999)
+        );
     }
 
     // ---- Encoder/decoder zero-input consistency ----
@@ -874,11 +979,17 @@ mod tests {
             .expect("encoder builds");
         let mut packet = [0u8; 4000];
         let enc_err = encoder.encode(&[], &mut packet);
-        assert!(enc_err.is_err(), "encode(&[], ...) must err, got {enc_err:?}");
+        assert!(
+            enc_err.is_err(),
+            "encode(&[], ...) must err, got {enc_err:?}"
+        );
 
         let mut decoder = Decoder::new(48_000, Channels::Mono).expect("decoder builds");
         let dec_err = decoder.decode(&[1u8], &mut [], DecodeMode::Normal);
-        assert!(dec_err.is_err(), "decode(.., &mut [], ..) must err, got {dec_err:?}");
+        assert!(
+            dec_err.is_err(),
+            "decode(.., &mut [], ..) must err, got {dec_err:?}"
+        );
     }
 
     // ---- Accessors round-trip the configuration ----
@@ -948,7 +1059,9 @@ mod tests {
             .expect("encoder builds");
         let pcm_in = vec![0i16; 960]; // 20 ms mono @ 48 kHz
         let mut packet = vec![0u8; 4000];
-        let n = encoder.encode(&pcm_in, &mut packet).expect("encode succeeds");
+        let n = encoder
+            .encode(&pcm_in, &mut packet)
+            .expect("encode succeeds");
         assert!(n > 0, "encode produced empty packet");
 
         let mut decoder = Decoder::new(48_000, Channels::Mono).expect("decoder builds");
@@ -963,8 +1076,8 @@ mod tests {
 
     #[test]
     fn decode_mode_as_decode_fec() {
-        assert_eq!(DecodeMode::Normal.as_decode_fec(), false);
-        assert_eq!(DecodeMode::Fec.as_decode_fec(), true);
+        assert!(!DecodeMode::Normal.as_decode_fec());
+        assert!(DecodeMode::Fec.as_decode_fec());
     }
 
     // ---- Encoder rejects off-by-one PCM lengths instead of leaking BadArg

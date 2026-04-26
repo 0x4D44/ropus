@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! Conformance test: `reference/tests/test_opus_api.c`.
 //!
 //! 1916-line API contract fuzzer from xiph/opus. Exercises encoder, decoder,

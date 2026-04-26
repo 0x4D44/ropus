@@ -477,7 +477,6 @@ fn smooth_fade(
 // DRED FEC state (stub — full DRED decoder not yet ported)
 // ===========================================================================
 
-
 // ===========================================================================
 // OpusDecoder struct
 // ===========================================================================
@@ -865,8 +864,7 @@ impl OpusDecoder {
                 // Thread the LPCNet state through SILK decode so good frames
                 // can `update()` its GRU history and lost frames (when the
                 // blob is loaded) can `conceal()` in place of classical PLC.
-                let silk_lpcnet: crate::silk::decoder::DnnPlcArg<'_> =
-                    Some(self.lpcnet.as_mut());
+                let silk_lpcnet: crate::silk::decoder::DnnPlcArg<'_> = Some(self.lpcnet.as_mut());
 
                 let silk_ret = silk_decode(
                     &mut self.silk_dec,
@@ -1015,8 +1013,7 @@ impl OpusDecoder {
             let celt_data = if decode_fec { None } else { data };
             // Neural PLC on CELT lost frames. The CELT path will only
             // flip to FRAME_PLC_NEURAL when weights have been loaded.
-            let celt_lpcnet: crate::celt::decoder::DnnPlcArg<'_> =
-                Some(self.lpcnet.as_mut());
+            let celt_lpcnet: crate::celt::decoder::DnnPlcArg<'_> = Some(self.lpcnet.as_mut());
 
             celt_ret = self.celt_dec.decode_with_ec(
                 celt_data,
@@ -2339,7 +2336,10 @@ mod tests {
         // With window=Q15ONE squared = Q15ONE, w ~= 1.0
         // out = 1.0 * in2 + 0.0 * in1 = in2
         for i in 0..4 {
-            assert!((out[i] as i32 - in2[i] as i32).unsigned_abs() <= 1, "smooth_fade mismatch at {i}");
+            assert!(
+                (out[i] as i32 - in2[i] as i32).unsigned_abs() <= 1,
+                "smooth_fade mismatch at {i}"
+            );
         }
     }
 
@@ -2731,7 +2731,10 @@ mod tests {
             assert_eq!(ret.unwrap(), 960);
             // 24-bit samples are i16 << 8, so should be multiples of 256
             assert!(pcm24.iter().any(|&s| s != 0), "decode24 produced all zeros");
-            assert!(pcm24.iter().all(|&s| s % 256 == 0), "decode24 samples not aligned to 256");
+            assert!(
+                pcm24.iter().all(|&s| s % 256 == 0),
+                "decode24 samples not aligned to 256"
+            );
         }
     }
 
@@ -2765,9 +2768,15 @@ mod tests {
             let ret = dec.decode_float(Some(pkt), &mut pcmf, 960, false);
             assert!(ret.is_ok(), "{name} decode_float failed: {:?}", ret);
             assert_eq!(ret.unwrap(), 960);
-            assert!(pcmf.iter().any(|s| s.abs() > 1e-6), "decode_float all zeros");
+            assert!(
+                pcmf.iter().any(|s| s.abs() > 1e-6),
+                "decode_float all zeros"
+            );
             // Float samples should be in [-1.0, 1.0] range
-            assert!(pcmf.iter().all(|&s| s >= -1.0 && s <= 1.0), "decode_float out of range");
+            assert!(
+                pcmf.iter().all(|&s| s >= -1.0 && s <= 1.0),
+                "decode_float out of range"
+            );
         }
     }
 
@@ -3337,11 +3346,7 @@ mod tests {
         // sees a fully-initialised history when loss kicks in.
         let mut out = vec![0i16; frame_size as usize];
         for seed in 0..4 {
-            let pcm = crate::coverage_tests::patterned_pcm_i16(
-                frame_size as usize,
-                1,
-                seed,
-            );
+            let pcm = crate::coverage_tests::patterned_pcm_i16(frame_size as usize, 1, seed);
             let mut pkt = vec![0u8; 1500];
             let len = enc.encode(&pcm, frame_size, &mut pkt, 1500).unwrap();
             dec.decode(Some(&pkt[..len as usize]), &mut out, frame_size, false)
@@ -3404,11 +3409,7 @@ mod tests {
 
         let mut nonzero = false;
         for seed in 0..5 {
-            let pcm = crate::coverage_tests::patterned_pcm_i16(
-                frame_size as usize,
-                1,
-                seed,
-            );
+            let pcm = crate::coverage_tests::patterned_pcm_i16(frame_size as usize, 1, seed);
             let mut pkt = vec![0u8; 1500];
             let len = enc.encode(&pcm, frame_size, &mut pkt, 1500).unwrap();
             let mut out = vec![0i16; frame_size as usize];
@@ -3457,11 +3458,7 @@ mod tests {
             // before we start dropping frames.
             let mut out = vec![0i16; frame_size as usize];
             for seed in 0..4 {
-                let pcm = crate::coverage_tests::patterned_pcm_i16(
-                    frame_size as usize,
-                    1,
-                    seed,
-                );
+                let pcm = crate::coverage_tests::patterned_pcm_i16(frame_size as usize, 1, seed);
                 let mut pkt = vec![0u8; 1500];
                 let len = enc.encode(&pcm, frame_size, &mut pkt, 1500).unwrap();
                 dec.decode(Some(&pkt[..len as usize]), &mut out, frame_size, false)
@@ -3499,7 +3496,10 @@ mod tests {
             dec.decode(Some(&pkt[..len as usize]), &mut out, frame_size, false)
                 .unwrap();
             let bw = dec.get_bandwidth();
-            assert!(bw >= OPUS_BANDWIDTH_NARROWBAND && bw <= OPUS_BANDWIDTH_FULLBAND, "bandwidth out of range");
+            assert!(
+                bw >= OPUS_BANDWIDTH_NARROWBAND && bw <= OPUS_BANDWIDTH_FULLBAND,
+                "bandwidth out of range"
+            );
         }
     }
 
@@ -4353,7 +4353,15 @@ mod tests {
         let in2 = vec![0i16; overlap * channels];
         let mut out = vec![0i16; overlap * channels];
 
-        smooth_fade(&in1, &in2, &mut out, overlap as i32, channels as i32, window, 8000);
+        smooth_fade(
+            &in1,
+            &in2,
+            &mut out,
+            overlap as i32,
+            channels as i32,
+            window,
+            8000,
+        );
 
         // Pinned: window stride=6 crossfade of in1=1000 fading to in2=0
         let expected: [i16; 10] = [999, 999, 998, 991, 975, 944, 893, 820, 724, 611];
@@ -4372,7 +4380,15 @@ mod tests {
         let in2 = vec![0i16; overlap * channels];
         let mut out = vec![0i16; overlap * channels];
 
-        smooth_fade(&in1, &in2, &mut out, overlap as i32, channels as i32, window, 16000);
+        smooth_fade(
+            &in1,
+            &in2,
+            &mut out,
+            overlap as i32,
+            channels as i32,
+            window,
+            16000,
+        );
 
         // Pinned: window stride=3 crossfade of in1=1000 fading to in2=0
         let expected: [i16; 10] = [999, 999, 999, 999, 998, 995, 991, 985, 975, 962];
@@ -4396,18 +4412,33 @@ mod tests {
     #[test]
     fn test_pin_bandwidth_toc_sweep() {
         // SILK-only: bit7=0, bits6-5 != 0b11 => bw = NB + ((toc>>5)&3)
-        assert_eq!(opus_packet_get_bandwidth(&[0x00]), OPUS_BANDWIDTH_NARROWBAND);
-        assert_eq!(opus_packet_get_bandwidth(&[0x20]), OPUS_BANDWIDTH_MEDIUMBAND);
+        assert_eq!(
+            opus_packet_get_bandwidth(&[0x00]),
+            OPUS_BANDWIDTH_NARROWBAND
+        );
+        assert_eq!(
+            opus_packet_get_bandwidth(&[0x20]),
+            OPUS_BANDWIDTH_MEDIUMBAND
+        );
         assert_eq!(opus_packet_get_bandwidth(&[0x40]), OPUS_BANDWIDTH_WIDEBAND);
 
         // Hybrid: bits 7-5 = 011 => bit4 selects SWB/FB
-        assert_eq!(opus_packet_get_bandwidth(&[0x60]), OPUS_BANDWIDTH_SUPERWIDEBAND);
+        assert_eq!(
+            opus_packet_get_bandwidth(&[0x60]),
+            OPUS_BANDWIDTH_SUPERWIDEBAND
+        );
         assert_eq!(opus_packet_get_bandwidth(&[0x70]), OPUS_BANDWIDTH_FULLBAND);
 
         // CELT-only: bit7=1 => bw = MB + ((toc>>5)&3), but MB remapped to NB
-        assert_eq!(opus_packet_get_bandwidth(&[0x80]), OPUS_BANDWIDTH_NARROWBAND);
+        assert_eq!(
+            opus_packet_get_bandwidth(&[0x80]),
+            OPUS_BANDWIDTH_NARROWBAND
+        );
         assert_eq!(opus_packet_get_bandwidth(&[0xA0]), OPUS_BANDWIDTH_WIDEBAND);
-        assert_eq!(opus_packet_get_bandwidth(&[0xC0]), OPUS_BANDWIDTH_SUPERWIDEBAND);
+        assert_eq!(
+            opus_packet_get_bandwidth(&[0xC0]),
+            OPUS_BANDWIDTH_SUPERWIDEBAND
+        );
         assert_eq!(opus_packet_get_bandwidth(&[0xE0]), OPUS_BANDWIDTH_FULLBAND);
 
         // Pin the actual constant values
@@ -4421,8 +4452,7 @@ mod tests {
     #[test]
     fn test_pin_decode_native_exact_output() {
         // Encode a known signal with RESTRICTED_LOWDELAY (CELT-only), decode, pin output.
-        let mut enc =
-            OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
         enc.set_bitrate(64000);
 
         let pcm_in = vec![10000i16; 960];
@@ -4445,8 +4475,7 @@ mod tests {
     #[test]
     fn test_pin_decode_with_gain() {
         // Encode, decode with gain applied, pin exact output samples.
-        let mut enc =
-            OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
         enc.set_bitrate(64000);
 
         let pcm_in = vec![10000i16; 960];
@@ -4538,7 +4567,9 @@ mod tests {
             let n = enc.encode(&pcm, 960, &mut pkt, 2000).unwrap();
             let mut dec = OpusDecoder::new(48000, 2).unwrap();
             let mut out = vec![0i16; 960 * 2];
-            let samples = dec.decode(Some(&pkt[..n as usize]), &mut out, 960, false).unwrap();
+            let samples = dec
+                .decode(Some(&pkt[..n as usize]), &mut out, 960, false)
+                .unwrap();
             assert_eq!(samples, 960);
             assert_eq!(dec.get_channels(), 2);
         }
@@ -4633,10 +4664,24 @@ mod tests {
         fn decode_rejects_non_positive_frame_size() {
             let mut dec = OpusDecoder::new(16000, 1).unwrap();
             let mut out = vec![0i16; 320];
-            assert_eq!(dec.decode(None, &mut out, 0, false).unwrap_err(), OPUS_BAD_ARG);
-            assert_eq!(dec.decode(None, &mut out, -1, false).unwrap_err(), OPUS_BAD_ARG);
-            assert_eq!(dec.decode_float(None, &mut vec![0f32; 320], 0, false).unwrap_err(), OPUS_BAD_ARG);
-            assert_eq!(dec.decode24(None, &mut vec![0i32; 320], 0, false).unwrap_err(), OPUS_BAD_ARG);
+            assert_eq!(
+                dec.decode(None, &mut out, 0, false).unwrap_err(),
+                OPUS_BAD_ARG
+            );
+            assert_eq!(
+                dec.decode(None, &mut out, -1, false).unwrap_err(),
+                OPUS_BAD_ARG
+            );
+            assert_eq!(
+                dec.decode_float(None, &mut vec![0f32; 320], 0, false)
+                    .unwrap_err(),
+                OPUS_BAD_ARG
+            );
+            assert_eq!(
+                dec.decode24(None, &mut vec![0i32; 320], 0, false)
+                    .unwrap_err(),
+                OPUS_BAD_ARG
+            );
         }
 
         #[test]
@@ -4674,7 +4719,10 @@ mod tests {
         #[test]
         fn get_nb_frames_code3_short_packet() {
             // Code 3 but only 1 byte → invalid
-            assert!(matches!(opus_packet_get_nb_frames(&[0x03]), Err(OPUS_INVALID_PACKET)));
+            assert!(matches!(
+                opus_packet_get_nb_frames(&[0x03]),
+                Err(OPUS_INVALID_PACKET)
+            ));
             // Empty → bad arg
             assert!(matches!(opus_packet_get_nb_frames(&[]), Err(OPUS_BAD_ARG)));
             // Code 1 / 2 always return 2
@@ -4739,22 +4787,25 @@ mod tests {
             let mut dec = OpusDecoder::new(16000, 1).unwrap();
 
             let mut outf = vec![0f32; 320];
-            let n = dec.decode_float(Some(&packet), &mut outf, 320, false).unwrap();
+            let n = dec
+                .decode_float(Some(&packet), &mut outf, 320, false)
+                .unwrap();
             assert_eq!(n, 320);
             assert!(outf.iter().all(|v| v.is_finite() && v.abs() <= 1.0));
 
             let packet2 = enc_one_mono(24000, 3);
             let mut dec2 = OpusDecoder::new(16000, 1).unwrap();
             let mut out32 = vec![0i32; 320];
-            let n2 = dec2.decode24(Some(&packet2), &mut out32, 320, false).unwrap();
+            let n2 = dec2
+                .decode24(Some(&packet2), &mut out32, 320, false)
+                .unwrap();
             assert_eq!(n2, 320);
         }
 
         #[test]
         fn decode_with_celt_only_packet_from_lowdelay_encoder() {
             // RESTRICTED_LOWDELAY uses CELT-only → exercises mode==CELT branch
-            let mut enc =
-                OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+            let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
             enc.set_bitrate(64000);
             let pcm = vec![3000i16; 960];
             let mut buf = vec![0u8; 1500];
@@ -4762,7 +4813,9 @@ mod tests {
 
             let mut dec = OpusDecoder::new(48000, 1).unwrap();
             let mut out = vec![0i16; 960];
-            let r = dec.decode(Some(&buf[..n as usize]), &mut out, 960, false).unwrap();
+            let r = dec
+                .decode(Some(&buf[..n as usize]), &mut out, 960, false)
+                .unwrap();
             assert_eq!(r, 960);
 
             // Now follow up with PLC — exercises prev_mode == CELT_ONLY PLC path
@@ -4796,7 +4849,12 @@ mod tests {
             let mut dec = OpusDecoder::new(48000, 1).unwrap();
             let mut out = vec![0i16; 960];
             // Code 1 with odd remaining → INVALID_PACKET via opus_packet_parse_impl
-            let r = dec.decode(Some(&[0x09u8, 0xAAu8, 0xBBu8, 0xCCu8]), &mut out, 960, false);
+            let r = dec.decode(
+                Some(&[0x09u8, 0xAAu8, 0xBBu8, 0xCCu8]),
+                &mut out,
+                960,
+                false,
+            );
             assert!(r.is_err());
         }
 
@@ -4849,9 +4907,15 @@ mod tests {
 
             let mut dec = OpusDecoder::new(48000, 1).unwrap();
             let mut out = vec![0i16; 960];
-            let _ = dec.decode(Some(&pkt_celt[..n as usize]), &mut out, 960, false).unwrap();
-            let _ = dec.decode(Some(&pkt_silk[..ns as usize]), &mut out, 960, false).unwrap();
-            let _ = dec.decode(Some(&pkt_celt[..n as usize]), &mut out, 960, false).unwrap();
+            let _ = dec
+                .decode(Some(&pkt_celt[..n as usize]), &mut out, 960, false)
+                .unwrap();
+            let _ = dec
+                .decode(Some(&pkt_silk[..ns as usize]), &mut out, 960, false)
+                .unwrap();
+            let _ = dec
+                .decode(Some(&pkt_celt[..n as usize]), &mut out, 960, false)
+                .unwrap();
         }
 
         #[test]
@@ -4872,8 +4936,12 @@ mod tests {
 
             let mut dec = OpusDecoder::new(48000, 1).unwrap();
             let mut out = vec![0i16; 960];
-            let _ = dec.decode(Some(&pkt_silk[..ns as usize]), &mut out, 960, false).unwrap();
-            let _ = dec.decode(Some(&pkt_celt[..n as usize]), &mut out, 960, false).unwrap();
+            let _ = dec
+                .decode(Some(&pkt_silk[..ns as usize]), &mut out, 960, false)
+                .unwrap();
+            let _ = dec
+                .decode(Some(&pkt_celt[..n as usize]), &mut out, 960, false)
+                .unwrap();
         }
 
         #[test]
@@ -4901,7 +4969,7 @@ mod tests {
         fn opus_packet_has_lbrr_all_modes() {
             // CELT-only packet → always false
             let p = [0x80u8, 0xAA];
-            assert_eq!(opus_packet_has_lbrr(&p, p.len() as i32).unwrap(), false);
+            assert!(!opus_packet_has_lbrr(&p, p.len() as i32).unwrap());
 
             // Hybrid packet with a tiny SILK payload
             let p = [0x60u8, 0xAA, 0xBB, 0xCC, 0xDD];
@@ -4932,8 +5000,7 @@ mod tests {
         fn decode_fec_request_falls_through_to_plc_when_celt_only() {
             // CELT-only packet with decode_fec=true → no FEC available,
             // so code falls through to PLC (line 1187).
-            let mut enc =
-                OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+            let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
             enc.set_bitrate(64000);
             let pcm = vec![0i16; 960];
             let mut pkt = vec![0u8; 1500];
@@ -4942,7 +5009,8 @@ mod tests {
             let mut dec = OpusDecoder::new(48000, 1).unwrap();
             let mut out = vec![0i16; 960];
             // Prime with a normal decode
-            dec.decode(Some(&pkt[..n as usize]), &mut out, 960, false).unwrap();
+            dec.decode(Some(&pkt[..n as usize]), &mut out, 960, false)
+                .unwrap();
             // Request FEC — should fall through to PLC since mode is CELT-only
             let r = dec.decode(Some(&pkt[..n as usize]), &mut out, 960, true);
             let _ = r; // may error or succeed via PLC; branch hit either way
@@ -4961,7 +5029,9 @@ mod tests {
             // Decode at 24kHz stereo (different fs path)
             let mut dec = OpusDecoder::new(24000, 2).unwrap();
             let mut out = vec![0i16; 480 * 2];
-            let r = dec.decode(Some(&pkt[..n as usize]), &mut out, 480, false).unwrap();
+            let r = dec
+                .decode(Some(&pkt[..n as usize]), &mut out, 480, false)
+                .unwrap();
             assert_eq!(r, 480);
         }
 

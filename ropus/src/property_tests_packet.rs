@@ -2,9 +2,9 @@
 // Uses proptest to verify TOC byte parsing, frame counts, bandwidth, and channel consistency.
 
 use crate::opus::decoder::{
+    OPUS_BANDWIDTH_FULLBAND, OPUS_BANDWIDTH_NARROWBAND, OPUS_INVALID_PACKET,
     opus_packet_get_bandwidth, opus_packet_get_nb_channels, opus_packet_get_nb_frames,
-    opus_packet_get_nb_samples, opus_packet_get_samples_per_frame, OPUS_BANDWIDTH_FULLBAND,
-    OPUS_BANDWIDTH_NARROWBAND, OPUS_INVALID_PACKET,
+    opus_packet_get_nb_samples, opus_packet_get_samples_per_frame,
 };
 use proptest::prelude::*;
 
@@ -56,10 +56,10 @@ proptest! {
         match opus_packet_get_nb_frames(&pkt) {
             Ok(nb_frames) => {
                 let spf = opus_packet_get_samples_per_frame(&pkt, fs);
-                match opus_packet_get_nb_samples(&pkt, fs) {
-                    Ok(ns) => prop_assert_eq!(nb_frames * spf, ns),
-                    // nb_samples can fail if total > 120ms — that's fine
-                    Err(_) => {}
+                // nb_samples can fail if total > 120ms — that's fine; we only
+                // check the relation when it succeeds.
+                if let Ok(ns) = opus_packet_get_nb_samples(&pkt, fs) {
+                    prop_assert_eq!(nb_frames * spf, ns);
                 }
             }
             Err(_) => {

@@ -2908,7 +2908,7 @@ mod tests {
                 name: "sp_fw".into(),
                 weight_type: WEIGHT_TYPE_FLOAT,
                 size: SPARSE_BLOCK_SIZE * 1 * 4,
-                data: f32_bytes(&vec![2.0f32; SPARSE_BLOCK_SIZE]),
+                data: f32_bytes(&[2.0f32; SPARSE_BLOCK_SIZE]),
             },
             WeightArray {
                 name: "sp_scale".into(),
@@ -3014,13 +3014,7 @@ mod tests {
         // L991 true branch: block_size field larger than remaining payload.
         #[test]
         fn test_parse_weights_block_size_overflow_returns_err() {
-            let mut rec = make_weight_record(
-                "bad",
-                WEIGHT_TYPE_FLOAT,
-                &f32_bytes(&[0.0]),
-                4,
-                true,
-            );
+            let mut rec = make_weight_record("bad", WEIGHT_TYPE_FLOAT, &f32_bytes(&[0.0]), 4, true);
             // block_size field (offset 16..20) declares 1000 but record only has 68 bytes.
             rec[16..20].copy_from_slice(&(1000i32).to_ne_bytes());
             // size field (offset 12..16) must be <= block_size.
@@ -3206,16 +3200,8 @@ mod tests {
                 size: 8,
                 data: f32_bytes(&[0.0f32; 2]),
             }];
-            let layer = conv2d_init(
-                &arrays,
-                Some("conv_bias"),
-                Some("absent_fw"),
-                1,
-                2,
-                1,
-                1,
-            )
-            .expect("absent float_weights should not fail");
+            let layer = conv2d_init(&arrays, Some("conv_bias"), Some("absent_fw"), 1, 2, 1, 1)
+                .expect("absent float_weights should not fail");
             assert!(layer.float_weights.is_none());
         }
 

@@ -16,8 +16,8 @@ use crate::celt::encoder::{
 use crate::celt::math_ops::{celt_exp2, celt_ilog2, celt_sqrt, frac_div32};
 use crate::celt::range_coder::RangeEncoder;
 use crate::dnn::dred::{
-    DREDEnc, DRED_EXPERIMENTAL_BYTES, DRED_EXPERIMENTAL_VERSION, DRED_EXTENSION_ID,
-    DRED_MAX_DATA_SIZE, DRED_MAX_FRAMES, DRED_MIN_BYTES, DRED_NUM_REDUNDANCY_FRAMES,
+    DRED_EXPERIMENTAL_BYTES, DRED_EXPERIMENTAL_VERSION, DRED_EXTENSION_ID, DRED_MAX_DATA_SIZE,
+    DRED_MAX_FRAMES, DRED_MIN_BYTES, DRED_NUM_REDUNDANCY_FRAMES, DREDEnc,
 };
 use crate::silk::common::{silk_lin2log, silk_log2lin};
 use crate::silk::encoder::{SilkEncControlStruct, SilkEncoder, silk_encode, silk_init_encoder_top};
@@ -1523,10 +1523,7 @@ impl OpusEncoder {
         // Build the byte view of `pcm` for the downmix callback; the i16
         // samples are passed straight through — no conversion.
         let pcm_bytes = unsafe {
-            core::slice::from_raw_parts(
-                pcm.as_ptr() as *const u8,
-                std::mem::size_of_val(pcm),
-            )
+            core::slice::from_raw_parts(pcm.as_ptr() as *const u8, std::mem::size_of_val(pcm))
         };
         self.encode_native_with_analysis(
             pcm,
@@ -1562,10 +1559,7 @@ impl OpusEncoder {
         // matching C `opus_encode_float`'s choice to pass `pcm` (floats)
         // and `downmix_float` to `opus_encode_native`.
         let pcm_bytes = unsafe {
-            core::slice::from_raw_parts(
-                pcm.as_ptr() as *const u8,
-                std::mem::size_of_val(pcm),
-            )
+            core::slice::from_raw_parts(pcm.as_ptr() as *const u8, std::mem::size_of_val(pcm))
         };
         self.encode_native_with_analysis(
             &pcm16,
@@ -1713,8 +1707,8 @@ impl OpusEncoder {
         // C opus_encoder.c:1311-1320: the update is gated by
         //   !analysis_info.valid || activity_probability > DTX_ACTIVITY_THRESHOLD
         // so silent-but-valid frames don't skew the peak.
-        let peak_update_allowed = analysis_info.valid == 0
-            || analysis_info.activity_probability > DTX_ACTIVITY_THRESHOLD;
+        let peak_update_allowed =
+            analysis_info.valid == 0 || analysis_info.activity_probability > DTX_ACTIVITY_THRESHOLD;
         if peak_update_allowed && !is_silence {
             let frame_energy = compute_frame_energy(pcm, frame_size, self.channels);
             self.peak_signal_energy =
@@ -1795,9 +1789,7 @@ impl OpusEncoder {
             if toc_frame_rate <= 16 {
                 // 1×60 ms (SILK-only at 16 Hz), 2×40 ms (12 Hz) or 2×60 ms
                 // (8 Hz) via code-1 SILK_ONLY, else code-3 multiframe.
-                if out_data_bytes == 1
-                    || (toc_mode == MODE_SILK_ONLY && toc_frame_rate != 10)
-                {
+                if out_data_bytes == 1 || (toc_mode == MODE_SILK_ONLY && toc_frame_rate != 10) {
                     toc_mode = MODE_SILK_ONLY;
                     packet_code = if toc_frame_rate <= 12 { 1 } else { 0 };
                     toc_frame_rate = if toc_frame_rate == 12 { 25 } else { 16 };
@@ -2606,7 +2598,8 @@ impl OpusEncoder {
             let frame_size_400hz = (frame_size * 400 / self.fs) as usize;
             let amlen = self.activity_mem.len();
             if frame_size_400hz > 0 && frame_size_400hz < amlen {
-                self.activity_mem.copy_within(0..amlen - frame_size_400hz, frame_size_400hz);
+                self.activity_mem
+                    .copy_within(0..amlen - frame_size_400hz, frame_size_400hz);
             }
             let act_byte = activity as u8;
             for i in 0..frame_size_400hz.min(amlen) {
@@ -3333,7 +3326,8 @@ impl OpusEncoder {
             }
             // Remaining space after accounting for the 3-byte code 3 header,
             // padding length byte, and extension ID byte.
-            let mut dred_bytes_left = imin(DRED_MAX_DATA_SIZE as i32, orig_max_data_bytes - ret - 3);
+            let mut dred_bytes_left =
+                imin(DRED_MAX_DATA_SIZE as i32, orig_max_data_bytes - ret - 3);
             // Account for multi-byte padding-length overhead — one extra byte
             // per 255 bytes of padding-plus-prefix.
             dred_bytes_left -= (dred_bytes_left + 1 + DRED_EXPERIMENTAL_BYTES as i32) / 255;
@@ -3343,8 +3337,7 @@ impl OpusEncoder {
                 let mut buf = [0u8; DRED_MAX_DATA_SIZE];
                 buf[0] = b'D';
                 buf[1] = DRED_EXPERIMENTAL_VERSION as u8;
-                let payload_max =
-                    (dred_bytes_left - DRED_EXPERIMENTAL_BYTES as i32) as usize;
+                let payload_max = (dred_bytes_left - DRED_EXPERIMENTAL_BYTES as i32) as usize;
                 let dred = self.dred_encoder.as_mut().unwrap();
                 let dred_bytes = dred.encode_silk_frame(
                     &mut buf[DRED_EXPERIMENTAL_BYTES..],
@@ -3367,13 +3360,8 @@ impl OpusEncoder {
                     // `pad` flag controls whether `out_range_impl` pads the
                     // tail up to `orig_max_data_bytes`. C passes `!use_vbr`.
                     let pad_flag = self.use_vbr == 0;
-                    let pad_ret = opus_packet_pad_impl(
-                        data,
-                        ret,
-                        orig_max_data_bytes,
-                        pad_flag,
-                        &[ext],
-                    );
+                    let pad_ret =
+                        opus_packet_pad_impl(data, ret, orig_max_data_bytes, pad_flag, &[ext]);
                     // Guard rail: match C behaviour of returning
                     // OPUS_INTERNAL_ERROR on failure.
                     if pad_ret < 0 {
@@ -3671,8 +3659,7 @@ impl OpusEncoder {
             self.dred_q0 = 9;
             self.dred_d_q = 3;
             self.dred_qmax = 15;
-            self.dred_target_chunks =
-                (duration + 5) / 4;
+            self.dred_target_chunks = (duration + 5) / 4;
         }
         OPUS_OK
     }
@@ -3787,13 +3774,10 @@ impl OpusEncoder {
         // SILK branch — reference uses `st->silk_mode.useDTX` && `st->prev_mode`
         // non-CELT. We approximate: if SILK encoder exists and we were last in
         // a SILK-involving mode, use SILK's no_speech_counter.
-        if self.silk_mode.use_dtx != 0
-            && self.prev_mode != 0
-            && self.prev_mode != MODE_CELT_ONLY
-        {
+        if self.silk_mode.use_dtx != 0 && self.prev_mode != 0 && self.prev_mode != MODE_CELT_ONLY {
             if let Some(ref silk) = self.silk_enc {
-                return (silk.state_fxx[0].s_cmn.no_speech_counter
-                    >= NB_SPEECH_FRAMES_BEFORE_DTX) as i32;
+                return (silk.state_fxx[0].s_cmn.no_speech_counter >= NB_SPEECH_FRAMES_BEFORE_DTX)
+                    as i32;
             }
         }
         // CELT/non-SILK branch: threshold on nb_no_activity_ms_Q1
@@ -6121,41 +6105,86 @@ mod tests {
         // framerate=50 -> period=3, framerate=100 -> period=2, framerate=25 -> period=4
 
         // SILK NB mono 20ms (fr=50, period=3)
-        assert_eq!(gen_toc(MODE_SILK_ONLY, 50, OPUS_BANDWIDTH_NARROWBAND, 1), 0x08);
+        assert_eq!(
+            gen_toc(MODE_SILK_ONLY, 50, OPUS_BANDWIDTH_NARROWBAND, 1),
+            0x08
+        );
         // SILK NB stereo 20ms
-        assert_eq!(gen_toc(MODE_SILK_ONLY, 50, OPUS_BANDWIDTH_NARROWBAND, 2), 0x0C);
+        assert_eq!(
+            gen_toc(MODE_SILK_ONLY, 50, OPUS_BANDWIDTH_NARROWBAND, 2),
+            0x0C
+        );
         // SILK WB mono 10ms (fr=100, period=2)
-        assert_eq!(gen_toc(MODE_SILK_ONLY, 100, OPUS_BANDWIDTH_WIDEBAND, 1), 0x40);
+        assert_eq!(
+            gen_toc(MODE_SILK_ONLY, 100, OPUS_BANDWIDTH_WIDEBAND, 1),
+            0x40
+        );
         // SILK WB stereo 10ms
-        assert_eq!(gen_toc(MODE_SILK_ONLY, 100, OPUS_BANDWIDTH_WIDEBAND, 2), 0x44);
+        assert_eq!(
+            gen_toc(MODE_SILK_ONLY, 100, OPUS_BANDWIDTH_WIDEBAND, 2),
+            0x44
+        );
         // SILK MB mono 20ms (fr=50, period=3)
-        assert_eq!(gen_toc(MODE_SILK_ONLY, 50, OPUS_BANDWIDTH_MEDIUMBAND, 1), 0x28);
+        assert_eq!(
+            gen_toc(MODE_SILK_ONLY, 50, OPUS_BANDWIDTH_MEDIUMBAND, 1),
+            0x28
+        );
         // SILK NB mono 40ms (fr=25, period=4)
-        assert_eq!(gen_toc(MODE_SILK_ONLY, 25, OPUS_BANDWIDTH_NARROWBAND, 1), 0x10);
+        assert_eq!(
+            gen_toc(MODE_SILK_ONLY, 25, OPUS_BANDWIDTH_NARROWBAND, 1),
+            0x10
+        );
         // SILK NB mono ~60ms (fr=16, period=5)
-        assert_eq!(gen_toc(MODE_SILK_ONLY, 16, OPUS_BANDWIDTH_NARROWBAND, 1), 0x18);
+        assert_eq!(
+            gen_toc(MODE_SILK_ONLY, 16, OPUS_BANDWIDTH_NARROWBAND, 1),
+            0x18
+        );
 
         // CELT_ONLY: toc = 0x80 | (max(0, bw - MB) << 5) | (period << 3) | stereo
         // CELT NB mono 20ms (bw=NB, tmp=NB-MB<0 -> 0, fr=50 -> period=3) = 0x98
-        assert_eq!(gen_toc(MODE_CELT_ONLY, 50, OPUS_BANDWIDTH_NARROWBAND, 1), 0x98);
+        assert_eq!(
+            gen_toc(MODE_CELT_ONLY, 50, OPUS_BANDWIDTH_NARROWBAND, 1),
+            0x98
+        );
         // CELT MB mono 20ms (tmp=0) = 0x98
-        assert_eq!(gen_toc(MODE_CELT_ONLY, 50, OPUS_BANDWIDTH_MEDIUMBAND, 1), 0x98);
+        assert_eq!(
+            gen_toc(MODE_CELT_ONLY, 50, OPUS_BANDWIDTH_MEDIUMBAND, 1),
+            0x98
+        );
         // CELT WB mono 20ms (tmp=1) = 0xB8
-        assert_eq!(gen_toc(MODE_CELT_ONLY, 50, OPUS_BANDWIDTH_WIDEBAND, 1), 0xB8);
+        assert_eq!(
+            gen_toc(MODE_CELT_ONLY, 50, OPUS_BANDWIDTH_WIDEBAND, 1),
+            0xB8
+        );
         // CELT FB stereo 10ms (tmp=3, fr=100 -> period=2) = 0xF4
-        assert_eq!(gen_toc(MODE_CELT_ONLY, 100, OPUS_BANDWIDTH_FULLBAND, 2), 0xF4);
+        assert_eq!(
+            gen_toc(MODE_CELT_ONLY, 100, OPUS_BANDWIDTH_FULLBAND, 2),
+            0xF4
+        );
         // CELT SWB mono 5ms (fr=200 -> period=1) = 0xC8
-        assert_eq!(gen_toc(MODE_CELT_ONLY, 200, OPUS_BANDWIDTH_SUPERWIDEBAND, 1), 0xC8);
+        assert_eq!(
+            gen_toc(MODE_CELT_ONLY, 200, OPUS_BANDWIDTH_SUPERWIDEBAND, 1),
+            0xC8
+        );
         // CELT FB mono 2.5ms (fr=400 -> period=0) = 0xE0
-        assert_eq!(gen_toc(MODE_CELT_ONLY, 400, OPUS_BANDWIDTH_FULLBAND, 1), 0xE0);
+        assert_eq!(
+            gen_toc(MODE_CELT_ONLY, 400, OPUS_BANDWIDTH_FULLBAND, 1),
+            0xE0
+        );
 
         // HYBRID: toc = 0x60 | ((bw - SWB) << 4) | ((period - 2) << 3) | stereo
         // Hybrid SWB mono 20ms (fr=50 -> period=3) = 0x68
-        assert_eq!(gen_toc(MODE_HYBRID, 50, OPUS_BANDWIDTH_SUPERWIDEBAND, 1), 0x68);
+        assert_eq!(
+            gen_toc(MODE_HYBRID, 50, OPUS_BANDWIDTH_SUPERWIDEBAND, 1),
+            0x68
+        );
         // Hybrid FB stereo 20ms = 0x7C
         assert_eq!(gen_toc(MODE_HYBRID, 50, OPUS_BANDWIDTH_FULLBAND, 2), 0x7C);
         // Hybrid SWB stereo 10ms (fr=100 -> period=2) = 0x64
-        assert_eq!(gen_toc(MODE_HYBRID, 100, OPUS_BANDWIDTH_SUPERWIDEBAND, 2), 0x64);
+        assert_eq!(
+            gen_toc(MODE_HYBRID, 100, OPUS_BANDWIDTH_SUPERWIDEBAND, 2),
+            0x64
+        );
         // Hybrid FB mono 10ms = 0x70
         assert_eq!(gen_toc(MODE_HYBRID, 100, OPUS_BANDWIDTH_FULLBAND, 1), 0x70);
     }
@@ -6166,23 +6195,47 @@ mod tests {
         // compute_equiv_rate(bitrate, channels, frame_rate, vbr, mode, complexity, loss)
 
         // Base: (32k, 1ch, 50fps, VBR, SILK, complexity=10, loss=0)
-        assert_eq!(compute_equiv_rate(32000, 1, 50, 1, MODE_SILK_ONLY, 10, 0), 32000);
+        assert_eq!(
+            compute_equiv_rate(32000, 1, 50, 1, MODE_SILK_ONLY, 10, 0),
+            32000
+        );
         // (64k, 2ch, 50fps, VBR, SILK, complexity=10, loss=0)
-        assert_eq!(compute_equiv_rate(64000, 2, 50, 1, MODE_SILK_ONLY, 10, 0), 64000);
+        assert_eq!(
+            compute_equiv_rate(64000, 2, 50, 1, MODE_SILK_ONLY, 10, 0),
+            64000
+        );
         // (128k, 2ch, 100fps, VBR, CELT, complexity=10, loss=0) -- frame_rate>50 branch
-        assert_eq!(compute_equiv_rate(128000, 2, 100, 1, MODE_CELT_ONLY, 10, 0), 123000);
+        assert_eq!(
+            compute_equiv_rate(128000, 2, 100, 1, MODE_CELT_ONLY, 10, 0),
+            123000
+        );
         // (16k, 1ch, 50fps, VBR, SILK, complexity=10, loss=5) -- loss penalty
-        assert_eq!(compute_equiv_rate(16000, 1, 50, 1, MODE_SILK_ONLY, 10, 5), 14000);
+        assert_eq!(
+            compute_equiv_rate(16000, 1, 50, 1, MODE_SILK_ONLY, 10, 5),
+            14000
+        );
         // (64k, 1ch, 50fps, CBR, SILK, complexity=1, loss=10) -- CBR + low complexity + loss
-        assert_eq!(compute_equiv_rate(64000, 1, 50, 0, MODE_SILK_ONLY, 1, 10), 36607);
+        assert_eq!(
+            compute_equiv_rate(64000, 1, 50, 0, MODE_SILK_ONLY, 1, 10),
+            36607
+        );
         // (64k, 1ch, 50fps, VBR, CELT, complexity=3, loss=0) -- CELT low complexity
-        assert_eq!(compute_equiv_rate(64000, 1, 50, 1, MODE_CELT_ONLY, 3, 0), 53568);
+        assert_eq!(
+            compute_equiv_rate(64000, 1, 50, 1, MODE_CELT_ONLY, 3, 0),
+            53568
+        );
         // Unknown mode (12345): moderate loss penalty
         assert_eq!(compute_equiv_rate(64000, 1, 50, 1, 12345, 10, 10), 59429);
         // HYBRID has same path as SILK
-        assert_eq!(compute_equiv_rate(64000, 1, 50, 1, MODE_HYBRID, 10, 0), 64000);
+        assert_eq!(
+            compute_equiv_rate(64000, 1, 50, 1, MODE_HYBRID, 10, 0),
+            64000
+        );
         // HYBRID with loss=25
-        assert_eq!(compute_equiv_rate(64000, 1, 50, 1, MODE_HYBRID, 10, 25), 54000);
+        assert_eq!(
+            compute_equiv_rate(64000, 1, 50, 1, MODE_HYBRID, 10, 25),
+            54000
+        );
     }
 
     #[test]
@@ -6232,7 +6285,16 @@ mod tests {
             pcm[i * 2] = 1000;
             pcm[i * 2 + 1] = -1000;
         }
-        stereo_fade(&mut pcm, Q15ONE, Q15ONE / 2, 120, frame_size as i32, 2, window, 48000);
+        stereo_fade(
+            &mut pcm,
+            Q15ONE,
+            Q15ONE / 2,
+            120,
+            frame_size as i32,
+            2,
+            window,
+            48000,
+        );
         // Overlap region fades from g1 to g2; post-overlap uses g2 constantly.
         // Gains are inverted inside: g1'=Q15ONE-Q15ONE=0, g2'=Q15ONE-Q15ONE/2.
         // At i=0: window value near zero, so almost no width reduction.
@@ -6257,14 +6319,23 @@ mod tests {
             pcm2[i * 2] = 5000;
             pcm2[i * 2 + 1] = -3000;
         }
-        stereo_fade(&mut pcm2, 0, Q15ONE, 120, frame_size2 as i32, 2, window, 8000);
+        stereo_fade(
+            &mut pcm2,
+            0,
+            Q15ONE,
+            120,
+            frame_size2 as i32,
+            2,
+            window,
+            8000,
+        );
         // Overlap region shows gradual transition from full reduction to none.
-        assert_eq!((pcm2[0], pcm2[1]), (1001, 999));     // near start: mostly reduced
-        assert_eq!((pcm2[10], pcm2[11]), (1222, 778));    // early overlap
-        assert_eq!((pcm2[20], pcm2[21]), (3042, -1042));  // mid overlap
-        assert_eq!((pcm2[30], pcm2[31]), (4805, -2805));  // late overlap
-        assert_eq!((pcm2[38], pcm2[39]), (5000, -3000));  // end of overlap: no reduction
-        assert_eq!((pcm2[40], pcm2[41]), (5000, -3000));  // post-overlap: no reduction
+        assert_eq!((pcm2[0], pcm2[1]), (1001, 999)); // near start: mostly reduced
+        assert_eq!((pcm2[10], pcm2[11]), (1222, 778)); // early overlap
+        assert_eq!((pcm2[20], pcm2[21]), (3042, -1042)); // mid overlap
+        assert_eq!((pcm2[30], pcm2[31]), (4805, -2805)); // late overlap
+        assert_eq!((pcm2[38], pcm2[39]), (5000, -3000)); // end of overlap: no reduction
+        assert_eq!((pcm2[40], pcm2[41]), (5000, -3000)); // post-overlap: no reduction
         assert_eq!((pcm2[58], pcm2[59]), (5000, -3000));
     }
 
@@ -6276,7 +6347,16 @@ mod tests {
         // overlap = overlap48 * fs / 48000 = 120 * 48000 / 48000 = 120. Need 130+ samples.
         let frame_size = 150;
         let mut pcm = vec![10000i16; frame_size];
-        gain_fade(&mut pcm, 0, Q15ONE, 120, frame_size as i32, 1, window, 48000);
+        gain_fade(
+            &mut pcm,
+            0,
+            Q15ONE,
+            120,
+            frame_size as i32,
+            1,
+            window,
+            48000,
+        );
         // In overlap region (0..120), gain fades from g1=0 to g2=Q15ONE.
         // After overlap (120..150), g2=Q15ONE so no change (g2==Q15ONE branch skips).
         assert_eq!(pcm[0], 0);
@@ -6295,7 +6375,16 @@ mod tests {
             pcm2[i * 2] = 8000;
             pcm2[i * 2 + 1] = -4000;
         }
-        gain_fade(&mut pcm2, Q15ONE, Q15ONE / 2, 120, frame_size2 as i32, 2, window, 8000);
+        gain_fade(
+            &mut pcm2,
+            Q15ONE,
+            Q15ONE / 2,
+            120,
+            frame_size2 as i32,
+            2,
+            window,
+            8000,
+        );
         // Fade from g1=Q15ONE to g2=Q15ONE/2 over 20 samples, then constant Q15ONE/2.
         assert_eq!((pcm2[0], pcm2[1]), (7999, -4000));
         assert_eq!((pcm2[10], pcm2[11]), (7778, -3890));
@@ -6342,10 +6431,12 @@ mod tests {
     #[test]
     fn test_pin_compute_stereo_width_exact() {
         // Correlated stereo (both channels identical) -> width = 0
-        let corr: Vec<i16> = (0..480).flat_map(|i| {
-            let v = ((i as f64 * 0.1).sin() * 10000.0) as i16;
-            vec![v, v]
-        }).collect();
+        let corr: Vec<i16> = (0..480)
+            .flat_map(|i| {
+                let v = ((i as f64 * 0.1).sin() * 10000.0) as i16;
+                vec![v, v]
+            })
+            .collect();
         let mut mem = StereoWidthState::default();
         assert_eq!(compute_stereo_width(&corr, 480, 48000, &mut mem), 0);
         assert_eq!(mem.xx, 23163419);
@@ -6355,10 +6446,12 @@ mod tests {
         assert_eq!(mem.max_follower, 0);
 
         // Anti-correlated stereo (right = -left) -> xy clamped to 0
-        let anti: Vec<i16> = (0..480).flat_map(|i| {
-            let v = ((i as f64 * 0.1).sin() * 10000.0) as i16;
-            vec![v, -v]
-        }).collect();
+        let anti: Vec<i16> = (0..480)
+            .flat_map(|i| {
+                let v = ((i as f64 * 0.1).sin() * 10000.0) as i16;
+                vec![v, -v]
+            })
+            .collect();
         let mut mem2 = StereoWidthState::default();
         assert_eq!(compute_stereo_width(&anti, 480, 48000, &mut mem2), 0);
         assert_eq!(mem2.xx, 23163419);
@@ -6368,11 +6461,13 @@ mod tests {
         assert_eq!(mem2.max_follower, 0);
 
         // Uncorrelated: left and right are different signals -> some width
-        let uncorr: Vec<i16> = (0..480).flat_map(|i| {
-            let l = ((i as f64 * 0.1).sin() * 10000.0) as i16;
-            let r = ((i as f64 * 0.17 + 1.0).sin() * 8000.0) as i16;
-            vec![l, r]
-        }).collect();
+        let uncorr: Vec<i16> = (0..480)
+            .flat_map(|i| {
+                let l = ((i as f64 * 0.1).sin() * 10000.0) as i16;
+                let r = ((i as f64 * 0.17 + 1.0).sin() * 8000.0) as i16;
+                vec![l, r]
+            })
+            .collect();
         let mut mem3 = StereoWidthState::default();
         assert_eq!(compute_stereo_width(&uncorr, 480, 48000, &mut mem3), 340);
         assert_eq!(mem3.xx, 23163419);
@@ -6387,17 +6482,35 @@ mod tests {
         // Pin exact SILK rate for various total bitrates and bandwidths.
 
         // Low rate, SWB, 10ms, VBR, no FEC, mono: entry=1
-        assert_eq!(compute_silk_rate_for_hybrid(14000, OPUS_BANDWIDTH_SUPERWIDEBAND, false, 1, 0, 1), 12050);
+        assert_eq!(
+            compute_silk_rate_for_hybrid(14000, OPUS_BANDWIDTH_SUPERWIDEBAND, false, 1, 0, 1),
+            12050
+        );
         // Mid rate, FB, 20ms, VBR, FEC, mono: entry=4
-        assert_eq!(compute_silk_rate_for_hybrid(24000, OPUS_BANDWIDTH_FULLBAND, true, 1, 1, 1), 21000);
+        assert_eq!(
+            compute_silk_rate_for_hybrid(24000, OPUS_BANDWIDTH_FULLBAND, true, 1, 1, 1),
+            21000
+        );
         // Mid rate, SWB, 20ms, CBR, no FEC, stereo: entry=2
-        assert_eq!(compute_silk_rate_for_hybrid(32000, OPUS_BANDWIDTH_SUPERWIDEBAND, true, 0, 0, 2), 26800);
+        assert_eq!(
+            compute_silk_rate_for_hybrid(32000, OPUS_BANDWIDTH_SUPERWIDEBAND, true, 0, 0, 2),
+            26800
+        );
         // Very high rate (exceeds table), FB, 20ms, VBR, no FEC, mono: entry=2
-        assert_eq!(compute_silk_rate_for_hybrid(150000, OPUS_BANDWIDTH_FULLBAND, true, 1, 0, 1), 81000);
+        assert_eq!(
+            compute_silk_rate_for_hybrid(150000, OPUS_BANDWIDTH_FULLBAND, true, 1, 0, 1),
+            81000
+        );
         // Rate at table boundary: 12000, FB, 10ms, VBR, no FEC, mono
-        assert_eq!(compute_silk_rate_for_hybrid(12000, OPUS_BANDWIDTH_FULLBAND, false, 1, 0, 1), 10000);
+        assert_eq!(
+            compute_silk_rate_for_hybrid(12000, OPUS_BANDWIDTH_FULLBAND, false, 1, 0, 1),
+            10000
+        );
         // Very low rate: 8000
-        assert_eq!(compute_silk_rate_for_hybrid(8000, OPUS_BANDWIDTH_SUPERWIDEBAND, false, 1, 0, 1), 6966);
+        assert_eq!(
+            compute_silk_rate_for_hybrid(8000, OPUS_BANDWIDTH_SUPERWIDEBAND, false, 1, 0, 1),
+            6966
+        );
     }
 
     #[test]
@@ -6442,8 +6555,12 @@ mod tests {
         let prev_nb = nb;
         for _ in 0..25 {
             let r = decide_dtx_mode(0, &mut nb, 40);
-            if r { dtx_count += 1; }
-            if nb < prev_nb { break; } // reset detected
+            if r {
+                dtx_count += 1;
+            }
+            if nb < prev_nb {
+                break;
+            } // reset detected
         }
         assert_eq!(nb, 400); // reset to threshold
         assert_eq!(dtx_count, 19);
@@ -6527,7 +6644,10 @@ mod tests {
             // Out of range: below min (note OPUS_FRAMESIZE_2_5_MS-1 is OPUS_FRAMESIZE_ARG itself,
             // so we test something definitely outside the accepted range) and above max.
             assert_eq!(enc.set_expert_frame_duration(4999), OPUS_BAD_ARG);
-            assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_120_MS + 1), OPUS_BAD_ARG);
+            assert_eq!(
+                enc.set_expert_frame_duration(OPUS_FRAMESIZE_120_MS + 1),
+                OPUS_BAD_ARG
+            );
 
             // set_complexity extremes (0 and 10) — walks through CELT ctl path
             assert_eq!(enc.set_complexity(0), OPUS_OK);
@@ -6558,7 +6678,10 @@ mod tests {
                 assert_eq!(enc.set_max_bandwidth(b), OPUS_OK);
             }
             assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_FULLBAND + 1), OPUS_BAD_ARG);
-            assert_eq!(enc.set_max_bandwidth(OPUS_BANDWIDTH_NARROWBAND - 1), OPUS_BAD_ARG);
+            assert_eq!(
+                enc.set_max_bandwidth(OPUS_BANDWIDTH_NARROWBAND - 1),
+                OPUS_BAD_ARG
+            );
             // get_bandwidth returns encoder bandwidth, not user-set
             let _ = enc.get_bandwidth();
 
@@ -6758,7 +6881,10 @@ mod tests {
 
             // 2.5ms at 48kHz -> frame_rate=400 (hits gen_toc period=0 branch)
             let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
-            assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_2_5_MS), OPUS_OK);
+            assert_eq!(
+                enc.set_expert_frame_duration(OPUS_FRAMESIZE_2_5_MS),
+                OPUS_OK
+            );
             let pcm = patterned_pcm_i16(120, 1, 4502);
             let _ = enc.encode(&pcm, 120, &mut packet, 1500).unwrap();
         }
@@ -6984,9 +7110,18 @@ mod tests {
             let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
             let pcm = patterned_pcm_i16(960, 1, 6800);
             let mut packet = vec![0u8; 1500];
-            assert_eq!(enc.encode_native(&pcm, 0, &mut packet, 1500, 16), Err(OPUS_BAD_ARG));
-            assert_eq!(enc.encode_native(&pcm, -1, &mut packet, 1500, 16), Err(OPUS_BAD_ARG));
-            assert_eq!(enc.encode_native(&pcm, 960, &mut packet, 0, 16), Err(OPUS_BAD_ARG));
+            assert_eq!(
+                enc.encode_native(&pcm, 0, &mut packet, 1500, 16),
+                Err(OPUS_BAD_ARG)
+            );
+            assert_eq!(
+                enc.encode_native(&pcm, -1, &mut packet, 1500, 16),
+                Err(OPUS_BAD_ARG)
+            );
+            assert_eq!(
+                enc.encode_native(&pcm, 960, &mut packet, 0, 16),
+                Err(OPUS_BAD_ARG)
+            );
         }
 
         // ---- encode_float wrapper frame_size < 0
@@ -7103,10 +7238,7 @@ mod tests {
         // ---- frame_size_select: frame_size < fs/400
         #[test]
         fn bc_frame_size_too_small() {
-            assert_eq!(
-                frame_size_select(50, OPUS_FRAMESIZE_ARG, 48000),
-                -1
-            );
+            assert_eq!(frame_size_select(50, OPUS_FRAMESIZE_ARG, 48000), -1);
         }
 
         // ---- helper: silk_rshift_round shift<=0 and shift>1 paths (L147/L149 context)

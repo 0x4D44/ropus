@@ -10,25 +10,28 @@ fn main() {
     let ref_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../reference");
     let harness_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".");
 
+    // Declare `no_reference` for cfg-checking regardless of which branch we take.
+    println!("cargo:rustc-check-cfg=cfg(no_reference)");
+    // Rerun this script if the probe file appears or disappears.
+    println!(
+        "cargo:rerun-if-changed={}",
+        ref_dir.join("celt/bands.c").display()
+    );
+
     if !ref_dir.join("celt/bands.c").exists() {
-        panic!(
-            "\n\n\
-             === Reference opus C source not found ===\n\
-             Expected under: {}\n\n\
-             Fetch it (pinned commit, idempotent):\n\
-             \n\
-             \x20   cargo run -p fetch-assets -- reference\n\
-             \n\
-             Or, to also fetch DNN model weights:\n\
-             \n\
-             \x20   cargo run -p fetch-assets -- all\n\
-             \n\
-             Manual alternative:\n\
-             \n\
-             \x20   git clone https://github.com/xiph/opus.git reference\n\
-             \n",
+        // No reference sources on disk. Downgrade from the historical
+        // hard panic to a cfg flag + warning so `cargo build` at the
+        // workspace root succeeds on a fresh clone. The Rust side
+        // stubs out FFI-dependent binaries behind `cfg(no_reference)`;
+        // invoking them prints the fetch-assets hint and exits.
+        println!("cargo:rustc-cfg=no_reference");
+        println!(
+            "cargo:warning=ropus-harness: reference opus C source not found under {} — \
+             FFI comparison binaries will stub out at runtime. Run \
+             `cargo run -p fetch-assets -- reference` (or `-- all` for DNN weights) to enable them.",
             ref_dir.display()
         );
+        return;
     }
 
     // --- CELT sources (platform-independent only) ---

@@ -102,7 +102,11 @@ pub fn scan_argv(raw: &[String]) -> PreludeFlags {
     }
     let output_is_stdout = explicit_stdout || (input_is_stdin && !has_explicit_output);
 
-    PreludeFlags { quiet, no_color, output_is_stdout }
+    PreludeFlags {
+        quiet,
+        no_color,
+        output_is_stdout,
+    }
 }
 
 /// Turn a command's `anyhow::Result<()>` into a process exit code, printing the

@@ -35,7 +35,7 @@ MAX_PARALLEL_AGENTS = 4
 
 ROOT = Path(__file__).resolve().parent.parent
 REFERENCE = ROOT / "reference"
-ASSETS = ROOT / "assets"
+ASSETS = ROOT / "wrk_docs" / "design_docs"
 TOOLS = ROOT / "tools"
 NOTES = ROOT / "notes"
 LOGS = ROOT / "logs"
@@ -368,7 +368,7 @@ PROMPTS["document_module"] = textwrap.dedent("""\
 PROMPTS["hld"] = textwrap.dedent("""\
     You are creating a High-Level Design document for porting the xiph/opus
     audio codec from C to Rust. You have access to the architecture
-    documentation in the assets/ directory.
+    documentation in the wrk_docs/design_docs/ directory.
 
     Read all the architecture docs first, then produce an HLD covering:
 
@@ -403,8 +403,8 @@ PROMPTS["implement_module"] = textwrap.dedent("""\
     You are implementing the **{module_name}** module of the Opus codec in Rust.
 
     ## Context
-    - Architecture doc: assets/{module_name}_architecture.md
-    - HLD: assets/hld.md
+    - Architecture doc: wrk_docs/design_docs/{module_name}_architecture.md
+    - HLD: wrk_docs/design_docs/hld.md
     - C reference files (in reference/): {file_list}
     - Already implemented modules: {completed_modules}
     - Rust module path: src/{rust_module}.rs
@@ -512,7 +512,7 @@ PROMPTS["fix_errors"] = textwrap.dedent("""\
     ## Files
     - Rust implementation: src/{rust_module}.rs
     - C reference: {file_list}
-    - Architecture doc: assets/{module_name}_architecture.md
+    - Architecture doc: wrk_docs/design_docs/{module_name}_architecture.md
 
     ## Rules
     1. The C reference is always correct - match its behavior exactly

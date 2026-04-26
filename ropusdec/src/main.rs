@@ -42,7 +42,12 @@ struct Args {
     /// User gain in dB. Added on top of the header `output_gain` and applied
     /// through the decoder's `set_gain` (fixed-point, pre-clamp). Total
     /// range is ±128 dB; out of range surfaces as a clean error.
-    #[arg(long, value_name = "DB", default_value_t = 0.0, allow_negative_numbers = true)]
+    #[arg(
+        long,
+        value_name = "DB",
+        default_value_t = 0.0,
+        allow_negative_numbers = true
+    )]
     gain: f32,
 
     /// Skip TPDF dither on the i16 output. No-op for `--float`.
@@ -69,7 +74,11 @@ struct Args {
 fn main() -> ExitCode {
     // `output_is_stdout` steers the banner to stderr so the WAV/PCM byte
     // stream isn't polluted when `-o -` (or implicit stdin→stdout) is used.
-    let PreludeFlags { quiet, no_color: _, output_is_stdout } = prelude::run_prelude();
+    let PreludeFlags {
+        quiet,
+        no_color: _,
+        output_is_stdout,
+    } = prelude::run_prelude();
     if !quiet {
         if output_is_stdout {
             ui::print_banner_stderr(

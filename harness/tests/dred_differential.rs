@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! DRED-scoped differential tests against the C reference.
 //!
 //! Keeps Stage 8 tests isolated from `c_ref_differential.rs` (which is
@@ -209,7 +210,6 @@ fn laplace_p0_decode_matches_c() {
             "c decode of c bytes diverges p0={p0} decay={decay}"
         );
     }
-
 }
 
 /// Stage 8.2: every DRED static quantisation table matches the C reference

@@ -13,6 +13,12 @@
 //! failure to callers.
 
 #![allow(non_snake_case, non_camel_case_types)]
+// Every `pub unsafe extern "C" fn` in this crate inherits the libopus C-ABI
+// safety contract (valid pointers, correctly-sized buffers, single-threaded
+// use of a handle, etc.). That contract is documented in the xiph/opus
+// headers we're cloning, not re-derived per function here — a hundred
+// copy-paste `/// # Safety` blocks would add noise without new information.
+#![allow(clippy::missing_safety_doc)]
 
 // Public API surface organised like the reference headers.
 pub mod ctl;

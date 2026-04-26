@@ -1339,7 +1339,14 @@ mod tests {
                 let input = vec![500i32; n + overlap as usize];
                 let mut freq = vec![0i32; n2];
                 clt_mdct_forward(
-                    &input, &mut freq, mode.window, overlap, shift, 1, fft_st, l.trig,
+                    &input,
+                    &mut freq,
+                    mode.window,
+                    overlap,
+                    shift,
+                    1,
+                    fft_st,
+                    l.trig,
                 );
                 // Output should be bounded.
                 let max_abs = freq.iter().map(|x| x.abs()).max().unwrap_or(0);

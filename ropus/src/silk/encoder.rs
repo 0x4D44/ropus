@@ -7502,8 +7502,7 @@ pub fn silk_burg_modified(
                 let mut tmp1 = shl32(uc!(x, xp + n) as i32, QA - 16);
                 let mut tmp2 = shl32(uc!(x, xp + subfr_length - n - 1) as i32, QA - 16);
                 for k in 0..n {
-                    c_first_row[k] =
-                        silk_smlawb(c_first_row[k], x1, uc!(x, xp + n - k - 1) as i16);
+                    c_first_row[k] = silk_smlawb(c_first_row[k], x1, uc!(x, xp + n - k - 1) as i16);
                     c_last_row[k] =
                         silk_smlawb(c_last_row[k], x2, uc!(x, xp + subfr_length - n + k) as i16);
                     let atmp_qa = af_qa[k];
@@ -10982,7 +10981,9 @@ mod tests {
 
     /// Deterministic PRNG helper (LCG) used by sweep tests for reproducible input.
     fn sweep_rng_step(state: &mut u64) -> i16 {
-        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (*state >> 49) as i16
     }
 
@@ -11149,9 +11150,7 @@ mod tests {
             for &br in &bitrates {
                 for &cx in &complexities {
                     for &kind in &signal_kinds {
-                        if try_encode_sweep(
-                            fs, 1, 1, br, cx, 0, 0, 0, 0, 0, kind, 2,
-                        ) {
+                        if try_encode_sweep(fs, 1, 1, br, cx, 0, 0, 0, 0, 0, kind, 2) {
                             encoded_any = true;
                         }
                     }
@@ -11174,9 +11173,7 @@ mod tests {
                 for &cx in &complexities {
                     for &kind in &[0u8, 1, 3] {
                         for &n_ch_int in &[1i32, 2i32] {
-                            if try_encode_sweep(
-                                fs, 2, n_ch_int, br, cx, 10, 0, 0, 0, 0, kind, 2,
-                            ) {
+                            if try_encode_sweep(fs, 2, n_ch_int, br, cx, 10, 0, 0, 0, 0, kind, 2) {
                                 ok = true;
                             }
                         }
@@ -11198,13 +11195,13 @@ mod tests {
                         for &pkt_loss in &[0, 25, 50] {
                             // Silence input exercises DTX.
                             let _ = try_encode_sweep(
-                                16, 1, 1, 16_000, 2, pkt_loss, use_fec, use_dtx,
-                                use_cbr, lbrr, 0, 3,
+                                16, 1, 1, 16_000, 2, pkt_loss, use_fec, use_dtx, use_cbr, lbrr, 0,
+                                3,
                             );
                             // Voiced input exercises FEC / LBRR activation.
                             let _ = try_encode_sweep(
-                                16, 1, 1, 24_000, 5, pkt_loss, use_fec, use_dtx,
-                                use_cbr, lbrr, 1, 3,
+                                16, 1, 1, 24_000, 5, pkt_loss, use_fec, use_dtx, use_cbr, lbrr, 1,
+                                3,
                             );
                         }
                     }
@@ -11498,7 +11495,10 @@ mod tests {
         // Negative use_in_band_fec
         let mut c6 = SilkEncControlStruct::default();
         c6.use_in_band_fec = -1;
-        assert_eq!(check_control_input(&c6), SILK_ENC_INVALID_INBAND_FEC_SETTING);
+        assert_eq!(
+            check_control_input(&c6),
+            SILK_ENC_INVALID_INBAND_FEC_SETTING
+        );
 
         // Negative packet_loss_percentage
         let mut c7 = SilkEncControlStruct::default();
@@ -11508,7 +11508,10 @@ mod tests {
         // Negative complexity
         let mut c8 = SilkEncControlStruct::default();
         c8.complexity = -1;
-        assert_eq!(check_control_input(&c8), SILK_ENC_INVALID_COMPLEXITY_SETTING);
+        assert_eq!(
+            check_control_input(&c8),
+            SILK_ENC_INVALID_COMPLEXITY_SETTING
+        );
 
         // Negative n_channels_internal
         let mut c9 = SilkEncControlStruct::default();
@@ -11741,14 +11744,7 @@ mod tests {
             // Alternate activity flag — both 0 and 1 paths
             let activity = (i & 1) as i32;
             let _ = silk_encode(
-                &mut enc,
-                &mut ctrl,
-                &frame,
-                320,
-                &mut re,
-                &mut nb,
-                0,
-                activity,
+                &mut enc, &mut ctrl, &frame, 320, &mut re, &mut nb, 0, activity,
             );
         }
     }
@@ -11760,9 +11756,7 @@ mod tests {
         // high bitrate (gain_mult upper branches).
         for &br in &[5_000, 8_000, 64_000, 100_000] {
             for &cx in &[0, 5] {
-                let _ = try_encode_sweep(
-                    16, 1, 1, br, cx, 0, 0, 0, 1, 0, 3, 3,
-                );
+                let _ = try_encode_sweep(16, 1, 1, br, cx, 0, 0, 0, 1, 0, 3, 3);
             }
         }
     }
@@ -11790,27 +11784,22 @@ mod tests {
         let mut buf = [0u8; 256];
         let mut re = RangeEncoder::new(&mut buf);
         let mut n = 0i32;
-        let ret_bad_prefill = silk_encode(
-            &mut enc, &mut ctrl, &samples, 320, &mut re, &mut n, 1, 0,
-        );
+        let ret_bad_prefill =
+            silk_encode(&mut enc, &mut ctrl, &samples, 320, &mut re, &mut n, 1, 0);
         assert_eq!(ret_bad_prefill, SILK_ENC_INPUT_INVALID_NO_OF_SAMPLES);
 
         // Now exit prefill mode and feed an oddly-sized buffer (not multiple of 10ms).
         let odd = vec![0i16; 123];
         let mut buf2 = [0u8; 256];
         let mut re2 = RangeEncoder::new(&mut buf2);
-        let ret_bad_len = silk_encode(
-            &mut enc, &mut ctrl, &odd, 123, &mut re2, &mut n, 0, 0,
-        );
+        let ret_bad_len = silk_encode(&mut enc, &mut ctrl, &odd, 123, &mut re2, &mut n, 0, 0);
         assert_eq!(ret_bad_len, SILK_ENC_INPUT_INVALID_NO_OF_SAMPLES);
 
         // 30ms of samples but payload_size_ms=20 → too many samples.
         let too_many = vec![0i16; 480];
         let mut buf3 = [0u8; 256];
         let mut re3 = RangeEncoder::new(&mut buf3);
-        let ret_too_many = silk_encode(
-            &mut enc, &mut ctrl, &too_many, 480, &mut re3, &mut n, 0, 0,
-        );
+        let ret_too_many = silk_encode(&mut enc, &mut ctrl, &too_many, 480, &mut re3, &mut n, 0, 0);
         assert_eq!(ret_too_many, SILK_ENC_INPUT_INVALID_NO_OF_SAMPLES);
     }
 
@@ -11867,7 +11856,14 @@ mod tests {
             let mut pre_re = RangeEncoder::new(&mut pre_buf);
             let mut n = 0i32;
             let _ = silk_encode(
-                &mut enc, &mut ctrl, &prefill, 160, &mut pre_re, &mut n, 1, 0,
+                &mut enc,
+                &mut ctrl,
+                &prefill,
+                160,
+                &mut pre_re,
+                &mut n,
+                1,
+                0,
             );
 
             ctrl.payload_size_ms = ms;
@@ -11936,7 +11932,14 @@ mod tests {
         let mut pre_re = RangeEncoder::new(&mut pre_buf);
         let mut n = 0i32;
         let _ = silk_encode(
-            &mut enc, &mut ctrl, &prefill, 160, &mut pre_re, &mut n, 1, 0,
+            &mut enc,
+            &mut ctrl,
+            &prefill,
+            160,
+            &mut pre_re,
+            &mut n,
+            1,
+            0,
         );
 
         ctrl.payload_size_ms = 20;
@@ -11945,9 +11948,7 @@ mod tests {
             let mut buf = vec![0u8; 2048];
             let mut re = RangeEncoder::new(&mut buf);
             let mut nb = 0i32;
-            let _ = silk_encode(
-                &mut enc, &mut ctrl, &pcm, 320, &mut re, &mut nb, 0, 1,
-            );
+            let _ = silk_encode(&mut enc, &mut ctrl, &pcm, 320, &mut re, &mut nb, 0, 1);
         }
     }
 
@@ -12000,7 +12001,16 @@ mod tests {
         silk_noise_shape_quantizer(
             &mut nsq,
             TYPE_VOICED,
-            &[5 << 10, -(2 << 10), 1 << 10, 0, -(5 << 10), 2 << 10, 100, -100],
+            &[
+                5 << 10,
+                -(2 << 10),
+                1 << 10,
+                0,
+                -(5 << 10),
+                2 << 10,
+                100,
+                -100,
+            ],
             &mut pulses,
             0,
             &mut s_ltp_q15,
@@ -12073,6 +12083,77 @@ mod tests {
                 0,
                 1,
             );
+        }
+    }
+
+    // =======================================================================
+    // Fuzz-campaign regressions (campaign 8)
+    // =======================================================================
+
+    /// Bug K (commit e955ba5): silk_pitch_analysis_core must clamp pitch_out[k]
+    /// at the per-sample-rate max `PE_MAX_LAG_MS * fs_khz`, not the global
+    /// `PE_MAX_LAG` constant (= `PE_MAX_LAG_MS * PE_MAX_FS_KHZ` = 288). At
+    /// 12 kHz the correct bound is 216; the buggy code let values up to 288
+    /// through, drifting NSQ state on the next frame.
+    #[test]
+    fn test_pitch_analysis_clamps_to_fs_dependent_max() {
+        // Call the function with many noise seeds at each supported fs_khz
+        // and assert the invariant holds on every output lag. If the fix is
+        // reverted, loud inputs at 12 kHz will push pitch_out[3] past 216.
+        for &fs_khz in &[8i32, 12, 16] {
+            let nb_subfr = 4i32;
+            let max_lag_correct = (PE_MAX_LAG_MS as i32) * fs_khz;
+            let frame_length = (PE_LTP_MEM_LENGTH_MS + (nb_subfr as usize) * PE_SUBFR_LENGTH_MS)
+                * (fs_khz as usize);
+
+            for seed_base in 0u64..64 {
+                let mut rng =
+                    0xDEAD_BEEF_0000_0000u64 ^ seed_base.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                let mut frame = vec![0i16; frame_length];
+                // Mix full-amplitude pseudo-random noise with a very low-frequency
+                // sawtooth so the pitch search sees both loud and long-period content.
+                for (i, s) in frame.iter_mut().enumerate() {
+                    rng = rng
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    let noise = (rng >> 49) as i16; // ±16k
+                    let period = 180 + (seed_base as usize % 40); // push toward high lag
+                    let saw = ((i % period) as i32 * 32767 / period as i32) as i16 - 16384;
+                    *s = noise.saturating_add(saw).saturating_mul(1);
+                }
+
+                let mut pitch_out = vec![0i32; nb_subfr as usize];
+                let mut lag_index: i16 = 0;
+                let mut contour_index: i8 = 0;
+                let mut ltp_corr_q15: i32 = 0;
+
+                // Typical runtime values from silk_find_pitch_lags_FIX.
+                let search_thres1_q16: i32 = ((0.8_f64 * 65536.0) + 0.5) as i32;
+                let search_thres2_q13: i32 = ((0.6_f64 * 8192.0) + 0.5) as i32;
+                let prev_lag: i32 = (seed_base as i32 % max_lag_correct).max(0);
+
+                let _ = silk_pitch_analysis_core(
+                    &frame,
+                    &mut pitch_out,
+                    &mut lag_index,
+                    &mut contour_index,
+                    &mut ltp_corr_q15,
+                    prev_lag,
+                    search_thres1_q16,
+                    search_thres2_q13,
+                    fs_khz,
+                    2, // complexity (matches Bug K config)
+                    nb_subfr,
+                );
+
+                for (k, &p) in pitch_out.iter().enumerate() {
+                    assert!(
+                        p <= max_lag_correct,
+                        "fs_khz={fs_khz} seed={seed_base} pitch_out[{k}]={p} \
+                         exceeds max allowed {max_lag_correct} (= PE_MAX_LAG_MS * fs_khz)"
+                    );
+                }
+            }
         }
     }
 }

@@ -2898,7 +2898,7 @@ mod tests {
     mod branch_coverage_stage3 {
         use super::*;
         use crate::celt::decoder::CeltDecoder;
-        use crate::celt::encoder::{celt_encode_with_ec, CeltEncoder};
+        use crate::celt::encoder::{CeltEncoder, celt_encode_with_ec};
 
         fn plc_arg<'a>() -> crate::celt::decoder::DnnPlcArg<'a> {
             None
@@ -2915,8 +2915,8 @@ mod tests {
             let mut out = vec![0i16; frame_size * channels];
             let sr = 48000.0;
             for i in 0..frame_size {
-                let s = (7000.0 * (2.0 * std::f64::consts::PI * freq_hz * i as f64 / sr).sin())
-                    as i16;
+                let s =
+                    (7000.0 * (2.0 * std::f64::consts::PI * freq_hz * i as f64 / sr).sin()) as i16;
                 for c in 0..channels {
                     out[i * channels + c] = s;
                 }
@@ -2946,14 +2946,8 @@ mod tests {
 
             let buf_len = compressed.len() as i32;
             for pcm in pcm_frames {
-                let n = celt_encode_with_ec(
-                    &mut enc,
-                    pcm,
-                    frame_size,
-                    &mut compressed,
-                    buf_len,
-                    None,
-                );
+                let n =
+                    celt_encode_with_ec(&mut enc, pcm, frame_size, &mut compressed, buf_len, None);
                 assert!(n > 0, "encode returned {n}");
                 let res = dec.decode_with_ec(
                     Some(&compressed[..n as usize]),
@@ -3000,7 +2994,8 @@ mod tests {
         #[test]
         fn roundtrip_stereo_high_bitrate_dual() {
             // High bitrate stereo enables dual stereo
-            let frames: Vec<Vec<i16>> = (0..2).map(|i| gen_sine(960, 2, 300.0 + i as f64)).collect();
+            let frames: Vec<Vec<i16>> =
+                (0..2).map(|i| gen_sine(960, 2, 300.0 + i as f64)).collect();
             roundtrip_signal(&frames, 960, 2, 192_000, 10, 1);
         }
 
@@ -3030,7 +3025,9 @@ mod tests {
         #[test]
         fn roundtrip_mono_tone_drives_spreading_decisions() {
             // Pure tone: spreading decision drifts, hf_average populated
-            let frames: Vec<Vec<i16>> = (0..4).map(|i| gen_sine(960, 1, 440.0 + i as f64 * 5.0)).collect();
+            let frames: Vec<Vec<i16>> = (0..4)
+                .map(|i| gen_sine(960, 1, 440.0 + i as f64 * 5.0))
+                .collect();
             roundtrip_signal(&frames, 960, 1, 72_000, 10, 1);
         }
 
@@ -3067,14 +3064,7 @@ mod tests {
             let buf_len = compressed.len() as i32;
             for f in 0..3 {
                 let pcm = gen_pcm(960, 2, f);
-                let n = celt_encode_with_ec(
-                    &mut enc,
-                    &pcm,
-                    960,
-                    &mut compressed,
-                    buf_len,
-                    None,
-                );
+                let n = celt_encode_with_ec(&mut enc, &pcm, 960, &mut compressed, buf_len, None);
                 assert!(n > 0);
                 let res = dec.decode_with_ec(
                     Some(&compressed[..n as usize]),
@@ -3220,7 +3210,15 @@ mod tests {
                 let mut band_e = vec![0i32; mode.nb_ebands as usize];
                 compute_band_energies(mode, &freq, &mut band_e, mode.nb_ebands - 1, 1, lm);
                 let mut norm = vec![0i32; n];
-                normalise_bands(mode, &freq, &mut norm, &band_e, mode.nb_ebands - 1, 1, big_m);
+                normalise_bands(
+                    mode,
+                    &freq,
+                    &mut norm,
+                    &band_e,
+                    mode.nb_ebands - 1,
+                    1,
+                    big_m,
+                );
             }
         }
 
@@ -3371,9 +3369,7 @@ mod tests {
                     pcm[2 * i + 1] = if f % 2 == 0 { 0 } else { s / 64 };
                 }
                 let buf_len = compressed.len() as i32;
-                let n = celt_encode_with_ec(
-                    &mut enc, &pcm, 960, &mut compressed, buf_len, None,
-                );
+                let n = celt_encode_with_ec(&mut enc, &pcm, 960, &mut compressed, buf_len, None);
                 assert!(n > 0);
                 let res = dec.decode_with_ec(
                     Some(&compressed[..n as usize]),
@@ -3406,9 +3402,7 @@ mod tests {
                     pcm[2 * i + 1] = s; // perfect mid
                 }
                 let buf_len = compressed.len() as i32;
-                let n = celt_encode_with_ec(
-                    &mut enc, &pcm, 960, &mut compressed, buf_len, None,
-                );
+                let n = celt_encode_with_ec(&mut enc, &pcm, 960, &mut compressed, buf_len, None);
                 assert!(n > 0);
                 let res = dec.decode_with_ec(
                     Some(&compressed[..n as usize]),
@@ -3441,9 +3435,7 @@ mod tests {
                     pcm[2 * i + 1] = -s;
                 }
                 let buf_len = compressed.len() as i32;
-                let n = celt_encode_with_ec(
-                    &mut enc, &pcm, 960, &mut compressed, buf_len, None,
-                );
+                let n = celt_encode_with_ec(&mut enc, &pcm, 960, &mut compressed, buf_len, None);
                 assert!(n > 0);
                 let res = dec.decode_with_ec(
                     Some(&compressed[..n as usize]),
@@ -3596,14 +3588,7 @@ mod tests {
                     freq[n_per_channel + i] = 1 << 17;
                 }
                 let mut band_e = vec![0i32; mode.nb_ebands as usize * 2];
-                compute_band_energies(
-                    mode,
-                    &freq,
-                    &mut band_e,
-                    mode.nb_ebands - 1,
-                    2,
-                    lm,
-                );
+                compute_band_energies(mode, &freq, &mut band_e, mode.nb_ebands - 1, 2, lm);
                 assert!(band_e.iter().any(|&e| e > 0));
             }
         }
@@ -3689,9 +3674,8 @@ mod tests {
                 for i in 0..2 {
                     let pcm = gen_pcm(960, 1, i + cpx);
                     let buf_len = compressed.len() as i32;
-                    let n = celt_encode_with_ec(
-                        &mut enc, &pcm, 960, &mut compressed, buf_len, None,
-                    );
+                    let n =
+                        celt_encode_with_ec(&mut enc, &pcm, 960, &mut compressed, buf_len, None);
                     assert!(n > 0);
                     let res = dec.decode_with_ec(
                         Some(&compressed[..n as usize]),
@@ -3719,9 +3703,8 @@ mod tests {
                 for i in 0..2 {
                     let pcm = gen_pcm(960, 2, i + cpx);
                     let buf_len = compressed.len() as i32;
-                    let n = celt_encode_with_ec(
-                        &mut enc, &pcm, 960, &mut compressed, buf_len, None,
-                    );
+                    let n =
+                        celt_encode_with_ec(&mut enc, &pcm, 960, &mut compressed, buf_len, None);
                     assert!(n > 0);
                     let res = dec.decode_with_ec(
                         Some(&compressed[..n as usize]),
@@ -3749,9 +3732,7 @@ mod tests {
             for f in 0..4 {
                 let pcm = gen_pcm(120, 1, f);
                 let buf_len = compressed.len() as i32;
-                let n = celt_encode_with_ec(
-                    &mut enc, &pcm, 120, &mut compressed, buf_len, None,
-                );
+                let n = celt_encode_with_ec(&mut enc, &pcm, 120, &mut compressed, buf_len, None);
                 assert!(n > 0);
                 let res = dec.decode_with_ec(
                     Some(&compressed[..n as usize]),
@@ -3779,16 +3760,14 @@ mod tests {
                 let mut pcm = vec![0i16; 960 * 2];
                 for i in 0..960 {
                     let s = (8000.0
-                        * (2.0 * std::f64::consts::PI * 500.0 * i as f64 / 48000.0)
-                            .sin()) as i16;
+                        * (2.0 * std::f64::consts::PI * 500.0 * i as f64 / 48000.0).sin())
+                        as i16;
                     pcm[2 * i] = s;
                     pcm[2 * i + 1] = -s;
                     let _ = f; // unused
                 }
                 let buf_len = compressed.len() as i32;
-                let n = celt_encode_with_ec(
-                    &mut enc, &pcm, 960, &mut compressed, buf_len, None,
-                );
+                let n = celt_encode_with_ec(&mut enc, &pcm, 960, &mut compressed, buf_len, None);
                 assert!(n > 0);
                 let res = dec.decode_with_ec(
                     Some(&compressed[..n as usize]),

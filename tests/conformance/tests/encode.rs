@@ -1,3 +1,4 @@
+#![cfg(not(no_reference))]
 //! Conformance test: `reference/tests/test_opus_encode.c`.
 //!
 //! 756-line encoder contract test that combines targeted API probes
@@ -11,8 +12,8 @@
 //!
 //! `test_opus_encode.c` also calls `regression_test()`, defined upstream in
 //! `opus_encode_regressions.c`. With Pieces A+B landed, `build.rs` compiles
-//! that file as an extra so the 11 historical crash repros (7 unconditional
-//! + 3 float-API + 1 projection overflow) run against our codec. The five
+//! that file as an extra so the 11 historical crash repros (7 unconditional,
+//! 3 float-API, 1 projection overflow) run against our codec. The five
 //! `ENABLE_QEXT`/`ENABLE_DRED`-guarded repros compile out.
 //!
 //! This file is its own `[[test]]` binary (cargo auto-discovery). Running
@@ -124,12 +125,8 @@ fn force_link() {
     // `projection_overflow{,2,3}` repros. Decoder surface is not touched
     // by regression_test() but we force-link it for parity with the
     // projection test binary (keeps the symbol set closed).
-    black_box(
-        mdopus_capi::projection::opus_projection_ambisonics_encoder_get_size as *const (),
-    );
-    black_box(
-        mdopus_capi::projection::opus_projection_ambisonics_encoder_create as *const (),
-    );
+    black_box(mdopus_capi::projection::opus_projection_ambisonics_encoder_get_size as *const ());
+    black_box(mdopus_capi::projection::opus_projection_ambisonics_encoder_create as *const ());
     black_box(mdopus_capi::projection::opus_projection_ambisonics_encoder_init as *const ());
     black_box(mdopus_capi::projection::opus_projection_encoder_destroy as *const ());
     black_box(mdopus_capi::projection::opus_projection_encode as *const ());
@@ -138,9 +135,7 @@ fn force_link() {
     black_box(mdopus_capi::ctl::mdopus_proj_encoder_ctl_set_int as *const ());
     black_box(mdopus_capi::ctl::mdopus_proj_encoder_ctl_get_int as *const ());
     black_box(mdopus_capi::ctl::mdopus_proj_encoder_ctl_get_uint32 as *const ());
-    black_box(
-        mdopus_capi::ctl::mdopus_proj_encoder_ctl_get_demixing_matrix as *const (),
-    );
+    black_box(mdopus_capi::ctl::mdopus_proj_encoder_ctl_get_demixing_matrix as *const ());
 }
 
 #[test]

@@ -76,16 +76,15 @@ pub fn build_picture_block(format: PictureFormat, data: &[u8]) -> Result<Vec<u8>
     // FLAC picture-block length fields are u32, so bail cleanly rather than
     // wrap-truncating via `as u32`. Same check for mime length for symmetry,
     // though our MIME strings are `image/jpeg` / `image/png` — well under 4 GiB.
-    let data_len = u32::try_from(data.len())
-        .map_err(|_| anyhow::anyhow!(
+    let data_len = u32::try_from(data.len()).map_err(|_| {
+        anyhow::anyhow!(
             "picture data is {} bytes; FLAC picture-block length field is u32 (max {} bytes)",
             data.len(),
             u32::MAX,
-        ))?;
-    let mime_len = u32::try_from(mime.len())
-        .expect("MIME strings are < 32 bytes by construction");
-    let desc_len = u32::try_from(description.len())
-        .expect("description is empty by construction");
+        )
+    })?;
+    let mime_len = u32::try_from(mime.len()).expect("MIME strings are < 32 bytes by construction");
+    let desc_len = u32::try_from(description.len()).expect("description is empty by construction");
 
     // Pre-size to the exact byte length: 4*7 header u32s + mime + desc + data.
     let mut out = Vec::with_capacity(32 + mime.len() + description.len() + data.len());
@@ -121,8 +120,7 @@ pub const MAX_PICTURE_BYTES: u64 = 20 * 1024 * 1024;
 /// code is the only caller. Matches the style of `audio/wav.rs`
 /// (hand-rolled to avoid a dep for a tiny surface area).
 pub fn base64_encode(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     let mut chunks = data.chunks_exact(3);
@@ -239,7 +237,11 @@ mod tests {
         // picture_type at offset 0 (BE u32 = 3)
         assert_eq!(u32_be(&block, 0), 3, "picture_type must be 3 (Front Cover)");
         // mime_length at offset 4 (BE u32 = len("image/png") = 9)
-        assert_eq!(u32_be(&block, 4), 9, "mime_length must match 'image/png' length");
+        assert_eq!(
+            u32_be(&block, 4),
+            9,
+            "mime_length must match 'image/png' length"
+        );
         // MIME string at offset 8..17
         assert_eq!(&block[8..17], b"image/png", "mime string body");
     }

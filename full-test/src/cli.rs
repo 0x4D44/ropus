@@ -1,11 +1,14 @@
 //! CLI parsing for `full-test`.
 //!
-//! Five flags, exactly as the HLD specifies:
+//! The five HLD flags plus a Phase 4 addition:
 //! - `--quick`
 //! - `--skip-quality`
 //! - `--skip-coverage`
 //! - `--skip-benchmarks`
 //! - `--skip-ambisonics`
+//! - `--emit-json` (Phase 4: keep the old JSON envelope on stdout in addition
+//!   to the HTML report — opt-in so the default shell output is the one-line
+//!   summary plus report path, not a 200 KiB JSON dump).
 //!
 //! `--help` / `-h` prints usage and exits 0. Any other argument is an error
 //! (exit 2). The surface here is tiny enough that a hand parser keeps the
@@ -19,6 +22,7 @@ pub struct Options {
     pub skip_coverage: bool,
     pub skip_benchmarks: bool,
     pub skip_ambisonics: bool,
+    pub emit_json: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -39,6 +43,7 @@ pub fn parse(args: &[String]) -> ParseOutcome {
             "--skip-coverage" => opts.skip_coverage = true,
             "--skip-benchmarks" => opts.skip_benchmarks = true,
             "--skip-ambisonics" => opts.skip_ambisonics = true,
+            "--emit-json" => opts.emit_json = true,
             other => return ParseOutcome::Error(format!("unknown argument: {other}")),
         }
     }
@@ -46,7 +51,7 @@ pub fn parse(args: &[String]) -> ParseOutcome {
 }
 
 pub fn print_help() {
-    println!("full-test — ropus validation runner (Phase 1)");
+    println!("full-test — ropus validation runner (Phase 4)");
     println!();
     println!("USAGE:");
     println!("    cargo run --release -p full-test -- [FLAGS]");
@@ -54,13 +59,14 @@ pub fn print_help() {
     println!("FLAGS:");
     println!("    --quick             Skip stages 1 (quality) and 4 (benchmarks).");
     println!("    --skip-quality      Skip stage 1 (cargo fmt + clippy).");
-    println!("    --skip-coverage     Downgrade stage 2 to plain `cargo test` (Phase 2+).");
-    println!("    --skip-benchmarks   Skip stage 4 (Phase 4+).");
-    println!("    --skip-ambisonics   Skip stage 3 (Phase 3+).");
+    println!("    --skip-coverage     Downgrade stage 2 to plain `cargo test`.");
+    println!("    --skip-benchmarks   Skip stage 4 (bench sweep).");
+    println!("    --skip-ambisonics   Skip stage 3 (projection roundtrip).");
+    println!("    --emit-json         Also print the JSON envelope on stdout.");
     println!("    -h, --help          Show this help and exit.");
     println!();
-    println!("Phase 1 only exercises stage 0 (setup capture) and stage 1 (quality).");
-    println!("Other --skip-* flags are recorded for later phases.");
+    println!("Report lands at tests/results/full_test_<YYYYMMDD_HHMMSS>.html.");
+    println!("Exit code: 0 on PASS/WARN, 1 on FAIL (see HLD § PASS / FAIL / WARN).");
 }
 
 #[cfg(test)]
@@ -85,6 +91,7 @@ mod tests {
             ("--skip-coverage", |o| o.skip_coverage),
             ("--skip-benchmarks", |o| o.skip_benchmarks),
             ("--skip-ambisonics", |o| o.skip_ambisonics),
+            ("--emit-json", |o| o.emit_json),
         ];
         for (flag, getter) in cases {
             let parsed = parse(&args(&[flag]));
@@ -103,6 +110,7 @@ mod tests {
             "--skip-coverage",
             "--skip-benchmarks",
             "--skip-ambisonics",
+            "--emit-json",
         ]));
         let expected = Options {
             quick: true,
@@ -110,6 +118,7 @@ mod tests {
             skip_coverage: true,
             skip_benchmarks: true,
             skip_ambisonics: true,
+            emit_json: true,
         };
         assert_eq!(parsed, ParseOutcome::Options(expected));
     }

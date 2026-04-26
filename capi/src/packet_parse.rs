@@ -66,13 +66,13 @@ pub unsafe extern "C" fn opus_packet_parse(
         // Write frame pointers: frame[i] = data + pay_off + sum(sizes[0..i]).
         // `frames` is optional; only write when non-null.
         let mut cursor = pay_off as isize;
-        for i in 0..count as usize {
+        for (i, &sz) in sizes.iter().enumerate() {
             if !frames.is_null() {
                 let frame_ptr = unsafe { data.offset(cursor) };
                 unsafe { *frames.add(i) = frame_ptr };
             }
-            unsafe { *size.add(i) = sizes[i] };
-            cursor += sizes[i] as isize;
+            unsafe { *size.add(i) = sz };
+            cursor += sz as isize;
         }
         if !payload_offset.is_null() {
             unsafe { *payload_offset = pay_off };
@@ -148,13 +148,13 @@ pub unsafe extern "C" fn opus_packet_parse_impl(
         }
         // Fill frame pointers + sizes. `frames` may be NULL (caller opts out).
         let mut cursor = pay_off as isize;
-        for i in 0..count as usize {
+        for (i, &sz) in sizes.iter().enumerate() {
             if !frames.is_null() {
                 let frame_ptr = unsafe { data.offset(cursor) };
                 unsafe { *frames.add(i) = frame_ptr };
             }
-            unsafe { *size.add(i) = sizes[i] };
-            cursor += sizes[i] as isize;
+            unsafe { *size.add(i) = sz };
+            cursor += sz as isize;
         }
         if !payload_offset.is_null() {
             unsafe { *payload_offset = pay_off };
@@ -167,7 +167,7 @@ pub unsafe extern "C" fn opus_packet_parse_impl(
             // (matches C reference `opus.c:378-382`). Callers should inspect
             // `padding_len` to decide whether to dereference the pointer.
             unsafe {
-                *padding = data.offset(pad_info.offset as isize);
+                *padding = data.add(pad_info.offset);
                 if !padding_len.is_null() {
                     *padding_len = pad_info.len;
                 }
@@ -176,4 +176,3 @@ pub unsafe extern "C" fn opus_packet_parse_impl(
         count
     })
 }
-
