@@ -3501,7 +3501,6 @@ impl OpusEncoder {
     /// Crate-internal: this is plumbing for `ropus::api::Encoder::bitrate()`.
     /// External callers should use `get_bitrate` (the libopus `OPUS_GET_BITRATE`
     /// equivalent).
-    #[allow(dead_code)] // Wired up in Stage 2 by `ropus::api::Encoder::bitrate`.
     pub(crate) fn get_user_bitrate_bps(&self) -> i32 {
         self.user_bitrate_bps
     }

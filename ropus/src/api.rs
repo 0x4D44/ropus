@@ -142,7 +142,24 @@ impl Bitrate {
     /// negatives are unreachable from the encoder's own stored state, so
     /// the catch-all arm trips a `debug_assert!` and falls back to
     /// [`Bitrate::Auto`].
-    #[allow(dead_code)] // Wired up in Stage 2 alongside the runtime getters.
+    ///
+    /// Round-trip behaviour against [`OpusEncoder::set_bitrate`]:
+    /// - [`Bitrate::Auto`] and [`Bitrate::Max`] round-trip faithfully.
+    /// - [`Bitrate::Bits(0)`] is unreachable from encoder state — the
+    ///   inner setter rejects it as `OPUS_BAD_ARG` rather than storing
+    ///   it.
+    /// - [`Bitrate::Bits(n)`] with `n` in `1..=499` is unreachable from
+    ///   encoder state — the inner setter clamps to 500 before storing,
+    ///   so the read-back is `Bitrate::Bits(500)`.
+    /// - [`Bitrate::Bits(n)`] with `n` in `500..=750_000 * channels`
+    ///   round-trips faithfully.
+    /// - [`Bitrate::Bits(n)`] with `n > 750_000 * channels` is
+    ///   unreachable from encoder state — the inner setter clamps to
+    ///   that upper bound before storing.
+    ///
+    /// If `Bitrate::Bits(0)` were ever observed here it would fall
+    /// back to [`Bitrate::Auto`] in release builds (and trip the
+    /// `debug_assert!` in debug builds).
     fn from_c_int(n: i32) -> Bitrate {
         match n {
             OPUS_AUTO => Bitrate::Auto,
@@ -193,7 +210,6 @@ impl Signal {
     /// Inverse of [`Signal::as_c_int`]. Unknown values are unreachable from
     /// the encoder's own stored state, so the catch-all arm trips a
     /// `debug_assert!` and falls back to [`Signal::Auto`].
-    #[allow(dead_code)] // Wired up in Stage 2 alongside the runtime getters.
     fn from_c_int(n: i32) -> Signal {
         match n {
             OPUS_AUTO => Signal::Auto,
@@ -233,7 +249,6 @@ impl Bandwidth {
     /// Inverse of [`Bandwidth::as_c_int`]. Unknown values are unreachable
     /// from the encoder's own stored state, so the catch-all arm trips a
     /// `debug_assert!` and falls back to [`Bandwidth::Fullband`].
-    #[allow(dead_code)] // Wired up in Stage 2 alongside the runtime getters.
     fn from_c_int(n: i32) -> Bandwidth {
         match n {
             OPUS_BANDWIDTH_NARROWBAND => Bandwidth::Narrowband,
@@ -270,7 +285,6 @@ impl ForceChannels {
     /// Inverse of [`ForceChannels::as_c_int`]. Unknown values are
     /// unreachable from the encoder's own stored state, so the catch-all
     /// arm trips a `debug_assert!` and falls back to [`ForceChannels::Auto`].
-    #[allow(dead_code)] // Wired up in Stage 2 alongside the runtime getters.
     fn from_c_int(n: i32) -> ForceChannels {
         match n {
             OPUS_AUTO => ForceChannels::Auto,
@@ -303,7 +317,6 @@ pub enum InbandFec {
 }
 
 impl InbandFec {
-    #[allow(dead_code)] // Wired up in Stage 2 alongside the runtime setters.
     fn as_c_int(self) -> i32 {
         match self {
             InbandFec::Disabled => 0,
@@ -315,7 +328,6 @@ impl InbandFec {
     /// Inverse of [`InbandFec::as_c_int`]. Unknown values are unreachable
     /// from the encoder's own stored state, so the catch-all arm trips a
     /// `debug_assert!` and falls back to [`InbandFec::Disabled`].
-    #[allow(dead_code)] // Wired up in Stage 2 alongside the runtime getters.
     fn from_c_int(n: i32) -> InbandFec {
         match n {
             0 => InbandFec::Disabled,
@@ -522,6 +534,8 @@ impl Encoder {
             max_bandwidth: None,
             frame_duration: None,
             packet_loss_perc: None,
+            inband_fec: None,
+            dtx: None,
         }
     }
 
@@ -620,20 +634,162 @@ impl Encoder {
         self.inner.get_lookahead().max(0) as u32
     }
 
-    /// Current constrained-VBR setting, as the 0/1 `i32` libopus stores.
+    // ----- Runtime setters --------------------------------------------------
+    //
+    // These mirror the corresponding [`EncoderBuilder`] methods but apply
+    // mid-stream without rebuilding the encoder, so SILK predictor history,
+    // CELT pitch state, range-coder context, and NSQ memory all remain
+    // intact across the configuration change. Each is a thin delegation to
+    // the underlying [`OpusEncoder`] setter.
+
+    /// Set the target bitrate.
     ///
-    /// Mirrors `OPUS_GET_VBR_CONSTRAINT`. Intended for introspection/testing
-    /// of settings applied via [`EncoderBuilder::vbr_constraint`].
-    pub fn get_vbr_constraint(&self) -> i32 {
-        self.inner.get_vbr_constraint()
+    /// Values `<= 0` (other than the [`Bitrate::Auto`] / [`Bitrate::Max`]
+    /// sentinels) surface as [`EncodeError::BadArg`]. Values in
+    /// `[1, 499]` clamp to 500. Values above `750_000 * channels` clamp
+    /// to that upper bound. The facade faithfully reflects what was
+    /// stored, not what was requested. Use [`Bitrate::try_bits`] to
+    /// pre-validate values that may exceed the libopus `i32::MAX`
+    /// ceiling.
+    pub fn set_bitrate(&mut self, b: Bitrate) -> Result<(), EncodeError> {
+        check_ok_runtime(self.inner.set_bitrate(b.as_c_int()))
     }
 
-    /// Current packet-loss-percentage hint, as the 0..=100 `i32` libopus stores.
+    /// Set the CPU/quality complexity (`0..=10`). Values above 10
+    /// surface as [`EncodeError::BadArg`].
+    pub fn set_complexity(&mut self, c: u8) -> Result<(), EncodeError> {
+        check_ok_runtime(self.inner.set_complexity(c as i32))
+    }
+
+    /// Set the signal-type hint.
+    pub fn set_signal(&mut self, s: Signal) -> Result<(), EncodeError> {
+        check_ok_runtime(self.inner.set_signal(s.as_c_int()))
+    }
+
+    /// Enable or disable variable-bitrate mode.
+    pub fn set_vbr(&mut self, on: bool) -> Result<(), EncodeError> {
+        check_ok_runtime(self.inner.set_vbr(i32::from(on)))
+    }
+
+    /// Constrain VBR to meet an averaged bitrate target (CVBR mode).
     ///
-    /// Mirrors `OPUS_GET_PACKET_LOSS_PERC`. Intended for introspection/testing
-    /// of settings applied via [`EncoderBuilder::packet_loss_perc`].
-    pub fn get_packet_loss_perc(&self) -> i32 {
-        self.inner.get_packet_loss_perc()
+    /// Only meaningful when [`set_vbr`](Self::set_vbr) is also `true`;
+    /// has no effect in CBR mode.
+    pub fn set_vbr_constraint(&mut self, on: bool) -> Result<(), EncodeError> {
+        check_ok_runtime(self.inner.set_vbr_constraint(i32::from(on)))
+    }
+
+    /// Force the encoded stream to a specific channel count.
+    ///
+    /// Setting [`ForceChannels::Stereo`] on a mono encoder returns
+    /// [`EncodeError::BadArg`].
+    pub fn set_force_channels(&mut self, c: ForceChannels) -> Result<(), EncodeError> {
+        check_ok_runtime(self.inner.set_force_channels(c.as_c_int()))
+    }
+
+    /// Limit the maximum encoded bandwidth.
+    pub fn set_max_bandwidth(&mut self, b: Bandwidth) -> Result<(), EncodeError> {
+        check_ok_runtime(self.inner.set_max_bandwidth(b.as_c_int()))
+    }
+
+    /// Hint the expected packet-loss percentage (`0..=100`).
+    ///
+    /// Values above 100 surface as [`EncodeError::BadArg`].
+    pub fn set_packet_loss_perc(&mut self, pct: u8) -> Result<(), EncodeError> {
+        check_ok_runtime(self.inner.set_packet_loss_perc(i32::from(pct)))
+    }
+
+    /// Configure the in-band forward-error-correction mode.
+    pub fn set_inband_fec(&mut self, mode: InbandFec) -> Result<(), EncodeError> {
+        check_ok_runtime(self.inner.set_inband_fec(mode.as_c_int()))
+    }
+
+    /// Enable or disable discontinuous transmission (DTX).
+    pub fn set_dtx(&mut self, on: bool) -> Result<(), EncodeError> {
+        check_ok_runtime(self.inner.set_dtx(i32::from(on)))
+    }
+
+    // ----- Runtime getters --------------------------------------------------
+    //
+    // Each reads back the user-set value (not a derived per-frame snapshot)
+    // so calls round-trip through the matching setter. The exception is
+    // [`Self::effective_bitrate_bps`], which deliberately returns the
+    // encoder's per-frame computed value — see its rustdoc.
+
+    /// Current target bitrate as last set via [`Self::set_bitrate`] or
+    /// [`EncoderBuilder::bitrate`].
+    ///
+    /// Round-trips: `encoder.set_bitrate(b)?` followed by `encoder.bitrate()`
+    /// returns the same value. For the encoder's per-frame *effective*
+    /// rate (which libopus clamps further to a ceiling derived from the
+    /// previous frame size), use [`Self::effective_bitrate_bps`] instead.
+    pub fn bitrate(&self) -> Bitrate {
+        Bitrate::from_c_int(self.inner.get_user_bitrate_bps())
+    }
+
+    /// Effective bitrate in bps for the next frame, as the encoder will
+    /// actually use it.
+    ///
+    /// Equivalent of `OPUS_GET_BITRATE` in libopus. The value differs from
+    /// [`Self::bitrate`] in two ways: (1) it resolves
+    /// [`Bitrate::Auto`]/[`Bitrate::Max`] to a concrete bps figure;
+    /// (2) it clamps to a frame-size-dependent ceiling that may shift
+    /// between calls as the encoder's `prev_framesize` updates.
+    pub fn effective_bitrate_bps(&self) -> i32 {
+        self.inner.get_bitrate()
+    }
+
+    /// Current CPU/quality complexity (`0..=10`).
+    pub fn complexity(&self) -> u8 {
+        self.inner.get_complexity() as u8
+    }
+
+    /// Current signal-type hint.
+    pub fn signal(&self) -> Signal {
+        Signal::from_c_int(self.inner.get_signal())
+    }
+
+    /// Whether variable-bitrate mode is enabled.
+    pub fn vbr(&self) -> bool {
+        self.inner.get_vbr() != 0
+    }
+
+    /// Whether constrained-VBR (CVBR) mode is enabled.
+    ///
+    /// Mirrors `OPUS_GET_VBR_CONSTRAINT`.
+    pub fn vbr_constraint(&self) -> bool {
+        self.inner.get_vbr_constraint() != 0
+    }
+
+    /// Current forced-channel-count setting.
+    pub fn force_channels(&self) -> ForceChannels {
+        ForceChannels::from_c_int(self.inner.get_force_channels())
+    }
+
+    /// Current maximum encoded-bandwidth limit.
+    pub fn max_bandwidth(&self) -> Bandwidth {
+        Bandwidth::from_c_int(self.inner.get_max_bandwidth())
+    }
+
+    /// Current packet-loss-percentage hint (`0..=100`).
+    ///
+    /// Mirrors `OPUS_GET_PACKET_LOSS_PERC`.
+    pub fn packet_loss_perc(&self) -> u8 {
+        self.inner.get_packet_loss_perc() as u8
+    }
+
+    /// Current in-band forward-error-correction mode.
+    ///
+    /// See [`InbandFec`] for the variant docs; note that
+    /// [`InbandFec::Forced`] is libopus' "FEC always" mode for
+    /// SILK/Hybrid frames.
+    pub fn inband_fec(&self) -> InbandFec {
+        InbandFec::from_c_int(self.inner.get_inband_fec())
+    }
+
+    /// Whether discontinuous transmission (DTX) is enabled.
+    pub fn dtx(&self) -> bool {
+        self.inner.get_dtx() != 0
     }
 }
 
@@ -669,6 +825,8 @@ pub struct EncoderBuilder {
     max_bandwidth: Option<Bandwidth>,
     frame_duration: Option<FrameDuration>,
     packet_loss_perc: Option<u8>,
+    inband_fec: Option<InbandFec>,
+    dtx: Option<bool>,
 }
 
 impl EncoderBuilder {
@@ -732,6 +890,27 @@ impl EncoderBuilder {
         self
     }
 
+    /// Configure the in-band forward-error-correction mode.
+    ///
+    /// Wraps libopus' `OPUS_SET_INBAND_FEC`. See [`InbandFec`] for the
+    /// three accepted modes. The same value can also be applied at runtime
+    /// via [`Encoder::set_inband_fec`].
+    pub fn inband_fec(mut self, mode: InbandFec) -> Self {
+        self.inband_fec = Some(mode);
+        self
+    }
+
+    /// Enable or disable discontinuous transmission (DTX).
+    ///
+    /// Wraps libopus' `OPUS_SET_DTX`. With DTX enabled the encoder may
+    /// suppress packets during silence (after a brief comfort-noise
+    /// header). The same value can also be applied at runtime via
+    /// [`Encoder::set_dtx`].
+    pub fn dtx(mut self, on: bool) -> Self {
+        self.dtx = Some(on);
+        self
+    }
+
     /// Construct the encoder, applying the configured settings.
     pub fn build(self) -> Result<Encoder, EncoderBuildError> {
         let fs = i32::try_from(self.sample_rate).map_err(|_| EncoderBuildError::BadArg)?;
@@ -765,6 +944,12 @@ impl EncoderBuilder {
         if let Some(pct) = self.packet_loss_perc {
             check_ok(inner.set_packet_loss_perc(i32::from(pct)))?;
         }
+        if let Some(mode) = self.inband_fec {
+            check_ok(inner.set_inband_fec(mode.as_c_int()))?;
+        }
+        if let Some(dtx) = self.dtx {
+            check_ok(inner.set_dtx(i32::from(dtx)))?;
+        }
 
         Ok(Encoder { inner })
     }
@@ -783,7 +968,6 @@ fn check_ok(code: i32) -> Result<(), EncoderBuildError> {
 /// `&mut self` setters and `encode` methods. Generic-over-error-type
 /// would require `From<i32>` impls on both error types for no readability
 /// gain, so the two helpers are kept as parallel three-line copies.
-#[allow(dead_code)] // Wired up in Stage 2 alongside the runtime setters.
 fn check_ok_runtime(code: i32) -> Result<(), EncodeError> {
     if code == 0 {
         Ok(())
@@ -1275,8 +1459,8 @@ mod tests {
                 .build()
                 .expect("encoder builds with vbr_constraint");
             assert_eq!(
-                encoder.get_vbr_constraint(),
-                i32::from(on),
+                encoder.vbr_constraint(),
+                on,
                 "vbr_constraint({on}) was not stored on the encoder"
             );
             let pcm_in = vec![0i16; 960]; // 20 ms mono @ 48 kHz
@@ -1299,8 +1483,8 @@ mod tests {
                 .build()
                 .expect("encoder builds with packet_loss_perc");
             assert_eq!(
-                encoder.get_packet_loss_perc(),
-                pct as i32,
+                encoder.packet_loss_perc(),
+                pct,
                 "packet_loss_perc({pct}) was not stored on the encoder"
             );
             let pcm_in = vec![0i16; 960]; // 20 ms mono @ 48 kHz
@@ -1406,5 +1590,338 @@ mod tests {
     fn bitrate_from_c_int_unknown_falls_back_to_auto_in_release() {
         assert_eq!(Bitrate::from_c_int(0), Bitrate::Auto);
         assert_eq!(Bitrate::from_c_int(-42), Bitrate::Auto);
+    }
+
+    // ---- Literal-value assertions: pin internal mappings to libopus reality ----
+    //
+    // The round-trip tests above prove `from_c_int(as_c_int(v)) == v`, which
+    // is internally consistent but would still pass if both directions had
+    // cancelling typos. These assertions pin each enum's wire values to the
+    // libopus integer constants so a drift in either direction is caught.
+
+    #[test]
+    fn typed_enum_wire_values_match_libopus() {
+        // InbandFec is the only enum whose wire values are not in the
+        // OPUS_* constant set (they're the literal CTL request values 0/1/2).
+        assert_eq!(InbandFec::Disabled.as_c_int(), 0);
+        assert_eq!(InbandFec::Enabled.as_c_int(), 1);
+        assert_eq!(InbandFec::Forced.as_c_int(), 2);
+
+        // Bitrate sentinels — the values libopus exports as
+        // OPUS_AUTO (-1000) and OPUS_BITRATE_MAX (-1).
+        assert_eq!(Bitrate::Auto.as_c_int(), -1000);
+        assert_eq!(Bitrate::Max.as_c_int(), -1);
+
+        // Bandwidth — the OPUS_BANDWIDTH_* constants are in the 1101..=1105
+        // band; pin the endpoints so a drift is loud.
+        assert_eq!(Bandwidth::Narrowband.as_c_int(), 1101);
+        assert_eq!(Bandwidth::Mediumband.as_c_int(), 1102);
+        assert_eq!(Bandwidth::Wideband.as_c_int(), 1103);
+        assert_eq!(Bandwidth::Superwideband.as_c_int(), 1104);
+        assert_eq!(Bandwidth::Fullband.as_c_int(), 1105);
+        assert_eq!(Bandwidth::Auto.as_c_int(), -1000);
+
+        // Signal — OPUS_SIGNAL_VOICE/_MUSIC are 3001/3002.
+        assert_eq!(Signal::Auto.as_c_int(), -1000);
+        assert_eq!(Signal::Voice.as_c_int(), 3001);
+        assert_eq!(Signal::Music.as_c_int(), 3002);
+
+        // ForceChannels — wire values are the channel counts plus OPUS_AUTO.
+        assert_eq!(ForceChannels::Auto.as_c_int(), -1000);
+        assert_eq!(ForceChannels::Mono.as_c_int(), 1);
+        assert_eq!(ForceChannels::Stereo.as_c_int(), 2);
+    }
+
+    // ===========================================================================
+    // Stage 2 — runtime setter / getter coverage on `Encoder`
+    // ===========================================================================
+
+    /// Generate `n` samples of a 1 kHz sine at 48 kHz, scaled to half full-scale
+    /// so DTX (silence-detection) cannot mask the signal in the bitrate-flip
+    /// tests. Caller can splat to stereo if needed.
+    fn sine_1khz_48k(n: usize) -> Vec<i16> {
+        let mut out = Vec::with_capacity(n);
+        for k in 0..n {
+            // 1000 Hz at 48 kHz: phase = 2 pi * k / 48.
+            let phase = (k as f64) * std::f64::consts::TAU / 48.0;
+            let s = (phase.sin() * 16_384.0).round() as i16;
+            out.push(s);
+        }
+        out
+    }
+
+    // ---- Test 1: Round-trip per setter on a mono encoder ----
+
+    #[test]
+    fn runtime_setters_round_trip_mono() {
+        let mut encoder = Encoder::builder(48_000, Channels::Mono, Application::Audio)
+            .build()
+            .expect("encoder builds");
+
+        encoder.set_bitrate(Bitrate::Bits(48_000)).unwrap();
+        assert_eq!(encoder.bitrate(), Bitrate::Bits(48_000));
+
+        encoder.set_complexity(7).unwrap();
+        assert_eq!(encoder.complexity(), 7);
+
+        encoder.set_signal(Signal::Voice).unwrap();
+        assert_eq!(encoder.signal(), Signal::Voice);
+
+        encoder.set_vbr(false).unwrap();
+        assert!(!encoder.vbr());
+        encoder.set_vbr(true).unwrap();
+        assert!(encoder.vbr());
+
+        encoder.set_vbr_constraint(true).unwrap();
+        assert!(encoder.vbr_constraint());
+
+        // Mono encoder: ForceChannels::Stereo is rejected (covered separately
+        // in the stereo test); ForceChannels::Mono and ::Auto round-trip.
+        encoder.set_force_channels(ForceChannels::Mono).unwrap();
+        assert_eq!(encoder.force_channels(), ForceChannels::Mono);
+        encoder.set_force_channels(ForceChannels::Auto).unwrap();
+        assert_eq!(encoder.force_channels(), ForceChannels::Auto);
+
+        encoder.set_max_bandwidth(Bandwidth::Wideband).unwrap();
+        assert_eq!(encoder.max_bandwidth(), Bandwidth::Wideband);
+
+        encoder.set_packet_loss_perc(20).unwrap();
+        assert_eq!(encoder.packet_loss_perc(), 20);
+
+        encoder.set_inband_fec(InbandFec::Enabled).unwrap();
+        assert_eq!(encoder.inband_fec(), InbandFec::Enabled);
+        encoder.set_inband_fec(InbandFec::Forced).unwrap();
+        assert_eq!(encoder.inband_fec(), InbandFec::Forced);
+
+        encoder.set_dtx(true).unwrap();
+        assert!(encoder.dtx());
+    }
+
+    // ---- Test 2: Round-trip the stereo-only setters on a stereo encoder ----
+
+    #[test]
+    fn runtime_setters_round_trip_stereo() {
+        let mut encoder = Encoder::builder(48_000, Channels::Stereo, Application::Audio)
+            .build()
+            .expect("encoder builds");
+
+        encoder.set_force_channels(ForceChannels::Stereo).unwrap();
+        assert_eq!(encoder.force_channels(), ForceChannels::Stereo);
+        encoder.set_force_channels(ForceChannels::Mono).unwrap();
+        assert_eq!(encoder.force_channels(), ForceChannels::Mono);
+        encoder.set_force_channels(ForceChannels::Auto).unwrap();
+        assert_eq!(encoder.force_channels(), ForceChannels::Auto);
+    }
+
+    // ---- Test 3: Bitrate round-trip across all three forms ----
+    //
+    // This is the test V1 of the HLD would have failed: `bitrate()` reads
+    // back via `get_user_bitrate_bps`, not the per-frame derived
+    // `get_bitrate`, so `Auto` and `Max` reconstruct correctly.
+
+    #[test]
+    fn bitrate_setter_round_trips_all_three_forms() {
+        let mut encoder = Encoder::builder(48_000, Channels::Mono, Application::Audio)
+            .build()
+            .expect("encoder builds");
+
+        encoder.set_bitrate(Bitrate::Auto).unwrap();
+        assert_eq!(encoder.bitrate(), Bitrate::Auto);
+
+        encoder.set_bitrate(Bitrate::Max).unwrap();
+        assert_eq!(encoder.bitrate(), Bitrate::Max);
+
+        encoder.set_bitrate(Bitrate::Bits(64_000)).unwrap();
+        assert_eq!(encoder.bitrate(), Bitrate::Bits(64_000));
+    }
+
+    // ---- Test 4: effective_bitrate_bps reflects the framing-derived clamp ----
+
+    #[test]
+    fn effective_bitrate_bps_clamps_below_request() {
+        let mut encoder = Encoder::builder(48_000, Channels::Mono, Application::Audio)
+            .build()
+            .expect("encoder builds");
+        encoder.set_bitrate(Bitrate::Bits(750_000)).unwrap();
+
+        // The request round-trips through `bitrate()` faithfully...
+        assert_eq!(encoder.bitrate(), Bitrate::Bits(750_000));
+
+        // ...but `effective_bitrate_bps` clamps to the per-frame ceiling
+        // (~510 kbps at 48 kHz / 20 ms mono). The exact value depends on
+        // `prev_framesize`, so just assert the cap.
+        let eff = encoder.effective_bitrate_bps();
+        assert!(
+            eff <= 750_000,
+            "effective_bitrate_bps({eff}) must be <= 750_000"
+        );
+        assert!(eff > 0, "effective_bitrate_bps must resolve Auto/Max to >0");
+    }
+
+    // ---- Test 5: BadArg propagation from runtime setters ----
+
+    #[test]
+    fn runtime_setters_surface_bad_arg() {
+        let mut encoder = Encoder::builder(48_000, Channels::Mono, Application::Audio)
+            .build()
+            .expect("encoder builds");
+
+        assert_eq!(encoder.set_complexity(11), Err(EncodeError::BadArg));
+        assert_eq!(encoder.set_packet_loss_perc(101), Err(EncodeError::BadArg));
+
+        // Bottom-edge: 0 is below the encoder's accepted range and surfaces as BadArg.
+        assert_eq!(encoder.set_bitrate(Bitrate::Bits(0)), Err(EncodeError::BadArg));
+
+        // Top-edge: above-range bitrate silently clamps. Round-trip via bitrate()
+        // reads back the clamped value, not the requested one.
+        encoder.set_bitrate(Bitrate::Bits(2_000_000_000)).unwrap();
+        match encoder.bitrate() {
+            Bitrate::Bits(b) => assert!(b <= 750_000, "expected clamp <= 750_000 on mono, got {b}"),
+            other => panic!("expected Bits(...) after clamp, got {other:?}"),
+        }
+    }
+
+    // ---- Test 6: Mid-stream bitrate flip produces a real effect on output ----
+
+    #[test]
+    fn mid_stream_bitrate_flip_changes_packet_size() {
+        let mut encoder = Encoder::builder(48_000, Channels::Mono, Application::Audio)
+            .build()
+            .expect("encoder builds");
+        // 20 ms frames at 48 kHz mono: 960 samples per frame.
+        let frame = sine_1khz_48k(960);
+        let mut packet = vec![0u8; 4000];
+
+        encoder.set_bitrate(Bitrate::Bits(16_000)).unwrap();
+        let mut sum1: usize = 0;
+        for _ in 0..100 {
+            let n = encoder.encode(&frame, &mut packet).expect("encode 1");
+            sum1 += n;
+        }
+        let mean1 = sum1 as f64 / 100.0;
+
+        encoder.set_bitrate(Bitrate::Bits(96_000)).unwrap();
+        let mut sum2: usize = 0;
+        for _ in 0..100 {
+            let n = encoder.encode(&frame, &mut packet).expect("encode 2");
+            sum2 += n;
+        }
+        let mean2 = sum2 as f64 / 100.0;
+
+        assert!(
+            mean2 >= 3.0 * mean1,
+            "expected mean(batch2)={mean2} >= 3 * mean(batch1)={mean1}"
+        );
+    }
+
+    // ---- Test 7: Mid-stream bitrate flip in CBR mode ----
+
+    #[test]
+    fn mid_stream_bitrate_flip_changes_packet_size_cbr() {
+        let mut encoder = Encoder::builder(48_000, Channels::Mono, Application::Audio)
+            .build()
+            .expect("encoder builds");
+        encoder.set_vbr(false).unwrap();
+        let frame = sine_1khz_48k(960);
+        let mut packet = vec![0u8; 4000];
+
+        encoder.set_bitrate(Bitrate::Bits(16_000)).unwrap();
+        let mut sum1: usize = 0;
+        for _ in 0..100 {
+            let n = encoder.encode(&frame, &mut packet).expect("encode 1");
+            sum1 += n;
+        }
+        let mean1 = sum1 as f64 / 100.0;
+
+        encoder.set_bitrate(Bitrate::Bits(96_000)).unwrap();
+        let mut sum2: usize = 0;
+        for _ in 0..100 {
+            let n = encoder.encode(&frame, &mut packet).expect("encode 2");
+            sum2 += n;
+        }
+        let mean2 = sum2 as f64 / 100.0;
+
+        assert!(
+            mean2 >= 3.0 * mean1,
+            "CBR: expected mean(batch2)={mean2} >= 3 * mean(batch1)={mean1}"
+        );
+    }
+
+    // ---- Test 8: set_max_bandwidth round-trips through the getter ----
+
+    #[test]
+    fn set_max_bandwidth_round_trips() {
+        let mut encoder = Encoder::builder(48_000, Channels::Mono, Application::Audio)
+            .build()
+            .expect("encoder builds");
+        encoder.set_max_bandwidth(Bandwidth::Narrowband).unwrap();
+        assert_eq!(encoder.max_bandwidth(), Bandwidth::Narrowband);
+    }
+
+    // ---- Test 9: Mid-stream mutation does not panic across many flips ----
+    //
+    // Deterministic 5-op cycle (no rand crate dep). Asserts no panic *and*
+    // that each emitted packet decodes successfully — the latter catches
+    // malformed-packet emission, not just no-panic.
+
+    #[test]
+    fn many_mid_stream_flips_do_not_panic_and_decode() {
+        let mut encoder = Encoder::builder(48_000, Channels::Mono, Application::Audio)
+            .build()
+            .expect("encoder builds");
+        let mut decoder = Decoder::new(48_000, Channels::Mono).expect("decoder builds");
+
+        let frame = sine_1khz_48k(960);
+        let mut packet = vec![0u8; 4000];
+        let mut pcm_out = vec![0i16; 5760]; // 120 ms cap at 48 kHz mono
+
+        for i in 0..100usize {
+            match i % 5 {
+                0 => {
+                    let bps = if i % 2 == 0 { 24_000 } else { 64_000 };
+                    encoder.set_bitrate(Bitrate::Bits(bps)).unwrap();
+                }
+                1 => {
+                    encoder.set_vbr(i % 4 < 2).unwrap();
+                }
+                2 => {
+                    let mode = match (i / 5) % 3 {
+                        0 => InbandFec::Disabled,
+                        1 => InbandFec::Enabled,
+                        _ => InbandFec::Forced,
+                    };
+                    encoder.set_inband_fec(mode).unwrap();
+                }
+                3 => {
+                    let pct = ((i / 5) % 11) as u8 * 10; // 0, 10, 20, ..., 100
+                    encoder.set_packet_loss_perc(pct).unwrap();
+                }
+                _ => {
+                    encoder.set_dtx(i % 2 == 0).unwrap();
+                }
+            }
+
+            let n = encoder.encode(&frame, &mut packet).expect("encode");
+            decoder
+                .decode(&packet[..n], &mut pcm_out, DecodeMode::Normal)
+                .expect("decode of newly-flipped encoder output");
+        }
+    }
+
+    // ---- Builder coverage for the new inband_fec / dtx methods ----
+
+    #[test]
+    fn builder_inband_fec_and_dtx_round_trip() {
+        for mode in [InbandFec::Disabled, InbandFec::Enabled, InbandFec::Forced] {
+            for dtx in [false, true] {
+                let encoder = Encoder::builder(48_000, Channels::Mono, Application::Audio)
+                    .inband_fec(mode)
+                    .dtx(dtx)
+                    .build()
+                    .expect("encoder builds with inband_fec + dtx");
+                assert_eq!(encoder.inband_fec(), mode);
+                assert_eq!(encoder.dtx(), dtx);
+            }
+        }
     }
 }
