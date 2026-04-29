@@ -1650,6 +1650,30 @@ mod tests {
         out
     }
 
+    // ---- Test 0: Default state pinning (HLD "Default state" subsection) ----
+    //
+    // Pins down the runtime-getter values reported by a freshly-built encoder,
+    // before any setter is called. The HLD asserts these defaults are mandated
+    // by libopus (encoder.rs:1239..=1289 fields); this test fails loudly if
+    // the inner `OpusEncoder::new` ever drifts from them.
+
+    #[test]
+    fn runtime_getters_reflect_default_state_after_build() {
+        let encoder = Encoder::builder(48_000, Channels::Mono, Application::Audio)
+            .build()
+            .unwrap();
+
+        // HLD "Default state" — these defaults are mandated by libopus and the HLD.
+        assert_eq!(encoder.bitrate(), Bitrate::Auto);
+        assert!(encoder.vbr()); // VBR on
+        assert_eq!(encoder.inband_fec(), InbandFec::Disabled);
+        assert!(!encoder.dtx()); // DTX off
+        assert_eq!(encoder.complexity(), 9);
+        assert_eq!(encoder.signal(), Signal::Auto);
+        assert_eq!(encoder.force_channels(), ForceChannels::Auto);
+        assert_eq!(encoder.max_bandwidth(), Bandwidth::Fullband);
+    }
+
     // ---- Test 1: Round-trip per setter on a mono encoder ----
 
     #[test]
