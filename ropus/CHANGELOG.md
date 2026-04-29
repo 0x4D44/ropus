@@ -4,10 +4,39 @@ All notable changes to the `ropus` crate are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 crate aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-The latest version published to crates.io is `0.5.0`. Versions `0.5.1`
-through `0.11.1` are in-tree milestones identified by the
-`ropus/Cargo.toml` version-bump commits in this repository; they will
-land on crates.io as a single jump at the next publish.
+## [0.12.0] - 2026-04-29
+
+### Added
+
+- Runtime setters on the typed `Encoder` facade, returning
+  `Result<(), EncodeError>`: `set_bitrate`, `set_complexity`, `set_signal`,
+  `set_vbr`, `set_vbr_constraint`, `set_force_channels`, `set_max_bandwidth`,
+  `set_packet_loss_perc`, `set_inband_fec`, `set_dtx`. Each thinly delegates
+  to the matching libopus CTL on the underlying `OpusEncoder`. Lets callers
+  retune an encoder mid-stream — bitrate, FEC, DTX, channel forcing, etc. —
+  without rebuilding it.
+- Runtime getters paired with the setters: `bitrate`, `effective_bitrate_bps`
+  (the libopus `OPUS_GET_BITRATE` value, which differs from the user-supplied
+  request after clamping), `complexity`, `signal`, `vbr`, `force_channels`,
+  `max_bandwidth`, `inband_fec`, `dtx`. The getters report the libopus-mandated
+  default state on a freshly-built encoder (pinned by a regression test).
+- `EncoderBuilder::inband_fec(InbandFec)` and `EncoderBuilder::dtx(bool)`
+  builder methods, mirroring the existing `vbr_constraint` / `packet_loss_perc`
+  builder shape.
+- New `InbandFec { Disabled, Enabled, Forced }` enum re-exported from the
+  crate root, replacing the previous bare `i32` for FEC-mode configuration.
+
+### Changed (BREAKING)
+
+- `Encoder::get_vbr_constraint() -> i32` renamed and retyped to
+  `Encoder::vbr_constraint() -> bool`. Migration:
+  `enc.get_vbr_constraint() != 0` → `enc.vbr_constraint()`.
+- `Encoder::get_packet_loss_perc() -> i32` renamed and retyped to
+  `Encoder::packet_loss_perc() -> u8`. Migration:
+  `enc.get_packet_loss_perc() as u8` → `enc.packet_loss_perc()`.
+- The low-level `OpusEncoder::get_vbr_constraint` /
+  `get_packet_loss_perc` methods are unchanged; only the high-level typed
+  facade was renamed. C-ABI shim (`capi/`) callers are unaffected.
 
 ## [0.11.1] - 2026-04-19
 
@@ -232,6 +261,7 @@ land on crates.io as a single jump at the next publish.
   `publish = false` crate hosting the C reference FFI build, integration
   binaries, and tooling. (`fa031ab`)
 
+[0.12.0]: https://github.com/0x4D44/ropus/releases/tag/v0.12.0
 [0.11.1]: https://github.com/0x4D44/ropus/releases/tag/v0.11.1
 [0.11.0]: https://github.com/0x4D44/ropus/releases/tag/v0.11.0
 [0.10.0]: https://github.com/0x4D44/ropus/releases/tag/v0.10.0
