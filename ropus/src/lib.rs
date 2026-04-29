@@ -100,7 +100,8 @@ pub mod types;
 mod api;
 pub use api::{
     Application, Bandwidth, Bitrate, Channels, DecodeError, DecodeMode, Decoder, DecoderInitError,
-    EncodeError, Encoder, EncoderBuildError, EncoderBuilder, ForceChannels, FrameDuration, Signal,
+    EncodeError, Encoder, EncoderBuildError, EncoderBuilder, ForceChannels, FrameDuration,
+    InbandFec, Signal,
 };
 
 // Low-level libopus types and integer constants. These mirror the C API and are

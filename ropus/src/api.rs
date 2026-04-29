@@ -135,6 +135,25 @@ impl Bitrate {
             Bitrate::Bits(b) => i32::try_from(b).unwrap_or(i32::MAX),
         }
     }
+
+    /// Inverse of [`Bitrate::as_c_int`]. `OPUS_AUTO` (-1000) maps to
+    /// [`Bitrate::Auto`], `OPUS_BITRATE_MAX` (-1) maps to [`Bitrate::Max`],
+    /// and any positive value maps to [`Bitrate::Bits`]. `0` and stray
+    /// negatives are unreachable from the encoder's own stored state, so
+    /// the catch-all arm trips a `debug_assert!` and falls back to
+    /// [`Bitrate::Auto`].
+    #[allow(dead_code)] // Wired up in Stage 2 alongside the runtime getters.
+    fn from_c_int(n: i32) -> Bitrate {
+        match n {
+            OPUS_AUTO => Bitrate::Auto,
+            OPUS_BITRATE_MAX => Bitrate::Max,
+            n if n > 0 => Bitrate::Bits(n as u32),
+            other => {
+                debug_assert!(false, "unexpected bitrate value from libopus: {other}");
+                Bitrate::Auto
+            }
+        }
+    }
 }
 
 /// Returned by [`Bitrate::try_bits`] when the requested bitrate exceeds the
@@ -170,6 +189,22 @@ impl Signal {
             Signal::Music => OPUS_SIGNAL_MUSIC,
         }
     }
+
+    /// Inverse of [`Signal::as_c_int`]. Unknown values are unreachable from
+    /// the encoder's own stored state, so the catch-all arm trips a
+    /// `debug_assert!` and falls back to [`Signal::Auto`].
+    #[allow(dead_code)] // Wired up in Stage 2 alongside the runtime getters.
+    fn from_c_int(n: i32) -> Signal {
+        match n {
+            OPUS_AUTO => Signal::Auto,
+            OPUS_SIGNAL_VOICE => Signal::Voice,
+            OPUS_SIGNAL_MUSIC => Signal::Music,
+            other => {
+                debug_assert!(false, "unexpected signal value from libopus: {other}");
+                Signal::Auto
+            }
+        }
+    }
 }
 
 /// Audio bandwidth selector.
@@ -194,6 +229,25 @@ impl Bandwidth {
             Bandwidth::Auto => OPUS_AUTO,
         }
     }
+
+    /// Inverse of [`Bandwidth::as_c_int`]. Unknown values are unreachable
+    /// from the encoder's own stored state, so the catch-all arm trips a
+    /// `debug_assert!` and falls back to [`Bandwidth::Fullband`].
+    #[allow(dead_code)] // Wired up in Stage 2 alongside the runtime getters.
+    fn from_c_int(n: i32) -> Bandwidth {
+        match n {
+            OPUS_BANDWIDTH_NARROWBAND => Bandwidth::Narrowband,
+            OPUS_BANDWIDTH_MEDIUMBAND => Bandwidth::Mediumband,
+            OPUS_BANDWIDTH_WIDEBAND => Bandwidth::Wideband,
+            OPUS_BANDWIDTH_SUPERWIDEBAND => Bandwidth::Superwideband,
+            OPUS_BANDWIDTH_FULLBAND => Bandwidth::Fullband,
+            OPUS_AUTO => Bandwidth::Auto,
+            other => {
+                debug_assert!(false, "unexpected bandwidth value from libopus: {other}");
+                Bandwidth::Fullband
+            }
+        }
+    }
 }
 
 /// Forced channel count for the encoded stream.
@@ -210,6 +264,67 @@ impl ForceChannels {
             ForceChannels::Auto => OPUS_AUTO,
             ForceChannels::Mono => 1,
             ForceChannels::Stereo => 2,
+        }
+    }
+
+    /// Inverse of [`ForceChannels::as_c_int`]. Unknown values are
+    /// unreachable from the encoder's own stored state, so the catch-all
+    /// arm trips a `debug_assert!` and falls back to [`ForceChannels::Auto`].
+    #[allow(dead_code)] // Wired up in Stage 2 alongside the runtime getters.
+    fn from_c_int(n: i32) -> ForceChannels {
+        match n {
+            OPUS_AUTO => ForceChannels::Auto,
+            1 => ForceChannels::Mono,
+            2 => ForceChannels::Stereo,
+            other => {
+                debug_assert!(
+                    false,
+                    "unexpected force-channels value from libopus: {other}"
+                );
+                ForceChannels::Auto
+            }
+        }
+    }
+}
+
+/// In-band forward-error-correction mode.
+///
+/// Wraps libopus' `OPUS_SET_INBAND_FEC` request, which accepts three values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InbandFec {
+    /// FEC disabled (CTL value 0). Default.
+    Disabled,
+    /// FEC enabled (CTL value 1). Encoder may add FEC redundancy when the
+    /// packet-loss-percentage hint and bitrate budget permit.
+    Enabled,
+    /// FEC always enabled (CTL value 2). Forces FEC redundancy regardless
+    /// of the bandwidth-adaptation heuristics.
+    Forced,
+}
+
+impl InbandFec {
+    #[allow(dead_code)] // Wired up in Stage 2 alongside the runtime setters.
+    fn as_c_int(self) -> i32 {
+        match self {
+            InbandFec::Disabled => 0,
+            InbandFec::Enabled => 1,
+            InbandFec::Forced => 2,
+        }
+    }
+
+    /// Inverse of [`InbandFec::as_c_int`]. Unknown values are unreachable
+    /// from the encoder's own stored state, so the catch-all arm trips a
+    /// `debug_assert!` and falls back to [`InbandFec::Disabled`].
+    #[allow(dead_code)] // Wired up in Stage 2 alongside the runtime getters.
+    fn from_c_int(n: i32) -> InbandFec {
+        match n {
+            0 => InbandFec::Disabled,
+            1 => InbandFec::Enabled,
+            2 => InbandFec::Forced,
+            other => {
+                debug_assert!(false, "unexpected inband-fec value from libopus: {other}");
+                InbandFec::Disabled
+            }
         }
     }
 }
@@ -660,6 +775,20 @@ fn check_ok(code: i32) -> Result<(), EncoderBuildError> {
         Ok(())
     } else {
         Err(EncoderBuildError::from_code(code))
+    }
+}
+
+/// Runtime-setter counterpart to [`check_ok`]: maps a libopus `OPUS_*`
+/// return code into the [`EncodeError`] surface used by `Encoder`'s
+/// `&mut self` setters and `encode` methods. Generic-over-error-type
+/// would require `From<i32>` impls on both error types for no readability
+/// gain, so the two helpers are kept as parallel three-line copies.
+#[allow(dead_code)] // Wired up in Stage 2 alongside the runtime setters.
+fn check_ok_runtime(code: i32) -> Result<(), EncodeError> {
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(EncodeError::from_code(code))
     }
 }
 
@@ -1194,5 +1323,88 @@ mod tests {
             Ok(_) => panic!("packet_loss_perc > 100 must err"),
             Err(e) => assert_eq!(e, EncoderBuildError::BadArg),
         }
+    }
+
+    // ---- from_c_int round-trips for every typed enum that has one ----
+
+    #[test]
+    fn bitrate_from_c_int_round_trip() {
+        for value in [Bitrate::Auto, Bitrate::Max, Bitrate::Bits(64_000)] {
+            assert_eq!(
+                Bitrate::from_c_int(value.as_c_int()),
+                value,
+                "Bitrate::from_c_int(as_c_int()) round-trip failed for {value:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn signal_from_c_int_round_trip() {
+        for value in [Signal::Auto, Signal::Voice, Signal::Music] {
+            assert_eq!(
+                Signal::from_c_int(value.as_c_int()),
+                value,
+                "Signal::from_c_int(as_c_int()) round-trip failed for {value:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn force_channels_from_c_int_round_trip() {
+        for value in [
+            ForceChannels::Auto,
+            ForceChannels::Mono,
+            ForceChannels::Stereo,
+        ] {
+            assert_eq!(
+                ForceChannels::from_c_int(value.as_c_int()),
+                value,
+                "ForceChannels::from_c_int(as_c_int()) round-trip failed for {value:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn bandwidth_from_c_int_round_trip() {
+        for value in [
+            Bandwidth::Narrowband,
+            Bandwidth::Mediumband,
+            Bandwidth::Wideband,
+            Bandwidth::Superwideband,
+            Bandwidth::Fullband,
+            Bandwidth::Auto,
+        ] {
+            assert_eq!(
+                Bandwidth::from_c_int(value.as_c_int()),
+                value,
+                "Bandwidth::from_c_int(as_c_int()) round-trip failed for {value:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn inband_fec_from_c_int_round_trip() {
+        for value in [InbandFec::Disabled, InbandFec::Enabled, InbandFec::Forced] {
+            assert_eq!(
+                InbandFec::from_c_int(value.as_c_int()),
+                value,
+                "InbandFec::from_c_int(as_c_int()) round-trip failed for {value:?}",
+            );
+        }
+    }
+
+    // ---- Release-build fallback for unknown bitrate values ----
+    //
+    // The catch-all arm in `Bitrate::from_c_int` trips a `debug_assert!`
+    // and falls back to `Auto`. The assertion fires in debug builds; in
+    // release builds the silent-default behaviour must hold so that a
+    // hypothetical future libopus state change cannot panic the facade.
+    // Skipping the debug-build symmetric check keeps the test suite clean
+    // (the round-trip tests above are the load-bearing coverage).
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn bitrate_from_c_int_unknown_falls_back_to_auto_in_release() {
+        assert_eq!(Bitrate::from_c_int(0), Bitrate::Auto);
+        assert_eq!(Bitrate::from_c_int(-42), Bitrate::Auto);
     }
 }

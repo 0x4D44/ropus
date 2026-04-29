@@ -3493,6 +3493,19 @@ impl OpusEncoder {
         )
     }
 
+    /// Return the user-set bitrate request as stored, before any
+    /// frame-size-dependent clamping. Counterpart to `set_bitrate` for
+    /// faithful round-trip queries; use `get_bitrate` when you want the
+    /// computed effective value the encoder will use for the next frame.
+    ///
+    /// Crate-internal: this is plumbing for `ropus::api::Encoder::bitrate()`.
+    /// External callers should use `get_bitrate` (the libopus `OPUS_GET_BITRATE`
+    /// equivalent).
+    #[allow(dead_code)] // Wired up in Stage 2 by `ropus::api::Encoder::bitrate`.
+    pub(crate) fn get_user_bitrate_bps(&self) -> i32 {
+        self.user_bitrate_bps
+    }
+
     pub fn set_complexity(&mut self, complexity: i32) -> i32 {
         if complexity < 0 || complexity > 10 {
             return OPUS_BAD_ARG;
