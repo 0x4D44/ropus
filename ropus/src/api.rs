@@ -1794,7 +1794,10 @@ mod tests {
         assert_eq!(encoder.set_packet_loss_perc(101), Err(EncodeError::BadArg));
 
         // Bottom-edge: 0 is below the encoder's accepted range and surfaces as BadArg.
-        assert_eq!(encoder.set_bitrate(Bitrate::Bits(0)), Err(EncodeError::BadArg));
+        assert_eq!(
+            encoder.set_bitrate(Bitrate::Bits(0)),
+            Err(EncodeError::BadArg)
+        );
 
         // Top-edge: above-range bitrate silently clamps. Round-trip via bitrate()
         // reads back the clamped value, not the requested one.

@@ -118,7 +118,7 @@ fn decode_with_c_float(packets: &[Vec<u8>], drop_pattern: impl Fn(usize) -> bool
                 .unwrap_or_else(|e| panic!("C decode frame {i} failed: {e}"))
         };
         assert_eq!(
-            samples as i32, FRAME_SIZE,
+            samples, FRAME_SIZE,
             "C decoder frame {i} returned {samples} samples (expected {FRAME_SIZE})"
         );
         out.extend_from_slice(&scratch[..frame_samples]);
@@ -144,7 +144,7 @@ fn decode_with_ropus(packets: &[Vec<u8>], drop_pattern: impl Fn(usize) -> bool) 
                 .unwrap_or_else(|e| panic!("ropus decode frame {i} failed: {e}"))
         };
         assert_eq!(
-            samples as i32, FRAME_SIZE,
+            samples, FRAME_SIZE,
             "ropus decoder frame {i} returned {samples} samples (expected {FRAME_SIZE})"
         );
         out.extend_from_slice(&scratch[..frame_samples]);

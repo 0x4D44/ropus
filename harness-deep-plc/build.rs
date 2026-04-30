@@ -273,7 +273,12 @@ fn main() {
         .include(ref_dir.join("dnn"))
         // Defines
         .define("HAVE_CONFIG_H", "1")
-        .define("OPUS_BUILD", None);
+        .define("OPUS_BUILD", None)
+        // Suppress xiph's `#pragma message "...opus will be very slow."`
+        // in opus_decoder.c when compiling without -O. See harness/build.rs
+        // for the rationale (cc-rs would otherwise forward the note as a
+        // cargo:warning=).
+        .define("OPUS_WILL_BE_SLOW", None);
 
     // Disable compiler-driven multiply-add fusion so the C reference and the
     // Rust side agree bit-for-bit on scalar float paths. MSVC `/fp:precise`

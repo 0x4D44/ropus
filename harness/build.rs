@@ -270,7 +270,13 @@ fn main() {
         .include(ref_dir.join("dnn"))
         // Defines
         .define("HAVE_CONFIG_H", "1")
-        .define("OPUS_BUILD", None);
+        .define("OPUS_BUILD", None)
+        // Suppress xiph's `#pragma message "...opus will be very slow."`
+        // in opus_decoder.c when compiling without -O. The C code exposes
+        // `OPUS_WILL_BE_SLOW` precisely so callers building debug copies
+        // can opt out of that note; cc-rs forwards it as a cargo:warning=
+        // otherwise, polluting the workspace warning report.
+        .define("OPUS_WILL_BE_SLOW", None);
 
     // Disable compiler-driven multiply-add fusion so scalar float paths
     // (analysis.c, mlp.c, any DNN code added later) produce identical
