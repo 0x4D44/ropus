@@ -33,7 +33,11 @@ struct Cli {
     #[arg(short = 'o', long)]
     output: Option<PathBuf>,
 
-    /// Target bitrate in bits per second (e.g. 64000). Default: codec auto.
+    /// Target bitrate in bits per second (e.g. 64000). Default: 160 kbps
+    /// stereo / 96 kbps mono (≈ MP3 320 kbps quality, with the 50 % efficiency
+    /// edge Opus has over MP3). The mono tier kicks in only when `--downmix
+    /// mono` is set; mono inputs without `--downmix` get the stereo-tier
+    /// default since channel count isn't known until decode.
     #[arg(long)]
     bitrate: Option<u32>,
 
@@ -315,10 +319,22 @@ fn main() -> ExitCode {
 
     let downmix_to_mono = matches!(cli.downmix, Some(DownmixArg::Mono));
 
+    // Default bitrate: 160 kbps stereo / 96 kbps mono. Targets MP3 320 kbps
+    // quality (Opus reaches transparency around 160 kbps stereo per
+    // Hydrogenaudio listening tests). Mono tier requires `--downmix mono`
+    // because the CLI doesn't yet know the input channel count — that's
+    // discovered inside `commands::encode` after symphonia decode. A truly
+    // mono input run without `--downmix` therefore gets a slightly generous
+    // 160 kbps; libopus' VBR will still spend less than the target on
+    // simple material, so the cost is small.
+    let bitrate = cli
+        .bitrate
+        .or(Some(if downmix_to_mono { 96_000 } else { 160_000 }));
+
     let opts = EncodeOptions {
         input: cli.input,
         output: cli.output,
-        bitrate: cli.bitrate,
+        bitrate,
         complexity: cli.complexity,
         application: cli.application.into(),
         vbr,

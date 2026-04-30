@@ -178,6 +178,140 @@ fn stdin_to_stdout_round_trip_with_equals() {
     );
 }
 
+/// Encode a fixture WAV through `ropusenc` with the supplied extra args and
+/// return the bitstream. Used by the default-bitrate pin tests below to
+/// compare two encodes for byte-identical output.
+fn encode_with_args(wav: &[u8], extra_args: &[&str]) -> Vec<u8> {
+    let mut cmd = Command::new(ropusenc_bin());
+    cmd.arg("--no-color").arg("-").arg("-o").arg("-");
+    for a in extra_args {
+        cmd.arg(a);
+    }
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ropusenc");
+    {
+        let mut stdin = child.stdin.take().expect("stdin piped");
+        stdin.write_all(wav).expect("write WAV into child stdin");
+    }
+    let output = child.wait_with_output().expect("wait_with_output");
+    assert!(
+        output.status.success(),
+        "ropusenc {extra_args:?} exited {:?}; stderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    output.stdout
+}
+
+#[test]
+fn default_bitrate_stereo_tier_is_160k() {
+    // Pin: with no `--bitrate` and no `--downmix`, ropusenc selects the
+    // stereo-tier default (160 kbps). The encoder is deterministic for a
+    // given config and input, so an explicit `--bitrate 160000` must produce
+    // a byte-identical Ogg stream. If a future refactor changes the default
+    // (or removes it, falling back to OPUS_AUTO), the streams will diverge
+    // and this test will fail.
+    let wav = synth_sine_wav_bytes(1, 1000.0);
+    let default_out = encode_with_args(&wav, &[]);
+    let explicit_out = encode_with_args(&wav, &["--bitrate", "160000"]);
+    assert_eq!(
+        default_out.len(),
+        explicit_out.len(),
+        "default and --bitrate 160000 must produce same-size streams"
+    );
+    assert_eq!(
+        default_out, explicit_out,
+        "default bitrate must match explicit --bitrate 160000 byte-for-byte"
+    );
+}
+
+#[test]
+fn default_bitrate_mono_tier_is_96k_with_downmix() {
+    // Pin: with `--downmix mono` and no `--bitrate`, ropusenc selects the
+    // mono-tier default (96 kbps). Mirror of the stereo pin above; together
+    // they cover both branches of the default-resolution logic in main.rs.
+    let wav = synth_sine_wav_bytes(1, 1000.0);
+    let default_out = encode_with_args(&wav, &["--downmix", "mono"]);
+    let explicit_out = encode_with_args(&wav, &["--downmix", "mono", "--bitrate", "96000"]);
+    assert_eq!(
+        default_out.len(),
+        explicit_out.len(),
+        "default and --bitrate 96000 must produce same-size streams"
+    );
+    assert_eq!(
+        default_out, explicit_out,
+        "default bitrate must match explicit --bitrate 96000 byte-for-byte"
+    );
+}
+
+#[test]
+fn stderr_reports_average_bitrate() {
+    // After a successful encode, ropusenc prints an "bitrate" line to
+    // stderr (the bitrate-report path lives in `ropus-tools-core`'s
+    // commands::encode and routes through the same `report!` sink as the
+    // other progress lines). Pin the presence and parseability of the
+    // figure so a refactor that drops or restructures the line trips this
+    // test instead of regressing the user-visible output silently.
+    let wav = synth_sine_wav_bytes(2, 1000.0);
+
+    let mut child = Command::new(ropusenc_bin())
+        .arg("--no-color")
+        .arg("-")
+        .arg("-o")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ropusenc");
+
+    {
+        let mut stdin = child.stdin.take().expect("stdin piped");
+        stdin.write_all(&wav).expect("write WAV into child stdin");
+    }
+
+    let output = child.wait_with_output().expect("wait_with_output");
+    assert!(
+        output.status.success(),
+        "ropusenc exited {:?}; stderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|l| l.contains("bitrate") && l.contains("kbps"))
+        .unwrap_or_else(|| {
+            panic!("no bitrate report line in stderr; got:\n{stderr}");
+        });
+
+    // Extract the numeric token sitting just before "kbps". Avoid a regex
+    // dep — split on whitespace and look for the "kbps" sentinel.
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    let kbps_idx = tokens
+        .iter()
+        .position(|t| *t == "kbps")
+        .expect("'kbps' token in bitrate line");
+    let value: f64 = tokens[kbps_idx - 1]
+        .parse()
+        .unwrap_or_else(|e| panic!("can't parse bitrate value {:?}: {e}", tokens[kbps_idx - 1]));
+
+    // VBR on a 1 kHz sine spends far fewer bits than the 160 kbps default
+    // target — a constant tone is trivial. Just sanity-check it's a
+    // positive figure under the target. If the report is off by orders of
+    // magnitude (e.g. accounting bug summing bytes vs. bits), this catches
+    // it.
+    assert!(
+        value > 0.0 && value < 200.0,
+        "bitrate {value} kbps out of plausible range for a 1 kHz mono sine"
+    );
+}
+
 #[test]
 fn stdout_has_no_banner_pollution() {
     // With `-o -` the banner, heading, and all progress/report lines must
