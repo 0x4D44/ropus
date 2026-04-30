@@ -178,6 +178,76 @@ fn stdin_to_stdout_round_trip_with_equals() {
     );
 }
 
+/// Encode a fixture WAV through `ropusenc` with the supplied extra args and
+/// return the bitstream. Used by the default-bitrate pin tests below to
+/// compare two encodes for byte-identical output.
+fn encode_with_args(wav: &[u8], extra_args: &[&str]) -> Vec<u8> {
+    let mut cmd = Command::new(ropusenc_bin());
+    cmd.arg("--no-color").arg("-").arg("-o").arg("-");
+    for a in extra_args {
+        cmd.arg(a);
+    }
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ropusenc");
+    {
+        let mut stdin = child.stdin.take().expect("stdin piped");
+        stdin.write_all(wav).expect("write WAV into child stdin");
+    }
+    let output = child.wait_with_output().expect("wait_with_output");
+    assert!(
+        output.status.success(),
+        "ropusenc {extra_args:?} exited {:?}; stderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    output.stdout
+}
+
+#[test]
+fn default_bitrate_stereo_tier_is_160k() {
+    // Pin: with no `--bitrate` and no `--downmix`, ropusenc selects the
+    // stereo-tier default (160 kbps). The encoder is deterministic for a
+    // given config and input, so an explicit `--bitrate 160000` must produce
+    // a byte-identical Ogg stream. If a future refactor changes the default
+    // (or removes it, falling back to OPUS_AUTO), the streams will diverge
+    // and this test will fail.
+    let wav = synth_sine_wav_bytes(1, 1000.0);
+    let default_out = encode_with_args(&wav, &[]);
+    let explicit_out = encode_with_args(&wav, &["--bitrate", "160000"]);
+    assert_eq!(
+        default_out.len(),
+        explicit_out.len(),
+        "default and --bitrate 160000 must produce same-size streams"
+    );
+    assert_eq!(
+        default_out, explicit_out,
+        "default bitrate must match explicit --bitrate 160000 byte-for-byte"
+    );
+}
+
+#[test]
+fn default_bitrate_mono_tier_is_96k_with_downmix() {
+    // Pin: with `--downmix mono` and no `--bitrate`, ropusenc selects the
+    // mono-tier default (96 kbps). Mirror of the stereo pin above; together
+    // they cover both branches of the default-resolution logic in main.rs.
+    let wav = synth_sine_wav_bytes(1, 1000.0);
+    let default_out = encode_with_args(&wav, &["--downmix", "mono"]);
+    let explicit_out = encode_with_args(&wav, &["--downmix", "mono", "--bitrate", "96000"]);
+    assert_eq!(
+        default_out.len(),
+        explicit_out.len(),
+        "default and --bitrate 96000 must produce same-size streams"
+    );
+    assert_eq!(
+        default_out, explicit_out,
+        "default bitrate must match explicit --bitrate 96000 byte-for-byte"
+    );
+}
+
 #[test]
 fn stdout_has_no_banner_pollution() {
     // With `-o -` the banner, heading, and all progress/report lines must
