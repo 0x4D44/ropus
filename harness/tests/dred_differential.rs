@@ -34,6 +34,7 @@ struct EcCtx {
     error: c_int,
 }
 
+#[link(name = "opus_ref", kind = "static")]
 unsafe extern "C" {
     fn ec_enc_init(this: *mut EcCtx, buf: *mut c_uchar, size: OpusUint32);
     fn ec_enc_done(this: *mut EcCtx);

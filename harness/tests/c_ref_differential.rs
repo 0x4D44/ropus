@@ -22,6 +22,7 @@ use std::os::raw::c_int;
 
 // Minimal FFI declarations for the C reference (linked via harness/build.rs as
 // the `opus_ref` static library).
+#[link(name = "opus_ref", kind = "static")]
 unsafe extern "C" {
     fn opus_decoder_create(fs: i32, channels: c_int, error: *mut c_int) -> *mut std::ffi::c_void;
     fn opus_decode(

@@ -5,6 +5,7 @@ use std::io::Read;
 
 use ropus::opus::decoder::OpusDecoder as RustDec;
 
+#[link(name = "opus_ref", kind = "static")]
 unsafe extern "C" {
     fn opus_decoder_create(fs: i32, ch: i32, err: *mut i32) -> *mut u8;
     fn opus_decoder_destroy(st: *mut u8);
