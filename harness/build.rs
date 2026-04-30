@@ -279,6 +279,15 @@ fn main() {
     // gcc/clang down to the same behaviour. Silent no-op on MSVC.
     build.flag_if_supported("-ffp-contract=off");
 
+    // The reference x86 SIMD sources (celt/x86/*_sse*.c, silk/x86/*_sse4_1.c,
+    // silk/fixed/x86/*_sse4_1.c) use SSE4.1/SSSE3 intrinsics. Upstream's
+    // autotools build adds -msse4.1 per-file via DEFAULT_X86_SSE4_1_CFLAGS;
+    // applying it to the whole TU set is safe on x86_64-v2+ hosts and keeps
+    // the build a single cc::Build invocation. Without this, GCC 13 rejects
+    // _mm_mul_epi32 / _mm_shuffle_epi8 / _mm_alignr_epi8 / _mm_mullo_epi32
+    // with "target specific option mismatch".
+    build.flag_if_supported("-msse4.1");
+
     // --- Fuzzing context detection ---
     //
     // When built under cargo-fuzz, the Rust code is compiled with
