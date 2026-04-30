@@ -249,6 +249,70 @@ fn default_bitrate_mono_tier_is_96k_with_downmix() {
 }
 
 #[test]
+fn stderr_reports_average_bitrate() {
+    // After a successful encode, ropusenc prints an "bitrate" line to
+    // stderr (the bitrate-report path lives in `ropus-tools-core`'s
+    // commands::encode and routes through the same `report!` sink as the
+    // other progress lines). Pin the presence and parseability of the
+    // figure so a refactor that drops or restructures the line trips this
+    // test instead of regressing the user-visible output silently.
+    let wav = synth_sine_wav_bytes(2, 1000.0);
+
+    let mut child = Command::new(ropusenc_bin())
+        .arg("--no-color")
+        .arg("-")
+        .arg("-o")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ropusenc");
+
+    {
+        let mut stdin = child.stdin.take().expect("stdin piped");
+        stdin.write_all(&wav).expect("write WAV into child stdin");
+    }
+
+    let output = child.wait_with_output().expect("wait_with_output");
+    assert!(
+        output.status.success(),
+        "ropusenc exited {:?}; stderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|l| l.contains("bitrate") && l.contains("kbps"))
+        .unwrap_or_else(|| {
+            panic!("no bitrate report line in stderr; got:\n{stderr}");
+        });
+
+    // Extract the numeric token sitting just before "kbps". Avoid a regex
+    // dep — split on whitespace and look for the "kbps" sentinel.
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    let kbps_idx = tokens
+        .iter()
+        .position(|t| *t == "kbps")
+        .expect("'kbps' token in bitrate line");
+    let value: f64 = tokens[kbps_idx - 1]
+        .parse()
+        .unwrap_or_else(|e| panic!("can't parse bitrate value {:?}: {e}", tokens[kbps_idx - 1]));
+
+    // VBR on a 1 kHz sine spends far fewer bits than the 160 kbps default
+    // target — a constant tone is trivial. Just sanity-check it's a
+    // positive figure under the target. If the report is off by orders of
+    // magnitude (e.g. accounting bug summing bytes vs. bits), this catches
+    // it.
+    assert!(
+        value > 0.0 && value < 200.0,
+        "bitrate {value} kbps out of plausible range for a 1 kHz mono sine"
+    );
+}
+
+#[test]
 fn stdout_has_no_banner_pollution() {
     // With `-o -` the banner, heading, and all progress/report lines must
     // land on stderr. stdout is the bitstream and must start exactly with

@@ -264,6 +264,7 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
     let mut packet_buf = vec![0u8; MAX_PACKET_BYTES];
     let mut samples_written: u64 = 0;
     let mut packet_count: u64 = 0;
+    let mut payload_bytes: u64 = 0;
     let total_chunks = pcm_48k.len() / frame_interleaved;
     let remainder_len = pcm_48k.len() - total_chunks * frame_interleaved;
     let has_tail = remainder_len > 0;
@@ -276,6 +277,7 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         // Advance the granule position by the per-channel frame length;
         // RFC 7845 sec. 4 mandates granule position is in 48 kHz samples.
         samples_written += frame_samples_ch as u64;
+        payload_bytes += n as u64;
         let is_last = idx + 1 == total_chunks && !has_tail;
         let end_info = if is_last {
             PacketWriteEndInfo::EndStream
@@ -296,6 +298,7 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
             .encode_float(&frame_buf, &mut packet_buf)
             .map_err(|e| anyhow!("encode failed (tail): {e}"))?;
         samples_written += frame_samples_ch as u64;
+        payload_bytes += n as u64;
         writer
             .write_packet(
                 packet_buf[..n].to_vec(),
@@ -320,6 +323,17 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         format_num(packet_count).bright_white(),
         format_num(samples_written).bright_white(),
     );
+    // Average payload bitrate (Opus packets only — excludes Ogg framing
+    // overhead, which is what `--bitrate` controls and what users compare
+    // against the target). RFC 7845 fixes the granule clock at 48 kHz, so
+    // duration_seconds = samples_written / OPUS_SR.
+    if samples_written > 0 {
+        let avg_bps = payload_bytes * 8 * (OPUS_SR as u64) / samples_written;
+        report!(
+            "bitrate  {} kbps avg (payload)",
+            format!("{:.1}", avg_bps as f64 / 1000.0).bright_white(),
+        );
+    }
     let dest = if output_is_stdout {
         "<stdout>".to_string()
     } else {
