@@ -13,6 +13,9 @@ use std::sync::Once;
 #[path = "c_reference.rs"]
 mod c_reference;
 
+#[path = "oracle.rs"]
+mod oracle;
+
 // --------------------------------------------------------------------------- //
 // Panic-capture: on Windows, Rust assertions in libfuzzer-sys trigger __fastfail
 // which bypasses libFuzzer's crash-artifact writer.
@@ -227,9 +230,7 @@ fuzz_target!(|data: &[u8]| {
                 let n = rust_samples * channels as usize;
                 // Float decode is a deterministic i16/32768 mapping over the
                 // Opus-decoded samples; CELT-only is bit-exact and SILK/Hybrid
-                // diverges identically in float and i16 paths. Compare via bit
-                // representation only when both sides agree (CELT-only = TOC
-                // bit 7 set on the encoded packet).
+                // is bounded by the SNR oracle (HLD V2 gap 6).
                 let celt_only = !packet.is_empty() && (packet[0] & 0x80) != 0;
                 if celt_only {
                     for (i, (r, c)) in rust_decoded[..n].iter().zip(c_decoded.iter()).enumerate() {
@@ -240,6 +241,25 @@ fuzz_target!(|data: &[u8]| {
                              sr={sample_rate}, ch={channels}, br={bitrate}"
                         );
                     }
+                } else {
+                    let to_i16 = |x: f32| -> i16 {
+                        (x * 32768.0).round().clamp(-32768.0, 32767.0) as i16
+                    };
+                    let rust_i16: Vec<i16> = rust_decoded[..n].iter().map(|&x| to_i16(x)).collect();
+                    let c_i16: Vec<i16> = c_decoded.iter().map(|&x| to_i16(x)).collect();
+                    if oracle::snr_oracle_applicable(&c_i16) {
+                        let snr = oracle::snr_db(&c_i16, &rust_i16);
+                        assert!(
+                            snr >= oracle::SILK_DECODE_MIN_SNR_DB,
+                            "Float roundtrip SILK/Hybrid SNR {snr:.2} dB < {:.0} dB \
+                             (sr={sample_rate}, ch={channels}, br={bitrate}, cx={complexity}, vbr={vbr})",
+                            oracle::SILK_DECODE_MIN_SNR_DB
+                        );
+                    }
+                    // else: reference is silence or near-silence; both
+                    // implementations' recovery PCM is unconstrained.
+                    // Sample-count match (already asserted earlier) is
+                    // the only oracle.
                 }
                 assert_eq!(
                     rust_samples, frame_size as usize,
@@ -313,7 +333,9 @@ fuzz_target!(|data: &[u8]| {
             }
         }
 
-        // Decoded output must match
+        // Decoded output must match (CELT-only) or fall within the SNR
+        // envelope (SILK/Hybrid). HLD V2 gap 6.
+        let celt_only = !packet.is_empty() && (packet[0] & 0x80) != 0;
         match rust_dec_ret {
             Ok(rust_samples) => {
                 let rust_samples = rust_samples as usize;
@@ -322,11 +344,27 @@ fuzz_target!(|data: &[u8]| {
                     rust_samples, c_samples,
                     "Decoded sample count mismatch: Rust={rust_samples}, C={c_samples}"
                 );
-                assert_eq!(
-                    &rust_decoded[..rust_samples * channels as usize],
-                    &c_decoded[..],
-                    "Decoded PCM mismatch at sr={sample_rate}, ch={channels}"
-                );
+                let rust_slice = &rust_decoded[..rust_samples * channels as usize];
+                if celt_only {
+                    assert_eq!(
+                        rust_slice,
+                        &c_decoded[..],
+                        "Decoded PCM mismatch at sr={sample_rate}, ch={channels}"
+                    );
+                } else if oracle::snr_oracle_applicable(&c_decoded[..]) {
+                    let snr = oracle::snr_db(&c_decoded[..], rust_slice);
+                    assert!(
+                        snr >= oracle::SILK_DECODE_MIN_SNR_DB,
+                        "Roundtrip SILK/Hybrid SNR {snr:.2} dB < {:.0} dB \
+                         (sr={sample_rate}, ch={channels}, br={bitrate}, cx={complexity}, vbr={vbr}, packet_len={})",
+                        oracle::SILK_DECODE_MIN_SNR_DB,
+                        packet.len()
+                    );
+                }
+                // else: reference is silence or near-silence; both
+                // implementations' recovery PCM is unconstrained.
+                // Sample-count match (already asserted earlier) is the
+                // only oracle.
 
                 // --- Semantic invariant: decoded sample count == frame_size ---
                 assert_eq!(

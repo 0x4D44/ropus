@@ -11,6 +11,9 @@ use std::sync::Once;
 #[path = "c_reference.rs"]
 mod c_reference;
 
+#[path = "oracle.rs"]
+mod oracle;
+
 // --------------------------------------------------------------------------- //
 // Panic-capture: on Windows, Rust assertions in libfuzzer-sys trigger __fastfail
 // which bypasses libFuzzer's crash-artifact writer. Install a panic hook that
@@ -419,9 +422,9 @@ fn run_decode(input: &MSInput, sample_rate: i32, channels: i32, mapping_family: 
                 "MS decode sample count mismatch: Rust={rust_samples}, C={}, ch={channels}",
                 c_pcm.len() / channels as usize
             );
-            // SILK/Hybrid sub-packets have known numerical drift; only assert
-            // byte-exact PCM for CELT-only packets. Sample count parity is
-            // checked unconditionally above.
+            // SILK/Hybrid sub-packets have known numerical drift; assert
+            // byte-exact PCM for CELT-only and bound SILK/Hybrid by the SNR
+            // oracle (HLD V2 gap 6). Sample count parity is checked above.
             if celt_only {
                 assert_eq!(
                     &rust_pcm[..total],
@@ -430,7 +433,20 @@ fn run_decode(input: &MSInput, sample_rate: i32, channels: i32, mapping_family: 
                      packet_len={}",
                     input.payload.len()
                 );
+            } else if oracle::snr_oracle_applicable(&c_pcm[..]) {
+                let snr = oracle::snr_db(&c_pcm[..], &rust_pcm[..total]);
+                assert!(
+                    snr >= oracle::SILK_DECODE_MIN_SNR_DB,
+                    "MS decode SILK/Hybrid SNR {snr:.2} dB < {:.0} dB \
+                     (sr={sample_rate}, ch={channels}, family={mapping_family}, packet_len={})",
+                    oracle::SILK_DECODE_MIN_SNR_DB,
+                    input.payload.len()
+                );
             }
+            // else: reference is silence or near-silence; both
+            // implementations' recovery PCM is unconstrained.
+            // Sample-count match (already asserted earlier) is the
+            // only oracle.
         }
         (Err(_), Err(_)) => {}
         (Ok(rust_samples), Err(c_err)) => {
@@ -604,7 +620,22 @@ fn run_roundtrip(
                      br={bitrate}, cx={complexity}, vbr={vbr}, packet_len={}",
                     rust_packet.len()
                 );
+            } else if oracle::snr_oracle_applicable(&c_pcm[..]) {
+                // SILK/Hybrid bounded by the SNR oracle (HLD V2 gap 6).
+                let snr = oracle::snr_db(&c_pcm[..], &rust_dec_pcm[..total]);
+                assert!(
+                    snr >= oracle::SILK_DECODE_MIN_SNR_DB,
+                    "MS roundtrip SILK/Hybrid SNR {snr:.2} dB < {:.0} dB \
+                     (sr={sample_rate}, ch={channels}, family={mapping_family}, \
+                      br={bitrate}, cx={complexity}, vbr={vbr}, packet_len={})",
+                    oracle::SILK_DECODE_MIN_SNR_DB,
+                    rust_packet.len()
+                );
             }
+            // else: reference is silence or near-silence; both
+            // implementations' recovery PCM is unconstrained.
+            // Sample-count match (already asserted earlier) is the
+            // only oracle.
         }
         (Err(_), Err(_)) => {}
         (Ok(rust_samples), Err(c_err)) => {

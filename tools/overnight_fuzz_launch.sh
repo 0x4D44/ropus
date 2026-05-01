@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Overnight fuzz launcher — kicks all 9 targets in parallel, each capped
+# Overnight fuzz launcher — kicks all 10 targets in parallel, each capped
 # at $DURATION seconds. Per-target stdout/stderr → $CAMPAIGN_DIR/<target>/run.log.
 # libFuzzer artifact_prefix and panic-capture dir scoped per-target so a
 # crash in one target doesn't pollute another's triage.
@@ -15,16 +15,30 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 TARGETS=(
     fuzz_decode
-    fuzz_encode
-    fuzz_roundtrip
-    fuzz_repacketizer
     fuzz_decode_safety
+    fuzz_encode
     fuzz_encode_safety
-    fuzz_roundtrip_safety
     fuzz_encode_multiframe
+    fuzz_roundtrip
+    fuzz_roundtrip_safety
+    fuzz_repacketizer_seq
+    fuzz_multistream
+    fuzz_dnn_blob
 )
 
 cd "$ROOT"
+
+# Seed-copy preamble (HLD V2 Stream D, gap 9): lift pathological seeds from
+# tests/fuzz/seeds/<target>/ into tests/fuzz/corpus/<target>/ at run start.
+# Uses cp -n so libFuzzer's evolved corpus from prior runs isn't overwritten.
+for t in "${TARGETS[@]}"; do
+    SEEDS_DIR="$ROOT/tests/fuzz/seeds/$t"
+    CORPUS_DIR="$ROOT/tests/fuzz/corpus/$t"
+    if [ -d "$SEEDS_DIR" ]; then
+        mkdir -p "$CORPUS_DIR"
+        cp -n "$SEEDS_DIR"/* "$CORPUS_DIR/" 2>/dev/null || true
+    fi
+done
 
 echo "Campaign:  $CAMPAIGN_DIR" | tee "$CAMPAIGN_DIR/launcher.log"
 echo "Duration:  ${DURATION}s ($((DURATION/3600))h $((DURATION%3600/60))m)" | tee -a "$CAMPAIGN_DIR/launcher.log"

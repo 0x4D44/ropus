@@ -9,6 +9,9 @@ use std::sync::Once;
 #[path = "c_reference.rs"]
 mod c_reference;
 
+#[path = "oracle.rs"]
+mod oracle;
+
 // --------------------------------------------------------------------------- //
 // Panic-capture: on Windows, Rust assertions in libfuzzer-sys trigger __fastfail
 // which bypasses libFuzzer's crash-artifact writer. Install a panic hook that
@@ -119,14 +122,14 @@ fuzz_target!(|data: &[u8]| {
                     packet.len()
                 );
 
+                let rust_slice = &rust_pcm[..rust_samples * channels as usize];
+                let c_slice = &c_pcm[..];
+                assert_eq!(
+                    rust_slice.len(),
+                    c_slice.len(),
+                    "Float PCM length mismatch sr={sample_rate}, ch={channels}"
+                );
                 if celt_only {
-                    let rust_slice = &rust_pcm[..rust_samples * channels as usize];
-                    let c_slice = &c_pcm[..];
-                    assert_eq!(
-                        rust_slice.len(),
-                        c_slice.len(),
-                        "Float PCM length mismatch sr={sample_rate}, ch={channels}"
-                    );
                     // Float PCM is i16/32768; must be bit-identical for CELT-only.
                     for (i, (r, c)) in rust_slice.iter().zip(c_slice.iter()).enumerate() {
                         assert_eq!(
@@ -137,6 +140,28 @@ fuzz_target!(|data: &[u8]| {
                             packet.len()
                         );
                     }
+                } else {
+                    // SILK/Hybrid bounded by the SNR oracle (HLD V2 gap 6).
+                    // Convert f32 (-1.0..1.0) to i16 for the i16 oracle.
+                    let to_i16 = |x: f32| -> i16 {
+                        (x * 32768.0).round().clamp(-32768.0, 32767.0) as i16
+                    };
+                    let rust_i16: Vec<i16> = rust_slice.iter().map(|&x| to_i16(x)).collect();
+                    let c_i16: Vec<i16> = c_slice.iter().map(|&x| to_i16(x)).collect();
+                    if oracle::snr_oracle_applicable(&c_i16) {
+                        let snr = oracle::snr_db(&c_i16, &rust_i16);
+                        assert!(
+                            snr >= oracle::SILK_DECODE_MIN_SNR_DB,
+                            "Float SILK/Hybrid decode SNR {snr:.2} dB < {:.0} dB \
+                             (sr={sample_rate}, ch={channels}, pkt_len={})",
+                            oracle::SILK_DECODE_MIN_SNR_DB,
+                            packet.len()
+                        );
+                    }
+                    // else: reference is silence or near-silence; both
+                    // implementations' recovery PCM is unconstrained.
+                    // Sample-count match (already asserted earlier) is
+                    // the only oracle.
                 }
             }
             (Err(_), Err(_)) => {}
@@ -198,15 +223,29 @@ fuzz_target!(|data: &[u8]| {
                     packet.len()
                 );
 
-                // PCM output must match sample-for-sample (CELT-only)
+                // PCM output must match sample-for-sample (CELT-only); SILK/Hybrid
+                // is bounded by the SNR oracle (HLD V2 gap 6).
+                let rust_slice = &rust_pcm[..rust_samples * channels as usize];
                 if celt_only {
-                    let rust_slice = &rust_pcm[..rust_samples * channels as usize];
                     assert_eq!(
                         rust_slice, &c_pcm[..],
                         "PCM mismatch at sr={sample_rate}, ch={channels}, pkt_len={}, samples={rust_samples}",
                         packet.len()
                     );
+                } else if oracle::snr_oracle_applicable(&c_pcm[..]) {
+                    let snr = oracle::snr_db(&c_pcm[..], rust_slice);
+                    assert!(
+                        snr >= oracle::SILK_DECODE_MIN_SNR_DB,
+                        "SILK/Hybrid decode SNR {snr:.2} dB < {:.0} dB \
+                         (sr={sample_rate}, ch={channels}, pkt_len={}, samples={rust_samples})",
+                        oracle::SILK_DECODE_MIN_SNR_DB,
+                        packet.len()
+                    );
                 }
+                // else: reference is silence or near-silence; both
+                // implementations' recovery PCM is unconstrained.
+                // Sample-count match (already asserted earlier) is the
+                // only oracle.
             }
             (Err(_), Err(_)) => {
                 // Both errored — that's fine, errors don't have to match exactly
