@@ -35,8 +35,8 @@ path = "fuzz_targets/fuzz_roundtrip.rs"
 doc = false
 
 [[bin]]
-name = "fuzz_repacketizer"
-path = "fuzz_targets/fuzz_repacketizer.rs"
+name = "fuzz_repacketizer_seq"
+path = "fuzz_targets/fuzz_repacketizer_seq.rs"
 doc = false
 
 [[bin]]
@@ -57,4 +57,14 @@ doc = false
 [[bin]]
 name = "fuzz_encode_multiframe"
 path = "fuzz_targets/fuzz_encode_multiframe.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_dnn_blob"
+path = "fuzz_targets/fuzz_dnn_blob.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_multistream"
+path = "fuzz_targets/fuzz_multistream.rs"
 doc = false
