@@ -27,8 +27,12 @@ pub const OPUS_APPLICATION_RESTRICTED_LOWDELAY: c_int = 2051;
 // CTL request codes
 pub const OPUS_SET_BITRATE_REQUEST: c_int = 4002;
 pub const OPUS_SET_VBR_REQUEST: c_int = 4006;
-pub const OPUS_SET_COMPLEXITY_REQUEST: c_int = 4010;
 pub const OPUS_SET_BANDWIDTH_REQUEST: c_int = 4008;
+pub const OPUS_SET_COMPLEXITY_REQUEST: c_int = 4010;
+pub const OPUS_SET_INBAND_FEC_REQUEST: c_int = 4012;
+pub const OPUS_SET_PACKET_LOSS_PERC_REQUEST: c_int = 4014;
+pub const OPUS_SET_DTX_REQUEST: c_int = 4016;
+pub const OPUS_SET_VBR_CONSTRAINT_REQUEST: c_int = 4020;
 pub const OPUS_SET_FORCE_CHANNELS_REQUEST: c_int = 4022;
 
 // Getter CTL request codes
@@ -80,6 +84,13 @@ unsafe extern "C" {
         data: *mut c_uchar,
         max_data_bytes: opus_int32,
     ) -> opus_int32;
+    pub fn opus_encode_float(
+        st: *mut OpusEncoder,
+        pcm: *const f32,
+        frame_size: c_int,
+        data: *mut c_uchar,
+        max_data_bytes: opus_int32,
+    ) -> opus_int32;
     pub fn opus_encoder_destroy(st: *mut OpusEncoder);
     pub fn opus_encoder_ctl(st: *mut OpusEncoder, request: c_int, ...) -> c_int;
 
@@ -94,6 +105,14 @@ unsafe extern "C" {
         data: *const c_uchar,
         len: opus_int32,
         pcm: *mut opus_int16,
+        frame_size: c_int,
+        decode_fec: c_int,
+    ) -> c_int;
+    pub fn opus_decode_float(
+        st: *mut OpusDecoder,
+        data: *const c_uchar,
+        len: opus_int32,
+        pcm: *mut f32,
         frame_size: c_int,
         decode_fec: c_int,
     ) -> c_int;
@@ -168,6 +187,33 @@ pub fn c_decode(data: &[u8], sample_rate: i32, channels: i32) -> Result<Vec<i16>
     }
 }
 
+/// Configuration for the C-side encoder, mirroring the Rust prologue setters
+/// in the differential fuzz targets so byte-exact compare stays valid.
+#[derive(Clone, Copy)]
+pub struct CEncodeConfig {
+    pub bitrate: i32,
+    pub complexity: i32,
+    pub application: i32,
+    pub vbr: i32,
+    pub vbr_constraint: i32,
+    pub inband_fec: i32,
+    pub dtx: i32,
+    pub loss_perc: i32,
+}
+
+#[inline]
+unsafe fn apply_c_encoder_config(enc: *mut OpusEncoder, cfg: &CEncodeConfig) {
+    unsafe {
+        opus_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, cfg.bitrate);
+        opus_encoder_ctl(enc, OPUS_SET_VBR_REQUEST, cfg.vbr);
+        opus_encoder_ctl(enc, OPUS_SET_VBR_CONSTRAINT_REQUEST, cfg.vbr_constraint);
+        opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC_REQUEST, cfg.inband_fec);
+        opus_encoder_ctl(enc, OPUS_SET_DTX_REQUEST, cfg.dtx);
+        opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC_REQUEST, cfg.loss_perc);
+        opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY_REQUEST, cfg.complexity);
+    }
+}
+
 /// Encode PCM samples using the C reference. Creates an encoder, configures it,
 /// encodes one frame, destroys the encoder. Returns compressed bytes or an error code.
 pub fn c_encode(
@@ -175,13 +221,11 @@ pub fn c_encode(
     frame_size: i32,
     sample_rate: i32,
     channels: i32,
-    bitrate: i32,
-    complexity: i32,
-    application: i32,
+    cfg: &CEncodeConfig,
 ) -> Result<Vec<u8>, i32> {
     unsafe {
         let mut error: c_int = 0;
-        let enc = opus_encoder_create(sample_rate, channels, application, &mut error);
+        let enc = opus_encoder_create(sample_rate, channels, cfg.application, &mut error);
         if enc.is_null() || error != OPUS_OK {
             if !enc.is_null() {
                 opus_encoder_destroy(enc);
@@ -189,10 +233,7 @@ pub fn c_encode(
             return Err(error);
         }
 
-        // Configure encoder
-        opus_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, bitrate);
-        opus_encoder_ctl(enc, OPUS_SET_VBR_REQUEST, 0 as c_int);
-        opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY_REQUEST, complexity);
+        apply_c_encoder_config(enc, cfg);
 
         let max_data_bytes: opus_int32 = 4000;
         let mut out = vec![0u8; max_data_bytes as usize];
@@ -212,6 +253,83 @@ pub fn c_encode(
         } else {
             out.truncate(ret as usize);
             Ok(out)
+        }
+    }
+}
+
+/// Float-PCM variant of `c_encode`. Mirrors `OpusEncoder::encode_float`.
+pub fn c_encode_float(
+    pcm: &[f32],
+    frame_size: i32,
+    sample_rate: i32,
+    channels: i32,
+    cfg: &CEncodeConfig,
+) -> Result<Vec<u8>, i32> {
+    unsafe {
+        let mut error: c_int = 0;
+        let enc = opus_encoder_create(sample_rate, channels, cfg.application, &mut error);
+        if enc.is_null() || error != OPUS_OK {
+            if !enc.is_null() {
+                opus_encoder_destroy(enc);
+            }
+            return Err(error);
+        }
+
+        apply_c_encoder_config(enc, cfg);
+
+        let max_data_bytes: opus_int32 = 4000;
+        let mut out = vec![0u8; max_data_bytes as usize];
+
+        let ret = opus_encode_float(
+            enc,
+            pcm.as_ptr(),
+            frame_size,
+            out.as_mut_ptr(),
+            max_data_bytes,
+        );
+
+        opus_encoder_destroy(enc);
+
+        if ret < 0 {
+            Err(ret as i32)
+        } else {
+            out.truncate(ret as usize);
+            Ok(out)
+        }
+    }
+}
+
+/// Float-PCM variant of `c_decode`. Mirrors `OpusDecoder::decode_float`.
+pub fn c_decode_float(data: &[u8], sample_rate: i32, channels: i32) -> Result<Vec<f32>, i32> {
+    unsafe {
+        let mut error: c_int = 0;
+        let dec = opus_decoder_create(sample_rate, channels, &mut error);
+        if dec.is_null() || error != OPUS_OK {
+            if !dec.is_null() {
+                opus_decoder_destroy(dec);
+            }
+            return Err(error);
+        }
+
+        let max_frame = 5760 * channels as usize;
+        let mut pcm = vec![0f32; max_frame];
+
+        let ret = opus_decode_float(
+            dec,
+            data.as_ptr(),
+            data.len() as opus_int32,
+            pcm.as_mut_ptr(),
+            5760,
+            0,
+        );
+
+        opus_decoder_destroy(dec);
+
+        if ret < 0 {
+            Err(ret as i32)
+        } else {
+            pcm.truncate(ret as usize * channels as usize);
+            Ok(pcm)
         }
     }
 }

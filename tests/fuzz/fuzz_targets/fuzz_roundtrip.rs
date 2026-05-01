@@ -69,6 +69,25 @@ fn byte_to_bitrate(b0: u8, b1: u8) -> i32 {
     6000 + (raw % 504001)
 }
 
+fn configure_encoder(
+    enc: &mut OpusEncoder,
+    bitrate: i32,
+    complexity: i32,
+    vbr: bool,
+    vbr_constraint: bool,
+    inband_fec: i32,
+    dtx: bool,
+    loss_perc: i32,
+) {
+    enc.set_bitrate(bitrate);
+    enc.set_vbr(if vbr { 1 } else { 0 });
+    enc.set_vbr_constraint(if vbr_constraint { 1 } else { 0 });
+    enc.set_inband_fec(inband_fec);
+    enc.set_dtx(if dtx { 1 } else { 0 });
+    enc.set_packet_loss_perc(loss_perc);
+    enc.set_complexity(complexity);
+}
+
 fuzz_target!(|data: &[u8]| {
     init_panic_capture();
     CURRENT_INPUT.with(|cell| {
@@ -77,125 +96,251 @@ fuzz_target!(|data: &[u8]| {
         buf.extend_from_slice(data);
     });
 
-    if data.len() < 6 + 320 {
+    if data.len() < 8 + 320 {
         return;
     }
 
     // --- Parse structured config ---
     let sample_rate = SAMPLE_RATES[(data[0] as usize) % SAMPLE_RATES.len()];
     let channels = if data[1] & 1 == 0 { 1 } else { 2 };
+    let use_float_pcm = (data[1] & 0b0010) != 0;
     let application = APPLICATIONS[(data[2] as usize) % APPLICATIONS.len()];
     let bitrate = byte_to_bitrate(data[3], data[4]);
     let complexity = (data[5] as i32) % 11;
-    let pcm_bytes = &data[6..];
+    let vbr = (data[6] & 0b0001) != 0;
+    let vbr_constraint = (data[6] & 0b0010) != 0;
+    let inband_fec_raw = ((data[6] & 0b1100) >> 2) as i32;
+    let inband_fec = if inband_fec_raw == 3 { 0 } else { inband_fec_raw };
+    let dtx = (data[7] & 0b0001) != 0;
+    let loss_perc = (((data[7] & 0b1111_1110) >> 1) as i32) % 101;
+    let pcm_bytes = &data[8..];
 
     let frame_size = sample_rate / 50; // 20ms
     let samples_needed = frame_size as usize * channels as usize;
-    let bytes_needed = samples_needed * 2;
+    let sample_size_bytes = if use_float_pcm { 4 } else { 2 };
+    let bytes_needed = samples_needed * sample_size_bytes;
 
     if pcm_bytes.len() < bytes_needed {
         return;
     }
 
-    let pcm: Vec<i16> = pcm_bytes[..bytes_needed]
-        .chunks_exact(2)
-        .map(|c| i16::from_le_bytes([c[0], c[1]]))
-        .collect();
+    let cfg = c_reference::CEncodeConfig {
+        bitrate,
+        complexity,
+        application,
+        vbr: if vbr { 1 } else { 0 },
+        vbr_constraint: if vbr_constraint { 1 } else { 0 },
+        inband_fec,
+        dtx: if dtx { 1 } else { 0 },
+        loss_perc,
+    };
 
-    // === Rust round-trip ===
+    // === Rust encoder + decoder construction (shared between i16 and f32) ===
     let mut rust_enc = match OpusEncoder::new(sample_rate, channels, application) {
         Ok(e) => e,
         Err(_) => return,
     };
-    rust_enc.set_bitrate(bitrate);
-    rust_enc.set_vbr(0);
-    rust_enc.set_complexity(complexity);
-
-    let mut rust_compressed = vec![0u8; 4000];
-    let rust_enc_len = match rust_enc.encode(&pcm, frame_size, &mut rust_compressed, 4000) {
-        Ok(l) => l as usize,
-        Err(_) => return,
-    };
+    configure_encoder(
+        &mut rust_enc,
+        bitrate,
+        complexity,
+        vbr,
+        vbr_constraint,
+        inband_fec,
+        dtx,
+        loss_perc,
+    );
 
     let mut rust_dec = match OpusDecoder::new(sample_rate, channels) {
         Ok(d) => d,
         Err(_) => return,
     };
-    let mut rust_decoded = vec![0i16; samples_needed];
-    let rust_dec_ret = rust_dec.decode(
-        Some(&rust_compressed[..rust_enc_len]),
-        &mut rust_decoded,
-        frame_size,
-        false,
-    );
 
-    // === C reference round-trip ===
-    let c_compressed = match c_reference::c_encode(
-        &pcm, frame_size, sample_rate, channels, bitrate, complexity, application,
-    ) {
-        Ok(c) => c,
-        Err(_) => return, // C encode failed — skip (Rust encode succeeded above)
-    };
+    let mut rust_compressed = vec![0u8; 4000];
 
-    let c_decoded = match c_reference::c_decode(&c_compressed, sample_rate, channels) {
-        Ok(d) => d,
-        Err(_) => return,
-    };
+    if use_float_pcm {
+        let pcm: Vec<f32> = pcm_bytes[..bytes_needed]
+            .chunks_exact(4)
+            .map(|c| {
+                let f = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+                // NaN/Inf produces differential mismatch — see wrk_journals/2026.05.01 - JRN - fuzz-coverage-expansion-impl.md
+                if f.is_finite() { f } else { 0.0 }
+            })
+            .collect();
 
-    // === Differential comparison ===
+        let rust_enc_len =
+            match rust_enc.encode_float(&pcm, frame_size, &mut rust_compressed, 4000) {
+                Ok(l) => l as usize,
+                Err(_) => return,
+            };
 
-    // Compressed output must match
-    assert_eq!(
-        &rust_compressed[..rust_enc_len], &c_compressed[..],
-        "Compressed output mismatch: Rust={rust_enc_len}B, C={}B, \
-         sr={sample_rate}, ch={channels}, app={application}, br={bitrate}, cx={complexity}",
-        c_compressed.len()
-    );
-
-    // --- Semantic invariant: encoded packet is parseable ---
-    let packet = &rust_compressed[..rust_enc_len];
-    if !packet.is_empty() {
-        let nb_frames = opus_packet_get_nb_frames(packet);
-        assert!(
-            nb_frames.is_ok() && nb_frames.unwrap() > 0,
-            "Encoded packet not parseable: len={rust_enc_len}"
+        let mut rust_decoded = vec![0f32; samples_needed];
+        let rust_dec_ret = rust_dec.decode_float(
+            Some(&rust_compressed[..rust_enc_len]),
+            &mut rust_decoded,
+            frame_size,
+            false,
         );
-        let nb_samples = opus_packet_get_nb_samples(packet, sample_rate);
-        if let Ok(ns) = nb_samples {
-            assert_eq!(
-                ns, frame_size,
-                "Encoded packet nb_samples ({ns}) != frame_size ({frame_size})"
-            );
-        }
-    }
 
-    // Decoded output must match
-    match rust_dec_ret {
-        Ok(rust_samples) => {
-            let rust_samples = rust_samples as usize;
-            let c_samples = c_decoded.len() / channels as usize;
-            assert_eq!(
-                rust_samples, c_samples,
-                "Decoded sample count mismatch: Rust={rust_samples}, C={c_samples}"
-            );
-            assert_eq!(
-                &rust_decoded[..rust_samples * channels as usize],
-                &c_decoded[..],
-                "Decoded PCM mismatch at sr={sample_rate}, ch={channels}"
-            );
+        let c_compressed =
+            match c_reference::c_encode_float(&pcm, frame_size, sample_rate, channels, &cfg) {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+        let c_decoded = match c_reference::c_decode_float(&c_compressed, sample_rate, channels) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
 
-            // --- Semantic invariant: decoded sample count == frame_size ---
-            assert_eq!(
-                rust_samples, frame_size as usize,
-                "Decoded samples ({rust_samples}) != frame_size ({frame_size})"
+        // Compressed output must match
+        assert_eq!(
+            &rust_compressed[..rust_enc_len], &c_compressed[..],
+            "Float compressed output mismatch: Rust={rust_enc_len}B, C={}B, \
+             sr={sample_rate}, ch={channels}, app={application}, br={bitrate}, cx={complexity}, vbr={vbr}",
+            c_compressed.len()
+        );
+
+        let packet = &rust_compressed[..rust_enc_len];
+        if !packet.is_empty() {
+            let nb_frames = opus_packet_get_nb_frames(packet);
+            assert!(
+                nb_frames.is_ok() && nb_frames.unwrap() > 0,
+                "Float encoded packet not parseable: len={rust_enc_len}"
             );
+            let nb_samples = opus_packet_get_nb_samples(packet, sample_rate);
+            if let Ok(ns) = nb_samples {
+                assert_eq!(
+                    ns, frame_size,
+                    "Float encoded packet nb_samples ({ns}) != frame_size ({frame_size})"
+                );
+            }
         }
-        Err(e) => {
-            panic!(
-                "Rust decode failed ({e}) but C decode succeeded ({} samples), \
-                 sr={sample_rate}, ch={channels}",
-                c_decoded.len() / channels as usize
+
+        match rust_dec_ret {
+            Ok(rust_samples) => {
+                let rust_samples = rust_samples as usize;
+                let c_samples = c_decoded.len() / channels as usize;
+                assert_eq!(
+                    rust_samples, c_samples,
+                    "Float decoded sample count mismatch: Rust={rust_samples}, C={c_samples}"
+                );
+                let n = rust_samples * channels as usize;
+                // Float decode is a deterministic i16/32768 mapping over the
+                // Opus-decoded samples; CELT-only is bit-exact and SILK/Hybrid
+                // diverges identically in float and i16 paths. Compare via bit
+                // representation only when both sides agree (CELT-only = TOC
+                // bit 7 set on the encoded packet).
+                let celt_only = !packet.is_empty() && (packet[0] & 0x80) != 0;
+                if celt_only {
+                    for (i, (r, c)) in rust_decoded[..n].iter().zip(c_decoded.iter()).enumerate() {
+                        assert_eq!(
+                            r.to_bits(),
+                            c.to_bits(),
+                            "Float decoded PCM mismatch at sample {i}: \
+                             sr={sample_rate}, ch={channels}, br={bitrate}"
+                        );
+                    }
+                }
+                assert_eq!(
+                    rust_samples, frame_size as usize,
+                    "Float decoded samples ({rust_samples}) != frame_size ({frame_size})"
+                );
+            }
+            Err(e) => {
+                panic!(
+                    "Float: Rust decode failed ({e}) but C decode succeeded ({} samples), \
+                     sr={sample_rate}, ch={channels}",
+                    c_decoded.len() / channels as usize
+                );
+            }
+        }
+    } else {
+        let pcm: Vec<i16> = pcm_bytes[..bytes_needed]
+            .chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .collect();
+
+        let rust_enc_len = match rust_enc.encode(&pcm, frame_size, &mut rust_compressed, 4000) {
+            Ok(l) => l as usize,
+            Err(_) => return,
+        };
+
+        let mut rust_decoded = vec![0i16; samples_needed];
+        let rust_dec_ret = rust_dec.decode(
+            Some(&rust_compressed[..rust_enc_len]),
+            &mut rust_decoded,
+            frame_size,
+            false,
+        );
+
+        // === C reference round-trip ===
+        let c_compressed = match c_reference::c_encode(
+            &pcm, frame_size, sample_rate, channels, &cfg,
+        ) {
+            Ok(c) => c,
+            Err(_) => return, // C encode failed — skip (Rust encode succeeded above)
+        };
+
+        let c_decoded = match c_reference::c_decode(&c_compressed, sample_rate, channels) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+
+        // === Differential comparison ===
+
+        // Compressed output must match
+        assert_eq!(
+            &rust_compressed[..rust_enc_len], &c_compressed[..],
+            "Compressed output mismatch: Rust={rust_enc_len}B, C={}B, \
+             sr={sample_rate}, ch={channels}, app={application}, br={bitrate}, cx={complexity}, vbr={vbr}",
+            c_compressed.len()
+        );
+
+        // --- Semantic invariant: encoded packet is parseable ---
+        let packet = &rust_compressed[..rust_enc_len];
+        if !packet.is_empty() {
+            let nb_frames = opus_packet_get_nb_frames(packet);
+            assert!(
+                nb_frames.is_ok() && nb_frames.unwrap() > 0,
+                "Encoded packet not parseable: len={rust_enc_len}"
             );
+            let nb_samples = opus_packet_get_nb_samples(packet, sample_rate);
+            if let Ok(ns) = nb_samples {
+                assert_eq!(
+                    ns, frame_size,
+                    "Encoded packet nb_samples ({ns}) != frame_size ({frame_size})"
+                );
+            }
+        }
+
+        // Decoded output must match
+        match rust_dec_ret {
+            Ok(rust_samples) => {
+                let rust_samples = rust_samples as usize;
+                let c_samples = c_decoded.len() / channels as usize;
+                assert_eq!(
+                    rust_samples, c_samples,
+                    "Decoded sample count mismatch: Rust={rust_samples}, C={c_samples}"
+                );
+                assert_eq!(
+                    &rust_decoded[..rust_samples * channels as usize],
+                    &c_decoded[..],
+                    "Decoded PCM mismatch at sr={sample_rate}, ch={channels}"
+                );
+
+                // --- Semantic invariant: decoded sample count == frame_size ---
+                assert_eq!(
+                    rust_samples, frame_size as usize,
+                    "Decoded samples ({rust_samples}) != frame_size ({frame_size})"
+                );
+            }
+            Err(e) => {
+                panic!(
+                    "Rust decode failed ({e}) but C decode succeeded ({} samples), \
+                     sr={sample_rate}, ch={channels}",
+                    c_decoded.len() / channels as usize
+                );
+            }
         }
     }
 });
