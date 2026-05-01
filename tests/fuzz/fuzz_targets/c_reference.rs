@@ -335,19 +335,25 @@ pub fn c_decode_float(data: &[u8], sample_rate: i32, channels: i32) -> Result<Ve
 }
 
 /// Encode multiple sequential frames using the C reference, keeping encoder state
-/// across frames. Returns a Vec of compressed packets (one per frame) or an error.
+/// across frames. `frame_cfgs` must be the same length as `pcm_frames`; each
+/// config is applied via CTL setters before its corresponding `opus_encode` call,
+/// mirroring the Rust target's per-frame setter shuffle so byte-exact compare
+/// stays valid. The encoder is created with `frame_cfgs[0].application`; mid-
+/// stream application changes are not supported by the underlying API.
+/// Returns a Vec of compressed packets (one per frame) or an error.
 pub fn c_encode_multiframe(
     pcm_frames: &[&[i16]],
+    frame_cfgs: &[CEncodeConfig],
     frame_size: i32,
     sample_rate: i32,
     channels: i32,
-    bitrate: i32,
-    complexity: i32,
-    application: i32,
 ) -> Result<Vec<Vec<u8>>, i32> {
+    if pcm_frames.len() != frame_cfgs.len() || frame_cfgs.is_empty() {
+        return Err(-1);
+    }
     unsafe {
         let mut error: c_int = 0;
-        let enc = opus_encoder_create(sample_rate, channels, application, &mut error);
+        let enc = opus_encoder_create(sample_rate, channels, frame_cfgs[0].application, &mut error);
         if enc.is_null() || error != OPUS_OK {
             if !enc.is_null() {
                 opus_encoder_destroy(enc);
@@ -355,14 +361,12 @@ pub fn c_encode_multiframe(
             return Err(error);
         }
 
-        opus_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, bitrate);
-        opus_encoder_ctl(enc, OPUS_SET_VBR_REQUEST, 0 as c_int);
-        opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY_REQUEST, complexity);
-
         let max_data_bytes: opus_int32 = 4000;
         let mut results = Vec::with_capacity(pcm_frames.len());
 
-        for pcm in pcm_frames {
+        for (pcm, cfg) in pcm_frames.iter().zip(frame_cfgs.iter()) {
+            apply_c_encoder_config(enc, cfg);
+
             let mut out = vec![0u8; max_data_bytes as usize];
             let ret = opus_encode(
                 enc,

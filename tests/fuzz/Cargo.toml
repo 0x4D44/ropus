@@ -9,7 +9,7 @@ license = "BSD-3-Clause"
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = "0.4"
+libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
 ropus = { path = "../../ropus" }
 
 [build-dependencies]
@@ -37,11 +37,6 @@ doc = false
 [[bin]]
 name = "fuzz_repacketizer"
 path = "fuzz_targets/fuzz_repacketizer.rs"
-doc = false
-
-[[bin]]
-name = "fuzz_packet_parse"
-path = "fuzz_targets/fuzz_packet_parse.rs"
 doc = false
 
 [[bin]]

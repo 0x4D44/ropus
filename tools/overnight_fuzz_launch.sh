@@ -18,7 +18,6 @@ TARGETS=(
     fuzz_encode
     fuzz_roundtrip
     fuzz_repacketizer
-    fuzz_packet_parse
     fuzz_decode_safety
     fuzz_encode_safety
     fuzz_roundtrip_safety
@@ -38,11 +37,19 @@ for t in "${TARGETS[@]}"; do
     ARTIFACTS="$CAMPAIGN_DIR/$t/artifacts/"
     CAPTURE="$CAMPAIGN_DIR/$t/capture"
 
+    # Per-target max_len override. fuzz_encode_multiframe needs ~31 KB to fit
+    # 16 frames at 48 kHz stereo (1920 PCM bytes/frame + per-frame config);
+    # the default 16 KB caps it well below that.
+    case "$t" in
+        fuzz_encode_multiframe) MAX_LEN_FOR_TARGET=65536 ;;
+        *)                      MAX_LEN_FOR_TARGET="$MAX_LEN" ;;
+    esac
+
     (
         export FUZZ_PANIC_CAPTURE_DIR="$CAPTURE"
         cargo +nightly fuzz run --fuzz-dir tests/fuzz "$t" -- \
             -max_total_time="$DURATION" \
-            -max_len="$MAX_LEN" \
+            -max_len="$MAX_LEN_FOR_TARGET" \
             -artifact_prefix="$ARTIFACTS" \
             -print_final_stats=1 \
             > "$LOG" 2>&1

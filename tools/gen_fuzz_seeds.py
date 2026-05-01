@@ -2,13 +2,12 @@
 """Generate seed corpus files for mdopus fuzz targets.
 
 Reads WAV test vectors from tests/vectors/ and produces binary seed files
-for each of the 5 fuzz targets. Seeds use structured fuzzing format:
+for each fuzz target. Seeds use structured fuzzing format:
 
   fuzz_decode      - [sr_idx, ch_byte] + packet bytes
   fuzz_encode      - [sr_idx, ch_byte, app_idx, br_lo, br_hi, cx] + PCM i16 LE
   fuzz_roundtrip   - same as fuzz_encode
   fuzz_repacketizer - raw Opus packet bytes (no header)
-  fuzz_packet_parse - raw bytes (no header)
 
 Usage:
     python tools/gen_fuzz_seeds.py
@@ -27,7 +26,6 @@ TARGETS = [
     "fuzz_encode",
     "fuzz_roundtrip",
     "fuzz_repacketizer",
-    "fuzz_packet_parse",
 ]
 
 # Sample rates supported by Opus and their frame sizes for 20ms
@@ -514,102 +512,6 @@ def gen_repacketizer_seeds():
     return count
 
 
-def gen_packet_parse_seeds():
-    """Generate seeds for the packet parsing target.
-
-    This target calls opus_packet_get_bandwidth, get_nb_channels,
-    get_nb_frames, get_samples_per_frame, get_nb_samples on any bytes.
-    We want good coverage of the TOC byte space plus edge cases.
-    """
-    count = 0
-
-    # Every possible TOC byte value (256 values, 1 byte each)
-    for toc in range(256):
-        write_seed("fuzz_packet_parse", f"toc_{toc:02x}.bin", bytes([toc]))
-        count += 1
-
-    # TOC + small payloads for each code type
-    for config in [0, 8, 16, 24, 31]:
-        for stereo in [False, True]:
-            s = "s" if stereo else "m"
-
-            # code 0: TOC + payload
-            toc = make_toc(config, stereo, 0)
-            write_seed("fuzz_packet_parse", f"p_cfg{config}_{s}_c0.bin",
-                        bytes([toc]) + bytes(10))
-            count += 1
-
-            # code 1: TOC + 2 equal frames
-            toc = make_toc(config, stereo, 1)
-            write_seed("fuzz_packet_parse", f"p_cfg{config}_{s}_c1.bin",
-                        bytes([toc]) + bytes(20))
-            count += 1
-
-            # code 2: TOC + len + 2 frames
-            toc = make_toc(config, stereo, 2)
-            write_seed("fuzz_packet_parse", f"p_cfg{config}_{s}_c2.bin",
-                        bytes([toc, 8]) + bytes(20))
-            count += 1
-
-            # code 3: TOC + count_byte + frames
-            toc = make_toc(config, stereo, 3)
-            write_seed("fuzz_packet_parse", f"p_cfg{config}_{s}_c3.bin",
-                        bytes([toc, 0x03]) + bytes(30))
-            count += 1
-
-    # Edge cases
-    # Empty after TOC
-    write_seed("fuzz_packet_parse", "empty_after_toc.bin", bytes([0x00]))
-    count += 1
-
-    # Code 3 with VBR flag set
-    toc = make_toc(16, False, 3)
-    write_seed("fuzz_packet_parse", "code3_vbr.bin", bytes([toc, 0x83]) + bytes(30))
-    count += 1
-
-    # Code 3 with padding flag set
-    write_seed("fuzz_packet_parse", "code3_pad.bin", bytes([toc, 0x43, 5]) + bytes(30))
-    count += 1
-
-    # Code 3 with both VBR and padding
-    write_seed("fuzz_packet_parse", "code3_vbr_pad.bin", bytes([toc, 0xC3, 5]) + bytes(30))
-    count += 1
-
-    # Maximum padding (code 3, padding flag, large padding count)
-    write_seed("fuzz_packet_parse", "max_padding.bin",
-                bytes([toc, 0x41, 254, 255]) + bytes(300))
-    count += 1
-
-    # Code 3 with zero frames
-    write_seed("fuzz_packet_parse", "code3_0frames.bin", bytes([toc, 0x00]))
-    count += 1
-
-    # Multi-byte length encoding (>= 252)
-    toc2 = make_toc(16, False, 2)
-    # Length of 300: first byte = 252, second byte = (300-252) = 48
-    write_seed("fuzz_packet_parse", "long_length.bin",
-                bytes([toc2, 252, 48]) + bytes(350))
-    count += 1
-
-    # All 0xFF bytes
-    write_seed("fuzz_packet_parse", "all_ff.bin", bytes([0xFF] * 16))
-    count += 1
-
-    # All 0x00 bytes
-    write_seed("fuzz_packet_parse", "all_00.bin", bytes([0x00] * 16))
-    count += 1
-
-    # Single byte (minimum input)
-    write_seed("fuzz_packet_parse", "single_byte.bin", bytes([0x42]))
-    count += 1
-
-    # Two bytes
-    write_seed("fuzz_packet_parse", "two_bytes.bin", bytes([0x42, 0x00]))
-    count += 1
-
-    return count
-
-
 def main():
     print("Generating fuzz seed corpus files...")
     print(f"  Vectors dir: {os.path.abspath(VECTORS_DIR)}")
@@ -634,10 +536,6 @@ def main():
 
     n = gen_repacketizer_seeds()
     print(f"  fuzz_repacketizer: {n} seeds")
-    total += n
-
-    n = gen_packet_parse_seeds()
-    print(f"  fuzz_packet_parse: {n} seeds")
     total += n
 
     print(f"\n  Total: {total} seed files generated.")

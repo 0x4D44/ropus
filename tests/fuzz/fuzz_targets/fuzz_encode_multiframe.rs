@@ -1,4 +1,5 @@
 #![no_main]
+use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use ropus::opus::decoder::OpusDecoder;
 use ropus::opus::encoder::{
@@ -64,74 +65,174 @@ const APPLICATIONS: [i32; 3] = [
     OPUS_APPLICATION_RESTRICTED_LOWDELAY,
 ];
 
-fn byte_to_bitrate(b0: u8, b1: u8) -> i32 {
-    let raw = u16::from_le_bytes([b0, b1]) as i32;
-    6000 + (raw % 504001)
+/// Map a u16 to a bitrate in the valid Opus range (6000..=510000).
+/// Mirrors `byte_to_bitrate` from Stream A's encode targets.
+fn raw_to_bitrate(raw: u16) -> i32 {
+    6000 + (raw as i32 % 504_001)
+}
+
+/// 16-byte digest of the structured input — enough to identify the shape of
+/// a crash (rates, channel count, frame count, total PCM size, first-frame
+/// config) without the ~41 MB/s allocation churn that `format!("{:?}", ...)`
+/// on a 61 KB-per-iteration input produced. The libFuzzer artifact directory
+/// already preserves the raw bytes that triggered the panic; this is the
+/// supplementary hint the panic hook writes alongside.
+fn input_fingerprint(input: &MultiframeInput) -> [u8; 16] {
+    let mut fp = [0u8; 16];
+    fp[0] = input.sample_rate_idx;
+    fp[1] = input.channels_minus_one;
+    fp[2] = input.application_idx;
+    fp[3] = input.frames.len() as u8;
+    let total_pcm: usize = input.frames.iter().map(|f| f.pcm_bytes.len()).sum();
+    fp[4..8].copy_from_slice(&(total_pcm as u32).to_le_bytes());
+    if let Some(first) = input.frames.first() {
+        fp[8..10].copy_from_slice(&first.bitrate_raw.to_le_bytes());
+        fp[10] = first.complexity;
+        fp[11] = first.fec;
+        fp[12] = first.loss_perc;
+        fp[13] = first.vbr as u8 | ((first.dtx as u8) << 1);
+    }
+    fp
+}
+
+// --------------------------------------------------------------------------- //
+// Structured input — `Arbitrary` lets libFuzzer produce well-shaped inputs that
+// the modulo-byte mutator on the original target couldn't reach. Frame count
+// and per-frame PCM length are explicitly bounded so each iteration completes
+// in <200 ms and inputs stay within libFuzzer's max_len budget.
+// --------------------------------------------------------------------------- //
+#[derive(Debug)]
+struct MultiframeInput {
+    sample_rate_idx: u8,
+    channels_minus_one: u8,
+    application_idx: u8,
+    frames: Vec<FrameConfig>,
+}
+
+#[derive(Debug)]
+struct FrameConfig {
+    bitrate_raw: u16,
+    complexity: u8,
+    vbr: bool,
+    fec: u8,
+    dtx: bool,
+    loss_perc: u8,
+    pcm_bytes: Vec<u8>,
+}
+
+impl<'a> Arbitrary<'a> for MultiframeInput {
+    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
+        let sample_rate_idx = u.int_in_range(0..=4)?;
+        let channels_minus_one = u.int_in_range(0..=1)?;
+        let application_idx = u.int_in_range(0..=2)?;
+        let n_frames = u.int_in_range(2..=16)?;
+
+        let sample_rate = SAMPLE_RATES[sample_rate_idx as usize];
+        let channels = channels_minus_one as i32 + 1;
+        let frame_size = (sample_rate / 50) as usize;
+        let pcm_bytes_needed = frame_size * channels as usize * 2;
+
+        let mut frames = Vec::with_capacity(n_frames);
+        for _ in 0..n_frames {
+            frames.push(FrameConfig::arbitrary_for_shape(u, pcm_bytes_needed)?);
+        }
+        Ok(Self {
+            sample_rate_idx,
+            channels_minus_one,
+            application_idx,
+            frames,
+        })
+    }
+}
+
+impl FrameConfig {
+    fn arbitrary_for_shape<'a>(
+        u: &mut Unstructured<'a>,
+        pcm_bytes_needed: usize,
+    ) -> arbitrary::Result<Self> {
+        Ok(Self {
+            bitrate_raw: u.arbitrary()?,
+            complexity: u.int_in_range(0..=10)?,
+            vbr: u.arbitrary()?,
+            fec: u.int_in_range(0..=2)?,
+            dtx: u.arbitrary()?,
+            loss_perc: u.int_in_range(0..=100)?,
+            pcm_bytes: u.bytes(pcm_bytes_needed)?.to_vec(),
+        })
+    }
 }
 
 // Multiframe differential fuzz target.
 //
-// Encodes 5-10 sequential frames through a single encoder instance, comparing
-// Rust vs C reference frame-by-frame. This catches state accumulation bugs that
-// single-frame fuzzing is structurally blind to — the encoder carries prediction
-// state, gain history, and mode decisions across frames.
-fuzz_target!(|data: &[u8]| {
+// Encodes 2-16 sequential frames through a single encoder instance, applying a
+// fresh setter shuffle (bitrate / complexity / vbr / fec / dtx / loss_perc)
+// before each frame to model intra-stream config drift (adaptive bitrate,
+// FEC toggling on push-to-talk). Compares Rust vs C reference frame-by-frame.
+// This catches state-accumulation bugs that single-frame fuzzing is
+// structurally blind to — the encoder carries prediction state, gain history,
+// and mode decisions across frames.
+fuzz_target!(|input: MultiframeInput| {
     init_panic_capture();
+    // Best-effort capture of a 16-byte fingerprint for crash repro. libFuzzer
+    // keeps the raw byte input in the artifact directory; we just write a
+    // shape hint (rates, frame count, total PCM size, first-frame config).
     CURRENT_INPUT.with(|cell| {
         let mut buf = cell.borrow_mut();
         buf.clear();
-        buf.extend_from_slice(data);
+        buf.extend_from_slice(&input_fingerprint(&input));
     });
 
-    // 7 config bytes + enough PCM for at least 5 frames at minimum config (8kHz mono 20ms)
-    // Minimum PCM per frame: 160 samples * 2 bytes = 320 bytes
-    // Minimum total: 7 + 5 * 320 = 1607 bytes
-    if data.len() < 7 + 5 * 320 {
-        return;
-    }
-
-    // --- Parse structured config ---
-    let sample_rate = SAMPLE_RATES[(data[0] as usize) % SAMPLE_RATES.len()];
-    let channels = if data[1] & 1 == 0 { 1 } else { 2 };
-    let application = APPLICATIONS[(data[2] as usize) % APPLICATIONS.len()];
-    let bitrate = byte_to_bitrate(data[3], data[4]);
-    let complexity = (data[5] as i32) % 11;
-    // Frame count: 5-10
-    let num_frames = 5 + ((data[6] as usize) % 6);
-    let pcm_bytes = &data[7..];
-
-    let frame_size = sample_rate / 50; // 20ms
+    let sample_rate = SAMPLE_RATES[input.sample_rate_idx as usize];
+    let channels = input.channels_minus_one as i32 + 1;
+    let application = APPLICATIONS[input.application_idx as usize];
+    let frame_size = sample_rate / 50; // 20 ms
     let samples_per_frame = frame_size as usize * channels as usize;
-    let bytes_per_frame = samples_per_frame * 2;
-    let total_bytes_needed = bytes_per_frame * num_frames;
 
-    if pcm_bytes.len() < total_bytes_needed {
-        return;
-    }
-
-    // Split input into frames of i16 PCM
-    let mut pcm_frames: Vec<Vec<i16>> = Vec::with_capacity(num_frames);
-    for i in 0..num_frames {
-        let start = i * bytes_per_frame;
-        let frame_bytes = &pcm_bytes[start..start + bytes_per_frame];
-        let pcm: Vec<i16> = frame_bytes
+    // Decode each frame's PCM bytes to i16 samples. The Arbitrary impl
+    // guarantees pcm_bytes.len() == samples_per_frame * 2, so chunks_exact
+    // never drops a tail.
+    let mut pcm_frames: Vec<Vec<i16>> = Vec::with_capacity(input.frames.len());
+    for fc in &input.frames {
+        let pcm: Vec<i16> = fc
+            .pcm_bytes
             .chunks_exact(2)
             .map(|c| i16::from_le_bytes([c[0], c[1]]))
             .collect();
         pcm_frames.push(pcm);
     }
 
+    // Per-frame C-side configs mirror the Rust setter calls below.
+    let frame_cfgs: Vec<c_reference::CEncodeConfig> = input
+        .frames
+        .iter()
+        .map(|fc| c_reference::CEncodeConfig {
+            bitrate: raw_to_bitrate(fc.bitrate_raw),
+            complexity: fc.complexity as i32,
+            application,
+            vbr: if fc.vbr { 1 } else { 0 },
+            vbr_constraint: 0,
+            inband_fec: fc.fec as i32,
+            dtx: if fc.dtx { 1 } else { 0 },
+            loss_perc: fc.loss_perc as i32,
+        })
+        .collect();
+
     // --- Rust multiframe encode ---
     let mut rust_enc = match OpusEncoder::new(sample_rate, channels, application) {
         Ok(e) => e,
         Err(_) => return,
     };
-    rust_enc.set_bitrate(bitrate);
-    rust_enc.set_vbr(0);
-    rust_enc.set_complexity(complexity);
 
-    let mut rust_packets: Vec<Vec<u8>> = Vec::with_capacity(num_frames);
-    for pcm in &pcm_frames {
+    let mut rust_packets: Vec<Vec<u8>> = Vec::with_capacity(input.frames.len());
+    for (pcm, cfg) in pcm_frames.iter().zip(frame_cfgs.iter()) {
+        rust_enc.set_bitrate(cfg.bitrate);
+        rust_enc.set_vbr(cfg.vbr);
+        rust_enc.set_vbr_constraint(cfg.vbr_constraint);
+        rust_enc.set_inband_fec(cfg.inband_fec);
+        rust_enc.set_dtx(cfg.dtx);
+        rust_enc.set_packet_loss_perc(cfg.loss_perc);
+        rust_enc.set_complexity(cfg.complexity);
+
         let mut out = vec![0u8; 4000];
         match rust_enc.encode(pcm, frame_size, &mut out, 4000) {
             Ok(len) => {
@@ -146,54 +247,74 @@ fuzz_target!(|data: &[u8]| {
     let frame_refs: Vec<&[i16]> = pcm_frames.iter().map(|f| f.as_slice()).collect();
     let c_packets = match c_reference::c_encode_multiframe(
         &frame_refs,
+        &frame_cfgs,
         frame_size,
         sample_rate,
         channels,
-        bitrate,
-        complexity,
-        application,
     ) {
         Ok(p) => p,
         Err(_) => return,
     };
 
-    // --- Differential comparison: frame-by-frame ---
+    // --- Differential comparison: frame-by-frame byte-exact ---
     assert_eq!(
         rust_packets.len(),
         c_packets.len(),
-        "Frame count mismatch: Rust={}, C={}, sr={sample_rate}, ch={channels}, frames={num_frames}",
+        "Frame count mismatch: Rust={}, C={}, sr={sample_rate}, ch={channels}, frames={}",
         rust_packets.len(),
-        c_packets.len()
+        c_packets.len(),
+        input.frames.len(),
     );
 
     for (i, (rust_pkt, c_pkt)) in rust_packets.iter().zip(c_packets.iter()).enumerate() {
+        let cfg = &frame_cfgs[i];
         assert_eq!(
             rust_pkt.len(),
             c_pkt.len(),
-            "Frame {i}/{num_frames} length mismatch: Rust={}, C={}, \
-             sr={sample_rate}, ch={channels}, app={application}, br={bitrate}, cx={complexity}",
+            "Frame {i}/{} length mismatch: Rust={}, C={}, \
+             sr={sample_rate}, ch={channels}, app={application}, \
+             br={}, cx={}, vbr={}, fec={}, dtx={}, loss={}",
+            input.frames.len(),
             rust_pkt.len(),
-            c_pkt.len()
+            c_pkt.len(),
+            cfg.bitrate,
+            cfg.complexity,
+            cfg.vbr,
+            cfg.inband_fec,
+            cfg.dtx,
+            cfg.loss_perc,
         );
 
         assert_eq!(
             rust_pkt, c_pkt,
-            "Frame {i}/{num_frames} byte mismatch: \
-             sr={sample_rate}, ch={channels}, app={application}, br={bitrate}, cx={complexity}, \
-             len={}",
-            rust_pkt.len()
+            "Frame {i}/{} byte mismatch: \
+             sr={sample_rate}, ch={channels}, app={application}, \
+             br={}, cx={}, vbr={}, fec={}, dtx={}, loss={}, len={}",
+            input.frames.len(),
+            cfg.bitrate,
+            cfg.complexity,
+            cfg.vbr,
+            cfg.inband_fec,
+            cfg.dtx,
+            cfg.loss_perc,
+            rust_pkt.len(),
         );
     }
 
     // --- Semantic invariant: each encoded packet is parseable ---
     for (i, pkt) in rust_packets.iter().enumerate() {
         if !pkt.is_empty() {
-            let nb_frames = ropus::opus::decoder::opus_packet_get_nb_frames(pkt);
-            assert!(
-                nb_frames.is_ok() && nb_frames.unwrap() > 0,
-                "Frame {i}: encoded packet not parseable, len={}",
-                pkt.len()
-            );
+            match ropus::opus::decoder::opus_packet_get_nb_frames(pkt) {
+                Ok(n) if n > 0 => {}
+                Ok(n) => panic!(
+                    "Frame {i}: encoded packet reports {n} frames, len={}",
+                    pkt.len()
+                ),
+                Err(e) => panic!(
+                    "Frame {i}: encoded packet not parseable, len={}, err={e}",
+                    pkt.len()
+                ),
+            }
         }
     }
 
