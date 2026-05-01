@@ -1,0 +1,63 @@
+# Oracle calibration: multistream SILK/Hybrid recovery divergence
+
+## Repro
+
+The 4 crash files are libFuzzer Arbitrary inputs for `fuzz_multistream`
+that triggered the SILK/Hybrid SNR oracle assertion at
+`fuzz_multistream.rs:457` during the 24h campaign hour 1.
+
+```
+cargo +nightly fuzz run --fuzz-dir tests/fuzz fuzz_multistream \
+    tests/fuzz/known_failures/multistream-decode-recovery-divergence/crash-00.bin
+```
+
+## What this is
+
+Same class as the standalone `silk_decode_recovery_divergence_loud`
+finding: a structurally-parseable but malformed packet decodes
+successfully on both sides with sample-count parity, but the PCM
+outputs diverge wildly (3-7 dB SNR vs the 50 dB tier-2 floor). Both
+implementations are in some recovery / DTX path producing unconstrained
+PCM.
+
+Captured at `family=0, packet_len=10` and `family=0, packet_len=8`
+across the 4 repros — all single-stream cases where the multistream
+wrapper effectively forwards to the standalone decoder, so this is
+*the same bug surface* re-finding the same recovery-divergence class.
+
+## Resolution applied (campaign hour 1)
+
+The SNR floor was disabled in `fuzz_multistream.rs` for SILK/Hybrid
+decode (CELT-only remains byte-exact). Sample-count parity is the
+only oracle on the SILK/Hybrid sub-packet path now. This restores the
+pre-Stream-D safety baseline for multistream and unblocks the campaign.
+
+The 4 captured repros are kept in this directory as a regression marker
+for any future re-enablement of the SNR floor — once the
+recovery-divergence root cause is fixed, the oracle can be re-armed
+and these inputs should pass.
+
+## Severity
+
+Low (oracle calibration, not a codec bug per se). The underlying
+recovery-divergence is real but produces only "low-fidelity recovery
+PCM diverges between implementations" — not a functional bug under
+well-formed input.
+
+## Detected
+
+2026-05-02 ~23:36 → 00:30 BST, 24h fuzz campaign hour 1. All 4
+`fuzz_multistream` workers tripped within minutes of campaign start.
+
+## Fix scope
+
+Two complementary follow-ups:
+1. Fix the underlying SILK recovery-divergence so malformed-but-
+   parseable packets produce equivalent PCM on both sides.
+2. Or build a structural per-sub-frame validity gate for multistream
+   payloads (parse out the embedded TOC code and frame sizes) so the
+   SNR floor only fires on inputs whose all sub-frames have non-zero
+   bytes.
+
+Either gives back the tier-2 SNR coverage we lost in the campaign-hour-1
+mitigation.
