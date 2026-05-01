@@ -34,6 +34,19 @@ pub fn snr_oracle_applicable(reference: &[i16]) -> bool {
     signal_energy(reference) >= SNR_PRECHECK_MIN_REF_ENERGY
 }
 
+/// SNR-applicability gate that also requires the packet to be structurally
+/// well-formed.
+///
+/// `packet_well_formed` should be the boolean result of a packet-parse
+/// validity check that bit-exact agrees between Rust and C — typically
+/// `opus_packet_get_nb_samples(packet, fs).is_ok()`. When that parse fails,
+/// both decoders enter recovery and produce PCM that diverges by design;
+/// asserting the SNR floor on those inputs produces false positives like
+/// the `silk_decode_recovery_divergence_loud` finding (2026-05-01).
+pub fn snr_oracle_applicable_for_packet(reference: &[i16], packet_well_formed: bool) -> bool {
+    packet_well_formed && snr_oracle_applicable(reference)
+}
+
 /// Compute SNR (signal-to-noise ratio) in decibels of `test` against
 /// `reference`. Special cases:
 /// - length mismatch returns `f64::NEG_INFINITY` (treated as a failure)

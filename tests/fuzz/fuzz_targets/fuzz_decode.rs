@@ -1,7 +1,8 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 use ropus::opus::decoder::{
-    opus_packet_get_nb_frames, opus_packet_get_samples_per_frame, OpusDecoder,
+    opus_packet_get_nb_frames, opus_packet_get_nb_samples, opus_packet_get_samples_per_frame,
+    OpusDecoder,
 };
 use std::cell::RefCell;
 use std::sync::Once;
@@ -148,7 +149,9 @@ fuzz_target!(|data: &[u8]| {
                     };
                     let rust_i16: Vec<i16> = rust_slice.iter().map(|&x| to_i16(x)).collect();
                     let c_i16: Vec<i16> = c_slice.iter().map(|&x| to_i16(x)).collect();
-                    if oracle::snr_oracle_applicable(&c_i16) {
+                    let well_formed =
+                        opus_packet_get_nb_samples(packet, sample_rate).is_ok();
+                    if oracle::snr_oracle_applicable_for_packet(&c_i16, well_formed) {
                         let snr = oracle::snr_db(&c_i16, &rust_i16);
                         assert!(
                             snr >= oracle::SILK_DECODE_MIN_SNR_DB,
@@ -232,15 +235,19 @@ fuzz_target!(|data: &[u8]| {
                         "PCM mismatch at sr={sample_rate}, ch={channels}, pkt_len={}, samples={rust_samples}",
                         packet.len()
                     );
-                } else if oracle::snr_oracle_applicable(&c_pcm[..]) {
-                    let snr = oracle::snr_db(&c_pcm[..], rust_slice);
-                    assert!(
-                        snr >= oracle::SILK_DECODE_MIN_SNR_DB,
-                        "SILK/Hybrid decode SNR {snr:.2} dB < {:.0} dB \
-                         (sr={sample_rate}, ch={channels}, pkt_len={}, samples={rust_samples})",
-                        oracle::SILK_DECODE_MIN_SNR_DB,
-                        packet.len()
-                    );
+                } else {
+                    let well_formed =
+                        opus_packet_get_nb_samples(packet, sample_rate).is_ok();
+                    if oracle::snr_oracle_applicable_for_packet(&c_pcm[..], well_formed) {
+                        let snr = oracle::snr_db(&c_pcm[..], rust_slice);
+                        assert!(
+                            snr >= oracle::SILK_DECODE_MIN_SNR_DB,
+                            "SILK/Hybrid decode SNR {snr:.2} dB < {:.0} dB \
+                             (sr={sample_rate}, ch={channels}, pkt_len={}, samples={rust_samples})",
+                            oracle::SILK_DECODE_MIN_SNR_DB,
+                            packet.len()
+                        );
+                    }
                 }
                 // else: reference is silence or near-silence; both
                 // implementations' recovery PCM is unconstrained.

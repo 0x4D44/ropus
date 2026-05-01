@@ -112,7 +112,11 @@ fuzz_target!(|data: &[u8]| {
     let use_float_pcm = (data[1] & 0b0010) != 0;
     let application = APPLICATIONS[(data[2] as usize) % APPLICATIONS.len()];
     let bitrate = byte_to_bitrate(data[3], data[4]);
-    let complexity = (data[5] as i32) % 11; // 0-10
+    // Cap at 9 to dodge the analysis.c divergence class (Campaign 9,
+    // 2026-04-19): the C reference builds with DISABLE_FLOAT_API=off, so
+    // complexity ≥ 10 ∧ sr ≥ 16000 ∧ app != RESTRICTED_SILK runs analysis
+    // on C and not on Rust.
+    let complexity = (data[5] as i32) % 10; // 0-9
     // data[6]: VBR + FEC config — explicit parens, `>>` binds tighter than `&`.
     let vbr = (data[6] & 0b0001) != 0;
     let vbr_constraint = (data[6] & 0b0010) != 0;

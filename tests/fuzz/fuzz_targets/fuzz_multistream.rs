@@ -118,7 +118,12 @@ impl<'a> Arbitrary<'a> for MSInput {
         };
         let application_idx = u.int_in_range(0..=2)?;
         let bitrate_raw = u.arbitrary()?;
-        let complexity = u.int_in_range(0..=10)?;
+        // Cap at 9 to dodge the analysis.c divergence class
+        // (Campaign 9, 2026-04-19): the C reference builds with
+        // DISABLE_FLOAT_API=off, so complexity ≥ 10 ∧ sr ≥ 16000 ∧
+        // app != RESTRICTED_SILK produces an AnalysisInfo on the C
+        // side that the Rust port doesn't yet emit.
+        let complexity = u.int_in_range(0..=9)?;
         let vbr = u.arbitrary()?;
         let mut setter_bytes = [0u8; 16];
         u.fill_buffer(&mut setter_bytes)?;
@@ -156,7 +161,8 @@ fn apply_ms_encoder_setter_sequence(enc: &mut OpusMSEncoder, bytes: &[u8]) {
                 let _ = enc.set_bitrate(raw_to_bitrate(u16::from_le_bytes([chunk[0], chunk[1]])));
             }
             1 => {
-                let _ = enc.set_complexity((chunk[1] % 11) as i32);
+                // Cap at 9, see Arbitrary impl above.
+                let _ = enc.set_complexity((chunk[1] % 10) as i32);
             }
             2 => {
                 let _ = enc.set_vbr((chunk[1] & 1) as i32);

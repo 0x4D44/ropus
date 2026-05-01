@@ -79,6 +79,35 @@ fn snr_oracle_skipped_for_silence_or_near_silence() {
 }
 
 #[test]
+fn snr_oracle_for_packet_skips_when_not_well_formed() {
+    // Loud reference (well above energy floor) but the packet didn't validate.
+    // Mirrors the silk_decode_recovery_divergence_loud finding (2026-05-01):
+    // both decoders enter recovery on a malformed packet, their PCM diverges
+    // wildly, and asserting SNR would produce a false positive.
+    let loud: Vec<i16> = (0..960).map(|i| ((i * 31) as i16).wrapping_add(20_000)).collect();
+    assert!(
+        snr_oracle_applicable(&loud),
+        "preflight: loud signal must pass the energy precheck"
+    );
+    assert!(
+        !snr_oracle_applicable_for_packet(&loud, false),
+        "expected packet-not-well-formed to override the energy precheck"
+    );
+}
+
+#[test]
+fn snr_oracle_for_packet_passes_when_both_gates_clear() {
+    let loud: Vec<i16> = (0..960).map(|i| ((i * 31) as i16).wrapping_add(20_000)).collect();
+    assert!(snr_oracle_applicable_for_packet(&loud, true));
+}
+
+#[test]
+fn snr_oracle_for_packet_skips_silence_even_if_well_formed() {
+    let zeros = vec![0i16; 1000];
+    assert!(!snr_oracle_applicable_for_packet(&zeros, true));
+}
+
+#[test]
 fn typical_encode_decode_drift_passes_threshold() {
     // Synthetic ~1% RMS drift -- should be well above the 50 dB floor.
     let r: Vec<i16> = (0..960)
