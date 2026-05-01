@@ -24,6 +24,7 @@ notes/*.log
 # Fuzz build artifacts (keep crashes/, fuzz_targets/, Cargo.*)
 /tests/fuzz/target/
 /tests/fuzz/corpus/
+/tests/fuzz/fuzz_crashes/
 
 # Transient fuzz panic-capture dir (crash artifacts saved by Windows hook)
 /fuzz_crashes/

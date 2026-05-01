@@ -621,6 +621,11 @@ fn multistream_packet_validate(data: &[u8], len: i32, nb_streams: i32, fs: i32) 
         }
         let packet_offset = parse_result;
 
+        // Bounds check: ensure packet_offset doesn't exceed the sub_data length
+        if packet_offset as usize > sub_data.len() {
+            return OPUS_INVALID_PACKET;
+        }
+
         let tmp_samples = match opus_packet_get_nb_samples(&sub_data[..packet_offset as usize], fs)
         {
             Ok(n) => n,
@@ -3110,6 +3115,41 @@ mod tests {
 
         // Self-delimited code 2 path parses the explicit last frame size.
         assert_eq!(parse_multistream_subpacket(&[0x02, 0x00, 0x00], 3, true), 3);
+    }
+
+    #[test]
+    fn test_multistream_decode_subpacket_oob_returns_invalid_packet() {
+        // Regression test for the Stream C fuzz finding
+        // (`tests/fuzz/known_failures/multistream-decode-subpacket-oob/`):
+        // a self-delimited sub-packet whose encoded size exceeds the
+        // remaining buffer used to slice OOB and panic safe Rust at
+        // `multistream_packet_validate`. The C reference returns
+        // OPUS_INVALID_PACKET on the same input. After the fix, ropus
+        // returns the same error code without panicking.
+        //
+        // Crafted packet: TOC=0x00 (code=0, mono SILK NB), self-delimited
+        // size byte=0xFC=>252 (one-byte encoding still > buffer remaining).
+        // Pre-fix behaviour: parse_multistream_subpacket returns
+        // pos + remaining = 2 + 252 = 254, and multistream_packet_validate
+        // sliced &sub_data[..254] against a 2-byte buffer.
+        let oob_packet = [0x00u8, 0xFC];
+
+        let mapping = [0u8, 1u8];
+        let mut decoder = OpusMSDecoder::new(48000, 2, 2, 0, &mapping).unwrap();
+        let mut pcm = vec![0i16; 5760 * 2];
+
+        let result = decoder.decode(
+            Some(&oob_packet),
+            oob_packet.len() as i32,
+            &mut pcm,
+            5760,
+            false,
+        );
+        assert!(
+            result.is_err(),
+            "expected OPUS_INVALID_PACKET, got {:?}",
+            result
+        );
     }
 
     #[test]
