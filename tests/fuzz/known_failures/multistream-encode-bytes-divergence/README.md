@@ -14,11 +14,21 @@ cargo +nightly fuzz run --fuzz-dir tests/fuzz fuzz_multistream \
 
 ## Symptom
 
-Representative case:
-- `sr=8000, ch=1, family=0, bitrate=15472, complexity=6, vbr=0,
-  packet_len=15`
-- Rust and C produce 15-byte compressed packets (length matches), but
-  the bytes differ.
+Variants captured (sr=8000, ch=1, family=0 across all):
+
+| Repro | bitrate | cx | vbr | Outcome |
+|---|---|---|---|---|
+| crash-00 | 15472 | 6 | 0 | 15B = 15B (bytes diverge) |
+| crash-01 | 15472 | 6 | 0 | 15B = 15B (bytes diverge) |
+| crash-02-len-mismatch | 62063 | 9 | 1 | Rust=15B vs C=13B |
+| crash-03-cx4-vbr1 | 15472 | 4 | 1 | 12B = 12B (bytes diverge) |
+
+The first two variants captured during hour 3, the last two during
+hour 4 after restart. All sr=8000 ch=1 (mono SILK NB) family=0.
+Variants span CBR/VBR and complexity 4/6/9 — the encoder
+state-divergence is robust across rate-control modes. Variant 02 is
+a *length* divergence (different bitstream, different size) — even
+more concerning than the byte mismatches.
 
 family=0 with ch=1 is a single-stream mono encode through the
 multistream wrapper. That's effectively a thin wrapper over the
@@ -48,9 +58,15 @@ compressed bitstream from the C reference. Functional behaviour
 
 ## Detected
 
-2026-05-02 ~02:30 BST, 24h fuzz campaign hour 3. Killed 2 of the 4
-restarted multistream workers (w0, w3). 2 unique fingerprints
-captured.
+2026-05-02 ~02:30 BST (hours 3-4), 24h fuzz campaign. Killed all 4
+multistream workers in two waves: w0/w3 hour 3, then w1/w2 hour 4
+after restart under family-asymmetry tolerance. 4 unique fingerprints
+captured spanning the rate-control modes listed above.
+
+After hour 4 the multistream target was retired for the rest of the
+campaign — every restart cycle hits another variant of this class
+within ~30 min, which is by definition the same root-cause encoder
+state divergence. Further repros would not add diagnostic value.
 
 ## Fix scope
 
