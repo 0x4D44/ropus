@@ -572,6 +572,47 @@ unsafe extern "C" {
         buf_len: *mut opus_int32,
     );
 
+    /// Multistream wrapper accessor: returns a pointer to the inner
+    /// OpusEncoder for `stream_id` within an `OpusMSEncoder`. The returned
+    /// pointer is valid as long as `ms` is, and is suitable for the other
+    /// `debug_get_*` accessors in this module. Returns NULL if
+    /// `stream_id` is out of range.
+    pub fn debug_get_inner_opus_encoder(
+        ms: *mut OpusMSEncoder,
+        stream_id: c_int,
+    ) -> *mut OpusEncoder;
+
+    /// Top-level Opus state plus a `silk_mode` subset for the encoder
+    /// state-accumulation diagnostic (Cluster A, Findings #7 + #8). Reads
+    /// fields that are mutated by `OPUS_SET_*` CTLs but not by every
+    /// Rust-side `ms_set_*` (the H1/H2 asymmetry suspects).
+    pub fn debug_get_opus_silk_mode_state(
+        enc: *mut OpusEncoder,
+        sm_use_in_band_fec: *mut opus_int32,
+        sm_use_cbr: *mut opus_int32,
+        sm_use_dtx: *mut opus_int32,
+        sm_lbrr_coded: *mut opus_int32,
+        sm_complexity: *mut opus_int32,
+        sm_packet_loss_percentage: *mut opus_int32,
+        sm_bit_rate: *mut opus_int32,
+        sm_payload_size_ms: *mut opus_int32,
+        sm_n_channels_internal: *mut opus_int32,
+        sm_max_internal_sample_rate: *mut opus_int32,
+        sm_min_internal_sample_rate: *mut opus_int32,
+        sm_desired_internal_sample_rate: *mut opus_int32,
+        use_vbr: *mut opus_int32,
+        vbr_constraint: *mut opus_int32,
+        use_dtx: *mut opus_int32,
+        fec_config: *mut opus_int32,
+        user_bitrate_bps: *mut opus_int32,
+        bitrate_bps: *mut opus_int32,
+        force_channels: *mut opus_int32,
+        signal_type: *mut opus_int32,
+        lsb_depth: *mut opus_int32,
+        lfe: *mut opus_int32,
+        application: *mut opus_int32,
+    );
+
     pub fn debug_get_silk_extended_state(
         enc: *mut OpusEncoder,
         channel: c_int,

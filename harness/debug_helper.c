@@ -11,6 +11,7 @@
 #include "celt/mdct.h"
 #include "celt/cpu_support.h"
 #include "src/analysis.h"
+#include "opus_private.h" /* for struct OpusMSEncoder + align() helper */
 
 #include <stdio.h>
 #include <stddef.h>
@@ -1323,5 +1324,140 @@ void debug_get_silk_extended_state(OpusEncoder *enc, int channel,
 
     *ltp_corr_q15 = ch->LTPCorr_Q15;
     *res_nrg_smth = ch->resNrgSmth;
+}
+
+/* ----------------------------------------------------------------------- *
+ * Top-level Opus encoder state for the encoder-state-accumulation
+ * diagnostic (Cluster A, Findings #7 + #8). Exposes the post-setter,
+ * pre-encode values that the public CTL setters mutate, so the harness
+ * can detect ms_set_*-vs-set_* asymmetries in the Rust port.
+ *
+ * The C OpusEncoder layout (reference/src/opus_encoder.c:76) under this
+ * harness's config (FIXED_POINT, no DISABLE_FLOAT_API, no ENABLE_DRED,
+ * no ENABLE_QEXT) is:
+ *   [0]  int          celt_enc_offset
+ *   [4]  int          silk_enc_offset
+ *   [8]  silk_EncControlStruct silk_mode  (no preceding DRED block)
+ *        int application; int channels; int delay_compensation;
+ *        int force_channels; int signal_type; int user_bandwidth;
+ *        int max_bandwidth; int user_forced_mode; int voice_ratio;
+ *        opus_int32 Fs; int use_vbr; int vbr_constraint;
+ *        int variable_duration; opus_int32 bitrate_bps;
+ *        opus_int32 user_bitrate_bps; int lsb_depth; int encoder_buffer;
+ *        int lfe; int arch; int use_dtx; int fec_config;
+ *        TonalityAnalysisState analysis; ... (we never read past
+ *        fec_config so the analysis layout is not needed).
+ */
+typedef struct {
+    int          celt_enc_offset;
+    int          silk_enc_offset;
+    silk_EncControlStruct silk_mode;
+    int          application;
+    int          channels;
+    int          delay_compensation;
+    int          force_channels;
+    int          signal_type;
+    int          user_bandwidth;
+    int          max_bandwidth;
+    int          user_forced_mode;
+    int          voice_ratio;
+    opus_int32   Fs;
+    int          use_vbr;
+    int          vbr_constraint;
+    int          variable_duration;
+    opus_int32   bitrate_bps;
+    opus_int32   user_bitrate_bps;
+    int          lsb_depth;
+    int          encoder_buffer;
+    int          lfe;
+    int          arch;
+    int          use_dtx;
+    int          fec_config;
+} OpusEncoderTopLevel;
+
+void debug_get_opus_silk_mode_state(OpusEncoder *enc,
+    opus_int32 *sm_use_in_band_fec,
+    opus_int32 *sm_use_cbr,
+    opus_int32 *sm_use_dtx,
+    opus_int32 *sm_lbrr_coded,
+    opus_int32 *sm_complexity,
+    opus_int32 *sm_packet_loss_percentage,
+    opus_int32 *sm_bit_rate,
+    opus_int32 *sm_payload_size_ms,
+    opus_int32 *sm_n_channels_internal,
+    opus_int32 *sm_max_internal_sample_rate,
+    opus_int32 *sm_min_internal_sample_rate,
+    opus_int32 *sm_desired_internal_sample_rate,
+    opus_int32 *use_vbr,
+    opus_int32 *vbr_constraint,
+    opus_int32 *use_dtx,
+    opus_int32 *fec_config,
+    opus_int32 *user_bitrate_bps,
+    opus_int32 *bitrate_bps,
+    opus_int32 *force_channels,
+    opus_int32 *signal_type,
+    opus_int32 *lsb_depth,
+    opus_int32 *lfe,
+    opus_int32 *application)
+{
+    OpusEncoderTopLevel *top = (OpusEncoderTopLevel *)enc;
+
+    *sm_use_in_band_fec              = top->silk_mode.useInBandFEC;
+    *sm_use_cbr                      = top->silk_mode.useCBR;
+    *sm_use_dtx                      = top->silk_mode.useDTX;
+    *sm_lbrr_coded                   = top->silk_mode.LBRR_coded;
+    *sm_complexity                   = top->silk_mode.complexity;
+    *sm_packet_loss_percentage       = top->silk_mode.packetLossPercentage;
+    *sm_bit_rate                     = top->silk_mode.bitRate;
+    *sm_payload_size_ms              = top->silk_mode.payloadSize_ms;
+    *sm_n_channels_internal          = top->silk_mode.nChannelsInternal;
+    *sm_max_internal_sample_rate     = top->silk_mode.maxInternalSampleRate;
+    *sm_min_internal_sample_rate     = top->silk_mode.minInternalSampleRate;
+    *sm_desired_internal_sample_rate = top->silk_mode.desiredInternalSampleRate;
+
+    *use_vbr          = top->use_vbr;
+    *vbr_constraint   = top->vbr_constraint;
+    *use_dtx          = top->use_dtx;
+    *fec_config       = top->fec_config;
+    *user_bitrate_bps = top->user_bitrate_bps;
+    *bitrate_bps      = top->bitrate_bps;
+    *force_channels   = top->force_channels;
+    *signal_type      = top->signal_type;
+    *lsb_depth        = top->lsb_depth;
+    *lfe              = top->lfe;
+    *application      = top->application;
+}
+
+/* ----------------------------------------------------------------------- *
+ * Multistream wrapper: return the pointer to a sub-encoder within an
+ * OpusMSEncoder, so callers can `debug_get_opus_silk_mode_state` it.
+ * Layout per reference/src/opus_multistream_encoder.c:78-84.
+ *
+ * Returns NULL if `stream_id` is out of range.
+ */
+extern int opus_encoder_get_size(int channels);
+
+OpusEncoder *debug_get_inner_opus_encoder(struct OpusMSEncoder *ms, int stream_id)
+{
+    if (ms == NULL || stream_id < 0) {
+        return NULL;
+    }
+    int nb_streams = ms->layout.nb_streams;
+    int coupled_streams = ms->layout.nb_coupled_streams;
+    if (stream_id >= nb_streams) {
+        return NULL;
+    }
+    int coupled_size = opus_encoder_get_size(2);
+    int mono_size = opus_encoder_get_size(1);
+    char *ptr = (char *)ms + align((int)sizeof(*ms));
+    int i;
+    for (i = 0; i < stream_id; i++) {
+        if (i < coupled_streams) {
+            ptr += align(coupled_size);
+        } else {
+            ptr += align(mono_size);
+        }
+    }
+    return (OpusEncoder *)ptr;
 }
 
