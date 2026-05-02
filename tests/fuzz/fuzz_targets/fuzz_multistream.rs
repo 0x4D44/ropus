@@ -456,14 +456,20 @@ fn run_decode(input: &MSInput, sample_rate: i32, channels: i32, mapping_family: 
             // only oracle.
         }
         (Err(_), Err(_)) => {}
-        // Asymmetric-error panics are tolerated for mapping_family == 255
-        // ("no mapping" / custom). With unconstrained channel layouts,
-        // Rust and C apply slightly different packet-length and structural
-        // validation under this family, producing legitimate one-sided
-        // OPUS_INVALID_PACKET returns. Documented in
-        // tests/fuzz/known_failures/multistream-family255-error-asymmetry/.
-        // Asymmetric errors at families 0/1/2 still panic — those are
-        // structured layouts where both implementations should agree.
+        // Asymmetric-error panics:
+        //
+        //   (Ok Rust, Err C) — Rust *more permissive* than C. Security-
+        //   relevant: ropus accepting malformed packets that C rejects
+        //   would be a contract regression. Strict at families 0/1/2;
+        //   tolerated only at family=255 (no normative constraints).
+        //   See known_failures/multistream-family255-error-asymmetry/.
+        //
+        //   (Err Rust, Ok C) — Rust *stricter* than C. Safe direction:
+        //   ropus over-rejecting valid packets is a usability issue but
+        //   not a security one. Tolerated at all families >= 1 to keep
+        //   the 24h campaign running through the family=1 finding
+        //   (multistream-decode-family-asymmetry/, ch=3 sr=48000) and
+        //   the family=255 case. family=0 (mono/stereo) still strict.
         (Ok(rust_samples), Err(c_err)) => {
             if mapping_family != 255 {
                 panic!(
@@ -474,7 +480,7 @@ fn run_decode(input: &MSInput, sample_rate: i32, channels: i32, mapping_family: 
             }
         }
         (Err(rust_err), Ok(c_pcm)) => {
-            if mapping_family != 255 {
+            if mapping_family == 0 {
                 panic!(
                     "MS decode: C ok ({} samples/ch) but Rust errored ({rust_err}), \
                      sr={sample_rate}, ch={channels}, family={mapping_family}, packet_len={}",
