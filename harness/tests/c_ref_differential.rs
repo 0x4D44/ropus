@@ -3687,6 +3687,11 @@ fn test_float_pcm_single_frame_byte_exact_below_analysis_gate() {
     // `roundtrip-float-12k-cx7-vbr-divergence` config. The rest are
     // neighbours that share at least one axis with those configs but
     // never cross `cx >= 10 && sr >= 16k`.
+    //
+    // The column alignment is intentional — the grid is short enough
+    // to read by eye, and the parameters at each axis are easier to
+    // compare side-by-side. Defeat rustfmt's row-shape preference here.
+    #[rustfmt::skip]
     let grid: &[(&str, i32, i32, i32, i32, i32, i32)] = &[
         // ---- Exact minimised repros ----
         ("repro-lowdelay-8k-cbr",     8_000,  1, APP_LOWDELAY, 65_760, 3, 0),
