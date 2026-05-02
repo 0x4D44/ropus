@@ -74,6 +74,13 @@ unsafe extern "C" {
         data: *mut u8,
         max_data_bytes: i32,
     ) -> i32;
+    fn opus_encode_float(
+        st: *mut u8,
+        pcm: *const f32,
+        frame_size: c_int,
+        data: *mut u8,
+        max_data_bytes: i32,
+    ) -> i32;
     fn opus_encoder_destroy(st: *mut u8);
     fn opus_encoder_ctl(st: *mut u8, request: c_int, ...) -> c_int;
     fn opus_decoder_ctl(st: *mut std::ffi::c_void, request: c_int, ...) -> c_int;
@@ -3540,4 +3547,162 @@ fn test_bug_d_silk_budget_bust_matches_c_reference() {
     }
 
     unsafe { opus_encoder_destroy(c_enc) };
+}
+
+// -----------------------------------------------------------------------------
+// Float-PCM single-frame ingest differential
+// -----------------------------------------------------------------------------
+//
+// Long-term oracle for the bug fixed in
+// `wrk_docs/2026.05.02 - HLD - float-pcm-ingest-fix.md`. The Rust
+// `OpusEncoder::encode_float` previously passed `lsb_depth = 24` to
+// `encode_native_with_analysis` while C `opus_encode_float` (under
+// `FIXED_POINT && !ENABLE_RES24`) passes `MAX_ENCODING_DEPTH = 16`. The
+// 8-step delta entered CELT's noise-floor formula and reshuffled bit
+// allocation, producing byte (and sometimes length) divergence on
+// float-PCM input.
+//
+// The grid is intentionally below the analysis-divergence gate
+// (`cx >= 10 && sr >= 16k`) so a failure here cleanly attributes to
+// the float-ingest path. Includes the exact two minimised-repro
+// configurations plus a small handful of neighbours.
+
+/// Generate a deterministic patterned float-PCM buffer in `[-0.5, 0.5]`.
+/// The shape mirrors `patterned_pcm_i16` but in the f32 domain so the
+/// inputs exercise non-trivial bit allocation rather than silence.
+fn patterned_pcm_f32(frame_size: usize, channels: usize, seed: i32) -> Vec<f32> {
+    (0..frame_size * channels)
+        .map(|i| {
+            let base = (((i as i32).wrapping_mul(7919) + seed.wrapping_mul(911)) % 28000) - 14000;
+            // Scale to roughly +/-0.5 so we stay well clear of the float
+            // saturation boundary; the bug we're guarding bites on
+            // ordinary signal levels, not edge clamping.
+            let v = base as f32 / 32768.0;
+            if channels == 2 && i % 2 == 1 {
+                v * 0.5
+            } else {
+                v
+            }
+        })
+        .collect()
+}
+
+/// Single float-PCM differential cell: encode one 20 ms frame with both
+/// the C reference and Rust at the given configuration, assert the
+/// compressed bytes match exactly.
+fn assert_float_encode_byte_exact(
+    label: &str,
+    sample_rate: i32,
+    channels: i32,
+    application: i32,
+    bitrate: i32,
+    complexity: i32,
+    vbr: i32,
+) {
+    // Sanity: the supervisor scoped this grid strictly below the
+    // analysis-divergence class so a failure cleanly attributes to the
+    // float-ingest path. A typo in the table would silently re-introduce
+    // the very ambiguity we're avoiding — guard it.
+    assert!(
+        complexity < 10 || sample_rate < 16000,
+        "[{label}] grid leaked into the analysis-divergence class \
+         (cx={complexity}, sr={sample_rate}); see HLD §6 / Q3"
+    );
+
+    let frame_size: i32 = sample_rate / 50; // 20 ms
+    let pcm = patterned_pcm_f32(
+        frame_size as usize,
+        channels as usize,
+        // Mix the config into the seed so neighbours produce visibly
+        // distinct PCM rather than scaled copies.
+        sample_rate.wrapping_add(channels.wrapping_mul(31)),
+    );
+
+    // C side
+    let c_out = unsafe {
+        let mut error: c_int = 0;
+        let enc = opus_encoder_create(sample_rate, channels, application, &mut error);
+        assert!(
+            !enc.is_null() && error == 0,
+            "[{label}] C encoder create failed: {error}"
+        );
+        opus_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, bitrate);
+        opus_encoder_ctl(enc, OPUS_SET_VBR_REQUEST, vbr);
+        opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY_REQUEST, complexity);
+        let mut out = vec![0u8; 4000];
+        let ret = opus_encode_float(
+            enc,
+            pcm.as_ptr(),
+            frame_size,
+            out.as_mut_ptr(),
+            out.len() as i32,
+        );
+        opus_encoder_destroy(enc);
+        assert!(ret > 0, "[{label}] C encode_float failed: {ret}");
+        out.truncate(ret as usize);
+        out
+    };
+
+    // Rust side
+    let mut rust_enc =
+        OpusEncoder::new(sample_rate, channels, application).expect("Rust encoder create failed");
+    rust_enc.set_bitrate(bitrate);
+    rust_enc.set_vbr(vbr);
+    rust_enc.set_complexity(complexity);
+
+    let mut rust_out = vec![0u8; 4000];
+    let rust_cap = rust_out.len() as i32;
+    let rust_len = rust_enc
+        .encode_float(&pcm, frame_size, &mut rust_out, rust_cap)
+        .unwrap_or_else(|e| panic!("[{label}] Rust encode_float failed: {e}"))
+        as usize;
+
+    assert_eq!(
+        rust_len,
+        c_out.len(),
+        "[{label}] output length mismatch: Rust={rust_len}, C={} \
+         (sr={sample_rate}, ch={channels}, app={application}, \
+          br={bitrate}, cx={complexity}, vbr={vbr})",
+        c_out.len()
+    );
+    assert_eq!(
+        &rust_out[..rust_len],
+        &c_out[..],
+        "[{label}] byte mismatch (sr={sample_rate}, ch={channels}, \
+         app={application}, br={bitrate}, cx={complexity}, vbr={vbr}): \
+         the float-PCM ingest divergence has regressed — see \
+         wrk_docs/2026.05.02 - HLD - float-pcm-ingest-fix.md"
+    );
+}
+
+#[test]
+fn test_float_pcm_single_frame_byte_exact_below_analysis_gate() {
+    const APP_VOIP: i32 = 2048;
+    const APP_AUDIO: i32 = 2049;
+    const APP_LOWDELAY: i32 = 2051;
+
+    // Each row is `(label, sr, ch, application, bitrate, complexity, vbr)`.
+    // The first three rows reproduce the minimised repros: CBR and VBR
+    // variants of `encode-float-lowdelay-8k-divergence` plus the
+    // `roundtrip-float-12k-cx7-vbr-divergence` config. The rest are
+    // neighbours that share at least one axis with those configs but
+    // never cross `cx >= 10 && sr >= 16k`.
+    let grid: &[(&str, i32, i32, i32, i32, i32, i32)] = &[
+        // ---- Exact minimised repros ----
+        ("repro-lowdelay-8k-cbr",     8_000,  1, APP_LOWDELAY, 65_760, 3, 0),
+        ("repro-lowdelay-8k-vbr",     8_000,  1, APP_LOWDELAY, 65_760, 3, 1),
+        ("repro-roundtrip-12k-cx7",  12_000,  2, APP_AUDIO,    71_281, 7, 1),
+        // ---- Neighbours: same axis, perturbed values ----
+        ("nbhr-lowdelay-8k-cx0",      8_000,  1, APP_LOWDELAY, 65_760, 0, 0),
+        ("nbhr-lowdelay-8k-cx9",      8_000,  1, APP_LOWDELAY, 65_760, 9, 0),
+        ("nbhr-lowdelay-8k-stereo",   8_000,  2, APP_LOWDELAY, 65_760, 3, 1),
+        ("nbhr-12k-cx7-cbr",         12_000,  2, APP_AUDIO,    71_281, 7, 0),
+        ("nbhr-12k-cx7-mono",        12_000,  1, APP_AUDIO,    71_281, 7, 1),
+        ("nbhr-12k-voip-cx5",        12_000,  1, APP_VOIP,     32_000, 5, 1),
+        ("nbhr-8k-voip-cx9",          8_000,  2, APP_VOIP,     24_000, 9, 1),
+    ];
+
+    for &(label, sr, ch, app, br, cx, vbr) in grid {
+        assert_float_encode_byte_exact(label, sr, ch, app, br, cx, vbr);
+    }
 }

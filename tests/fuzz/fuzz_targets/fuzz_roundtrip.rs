@@ -70,19 +70,21 @@ const APPLICATIONS: [i32; 3] = [
 // Known-class skip filter — see `fuzz_encode.rs::is_known_class`.
 // Narrow on purpose: each tuple guards exactly the divergence class
 // already documented under `tests/fuzz/known_failures/`.
+//
+// NOTE: The previous entry guarding the
+// `roundtrip-float-12k-cx7-vbr-divergence` class (sr=12000, AUDIO,
+// float-PCM, vbr=true) was retired on 2026-05-02 once the
+// `MAX_ENCODING_DEPTH = 16` fix landed — see
+// `wrk_docs/2026.05.02 - HLD - float-pcm-ingest-fix.md`. The empty
+// stub is kept so future divergence classes have an obvious place to
+// register without churning the call site.
 fn is_known_class(
-    sample_rate: i32,
-    application: i32,
-    use_float_pcm: bool,
-    vbr: bool,
+    _sample_rate: i32,
+    _application: i32,
+    _use_float_pcm: bool,
+    _vbr: bool,
 ) -> bool {
-    // roundtrip-float-12k-cx7-vbr-divergence: sr=12000, AUDIO, float-PCM,
-    // vbr=true. Rust=289B vs C=179B — a rate-control divergence in the
-    // float ingest path.
-    sample_rate == 12000
-        && application == OPUS_APPLICATION_AUDIO
-        && use_float_pcm
-        && vbr
+    false
 }
 
 fn byte_to_bitrate(b0: u8, b1: u8) -> i32 {

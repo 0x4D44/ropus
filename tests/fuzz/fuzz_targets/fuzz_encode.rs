@@ -72,19 +72,21 @@ const APPLICATIONS: [i32; 3] = [
 // Narrow on purpose: each tuple guards exactly the class it documents.
 // Adjacent configs still exercise the differential — the goal is escape
 // from saturation, not blanket suppression.
+//
+// NOTE: The previous entry guarding the
+// `encode-float-lowdelay-8k-divergence` class (sr=8000, ch=1,
+// RESTRICTED_LOWDELAY, float-PCM) was retired on 2026-05-02 once the
+// `MAX_ENCODING_DEPTH = 16` fix landed — see
+// `wrk_docs/2026.05.02 - HLD - float-pcm-ingest-fix.md`. The empty
+// stub is kept so future divergence classes have an obvious place to
+// register without churning the call site.
 fn is_known_class(
-    sample_rate: i32,
-    channels: i32,
-    application: i32,
-    use_float_pcm: bool,
+    _sample_rate: i32,
+    _channels: i32,
+    _application: i32,
+    _use_float_pcm: bool,
 ) -> bool {
-    // encode-float-lowdelay-8k-divergence: sr=8000, ch=1,
-    // RESTRICTED_LOWDELAY, float-PCM. Two repros (CBR + VBR), Rust packs
-    // 2× the bytes in the VBR variant.
-    sample_rate == 8000
-        && channels == 1
-        && application == OPUS_APPLICATION_RESTRICTED_LOWDELAY
-        && use_float_pcm
+    false
 }
 
 /// Map a byte to a bitrate in the valid Opus range.

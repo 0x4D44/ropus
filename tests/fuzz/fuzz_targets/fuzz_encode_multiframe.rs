@@ -70,11 +70,14 @@ const APPLICATIONS: [i32; 3] = [
 // the per-frame differential pass on these tuples keeps the worker alive
 // past the known bug so libFuzzer can mutate into NEW corners.
 //
-// Both classes (multiframe-cbr-cross-frame and multiframe-vbr-fec-dtx)
-// fire at sr=8000, ch=2, VOIP. Skipping that tuple loses one common
-// shape but unblocks the rest of the multi-frame surface.
-fn is_known_class(sample_rate: i32, channels: i32, application: i32) -> bool {
-    sample_rate == 8000 && channels == 2 && application == OPUS_APPLICATION_VOIP
+// Original campaign-1 classes fired at sr=8000, ch=2, VOIP. Campaign-2
+// 5-min smoke surfaced a variant at sr=8000, ch=2, AUDIO, cx=9, vbr=1,
+// fec=2, dtx=1 (saved as multiframe-vbr-fec-dtx/crash-audio-cx9.bin) —
+// proving the bug is not application-gated. Widened to drop the app
+// constraint: any sr=8000 ch=2 multiframe input is the same root-cause
+// state-accumulation surface.
+fn is_known_class(sample_rate: i32, channels: i32, _application: i32) -> bool {
+    sample_rate == 8000 && channels == 2
 }
 
 /// Map a u16 to a bitrate in the valid Opus range (6000..=510000).

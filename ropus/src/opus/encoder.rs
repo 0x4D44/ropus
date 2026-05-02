@@ -1566,7 +1566,12 @@ impl OpusEncoder {
             frame_size,
             data,
             max_data_bytes,
-            24,
+            // C `opus_encode_float` passes `MAX_ENCODING_DEPTH`, which is
+            // 16 under `FIXED_POINT && !ENABLE_RES24` (the build the
+            // harness links). Passing 24 here over-deepens CELT's
+            // noise-floor formula and reshuffles bit allocation. See
+            // `wrk_docs/2026.05.02 - HLD - float-pcm-ingest-fix.md`.
+            MAX_ENCODING_DEPTH,
             Some((pcm_bytes, analysis_frame_size, downmix_float as DownmixFunc)),
         )
     }

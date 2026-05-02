@@ -437,6 +437,14 @@ pub unsafe extern "C" fn opus_multistream_encode_float(
     // ropus's MS encoder doesn't expose a float encode entry point publicly.
     // The api test never calls this on a non-null state (it's only referenced
     // indirectly via the MALLOC_FAIL path, which is skipped without glibc).
+    //
+    // When this is wired, the float→i16 conversion must hand
+    // `MAX_ENCODING_DEPTH` (= 16, see `ropus/src/types.rs`) to
+    // `OpusEncoder::encode_native_with_analysis`, mirroring C
+    // `opus_multistream_encode_float`. Passing 24 (the float-build
+    // value) reshuffles CELT bit allocation and breaks byte-exact
+    // differential testing — see
+    // `wrk_docs/2026.05.02 - HLD - float-pcm-ingest-fix.md`.
     ffi_guard!(OPUS_INTERNAL_ERROR, {
         let _ = pcm;
         let _ = frame_size;

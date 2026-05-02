@@ -87,12 +87,16 @@ for spec in "${TARGET_JOBS[@]}"; do
     mkdir -p "$ARTIFACTS" "$CAPTURE"
     (
         export FUZZ_PANIC_CAPTURE_DIR="$CAPTURE"
-        # `-fork=N`: parent stays alive and records artifacts; children
-        # restart automatically on panic. `-ignore_crashes=0` (default)
-        # means: save the crash, do not terminate the parent.
+        # `-fork=N` + `-ignore_crashes=1`: with =0 (the default) the
+        # parent libFuzzer process EXITS on the first child panic,
+        # which campaign-2's 5-min smoke confirmed in the wild — both
+        # heaviest targets dead within minutes. With =1 the parent
+        # saves the artifact and respawns the child, fuzzing continues
+        # for the full -max_total_time. The per-class skip filters
+        # inside the targets are belt-and-braces.
         cargo +nightly fuzz run --fuzz-dir tests/fuzz "$t" -- \
             -fork="$forks" \
-            -ignore_crashes=0 \
+            -ignore_crashes=1 \
             -ignore_timeouts=1 \
             -ignore_ooms=1 \
             -max_total_time="$DURATION" \

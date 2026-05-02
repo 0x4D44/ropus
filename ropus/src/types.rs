@@ -32,6 +32,20 @@ pub const Q15_ONE: i32 = 32767;
 pub const CELT_SIG_SCALE: f32 = 32768.0;
 pub const CELT_LPC_ORDER: usize = 24;
 
+/// Maximum effective `lsb_depth` the public encode entry points may pass
+/// through to `opus_encode_native`. Mirrors the C reference's
+/// `MAX_ENCODING_DEPTH` macro at `reference/celt/arch.h:176`, which is
+/// **16** in the `FIXED_POINT && !ENABLE_RES24` build the harness links
+/// against (see `harness/config.h:7-8`). The constant flips to `24`
+/// under `ENABLE_RES24`, but ropus does not currently support 24-bit
+/// residual encoding, so the fixed-point value applies unconditionally.
+///
+/// This value enters CELT's noise-floor formula in `dynalloc_analysis`
+/// (`ropus/src/celt/encoder.rs`), so any drift from the C reference
+/// reshuffles bit allocation and breaks byte-exact differential
+/// testing — see `wrk_docs/2026.05.02 - HLD - float-pcm-ingest-fix.md`.
+pub const MAX_ENCODING_DEPTH: i32 = 16;
+
 // ---------------------------------------------------------------------------
 // EC_ILOG (from ecintrin.h)
 // ---------------------------------------------------------------------------
