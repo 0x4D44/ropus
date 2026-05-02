@@ -501,6 +501,73 @@ pub fn c_decode_multiframe(
     }
 }
 
+/// Decode a sequence of packets through one stateful C decoder, applying a
+/// per-frame drop schedule. `dropped[i] == true` calls `opus_decode(NULL, 0, ...)`
+/// (PLC) instead of decoding `packets[i]`. `frame_size` is passed unchanged
+/// per frame — caller picks the longest plausible frame for the configured
+/// sample rate (e.g. 5760 = 120 ms at 48 kHz).
+///
+/// Returns one Vec<i16> per scheduled frame (PCM, length = decoded_samples *
+/// channels) so callers can do per-frame parity against the Rust mirror. On
+/// per-frame error, that slot is `Err(code)` but decoding continues for the
+/// remaining frames — matches the Rust mirror's behaviour during PLC sweeps.
+pub fn c_decode_seq_with_drops(
+    packets: &[&[u8]],
+    dropped: &[bool],
+    sample_rate: i32,
+    channels: i32,
+    frame_size: i32,
+) -> Result<Vec<Result<Vec<i16>, i32>>, i32> {
+    if packets.len() != dropped.len() {
+        return Err(-1);
+    }
+    unsafe {
+        let mut error: c_int = 0;
+        let dec = opus_decoder_create(sample_rate, channels, &mut error);
+        if dec.is_null() || error != OPUS_OK {
+            if !dec.is_null() {
+                opus_decoder_destroy(dec);
+            }
+            return Err(error);
+        }
+
+        let max_pcm = frame_size as usize * channels as usize;
+        let mut results: Vec<Result<Vec<i16>, i32>> = Vec::with_capacity(packets.len());
+
+        for (pkt, &drop) in packets.iter().zip(dropped.iter()) {
+            let mut pcm = vec![0i16; max_pcm];
+            let ret = if drop {
+                opus_decode(
+                    dec,
+                    std::ptr::null(),
+                    0,
+                    pcm.as_mut_ptr(),
+                    frame_size,
+                    0,
+                )
+            } else {
+                opus_decode(
+                    dec,
+                    pkt.as_ptr(),
+                    pkt.len() as opus_int32,
+                    pcm.as_mut_ptr(),
+                    frame_size,
+                    0,
+                )
+            };
+            if ret < 0 {
+                results.push(Err(ret as i32));
+            } else {
+                pcm.truncate(ret as usize * channels as usize);
+                results.push(Ok(pcm));
+            }
+        }
+
+        opus_decoder_destroy(dec);
+        Ok(results)
+    }
+}
+
 /// Get bandwidth from first byte of a packet using the C reference.
 pub fn c_packet_get_bandwidth(data: &[u8]) -> i32 {
     if data.is_empty() {

@@ -68,3 +68,8 @@ doc = false
 name = "fuzz_multistream"
 path = "fuzz_targets/fuzz_multistream.rs"
 doc = false
+
+[[bin]]
+name = "fuzz_decode_plc_seq"
+path = "fuzz_targets/fuzz_decode_plc_seq.rs"
+doc = false
