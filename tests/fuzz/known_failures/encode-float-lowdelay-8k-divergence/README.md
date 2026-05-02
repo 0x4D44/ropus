@@ -13,11 +13,19 @@ cargo +nightly fuzz run --fuzz-dir tests/fuzz fuzz_encode \
 
 ## Symptom
 
-- `sr=8000, ch=1, application=2051 (RESTRICTED_LOWDELAY),
-  bitrate=65760, complexity=3, vbr=false, float-PCM input,
-  packet_len=164`
-- Rust and C produce 164-byte compressed packets (length matches),
-  but the bytes differ.
+Variants captured (sr=8000, ch=1, RESTRICTED_LOWDELAY (2051),
+bitrate=65760, complexity=3, float-PCM input):
+
+| Repro | vbr | fec | Outcome |
+|---|---|---|---|
+| crash-00 | 0 | 0 | 164B = 164B (bytes diverge) |
+| crash-01-vbr-len-mismatch | 1 | 0 | Rust=308B vs C=123B (length divergence) |
+
+The CBR case produces the same-length-different-bytes pattern; the
+VBR case produces an outright length divergence — Rust packs more
+than 2× the bytes C does for the same input. Cross-mode variation
+matches the multistream-encode-bytes-divergence shape (where the
+4 variants span CBR/VBR/cx 4/6/9 too).
 
 ## Why this is significant
 
@@ -52,9 +60,11 @@ could surface as quality issues.
 
 ## Detected
 
-2026-05-02 ~05:38 BST, 24h fuzz campaign hour 6. Killed
-fuzz_encode w0 (w1 still alive). Captured at
-`fuzz_encode/artifacts-w0/`.
+2026-05-02 hours 6 + 12 of 24h fuzz campaign. crash-00 killed
+fuzz_encode w0 at hour 6 (CBR variant). crash-01-vbr-len-mismatch
+killed fuzz_encode w1 at hour 12 (VBR variant). Both fuzz_encode
+workers retired for the rest of the campaign — same encode-path
+class will keep being hit on restart.
 
 ## Fix scope
 
