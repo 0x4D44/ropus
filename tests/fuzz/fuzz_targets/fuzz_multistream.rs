@@ -462,38 +462,24 @@ fn run_decode(input: &MSInput, sample_rate: i32, channels: i32, mapping_family: 
             // only oracle.
         }
         (Err(_), Err(_)) => {}
-        // Asymmetric-error panics:
-        //
-        //   (Ok Rust, Err C) — Rust *more permissive* than C. Security-
-        //   relevant: ropus accepting malformed packets that C rejects
-        //   would be a contract regression. Strict at families 0/1/2;
-        //   tolerated only at family=255 (no normative constraints).
-        //   See known_failures/multistream-family255-error-asymmetry/.
-        //
-        //   (Err Rust, Ok C) — Rust *stricter* than C. Safe direction:
-        //   ropus over-rejecting valid packets is a usability issue but
-        //   not a security one. Tolerated at all families >= 1 to keep
-        //   the 24h campaign running through the family=1 finding
-        //   (multistream-decode-family-asymmetry/, ch=3 sr=48000) and
-        //   the family=255 case. family=0 (mono/stereo) still strict.
+        // Asymmetric decode errors are no longer tolerated. The old family=1
+        // over-rejection and family=255 mismatch repros were both closed by
+        // making multistream validation use the same full packet parser as C
+        // (Worker B journal, 2026-05-03).
         (Ok(rust_samples), Err(c_err)) => {
-            if mapping_family != 255 {
-                panic!(
-                    "MS decode: Rust ok ({rust_samples} samples) but C errored ({c_err}), \
-                     sr={sample_rate}, ch={channels}, family={mapping_family}, packet_len={}",
-                    input.payload.len()
-                );
-            }
+            panic!(
+                "MS decode: Rust ok ({rust_samples} samples) but C errored ({c_err}), \
+                 sr={sample_rate}, ch={channels}, family={mapping_family}, packet_len={}",
+                input.payload.len()
+            );
         }
         (Err(rust_err), Ok(c_pcm)) => {
-            if mapping_family == 0 {
-                panic!(
-                    "MS decode: C ok ({} samples/ch) but Rust errored ({rust_err}), \
-                     sr={sample_rate}, ch={channels}, family={mapping_family}, packet_len={}",
-                    c_pcm.len() / channels as usize,
-                    input.payload.len()
-                );
-            }
+            panic!(
+                "MS decode: C ok ({} samples/ch) but Rust errored ({rust_err}), \
+                 sr={sample_rate}, ch={channels}, family={mapping_family}, packet_len={}",
+                c_pcm.len() / channels as usize,
+                input.payload.len()
+            );
         }
     }
 }
