@@ -7999,80 +7999,19 @@ pub fn silk_encode(
 
         // --- Encode if we have a full sub-frame ---
         if enc.state_fxx[0].s_cmn.input_buf_ix >= frame_length {
-            // --- Prefill mode ---
-            // C (enc_API.c:409-532) runs HP variable cutoff, sMid buffering,
-            // VAD, and silk_encode_frame even during prefill. The Rust prefill
-            // path must match to keep persistent state (s_vad, sMid) aligned.
-            if prefill_flag != 0 {
-                // HP variable cutoff (C enc_API.c:409) — runs unconditionally
-                silk_hp_variable_cutoff(&mut enc.state_fxx[0]);
-                // sMid buffering for mono (C enc_API.c:476-478)
-                if n_channels_internal == 1 {
-                    let fl = frame_length as usize;
-                    enc.state_fxx[0].s_cmn.input_buf[0] = enc.s_stereo.s_mid[0];
-                    enc.state_fxx[0].s_cmn.input_buf[1] = enc.s_stereo.s_mid[1];
-                    if fl + 2 <= enc.state_fxx[0].s_cmn.input_buf.len() {
-                        enc.s_stereo.s_mid[0] = enc.state_fxx[0].s_cmn.input_buf[fl];
-                        enc.s_stereo.s_mid[1] = enc.state_fxx[0].s_cmn.input_buf[fl + 1];
-                    }
-                }
-                // VAD on channel 0 (C enc_API.c:480)
-                {
-                    let fl = frame_length as usize;
-                    let input_copy = enc.state_fxx[0].s_cmn.input_buf[1..1 + fl].to_vec();
-                    silk_vad_get_sa_q8(&mut enc.state_fxx[0].s_cmn, &input_copy);
-                    silk_encode_do_vad_fix(&mut enc.state_fxx[0], activity);
-                }
-
-                // Compute target rate for prefill (C enc_API.c:412-443)
-                // LBRR subtraction and bit balance are skipped (guarded by !prefillFlag in C).
-                // Bit reservoir decay is included for structural parity with the normal
-                // path (n_bits_exceeded is 0 after init, so the subtraction is a no-op).
-                const BITRESERVOIR_DECAY_TIME_MS: i32 = 500;
-                let mut n_bits_target = silk_div32_16(
-                    silk_mul(enc_control.bit_rate, enc_control.payload_size_ms),
-                    1000,
-                );
-                n_bits_target = silk_div32_16(n_bits_target, n_frames_per_packet);
-                let mut target_rate = if enc_control.payload_size_ms == 10 {
-                    silk_smulbb(n_bits_target, 100)
-                } else {
-                    silk_smulbb(n_bits_target, 50)
-                };
-                target_rate -= silk_div32_16(
-                    silk_mul(enc.n_bits_exceeded, 1000),
-                    BITRESERVOIR_DECAY_TIME_MS,
-                );
-                let target_rate = target_rate.max(5000).min(enc_control.bit_rate);
-
-                for n in 0..n_channels_internal {
-                    if target_rate > 0 {
-                        silk_control_snr(&mut enc.state_fxx[n].s_cmn, target_rate);
-                    }
-
-                    let mut dummy_bytes = 0i32;
-                    silk_encode_frame_fix(
-                        &mut enc.state_fxx[n],
-                        &mut dummy_bytes,
-                        range_enc,
-                        CODE_INDEPENDENTLY,
-                        0,
-                        0,
-                    );
-                    enc.state_fxx[n].s_cmn.controlled_since_last_payload = 0;
-                    enc.state_fxx[n].s_cmn.input_buf_ix = 0;
-                    enc.state_fxx[n].s_cmn.n_frames_encoded += 1;
-                }
-                if n_samples_remaining <= 0 {
-                    break;
-                }
-                curr_block += 1;
-                continue;
-            }
-
+            // The body below is the unified C `silk_Encode` flow (enc_API.c:412-648).
+            // C runs every step (HP cutoff, target rate, LR->MS, side-channel
+            // reset gate, VAD, control_SNR, silk_encode_frame_Fxx) on both the
+            // normal and prefill paths; only entropy-coder writes (LBRR coding,
+            // stereo encode_pred / mid_only, patch_initial_bits) and the
+            // post-payload bit-reservoir / bandwidth-switch update are gated by
+            // `!prefillFlag`. Mirroring that structure keeps cross-frame state
+            // (s_stereo smoothing, VAD, sMid) aligned with C across CELT-only ->
+            // SILK transitions, which is the Cluster A B1 fix surface.
+            //
             // --- LBRR encoding (first sub-frame only) ---
-            // Matches C enc_API.c:355-406
-            if enc.state_fxx[0].s_cmn.n_frames_encoded == 0 {
+            // Matches C enc_API.c:418-468 (`!prefillFlag` guard at L418).
+            if enc.state_fxx[0].s_cmn.n_frames_encoded == 0 && prefill_flag == 0 {
                 // Create space at start of payload for VAD and FEC flags
                 let shift = ((n_frames_per_packet + 1) * n_channels_internal as i32) as u32;
                 let icdf = [(256u32 - (256u32 >> shift)) as u8, 0u8];
@@ -8435,7 +8374,15 @@ pub fn silk_encode(
             }
 
             // --- Check if packet is complete ---
-            if enc.state_fxx[0].s_cmn.n_frames_encoded >= n_frames_per_packet {
+            // C enc_API.c:613 gates the entire post-payload block on
+            // `*nBytesOut > 0 && nFramesEncoded == nFramesPerPacket`. During
+            // prefill, silk_encode_frame_Fxx returns *nBytesOut = 0, which
+            // collapses C's check to false. We mirror that effect by adding
+            // an explicit `prefill_flag == 0` gate so that LBRR-flag
+            // patching, bit-reservoir update, and bandwidth-switch are all
+            // skipped during prefill (state must not advance past the
+            // prefill payload, which is discarded).
+            if prefill_flag == 0 && enc.state_fxx[0].s_cmn.n_frames_encoded >= n_frames_per_packet {
                 // Build VAD/LBRR flags
                 let mut flags: u32 = 0;
                 for n in 0..n_channels_internal {
@@ -8446,7 +8393,7 @@ pub fn silk_encode(
                     flags = flags << 1;
                     flags |= enc.state_fxx[n].s_cmn.lbrr_flag as u32;
                 }
-                if prefill_flag == 0 {
+                {
                     let n_bits = ((n_frames_per_packet + 1) * n_channels_internal as i32) as u32;
                     range_enc.patch_initial_bits(flags, n_bits);
                 }
