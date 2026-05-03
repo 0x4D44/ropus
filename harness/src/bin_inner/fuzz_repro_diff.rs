@@ -842,9 +842,10 @@ fn read_c_silk_trace() -> Vec<ropus::silk_trace::Tuple> {
             n_bits_used_lbrr,
             mid_only_flag,
             prev_decode_only_middle,
-            // V1 7-tuple grid leaves V2 fields at defaults (iter=0,
-            // payload=[]); the V2 trace ring is read separately by
-            // `dbg_silk_trace_read_payload` when added in Stage 2/3.
+            // V1 7-tuple grid leaves V2 fields at defaults (iter=-1
+            // per the custom `Default` impl, payload=[]); the V2 trace
+            // ring is read separately by `dbg_silk_trace_read_payload`
+            // when added in Stage 2/3.
             ..Default::default()
         });
     }

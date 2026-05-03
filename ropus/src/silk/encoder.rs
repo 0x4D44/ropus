@@ -7050,6 +7050,17 @@ pub fn silk_encode_frame_fix(
 
     let bits_margin = if use_cbr != 0 { 5 } else { max_bits / 4 };
 
+    // V2 trace boundaries (100..=109) emitted from this function all use
+    // `channel: -1` as a sentinel.
+    //
+    // Rationale: the C side stamps `channel` from the file-scope global
+    // `dbg_silk_trace_current_channel` (set by `silk_Encode` one level up,
+    // which knows whether it is encoding the mid/side or mono channel).
+    // Inside `silk_encode_frame_fix` itself, the channel index is not
+    // visible without changing the function signature, so we emit -1 and
+    // Stage 4's diff tool ignores the `channel` field for tuples with
+    // `boundary_id >= 100`. V1 boundaries (1..=7), emitted from
+    // `silk_Encode`, do carry the real channel index.
     ps_enc.s_cmn.indices.seed = ((ps_enc.s_cmn.frame_counter as u8) & 3) as i8;
     ps_enc.s_cmn.frame_counter += 1;
 
@@ -7062,6 +7073,23 @@ pub fn silk_encode_frame_fix(
         &mut ps_enc.s_cmn.input_buf[1..],
         frame_length,
     );
+
+    // Phase C boundary 100: after silk_lp_variable_cutoff. Payload =
+    // input_buf[1..=frame_length] (i16 cast to i32). Mirrors C
+    // harness/silk_encode_frame_FIX_traced.c boundary 100.
+    #[cfg(feature = "trace-silk-encode")]
+    if ps_enc.s_cmn.prefill_flag == 0 {
+        let mut payload = Vec::with_capacity(frame_length);
+        for i in 0..frame_length {
+            payload.push(ps_enc.s_cmn.input_buf[1 + i] as i32);
+        }
+        crate::silk_trace::push(crate::silk_trace::Tuple {
+            boundary_id: 100,
+            channel: -1,
+            payload,
+            ..Default::default()
+        });
+    }
 
     // Copy input to x_buf
     let copy_start = x_frame_offset + la_shape;
@@ -7087,6 +7115,25 @@ pub fn silk_encode_frame_fix(
             0,
         );
 
+        // Phase C boundary 101: after silk_find_pitch_lags_fix. Payload =
+        // pitch_l[0..nb_subfr] ++ [lag_index, contour_index]. Mirrors C
+        // boundary 101.
+        #[cfg(feature = "trace-silk-encode")]
+        {
+            let mut payload = Vec::with_capacity(nb_subfr + 2);
+            for i in 0..nb_subfr {
+                payload.push(s_enc_ctrl.pitch_l[i]);
+            }
+            payload.push(ps_enc.s_cmn.indices.lag_index as i32);
+            payload.push(ps_enc.s_cmn.indices.contour_index as i32);
+            crate::silk_trace::push(crate::silk_trace::Tuple {
+                boundary_id: 101,
+                channel: -1,
+                payload,
+                ..Default::default()
+            });
+        }
+
         // Noise shape analysis
         // C does x_ptr = x - psEnc->sCmn.la_shape inside noise_shape_analysis.
         // Use the state variable la_shape (complexity-dependent), NOT the
@@ -7099,6 +7146,41 @@ pub fn silk_encode_frame_fix(
             &res_pitch[ltp_mem..],
             &x_frame_copy,
         );
+
+        // Phase C boundary 102: after silk_noise_shape_analysis_fix.
+        // Payload = harm_shape_gain_q14[0..nb_subfr]
+        //        ++ tilt_q14[0..nb_subfr]
+        //        ++ lf_shp_q14[0..nb_subfr]
+        //        ++ gains_unq_q16[0..nb_subfr]
+        //        ++ [HarmBoost_smth_Q16, harm_shape_gain_smth (Tilt_smth_Q16
+        //           in C)]. The C HarmBoost_smth_Q16 field is declared but
+        //        never written, so it is always 0; the Rust port omits it,
+        //        so we emit 0 here. The C Tilt_smth_Q16 field maps to Rust
+        //        s_shape.tilt_smth (same Q16 semantics).
+        #[cfg(feature = "trace-silk-encode")]
+        {
+            let mut payload = Vec::with_capacity(4 * nb_subfr + 2);
+            for i in 0..nb_subfr {
+                payload.push(s_enc_ctrl.harm_shape_gain_q14[i]);
+            }
+            for i in 0..nb_subfr {
+                payload.push(s_enc_ctrl.tilt_q14[i]);
+            }
+            for i in 0..nb_subfr {
+                payload.push(s_enc_ctrl.lf_shp_q14[i]);
+            }
+            for i in 0..nb_subfr {
+                payload.push(s_enc_ctrl.gains_unq_q16[i]);
+            }
+            payload.push(0); // HarmBoost_smth_Q16 — unused in C, absent in Rust
+            payload.push(ps_enc.s_shape.tilt_smth);
+            crate::silk_trace::push(crate::silk_trace::Tuple {
+                boundary_id: 102,
+                channel: -1,
+                payload,
+                ..Default::default()
+            });
+        }
 
         // Find prediction coefficients (LPC + LTP)
         // C passes res_pitch_frame = res_pitch + ltp_mem as the pointer,
@@ -7115,12 +7197,110 @@ pub fn silk_encode_frame_fix(
             cond_coding,
         );
 
+        // Phase C boundary 103: after silk_find_pred_coefs_fix.
+        // Payload = pred_coef_q12[0][0..MAX_LPC_ORDER]
+        //        ++ pred_coef_q12[1][0..MAX_LPC_ORDER]
+        //        ++ ltp_coef_q14[0..LTP_ORDER * nb_subfr]
+        //        ++ ar_q13[0..MAX_SHAPE_LPC_ORDER * nb_subfr]
+        //        ++ [ltp_scale_q14]
+        //        ++ nlsf_indices[0..MAX_LPC_ORDER+1]
+        //        ++ ltp_index[0..nb_subfr]
+        //        ++ [ltp_scale_index, nlsf_interp_coef_q2].
+        #[cfg(feature = "trace-silk-encode")]
+        {
+            let mut payload = Vec::with_capacity(
+                2 * MAX_LPC_ORDER
+                    + LTP_ORDER * nb_subfr
+                    + MAX_SHAPE_LPC_ORDER * nb_subfr
+                    + 1
+                    + (MAX_LPC_ORDER + 1)
+                    + nb_subfr
+                    + 2,
+            );
+            for i in 0..MAX_LPC_ORDER {
+                payload.push(s_enc_ctrl.pred_coef_q12[0][i] as i32);
+            }
+            for i in 0..MAX_LPC_ORDER {
+                payload.push(s_enc_ctrl.pred_coef_q12[1][i] as i32);
+            }
+            for i in 0..(LTP_ORDER * nb_subfr) {
+                payload.push(s_enc_ctrl.ltp_coef_q14[i] as i32);
+            }
+            for i in 0..(MAX_SHAPE_LPC_ORDER * nb_subfr) {
+                payload.push(s_enc_ctrl.ar_q13[i] as i32);
+            }
+            payload.push(s_enc_ctrl.ltp_scale_q14);
+            for i in 0..=MAX_LPC_ORDER {
+                payload.push(ps_enc.s_cmn.indices.nlsf_indices[i] as i32);
+            }
+            for i in 0..nb_subfr {
+                payload.push(ps_enc.s_cmn.indices.ltp_index[i] as i32);
+            }
+            payload.push(ps_enc.s_cmn.indices.ltp_scale_index as i32);
+            payload.push(ps_enc.s_cmn.indices.nlsf_interp_coef_q2 as i32);
+            crate::silk_trace::push(crate::silk_trace::Tuple {
+                boundary_id: 103,
+                channel: -1,
+                payload,
+                ..Default::default()
+            });
+        }
+
         // Process gains
         silk_process_gains_fix(ps_enc, &mut s_enc_ctrl, cond_coding);
+
+        // Phase C boundary 104: after silk_process_gains_fix. Payload =
+        // gains_q16[0..nb_subfr] ++ [lambda_q10, last_gain_index_prev]
+        //                       ++ gains_indices[0..nb_subfr].
+        #[cfg(feature = "trace-silk-encode")]
+        {
+            let mut payload = Vec::with_capacity(2 * nb_subfr + 2);
+            for i in 0..nb_subfr {
+                payload.push(s_enc_ctrl.gains_q16[i]);
+            }
+            payload.push(s_enc_ctrl.lambda_q10);
+            payload.push(s_enc_ctrl.last_gain_index_prev as i32);
+            for i in 0..nb_subfr {
+                payload.push(ps_enc.s_cmn.indices.gains_indices[i] as i32);
+            }
+            crate::silk_trace::push(crate::silk_trace::Tuple {
+                boundary_id: 104,
+                channel: -1,
+                payload,
+                ..Default::default()
+            });
+        }
 
         // Low Bitrate Redundant Encoding (matches C encode_frame_FIX.c:172)
         let lbrr_input = ps_enc.x_buf[x_frame_offset..x_frame_offset + frame_length].to_vec();
         silk_lbrr_encode_fix(ps_enc, &mut s_enc_ctrl, &lbrr_input, cond_coding);
+
+        // Phase C boundary 105: after silk_lbrr_encode_fix. Payload =
+        // gains_q16[0..nb_subfr] (round-trip restore check)
+        //   ++ [lbrr_flags[n_frames_encoded]]
+        //   ++ indices_lbrr[n_frames_encoded].gains_indices[0..nb_subfr]
+        //   ++ [indices_lbrr[n_frames_encoded].signal_type,
+        //       indices_lbrr[n_frames_encoded].quant_offset_type].
+        #[cfg(feature = "trace-silk-encode")]
+        {
+            let nfe = ps_enc.s_cmn.n_frames_encoded as usize;
+            let mut payload = Vec::with_capacity(2 * nb_subfr + 3);
+            for i in 0..nb_subfr {
+                payload.push(s_enc_ctrl.gains_q16[i]);
+            }
+            payload.push(ps_enc.s_cmn.lbrr_flags[nfe]);
+            for i in 0..nb_subfr {
+                payload.push(ps_enc.s_cmn.indices_lbrr[nfe].gains_indices[i] as i32);
+            }
+            payload.push(ps_enc.s_cmn.indices_lbrr[nfe].signal_type as i32);
+            payload.push(ps_enc.s_cmn.indices_lbrr[nfe].quant_offset_type as i32);
+            crate::silk_trace::push(crate::silk_trace::Tuple {
+                boundary_id: 105,
+                channel: -1,
+                payload,
+                ..Default::default()
+            });
+        }
 
         // Rate control loop: NSQ + encode (matches C encode_frame_FIX.c)
         let max_iter: i32 = 6;
@@ -7153,6 +7333,30 @@ pub fn silk_encode_frame_fix(
         let mut best_sum = [0i32; MAX_NB_SUBFR];
 
         for iter in 0..=max_iter {
+            // Phase C boundary 106: pre-NSQ rate-control loop entry, once
+            // per iter. Payload = [iter, gains_id, gains_id_lower,
+            // gains_id_upper, found_lower as i32, found_upper as i32,
+            // gain_mult_q8 as i32].
+            #[cfg(feature = "trace-silk-encode")]
+            {
+                let payload = vec![
+                    iter,
+                    gains_id,
+                    gains_id_lower,
+                    gains_id_upper,
+                    found_lower as i32,
+                    found_upper as i32,
+                    gain_mult_q8 as i32,
+                ];
+                crate::silk_trace::push(crate::silk_trace::Tuple {
+                    boundary_id: 106,
+                    channel: -1,
+                    iter,
+                    payload,
+                    ..Default::default()
+                });
+            }
+
             let mut n_bits: i32;
             if gains_id == gains_id_lower && found_lower {
                 n_bits = n_bits_lower;
@@ -7214,6 +7418,34 @@ pub fn silk_encode_frame_fix(
                 ps_enc.s_cmn.indices = indices;
                 ps_enc.s_cmn.pulses = pulses;
 
+                // Phase C boundary 107: post-NSQ, once per iter. Payload =
+                // [iter] ++ pulses[0..frame_length] (i8 cast to i32)
+                //        ++ [signal_type, quant_offset_type, indices.seed, lag_prev].
+                #[cfg(feature = "trace-silk-encode")]
+                {
+                    let mut payload = Vec::with_capacity(1 + frame_length + 4);
+                    payload.push(iter);
+                    for i in 0..frame_length {
+                        payload.push(ps_enc.s_cmn.pulses[i] as i32);
+                    }
+                    payload.push(ps_enc.s_cmn.indices.signal_type as i32);
+                    payload.push(ps_enc.s_cmn.indices.quant_offset_type as i32);
+                    // Mirror C `psEnc->sCmn.indices.Seed` (i8 frame-counter-derived
+                    // seed, set once at function entry; unchanged by NSQ). Do NOT
+                    // read `s_nsq.rand_seed` — that field is mutated every NSQ
+                    // sample call (`silk_RAND`, `+= pulses[i]`) and would diverge
+                    // spuriously vs. the static C `indices.Seed` snapshot.
+                    payload.push(ps_enc.s_cmn.indices.seed as i32);
+                    payload.push(ps_enc.s_cmn.s_nsq.lag_prev);
+                    crate::silk_trace::push(crate::silk_trace::Tuple {
+                        boundary_id: 107,
+                        channel: -1,
+                        iter,
+                        payload,
+                        ..Default::default()
+                    });
+                }
+
                 // Save state before encode if last iteration and no lower found
                 let rc_snap_pre_encode = if iter == max_iter && !found_lower {
                     Some(range_enc.save_snapshot())
@@ -7230,6 +7462,28 @@ pub fn silk_encode_frame_fix(
                     cond_coding,
                 );
 
+                // Phase C boundary 108: post-silk_encode_indices, once per
+                // iter. Payload = [iter, ec_tell, rng_lo, rng_hi] where
+                // rng is split into low/high 16-bit halves to match the C
+                // side's u32→i32 emission.
+                #[cfg(feature = "trace-silk-encode")]
+                {
+                    let rng = range_enc.get_rng();
+                    let payload = vec![
+                        iter,
+                        range_enc.tell(),
+                        (rng & 0xFFFF) as i32,
+                        ((rng >> 16) & 0xFFFF) as i32,
+                    ];
+                    crate::silk_trace::push(crate::silk_trace::Tuple {
+                        boundary_id: 108,
+                        channel: -1,
+                        iter,
+                        payload,
+                        ..Default::default()
+                    });
+                }
+
                 // Encode pulses
                 silk_encode_pulses(
                     range_enc,
@@ -7240,6 +7494,26 @@ pub fn silk_encode_frame_fix(
                 );
 
                 n_bits = range_enc.tell();
+
+                // Phase C boundary 109: post-silk_encode_pulses, once per
+                // iter. Payload = [iter, ec_tell, rng_lo, rng_hi].
+                #[cfg(feature = "trace-silk-encode")]
+                {
+                    let rng = range_enc.get_rng();
+                    let payload = vec![
+                        iter,
+                        n_bits,
+                        (rng & 0xFFFF) as i32,
+                        ((rng >> 16) & 0xFFFF) as i32,
+                    ];
+                    crate::silk_trace::push(crate::silk_trace::Tuple {
+                        boundary_id: 109,
+                        channel: -1,
+                        iter,
+                        payload,
+                        ..Default::default()
+                    });
+                }
 
                 // Damage control: last iteration, no lower bound, still over budget
                 if iter == max_iter && !found_lower && n_bits > max_bits {
