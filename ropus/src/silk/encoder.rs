@@ -1600,10 +1600,11 @@ fn silk_setup_resamplers(ps_enc: &mut SilkEncoderStateFix, fs_khz: i32) -> i32 {
 
             // Temp resampler: internal rate → API rate
             let mut temp_resampler = SilkResamplerState::default();
-            silk_resampler_init(
+            crate::silk::decoder::silk_resampler_init_pub(
                 &mut temp_resampler,
                 ps_enc.s_cmn.fs_khz * 1000,
                 ps_enc.s_cmn.api_fs_hz,
+                false,
             );
 
             let api_buf_samples = buf_length_ms * (ps_enc.s_cmn.api_fs_hz / 1000);
@@ -9959,6 +9960,47 @@ mod tests {
         assert_eq!(enc.s_cmn.resampler_state.fs_in_khz, 24);
         assert_eq!(enc.s_cmn.resampler_state.fs_out_khz, 12);
         assert!(enc.x_buf.iter().take(156).any(|&sample| sample != 0));
+
+        let mut downshift = SilkEncoderStateFix::default();
+        assert_eq!(silk_init_encoder(&mut downshift), 0);
+        downshift.s_cmn.fs_khz = 12;
+        downshift.s_cmn.nb_subfr = 4;
+        downshift.s_cmn.api_fs_hz = 12000;
+        downshift.s_cmn.prev_api_fs_hz = 12000;
+        for (i, sample) in downshift.x_buf.iter_mut().take(300).enumerate() {
+            *sample = (i as i16).wrapping_mul(3).wrapping_sub(400);
+        }
+
+        let buf_length_ms = (downshift.s_cmn.nb_subfr * 5) * 2 + LA_SHAPE_MS;
+        let old_buf_samples = (buf_length_ms * downshift.s_cmn.fs_khz) as usize;
+        let api_buf_samples = (buf_length_ms * (downshift.s_cmn.api_fs_hz / 1000)) as usize;
+        let mut temp_resampler = SilkResamplerState::default();
+        crate::silk::decoder::silk_resampler_init_pub(
+            &mut temp_resampler,
+            downshift.s_cmn.fs_khz * 1000,
+            downshift.s_cmn.api_fs_hz,
+            false,
+        );
+        assert_eq!(temp_resampler.input_delay, 9);
+        let mut x_buf_api = vec![0i16; api_buf_samples];
+        silk_resampler_run(
+            &mut temp_resampler,
+            &mut x_buf_api,
+            &downshift.x_buf[..old_buf_samples],
+        );
+
+        let mut expected_resampler = SilkResamplerState::default();
+        silk_resampler_init(&mut expected_resampler, downshift.s_cmn.api_fs_hz, 8000);
+        let new_buf_samples = (buf_length_ms * 8) as usize;
+        let mut expected_x_buf = vec![0i16; new_buf_samples];
+        silk_resampler_run(&mut expected_resampler, &mut expected_x_buf, &x_buf_api);
+
+        assert_eq!(silk_setup_resamplers(&mut downshift, 8), SILK_NO_ERROR);
+        assert_eq!(
+            &downshift.x_buf[..new_buf_samples],
+            expected_x_buf.as_slice()
+        );
+        assert_eq!(downshift.s_cmn.resampler_state.input_delay, 0);
     }
 
     #[test]
