@@ -2979,16 +2979,24 @@ impl OpusEncoder {
                 range_final = 0; // Will be set after CELT
             }
 
-            // Analysis hand-off to CELT (C opus_encoder.c:2416-2418).
+            // Analysis and SILK side-info hand-off to CELT (C opus_encoder.c:2416-2425).
             //   if (redundancy || mode != SILK_ONLY) CELT_SET_ANALYSIS(info)
-            // The redundancy-CELT path needs it too. OPUS_RESET_STATE later
-            // wipes `st->analysis` on the CELT side, so we re-apply for the
-            // main encode below as well.
+            //   if (mode == HYBRID) CELT_SET_SILK_INFO(info)
+            // Keep this before CELT redundancy/reset/prefill: the C reset
+            // clears CELT-side analysis and SILK info on mode transitions.
             if redundancy || self.mode != MODE_SILK_ONLY {
                 if let Some(ref mut celt) = self.celt_enc {
                     celt.ctl(CeltEncoderCtl::SetAnalysis(analysis_info_to_celt(
                         analysis_info,
                     )));
+                }
+            }
+            if self.mode == MODE_HYBRID {
+                if let Some(ref mut celt) = self.celt_enc {
+                    celt.ctl(CeltEncoderCtl::SetSilkInfo(SILKInfo {
+                        signal_type: self.silk_mode.signal_type,
+                        offset: self.silk_mode.offset,
+                    }));
                 }
             }
 
@@ -3074,12 +3082,6 @@ impl OpusEncoder {
                         );
                         celt.ctl(CeltEncoderCtl::SetPrediction(0));
                     }
-
-                    // Set analysis/silk info for CELT
-                    celt.ctl(CeltEncoderCtl::SetSilkInfo(SILKInfo {
-                        signal_type: self.silk_mode.signal_type,
-                        offset: self.silk_mode.offset,
-                    }));
 
                     // Encode if there's room
                     if enc.tell() <= 8 * nb_compr_bytes {
