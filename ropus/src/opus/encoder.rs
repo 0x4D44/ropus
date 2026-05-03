@@ -4607,7 +4607,10 @@ mod tests {
         assert_eq!(enc.set_dtx(1), OPUS_OK);
         assert_eq!(enc.set_prediction_disabled(1), OPUS_OK);
         assert_eq!(enc.set_phase_inversion_disabled(1), OPUS_OK);
-        assert_eq!(enc.set_application(OPUS_APPLICATION_RESTRICTED_LOWDELAY), OPUS_OK);
+        assert_eq!(
+            enc.set_application(OPUS_APPLICATION_RESTRICTED_LOWDELAY),
+            OPUS_OK
+        );
         assert_eq!(enc.set_application(12345), OPUS_BAD_ARG);
 
         enc.hp_mem = [1, 2, 3, 4];
@@ -4676,7 +4679,10 @@ mod tests {
         assert_eq!(enc.set_dtx(1), OPUS_OK);
         assert_eq!(enc.set_prediction_disabled(1), OPUS_OK);
         assert_eq!(enc.set_phase_inversion_disabled(1), OPUS_OK);
-        assert_eq!(enc.set_application(OPUS_APPLICATION_RESTRICTED_LOWDELAY), OPUS_OK);
+        assert_eq!(
+            enc.set_application(OPUS_APPLICATION_RESTRICTED_LOWDELAY),
+            OPUS_OK
+        );
 
         assert_eq!(enc.get_vbr(), 0);
         assert_eq!(enc.get_expert_frame_duration(), OPUS_FRAMESIZE_10_MS);

@@ -36,8 +36,8 @@ fn patterned_pcm_i16(frame_size: usize, channels: usize, seed: i32) -> Vec<i16> 
 fn silk_trace_v2_tuples_emitted_on_silk_encode() {
     // 16 kHz mono VOIP — a SILK-only configuration so `silk_encode_frame_fix`
     // is exercised and V2 boundaries 100..=109 get a chance to fire.
-    let mut enc = OpusEncoder::new(16000, 1, OPUS_APPLICATION_VOIP)
-        .expect("Rust encoder create failed");
+    let mut enc =
+        OpusEncoder::new(16000, 1, OPUS_APPLICATION_VOIP).expect("Rust encoder create failed");
     enc.set_bitrate(16000);
 
     // Clear any residue from a prior test in the same process.
@@ -57,7 +57,10 @@ fn silk_trace_v2_tuples_emitted_on_silk_encode() {
 
     let snap = ropus::silk_trace::snapshot();
     let v2_count = snap.iter().filter(|t| t.boundary_id >= 100).count();
-    let v1_count = snap.iter().filter(|t| t.boundary_id < 100 && t.boundary_id > 0).count();
+    let v1_count = snap
+        .iter()
+        .filter(|t| t.boundary_id < 100 && t.boundary_id > 0)
+        .count();
 
     // Expect at least one V2 tuple. Stage 3 wired 10 boundaries, but
     // some (e.g. prefill-skipped 100, last-iter-only 109) won't fire on

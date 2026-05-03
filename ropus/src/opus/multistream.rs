@@ -3265,7 +3265,10 @@ mod tests {
 
         {
             let child = enc.get_encoder_mut(0).unwrap();
-            assert_eq!(child.set_expert_frame_duration(OPUS_FRAMESIZE_20_MS), OPUS_OK);
+            assert_eq!(
+                child.set_expert_frame_duration(OPUS_FRAMESIZE_20_MS),
+                OPUS_OK
+            );
             assert_eq!(child.set_lsb_depth(14), OPUS_OK);
         }
 
@@ -3356,10 +3359,7 @@ mod tests {
         let len = enc.encode(&pcm, 960, &mut packet, 5000).unwrap();
         assert!(len > 0);
         assert_eq!(enc.get_final_range(), enc.ms_encoder.get_final_range());
-        assert_eq!(
-            enc.ms_encoder.get_encoder(0).unwrap().get_complexity(),
-            4
-        );
+        assert_eq!(enc.ms_encoder.get_encoder(0).unwrap().get_complexity(), 4);
         assert_eq!(enc.ms_encoder.get_encoder(0).unwrap().get_vbr(), 0);
 
         enc.reset();

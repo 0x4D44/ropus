@@ -28,8 +28,8 @@ use std::os::raw::{c_int, c_uchar};
 use std::path::PathBuf;
 
 use ropus::opus::encoder::{
-    OpusEncoder as RustOpusEncoder, OPUS_APPLICATION_AUDIO,
-    OPUS_APPLICATION_RESTRICTED_LOWDELAY, OPUS_APPLICATION_VOIP,
+    OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY, OPUS_APPLICATION_VOIP,
+    OpusEncoder as RustOpusEncoder,
 };
 use ropus::opus::multistream::OpusMSEncoder as RustOpusMSEncoder;
 
@@ -543,14 +543,14 @@ fn run_multiframe_repro(path: &PathBuf) {
     );
 
     // Rust encoder
-    let mut rust_enc = match RustOpusEncoder::new(input.sample_rate, input.channels, input.application)
-    {
-        Ok(e) => e,
-        Err(e) => {
-            println!("Rust encoder create failed: {e}");
-            return;
-        }
-    };
+    let mut rust_enc =
+        match RustOpusEncoder::new(input.sample_rate, input.channels, input.application) {
+            Ok(e) => e,
+            Err(e) => {
+                println!("Rust encoder create failed: {e}");
+                return;
+            }
+        };
 
     // C encoder
     let c_enc = unsafe {
@@ -593,7 +593,11 @@ fn run_multiframe_repro(path: &PathBuf) {
         unsafe {
             bindings::opus_encoder_ctl(c_enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
             bindings::opus_encoder_ctl(c_enc, bindings::OPUS_SET_VBR_REQUEST, vbr);
-            bindings::opus_encoder_ctl(c_enc, bindings::OPUS_SET_VBR_CONSTRAINT_REQUEST, 0 as c_int);
+            bindings::opus_encoder_ctl(
+                c_enc,
+                bindings::OPUS_SET_VBR_CONSTRAINT_REQUEST,
+                0 as c_int,
+            );
             bindings::opus_encoder_ctl(c_enc, bindings::OPUS_SET_INBAND_FEC_REQUEST, inband_fec);
             bindings::opus_encoder_ctl(c_enc, bindings::OPUS_SET_DTX_REQUEST, dtx);
             bindings::opus_encoder_ctl(
@@ -613,7 +617,11 @@ fn run_multiframe_repro(path: &PathBuf) {
                 "\n--- Frame {} pre-encode ---  br={} cx={} vbr={} fec={} dtx={} loss={}",
                 frame_idx, bitrate, complexity, vbr, inband_fec, dtx, loss_perc
             );
-            print_top_state_diff("C silk_mode (post-setter, pre-encode)", &c_sm_pre, &c_top_pre);
+            print_top_state_diff(
+                "C silk_mode (post-setter, pre-encode)",
+                &c_sm_pre,
+                &c_top_pre,
+            );
             print_rust_top_state(&r_top_pre);
             // Asymmetry detector: did Rust's reachable getters match C's
             // reachable top-level fields?
@@ -925,12 +933,10 @@ fn print_phase_b_trace_diff(
         .filter(|t| t.boundary_id > 0 && t.boundary_id < 100)
         .collect();
 
-    println!("\n--- Phase B trace tuples (boundary, ec_tell, rng, target_rate, n_bits_exceeded, curr_lbrr, n_lbrr, mid_only, prev_d_only_mid) ---");
     println!(
-        "  count: Rust={} C={}",
-        rust_v1.len(),
-        c_v1.len()
+        "\n--- Phase B trace tuples (boundary, ec_tell, rng, target_rate, n_bits_exceeded, curr_lbrr, n_lbrr, mid_only, prev_d_only_mid) ---"
     );
+    println!("  count: Rust={} C={}", rust_v1.len(), c_v1.len());
     let n = rust_v1.len().min(c_v1.len());
     let mut first_diff_at: Option<usize> = None;
     for i in 0..n {
@@ -943,23 +949,39 @@ fn print_phase_b_trace_diff(
         let marker = if same { " " } else { "*" };
         println!(
             "  {marker} [{i:3}] b{}/ch{:2} R: tell={:5} rng={:08x} tr={:6} nx={:5} cl={:5} nl={:5} mo={:2} pdm={:2}",
-            r.boundary_id, r.channel,
-            r.ec_tell, r.rng, r.target_rate_bps, r.n_bits_exceeded,
-            r.curr_n_bits_used_lbrr, r.n_bits_used_lbrr, r.mid_only_flag, r.prev_decode_only_middle
+            r.boundary_id,
+            r.channel,
+            r.ec_tell,
+            r.rng,
+            r.target_rate_bps,
+            r.n_bits_exceeded,
+            r.curr_n_bits_used_lbrr,
+            r.n_bits_used_lbrr,
+            r.mid_only_flag,
+            r.prev_decode_only_middle
         );
         if !same {
             println!(
                 "         b{}/ch{:2} C: tell={:5} rng={:08x} tr={:6} nx={:5} cl={:5} nl={:5} mo={:2} pdm={:2}",
-                c.boundary_id, c.channel,
-                c.ec_tell, c.rng, c.target_rate_bps, c.n_bits_exceeded,
-                c.curr_n_bits_used_lbrr, c.n_bits_used_lbrr, c.mid_only_flag, c.prev_decode_only_middle
+                c.boundary_id,
+                c.channel,
+                c.ec_tell,
+                c.rng,
+                c.target_rate_bps,
+                c.n_bits_exceeded,
+                c.curr_n_bits_used_lbrr,
+                c.n_bits_used_lbrr,
+                c.mid_only_flag,
+                c.prev_decode_only_middle
             );
         }
     }
     if rust_v1.len() != c_v1.len() {
-        println!("  count mismatch: Rust extra {} / C extra {}",
+        println!(
+            "  count mismatch: Rust extra {} / C extra {}",
             rust_v1.len().saturating_sub(c_v1.len()),
-            c_v1.len().saturating_sub(rust_v1.len()));
+            c_v1.len().saturating_sub(rust_v1.len())
+        );
     }
     if let Some(idx) = first_diff_at {
         let r = rust_v1[idx];
@@ -1311,7 +1333,11 @@ fn format_v2_payload(boundary_id: i32, payload: &[i32]) -> String {
             let rng_hex = rng_pair_to_hex(payload[2], payload[3]);
             format!("iter={} ec_tell={} rng={}", payload[0], payload[1], rng_hex)
         }
-        _ => format!("(unknown boundary) payload[len={}] {}", payload.len(), fmt_vec(payload, 8)),
+        _ => format!(
+            "(unknown boundary) payload[len={}] {}",
+            payload.len(),
+            fmt_vec(payload, 8)
+        ),
     }
 }
 
@@ -1345,12 +1371,7 @@ fn print_payload_divergence(boundary_id: i32, rust_payload: &[i32], c_payload: &
         hi_r,
         &rust_payload[lo..hi_r]
     );
-    println!(
-        "          C[{}..{}] = {:?}",
-        lo,
-        hi_c,
-        &c_payload[lo..hi_c]
-    );
+    println!("          C[{}..{}] = {:?}", lo, hi_c, &c_payload[lo..hi_c]);
     if rust_payload.len() != c_payload.len() {
         println!(
             "          (length mismatch: R.len={} C.len={})",
@@ -1604,7 +1625,11 @@ fn run_multistream_repro(path: &PathBuf) {
     let samples_needed = (frame_size as usize) * (input.channels as usize);
     let bytes_needed = samples_needed * 2;
     if input.payload.len() < bytes_needed {
-        println!("payload too short ({} < {})", input.payload.len(), bytes_needed);
+        println!(
+            "payload too short ({} < {})",
+            input.payload.len(),
+            bytes_needed
+        );
         return;
     }
     let pcm: Vec<i16> = input.payload[..bytes_needed]
@@ -1684,7 +1709,11 @@ fn run_multistream_repro(path: &PathBuf) {
             RustOpusMSEncoder::set_packet_loss_perc,
             0,
         ),
-        ("set_complexity", RustOpusMSEncoder::set_complexity, input.complexity),
+        (
+            "set_complexity",
+            RustOpusMSEncoder::set_complexity,
+            input.complexity,
+        ),
     ];
 
     let inner_c = unsafe { bindings::debug_get_inner_opus_encoder(c_enc, 0) };
@@ -1740,7 +1769,10 @@ fn run_multistream_repro(path: &PathBuf) {
     // Setter shuffle. We mirror apply_ms_encoder_setter_sequence /
     // apply_c_ms_setter_sequence symbol-for-symbol. Stage 6a aligned both
     // sides to the same complexity modulus (see the `1 => { ... }` arm).
-    println!("\n--- Setter shuffle ({} chunks) ---", input.setter_bytes.len() / 2);
+    println!(
+        "\n--- Setter shuffle ({} chunks) ---",
+        input.setter_bytes.len() / 2
+    );
     for (i, chunk) in input.setter_bytes.chunks_exact(2).take(8).enumerate() {
         let sel = chunk[0] % 7;
         let arg_byte = chunk[1];
@@ -1833,7 +1865,9 @@ fn run_multistream_repro(path: &PathBuf) {
     // initial states immediately before the first encode? If anything
     // differs here it's an init-time bug, not encode-time.
     {
-        let inner_r = rust_enc.get_encoder(0).expect("MS encoder must have stream 0");
+        let inner_r = rust_enc
+            .get_encoder(0)
+            .expect("MS encoder must have stream 0");
         let pre_diffs = compare_extended_state(inner_c, inner_r, 0);
         if !pre_diffs.is_empty() {
             println!(
@@ -1978,7 +2012,10 @@ fn run_multistream_repro(path: &PathBuf) {
         let r_if = dump_rust_interframe(inner, 0);
         let if_diffs = diff_silk_interframe(&c_if, &r_if);
         if !if_diffs.is_empty() {
-            println!("  post-encode SILK interframe-state mismatches ({}):", if_diffs.len());
+            println!(
+                "  post-encode SILK interframe-state mismatches ({}):",
+                if_diffs.len()
+            );
             for d in &if_diffs {
                 println!("    {d}");
             }
@@ -2078,9 +2115,7 @@ fn assert_eq_field<T: PartialEq + std::fmt::Debug>(
     frame_idx: usize,
 ) {
     if c != r {
-        findings.push(format!(
-            "frame {frame_idx} {name}: C={c:?} R={r:?}"
-        ));
+        findings.push(format!("frame {frame_idx} {name}: C={c:?} R={r:?}"));
         println!("    *** DIFF {name}: C={c:?} R={r:?}");
     }
 }
@@ -2335,10 +2370,10 @@ fn run_all_known_failures() {
         .parent()
         .expect("workspace root")
         .to_path_buf();
-    let multiframe_dir = workspace
-        .join("tests/fuzz/known_failures/multiframe-cbr-cross-frame-divergence");
-    let multistream_dir = workspace
-        .join("tests/fuzz/known_failures/multistream-encode-bytes-divergence");
+    let multiframe_dir =
+        workspace.join("tests/fuzz/known_failures/multiframe-cbr-cross-frame-divergence");
+    let multistream_dir =
+        workspace.join("tests/fuzz/known_failures/multistream-encode-bytes-divergence");
     let mut multiframe: Vec<_> = std::fs::read_dir(&multiframe_dir)
         .expect("read multiframe dir")
         .filter_map(|e| e.ok())
