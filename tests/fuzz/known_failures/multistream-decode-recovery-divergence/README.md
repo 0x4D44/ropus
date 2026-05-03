@@ -61,3 +61,17 @@ Two complementary follow-ups:
 
 Either gives back the tier-2 SNR coverage we lost in the campaign-hour-1
 mitigation.
+
+## 2026-05-03 Worker B triage
+
+Verdict: **defer**, gated on the standalone
+`tests/fuzz/known_failures/silk_decode_recovery_divergence_loud/` fix or a
+future per-sub-packet structural-validity gate.
+
+Focused replay now locks the classification in
+`tests/fuzz/tests/multistream_decode_asymmetries.rs`: all four multistream
+fixtures decode `Ok` on both Rust and C, sample counts match, the packets are
+SILK/Hybrid rather than CELT-only, and only recovery PCM diverges below the
+50 dB SNR floor. These repros stay in this directory as markers until the
+gating SILK recovery class is fixed and the multistream SILK/Hybrid SNR oracle
+can be re-armed.
