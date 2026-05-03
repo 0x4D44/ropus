@@ -842,6 +842,10 @@ fn read_c_silk_trace() -> Vec<ropus::silk_trace::Tuple> {
             n_bits_used_lbrr,
             mid_only_flag,
             prev_decode_only_middle,
+            // V1 7-tuple grid leaves V2 fields at defaults (iter=0,
+            // payload=[]); the V2 trace ring is read separately by
+            // `dbg_silk_trace_read_payload` when added in Stage 2/3.
+            ..Default::default()
         });
     }
     out
@@ -864,8 +868,8 @@ fn print_phase_b_trace_diff(
     let n = rust_trace.len().min(c_trace.len());
     let mut first_diff_at: Option<usize> = None;
     for i in 0..n {
-        let r = rust_trace[i];
-        let c = c_trace[i];
+        let r = &rust_trace[i];
+        let c = &c_trace[i];
         let same = r == c;
         if !same && first_diff_at.is_none() {
             first_diff_at = Some(i);
@@ -892,7 +896,7 @@ fn print_phase_b_trace_diff(
             c_trace.len().saturating_sub(rust_trace.len()));
     }
     if let Some(idx) = first_diff_at {
-        let r = rust_trace[idx];
+        let r = &rust_trace[idx];
         println!(
             "\n  >>> FIRST DIVERGENCE at boundary {} (channel {}), index {} <<<",
             r.boundary_id, r.channel, idx

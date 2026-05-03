@@ -82,6 +82,30 @@ extern void dbg_silk_trace_push(
     opus_int32 mid_only_flag,
     opus_int32 prev_decode_only_middle);
 
+/* Phase C inner-function trace (HLD V2). The traced variants of
+ * silk_encode_frame_FIX / silk_encode_do_VAD_FIX live in
+ * `harness/silk_encode_frame_FIX_traced.c`; we call them directly
+ * (rather than the macro-dispatched _Fxx form) because (a) the harness
+ * is built FIXED_POINT-only, and (b) we want to bypass the original
+ * non-traced `silk_encode_frame_FIX` symbol that's still in the build
+ * for any other internal callers. The original symbols stay defined so
+ * a future float-mode harness build needs no further plumbing.
+ *
+ * `dbg_silk_trace_current_channel` is read by the inner DBG_TRACE_F
+ * macro to stamp each per-boundary tuple with the right channel index.
+ * We set it immediately before each call here. */
+extern int dbg_silk_trace_current_channel;
+extern opus_int silk_encode_frame_FIX_traced(
+    silk_encoder_state_FIX *psEnc,
+    opus_int32 *pnBytesOut,
+    ec_enc *psRangeEnc,
+    opus_int condCoding,
+    opus_int maxBits,
+    opus_int useCBR);
+extern void silk_encode_do_VAD_FIX_traced(
+    silk_encoder_state_FIX *psEnc,
+    opus_int activity);
+
 /* The DBG_TRACE macro is a no-op when `psRangeEnc` is NULL — that
  * indicates a prefill call from `opus_encoder.c::opus_encode_native`
  * (reference/src/opus_encoder.c:2206) where SILK is invoked solely to
@@ -527,7 +551,7 @@ opus_int silk_Encode(                                   /* O    Returns error co
                         psEnc->state_Fxx[ 1 ].sCmn.sNSQ.prev_gain_Q16      = 65536;
                         psEnc->state_Fxx[ 1 ].sCmn.first_frame_after_reset = 1;
                     }
-                    silk_encode_do_VAD_Fxx( &psEnc->state_Fxx[ 1 ], activity );
+                    silk_encode_do_VAD_FIX_traced( &psEnc->state_Fxx[ 1 ], activity );
                 } else {
                     psEnc->state_Fxx[ 1 ].sCmn.VAD_flags[ psEnc->state_Fxx[ 0 ].sCmn.nFramesEncoded ] = 0;
                 }
@@ -550,7 +574,7 @@ opus_int silk_Encode(                                   /* O    Returns error co
              * sufficient for B1 localisation; re-add mid_only when
              * needed under a separate trace boundary. */
             DBG_TRACE(4, -1, TargetRate_bps, -1);
-            silk_encode_do_VAD_Fxx( &psEnc->state_Fxx[ 0 ], activity );
+            silk_encode_do_VAD_FIX_traced( &psEnc->state_Fxx[ 0 ], activity );
 
             /* Encode */
             for( n = 0; n < encControl->nChannelsInternal; n++ ) {
@@ -597,9 +621,15 @@ opus_int silk_Encode(                                   /* O    Returns error co
                     } else {
                         condCoding = CODE_CONDITIONALLY;
                     }
-                    if( ( ret = silk_encode_frame_Fxx( &psEnc->state_Fxx[ n ], nBytesOut, psRangeEnc, condCoding, maxBits, useCBR ) ) != 0 ) {
+                    /* Stamp the channel for inner-function trace
+                     * pushes (Phase C boundaries 100..109). Reset to
+                     * -1 after the call so any subsequent global-scope
+                     * pushes don't spuriously inherit the channel. */
+                    dbg_silk_trace_current_channel = n;
+                    if( ( ret = silk_encode_frame_FIX_traced( &psEnc->state_Fxx[ n ], nBytesOut, psRangeEnc, condCoding, maxBits, useCBR ) ) != 0 ) {
                         silk_assert( 0 );
                     }
+                    dbg_silk_trace_current_channel = -1;
                     /* L1.4.6: per-channel after silk_encode_frame_Fxx [B1 candidate] */
                     DBG_TRACE(6, n, channelRate_bps, -1);
                 }

@@ -8096,6 +8096,7 @@ pub fn silk_encode(
                 n_bits_used_lbrr: enc.n_bits_used_lbrr,
                 mid_only_flag: -1,
                 prev_decode_only_middle: enc.prev_decode_only_middle,
+                ..Default::default()
             });
 
             // --- HP variable cutoff ---
@@ -8112,6 +8113,7 @@ pub fn silk_encode(
                 n_bits_used_lbrr: enc.n_bits_used_lbrr,
                 mid_only_flag: -1,
                 prev_decode_only_middle: enc.prev_decode_only_middle,
+                ..Default::default()
             });
 
             // --- Target bitrate (C enc_API.c:412-443) ---
@@ -8162,6 +8164,7 @@ pub fn silk_encode(
                 n_bits_used_lbrr: enc.n_bits_used_lbrr,
                 mid_only_flag: -1,
                 prev_decode_only_middle: enc.prev_decode_only_middle,
+                ..Default::default()
             });
 
             // --- Stereo LR→MS / mono buffer ---
@@ -8265,6 +8268,7 @@ pub fn silk_encode(
                     n_bits_used_lbrr: enc.n_bits_used_lbrr,
                     mid_only_flag: mid_only,
                     prev_decode_only_middle: enc.prev_decode_only_middle,
+                    ..Default::default()
                 });
             }
 
@@ -8321,6 +8325,7 @@ pub fn silk_encode(
                         n_bits_used_lbrr: enc.n_bits_used_lbrr,
                         mid_only_flag: -1,
                         prev_decode_only_middle: enc.prev_decode_only_middle,
+                        ..Default::default()
                     });
 
                     // Use independent coding if no previous frame available
@@ -8358,6 +8363,7 @@ pub fn silk_encode(
                         n_bits_used_lbrr: enc.n_bits_used_lbrr,
                         mid_only_flag: -1,
                         prev_decode_only_middle: enc.prev_decode_only_middle,
+                        ..Default::default()
                     });
                 }
 
@@ -8424,6 +8430,7 @@ pub fn silk_encode(
                     n_bits_used_lbrr: enc.n_bits_used_lbrr,
                     mid_only_flag: -1,
                     prev_decode_only_middle: enc.prev_decode_only_middle,
+                    ..Default::default()
                 });
 
                 // Update flag indicating if bandwidth switching is allowed

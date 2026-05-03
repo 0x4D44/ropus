@@ -746,6 +746,25 @@ unsafe extern "C" {
         mid_only_flag: *mut opus_int32,
         prev_decode_only_middle: *mut opus_int32,
     ) -> c_int;
+
+    // -- Phase C inner-function trace ring (HLD V2). Variable-length
+    //    payload records pushed from `harness/silk_encode_frame_FIX_traced.c`
+    //    at boundaries 100..109. The ring shares its lifecycle with the
+    //    Phase B 7-tuple ring above: a single `dbg_silk_trace_clear` call
+    //    clears both. `dbg_silk_trace_read_payload` writes the payload
+    //    into a caller-supplied buffer (truncated to `out_buf_cap` if the
+    //    stored payload is longer; the actual stored length is reported
+    //    via `*out_len`).
+    pub fn dbg_silk_trace_payload_count_get() -> c_int;
+    pub fn dbg_silk_trace_read_payload(
+        idx: c_int,
+        boundary_id: *mut c_int,
+        channel: *mut c_int,
+        iter: *mut c_int,
+        out_len: *mut c_int,
+        out_buf: *mut opus_int32,
+        out_buf_cap: c_int,
+    ) -> c_int;
 }
 
 // ---------------------------------------------------------------------------

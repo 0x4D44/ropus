@@ -369,6 +369,14 @@ fn main() {
     // for normal comparison runs.
     build.file(harness_dir.join("silk_enc_api_traced.c"));
 
+    // Phase C trace-instrumented copy of silk/fixed/encode_frame_FIX.c.
+    // Defines `silk_encode_frame_FIX_traced` and `silk_encode_do_VAD_FIX_traced`
+    // (renamed externals to avoid collision with the unmodified xiph copy
+    // that stays in the build). Called from silk_enc_api_traced.c and
+    // emits per-boundary payload tuples for HLD V2 boundaries 100..109
+    // via `dbg_silk_trace_push_payload`.
+    build.file(harness_dir.join("silk_encode_frame_FIX_traced.c"));
+
     build.compile("opus_ref");
 
     // Tell cargo to link the static library
@@ -377,6 +385,8 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=debug_helper.c");
     println!("cargo:rerun-if-changed=debug_silk_trace.c");
+    println!("cargo:rerun-if-changed=silk_enc_api_traced.c");
+    println!("cargo:rerun-if-changed=silk_encode_frame_FIX_traced.c");
     println!("cargo:rerun-if-changed=../reference/celt/celt_decoder.c");
 }
 // force rebuild

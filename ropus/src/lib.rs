@@ -111,7 +111,18 @@ pub mod silk_trace {
 
     use std::sync::Mutex;
 
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    /// One trace record emitted at a boundary inside the SILK encoder.
+    ///
+    /// V1 (`boundary_id` 1..=7) carries only the scalar header fields and
+    /// leaves `iter = -1` / `payload = []`. V2 (Phase C, `boundary_id`
+    /// 100..=109 — see HLD V2 §4.1) reuses the same record, populating
+    /// `iter` for per-rate-control-loop boundaries and `payload` with the
+    /// full state vector for the boundary. The `boundary_id < 100` vs
+    /// `>= 100` split discriminates V1 vs V2 records; the `iter = -1`
+    /// sentinel ("not in rate-control loop") covers both V1 records and
+    /// V2 setup boundaries (100..=105) which fire once per encode and
+    /// must match the C side's `iter = -1` emission.
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct Tuple {
         pub boundary_id: i32,
         pub channel: i32,
@@ -123,6 +134,39 @@ pub mod silk_trace {
         pub n_bits_used_lbrr: i32,
         pub mid_only_flag: i32,
         pub prev_decode_only_middle: i32,
+        /// Rate-control loop iteration index for V2 per-iter boundaries
+        /// (106/107/108/109). `-1` is the "not in rate-control loop"
+        /// sentinel, used by V1 boundaries and V2 setup boundaries
+        /// (100..=105) which fire once per encode. Mirrors the C side's
+        /// `DBG_TRACE_F( … , -1, … )` emission in
+        /// `harness/silk_encode_frame_FIX_traced.c`.
+        pub iter: i32,
+        /// State-vector payload for V2 boundaries. Empty for V1. The
+        /// boundary_id determines the layout (see HLD V2 §4.1).
+        pub payload: Vec<i32>,
+    }
+
+    impl Default for Tuple {
+        fn default() -> Self {
+            Self {
+                boundary_id: 0,
+                channel: 0,
+                ec_tell: 0,
+                rng: 0,
+                target_rate_bps: 0,
+                n_bits_exceeded: 0,
+                curr_n_bits_used_lbrr: 0,
+                n_bits_used_lbrr: 0,
+                mid_only_flag: 0,
+                prev_decode_only_middle: 0,
+                // -1 is the "not in rate-control loop" sentinel; the C
+                // side emits -1 for V1 boundaries (1..=7) and V2 setup
+                // boundaries (100..=105). V2 per-iter boundaries
+                // (106..=109) overwrite this with the actual iter index.
+                iter: -1,
+                payload: Vec::new(),
+            }
+        }
     }
 
     static BUF: Mutex<Vec<Tuple>> = Mutex::new(Vec::new());

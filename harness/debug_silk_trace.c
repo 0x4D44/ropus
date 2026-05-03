@@ -321,8 +321,14 @@ typedef struct {
 static dbg_silk_trace_tuple_t dbg_silk_trace_buf[DBG_SILK_TRACE_MAX];
 static int dbg_silk_trace_count = 0;
 
+/* Forward count for the Phase C payload ring; the storage and push/read
+ * helpers live below the V1 7-tuple block. `dbg_silk_trace_clear`
+ * resets both rings so the V1 and V2 trace lifecycles share one call. */
+static int dbg_silk_trace_payload_count;
+
 void dbg_silk_trace_clear(void) {
     dbg_silk_trace_count = 0;
+    dbg_silk_trace_payload_count = 0;
 }
 
 void dbg_silk_trace_push(
@@ -382,6 +388,108 @@ int dbg_silk_trace_read(
 
 int dbg_silk_trace_count_get(void) {
     return dbg_silk_trace_count;
+}
+
+/* ======================================================================
+ * Phase C trace ring — variable-length payload tuples.
+ *
+ * Companion to the Phase B 7-tuple grid above. Stage 1 of HLD V2:
+ * stores `(boundary_id, channel, iter, payload[len])` records emitted
+ * from `silk_encode_frame_FIX_traced` at boundaries 100..109. Records
+ * are kept in a parallel buffer with fixed-size payload slots
+ * (DBG_SILK_TRACE_PAYLOAD_MAX i32s × DBG_SILK_TRACE_PAYLOAD_RECS
+ * records) so a Rust caller can read the full payload back via FFI.
+ *
+ * Sizing rationale: HLD V2 §4.1 estimates max ~34 tuples per encode
+ * (6 setup + 4 × 7 iter), payload up to ~324 i32s on boundary 100/107.
+ * 64 records × 384 i32s × 4 bytes ≈ 96 KB total — comfortable
+ * static budget, single-encode reset.
+ *
+ * The current channel index is read by `silk_encode_frame_FIX_traced`'s
+ * DBG_TRACE_F macro from a global set by `silk_enc_api_traced.c` just
+ * before each per-channel call. -1 means "outside per-channel scope".
+ * ====================================================================== */
+
+#define DBG_SILK_TRACE_PAYLOAD_RECS 64
+#define DBG_SILK_TRACE_PAYLOAD_MAX  384
+
+typedef struct {
+    int boundary_id;
+    int channel;
+    int iter;
+    int len;                                              /* actual payload length */
+    opus_int32 payload[ DBG_SILK_TRACE_PAYLOAD_MAX ];
+} dbg_silk_trace_payload_t;
+
+static dbg_silk_trace_payload_t dbg_silk_trace_payload_buf[ DBG_SILK_TRACE_PAYLOAD_RECS ];
+/* dbg_silk_trace_payload_count is forward-declared above near
+ * dbg_silk_trace_clear so that single function can reset both rings. */
+
+/* Channel context for inner-function trace pushes. The api-level traced
+ * encoder writes this immediately before each per-channel
+ * `silk_encode_frame_FIX_traced` call so the per-boundary tuples carry
+ * the right channel index. -1 by default. */
+int dbg_silk_trace_current_channel = -1;
+
+void dbg_silk_trace_push_payload(
+    int boundary_id,
+    int channel,
+    int iter,
+    const opus_int32 *payload,
+    int payload_len)
+{
+    if (dbg_silk_trace_payload_count >= DBG_SILK_TRACE_PAYLOAD_RECS) return;
+    dbg_silk_trace_payload_t *r = &dbg_silk_trace_payload_buf[dbg_silk_trace_payload_count++];
+    r->boundary_id = boundary_id;
+    r->channel = channel;
+    r->iter = iter;
+    if (payload_len < 0) payload_len = 0;
+    /* Loud failure in dev builds when the static cap is too small. The
+     * truncation below is the production fallback (silent), but if we
+     * ever hit it the trace is lying — better to know immediately. */
+    silk_assert(payload_len <= DBG_SILK_TRACE_PAYLOAD_MAX);
+    if (payload_len > DBG_SILK_TRACE_PAYLOAD_MAX) payload_len = DBG_SILK_TRACE_PAYLOAD_MAX;
+    r->len = payload_len;
+    if (payload_len > 0 && payload != NULL) {
+        memcpy(r->payload, payload, (size_t)payload_len * sizeof(opus_int32));
+    }
+}
+
+int dbg_silk_trace_payload_count_get(void) {
+    return dbg_silk_trace_payload_count;
+}
+
+/* Read a single payload record. Caller supplies an output buffer of
+ * `out_buf_cap` i32s; the actual stored payload length is written to
+ * `*out_len` (capped at DBG_SILK_TRACE_PAYLOAD_MAX). The returned
+ * payload is truncated to `min(stored_len, out_buf_cap)` if the caller's
+ * buffer is short. Returns 0 on success, -1 if `idx` is out of range.
+ *
+ * `dbg_silk_trace_clear` resets the payload ring too — keeps the V1 and
+ * V2 trace lifecycles aligned (one harness-side `dbg_silk_trace_clear`
+ * call clears both rings before each encode). */
+int dbg_silk_trace_read_payload(
+    int idx,
+    int *boundary_id,
+    int *channel,
+    int *iter,
+    int *out_len,
+    opus_int32 *out_buf,
+    int out_buf_cap)
+{
+    if (idx < 0 || idx >= dbg_silk_trace_payload_count) return -1;
+    const dbg_silk_trace_payload_t *r = &dbg_silk_trace_payload_buf[idx];
+    *boundary_id = r->boundary_id;
+    *channel = r->channel;
+    *iter = r->iter;
+    *out_len = r->len;
+    if (out_buf != NULL && out_buf_cap > 0) {
+        int n = (r->len < out_buf_cap) ? r->len : out_buf_cap;
+        if (n > 0) {
+            memcpy(out_buf, r->payload, (size_t)n * sizeof(opus_int32));
+        }
+    }
+    return 0;
 }
 
 /* ----------------------------------------------------------------------
