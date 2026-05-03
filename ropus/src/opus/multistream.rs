@@ -18,8 +18,9 @@ use crate::celt::quant_bands::amp2log2;
 use crate::types::*;
 
 use super::decoder::{
-    MODE_CELT_ONLY, OPUS_BAD_ARG, OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR, OPUS_INVALID_PACKET,
-    OPUS_OK, OPUS_UNIMPLEMENTED, OpusDecoder, opus_packet_get_nb_samples,
+    MAX_FRAMES, MODE_CELT_ONLY, OPUS_BAD_ARG, OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR,
+    OPUS_INVALID_PACKET, OPUS_OK, OPUS_UNIMPLEMENTED, OpusDecoder, opus_packet_get_nb_samples,
+    opus_packet_parse_impl,
 };
 use super::decoder::{
     OPUS_BANDWIDTH_FULLBAND, OPUS_BANDWIDTH_NARROWBAND, OPUS_BANDWIDTH_SUPERWIDEBAND,
@@ -643,112 +644,27 @@ fn multistream_packet_validate(data: &[u8], len: i32, nb_streams: i32, fs: i32) 
 
 /// Parse a self-delimiting or standard sub-packet to find its byte length.
 /// Returns packet_offset (total bytes consumed), or negative error code.
-/// Simplified version of opus_packet_parse_impl — only extracts offset.
+/// Delegates to the same full packet parser used by the single-stream decoder
+/// so multistream validation matches C `opus_multistream_packet_validate`.
 fn parse_multistream_subpacket(data: &[u8], len: i32, self_delimited: bool) -> i32 {
-    if len < 1 {
-        return OPUS_INVALID_PACKET;
-    }
-
-    let toc = data[0];
-    let mut pos: usize = 1;
-    let mut remaining = len - 1;
-
-    // Determine number of frames from code
-    let code = toc & 0x3;
-    match code {
-        0 => {}
-        1 => {}
-        2 => {}
-        3 => {
-            // VBR/CBR code 3
-            if remaining < 1 {
-                return OPUS_INVALID_PACKET;
-            }
-            let ch = data[pos];
-            pos += 1;
-            remaining -= 1;
-            let count = (ch & 0x3F) as i32;
-            if count == 0 || (count > 48) {
-                return OPUS_INVALID_PACKET;
-            }
-
-            // Parse padding
-            if ch & 0x40 != 0 {
-                // Padding
-                loop {
-                    if remaining < 1 {
-                        return OPUS_INVALID_PACKET;
-                    }
-                    let p = data[pos] as i32;
-                    pos += 1;
-                    remaining -= 1;
-                    remaining -= if p == 255 { 254 } else { p };
-                    if remaining < 0 {
-                        return OPUS_INVALID_PACKET;
-                    }
-                    if p < 255 {
-                        break;
-                    }
-                }
-            }
-
-            // VBR or CBR
-            if ch & 0x80 != 0 {
-                // VBR — parse (count-1) frame sizes
-                for _ in 0..(count - 1) {
-                    let (consumed, sz) = parse_size_field(&data[pos..], remaining);
-                    if consumed < 0 {
-                        return OPUS_INVALID_PACKET;
-                    }
-                    pos += consumed as usize;
-                    remaining -= consumed;
-                    remaining -= sz as i32;
-                    if remaining < 0 {
-                        return OPUS_INVALID_PACKET;
-                    }
-                }
-            }
-            // CBR — all frames same size, determined by remaining/count
-        }
-        _ => unreachable!(),
-    }
-
-    // Handle self-delimiting: parse the self-delimiting size field
-    if self_delimited {
-        let (consumed, sz) = parse_size_field(&data[pos..], remaining);
-        if consumed < 0 {
-            return OPUS_INVALID_PACKET;
-        }
-        pos += consumed as usize;
-        remaining -= consumed;
-
-        // For self-delimiting, the last frame size is explicit
-        if code == 0 {
-            remaining = sz as i32;
-        } else if code == 1 {
-            remaining = 2 * sz as i32;
-        } else if code == 2 {
-            // Code 2: first frame size is in the packet, second is the self-delim size
-            // Need to parse the first frame size
-            let (c2, s2) = parse_size_field(&data[pos..], remaining);
-            if c2 < 0 {
-                return OPUS_INVALID_PACKET;
-            }
-            remaining = s2 as i32 + sz as i32;
-            pos += c2 as usize;
-        } else {
-            // Code 3: self-delim size is the last frame size, already accounted for
-            remaining += sz as i32;
-        }
-        if remaining < 0 {
-            return OPUS_INVALID_PACKET;
-        }
-    }
-
-    pos as i32 + remaining
+    let mut toc = 0u8;
+    let mut sizes = [0i16; MAX_FRAMES];
+    let mut payload_offset = 0i32;
+    let mut packet_offset = 0i32;
+    let count = opus_packet_parse_impl(
+        data,
+        len,
+        self_delimited,
+        &mut toc,
+        &mut sizes,
+        &mut payload_offset,
+        Some(&mut packet_offset),
+    );
+    if count < 0 { count } else { packet_offset }
 }
 
 /// Parse a 1- or 2-byte size field.
+#[cfg(test)]
 fn parse_size_field(data: &[u8], len: i32) -> (i32, i16) {
     if len < 1 {
         return (-1, -1);
@@ -3041,9 +2957,9 @@ mod tests {
         assert!(parse_multistream_subpacket(&[0x03, 0x42, 0x01], 3, false) < 0);
         assert_eq!(
             parse_multistream_subpacket(&[0x03, 0x82, 0x01, 0x00], 4, false),
-            3
+            4
         );
-        assert_eq!(parse_multistream_subpacket(&[0x03, 0x02, 0x01], 3, true), 4);
+        assert!(parse_multistream_subpacket(&[0x03, 0x02, 0x01], 3, true) < 0);
         assert!(parse_multistream_subpacket(&[0x03], 1, false) < 0);
         assert!(parse_multistream_subpacket(&[0x03, 0x00], 2, false) < 0);
         assert!(parse_multistream_subpacket(&[0x03, 0xB1], 2, false) < 0);
@@ -3168,11 +3084,9 @@ mod tests {
         assert_eq!(parse_multistream_subpacket(&[0x02, 0x00, 0x00], 3, true), 3);
         assert_eq!(parse_multistream_subpacket(&[0x03, 0x03, 0x00], 3, true), 3);
 
-        // Padding branch, code 3 CBR path.
-        assert_eq!(
-            parse_multistream_subpacket(&[0x03, 0x43, 0x01, 0xAA, 0xBB], 5, false),
-            4
-        );
+        // Padding branch, code 3 CBR path: after removing one padding byte,
+        // the remaining payload is not divisible by the 3-frame CBR count.
+        assert!(parse_multistream_subpacket(&[0x03, 0x43, 0x01, 0xAA, 0xBB], 5, false) < 0);
 
         // VBR branch, code 3 with two size fields and no self-delimiting size.
         assert_eq!(
@@ -3181,7 +3095,7 @@ mod tests {
                 8,
                 false
             ),
-            6
+            8
         );
 
         // Self-delimited code 2 path parses the explicit last frame size.
