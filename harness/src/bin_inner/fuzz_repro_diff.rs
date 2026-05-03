@@ -701,6 +701,7 @@ fn run_multiframe_repro(path: &PathBuf) {
         // to keep output bounded for multi-frame repros.
         if !bytes_match || frame_idx == 0 {
             print_phase_b_trace_diff(&rust_trace, &c_trace);
+            print_phase_c_trace_diff(&rust_trace, &c_trace);
         }
 
         // Post-encode state dumps.
@@ -799,10 +800,21 @@ fn run_multiframe_repro(path: &PathBuf) {
 }
 
 /// Read the C-side Phase B trace FIFO into a Vec.
+///
+/// Drains BOTH the V1 7-tuple ring (`dbg_silk_trace_read`) and the V2
+/// payload ring (`dbg_silk_trace_read_payload`) into a single combined
+/// `Vec<Tuple>`. V1 records have `boundary_id ∈ 1..=7` and `payload = []`;
+/// V2 records have `boundary_id ∈ 100..=109` and `payload` populated per
+/// the §4.1 schema. The two are interleaved here in V1-first order, but
+/// the diff-side filters by `boundary_id` so the order is irrelevant for
+/// correctness — it just keeps the sequential dump readable.
 fn read_c_silk_trace() -> Vec<ropus::silk_trace::Tuple> {
-    let count = unsafe { bindings::dbg_silk_trace_count_get() } as usize;
-    let mut out = Vec::with_capacity(count);
-    for i in 0..count {
+    let v1_count = unsafe { bindings::dbg_silk_trace_count_get() } as usize;
+    let v2_count = unsafe { bindings::dbg_silk_trace_payload_count_get() } as usize;
+    let mut out = Vec::with_capacity(v1_count + v2_count);
+
+    // V1 records (boundary 1..=7).
+    for i in 0..v1_count {
         let mut boundary_id: c_int = 0;
         let mut channel: c_int = 0;
         let mut ec_tell: i32 = 0;
@@ -842,13 +854,52 @@ fn read_c_silk_trace() -> Vec<ropus::silk_trace::Tuple> {
             n_bits_used_lbrr,
             mid_only_flag,
             prev_decode_only_middle,
-            // V1 7-tuple grid leaves V2 fields at defaults (iter=-1
-            // per the custom `Default` impl, payload=[]); the V2 trace
-            // ring is read separately by `dbg_silk_trace_read_payload`
-            // when added in Stage 2/3.
+            // V1 records leave V2 fields at defaults (iter=-1 per the
+            // custom `Default` impl, payload=[]).
             ..Default::default()
         });
     }
+
+    // V2 records (boundary 100..=109). Each record's payload can be up
+    // to 384 i32s (DBG_SILK_TRACE_PAYLOAD_MAX in `harness/debug_silk_trace.c`).
+    // We allocate a 512-i32 scratch buffer per call: well above the
+    // 384-i32 cap and matches the Rust-side push call sites in
+    // `silk/encoder.rs` that build payloads of comparable size.
+    const V2_BUF_CAP: usize = 512;
+    let mut buf = vec![0i32; V2_BUF_CAP];
+    for i in 0..v2_count {
+        let mut boundary_id: c_int = 0;
+        let mut channel: c_int = 0;
+        let mut iter: c_int = 0;
+        let mut out_len: c_int = 0;
+        let r = unsafe {
+            bindings::dbg_silk_trace_read_payload(
+                i as c_int,
+                &mut boundary_id,
+                &mut channel,
+                &mut iter,
+                &mut out_len,
+                buf.as_mut_ptr(),
+                V2_BUF_CAP as c_int,
+            )
+        };
+        if r != 0 {
+            break;
+        }
+        let len = (out_len as usize).min(V2_BUF_CAP);
+        let payload = buf[..len].to_vec();
+        // V2 records: scalar header fields aren't meaningful (V2 boundaries
+        // emit state-vector payloads, not the V1 (ec_tell, rng, target_rate)
+        // tuple). Default everything except the four V2-defining fields.
+        out.push(ropus::silk_trace::Tuple {
+            boundary_id,
+            channel,
+            iter,
+            payload,
+            ..Default::default()
+        });
+    }
+
     out
 }
 
@@ -856,21 +907,35 @@ fn read_c_silk_trace() -> Vec<ropus::silk_trace::Tuple> {
 /// Each side's tuples are aligned by `(boundary_id, channel)` ordering. If
 /// the boundary sequence diverges at any step, the per-side stream from
 /// that point on is shown but no further alignment is attempted.
+///
+/// V1 only — both sides are filtered to `boundary_id < 100` so the V1
+/// 7-boundary api-level grid prints cleanly even when the V2 inner-function
+/// grid is also populated. The V2 grid is dumped separately by
+/// [`print_phase_c_trace_diff`].
 fn print_phase_b_trace_diff(
     rust_trace: &[ropus::silk_trace::Tuple],
     c_trace: &[ropus::silk_trace::Tuple],
 ) {
+    let rust_v1: Vec<&ropus::silk_trace::Tuple> = rust_trace
+        .iter()
+        .filter(|t| t.boundary_id > 0 && t.boundary_id < 100)
+        .collect();
+    let c_v1: Vec<&ropus::silk_trace::Tuple> = c_trace
+        .iter()
+        .filter(|t| t.boundary_id > 0 && t.boundary_id < 100)
+        .collect();
+
     println!("\n--- Phase B trace tuples (boundary, ec_tell, rng, target_rate, n_bits_exceeded, curr_lbrr, n_lbrr, mid_only, prev_d_only_mid) ---");
     println!(
         "  count: Rust={} C={}",
-        rust_trace.len(),
-        c_trace.len()
+        rust_v1.len(),
+        c_v1.len()
     );
-    let n = rust_trace.len().min(c_trace.len());
+    let n = rust_v1.len().min(c_v1.len());
     let mut first_diff_at: Option<usize> = None;
     for i in 0..n {
-        let r = &rust_trace[i];
-        let c = &c_trace[i];
+        let r = rust_v1[i];
+        let c = c_v1[i];
         let same = r == c;
         if !same && first_diff_at.is_none() {
             first_diff_at = Some(i);
@@ -891,13 +956,13 @@ fn print_phase_b_trace_diff(
             );
         }
     }
-    if rust_trace.len() != c_trace.len() {
+    if rust_v1.len() != c_v1.len() {
         println!("  count mismatch: Rust extra {} / C extra {}",
-            rust_trace.len().saturating_sub(c_trace.len()),
-            c_trace.len().saturating_sub(rust_trace.len()));
+            rust_v1.len().saturating_sub(c_v1.len()),
+            c_v1.len().saturating_sub(rust_v1.len()));
     }
     if let Some(idx) = first_diff_at {
-        let r = &rust_trace[idx];
+        let r = rust_v1[idx];
         println!(
             "\n  >>> FIRST DIVERGENCE at boundary {} (channel {}), index {} <<<",
             r.boundary_id, r.channel, idx
@@ -913,8 +978,597 @@ fn print_phase_b_trace_diff(
             _ => "(unknown)",
         };
         println!("  {label}");
-    } else if rust_trace.len() == c_trace.len() {
+    } else if rust_v1.len() == c_v1.len() {
         println!("\n  >>> trace tuples match across all {n} boundaries <<<");
+    }
+}
+
+// ===========================================================================
+// Phase C (HLD V2) trace decode + diff
+// ---------------------------------------------------------------------------
+// V2 boundaries 100..=109 carry full state-vector payloads (`Vec<i32>`). The
+// schema differs per boundary (HLD V2 §4.1, mirrored in
+// `harness/silk_encode_frame_FIX_traced.c` boundaries 100..=109). The diff
+// strategy:
+//   1. Match Rust against C using `(boundary_id, iter)` as the key. Channel
+//      is ignored for V2 because Rust emits `channel = -1` (sentinel) while
+//      C emits the per-channel global; aligning by channel would create
+//      false negatives (per HLD V2 §4 spec for stage 4).
+//   2. For setup boundaries (100..=105), iter is `-1` on both sides; one
+//      tuple per encode per boundary.
+//   3. For per-iter boundaries (106..=109), the rate-control loop may take
+//      different iter counts on each side (G8 candidate). A tuple present
+//      on one side but not the other IS a divergence finding.
+//   4. Pretty-print each boundary's payload as named columns; highlight the
+//      first per-element divergence within the payload.
+// ===========================================================================
+
+/// Format a u16-pair (lo, hi) as the original u32 hex value. Boundaries
+/// 108/109 split `psRangeEnc->rng` into `rng & 0xFFFF` and `rng >> 16`.
+fn rng_pair_to_hex(lo: i32, hi: i32) -> String {
+    let lo_u = (lo as u32) & 0xFFFF;
+    let hi_u = (hi as u32) & 0xFFFF;
+    let v = (hi_u << 16) | lo_u;
+    format!("0x{:08x}", v)
+}
+
+/// Map a V2 boundary id to a coarse (mnemonic, hypothesis-letter) for
+/// display. This is the boundary-level label — for boundaries whose
+/// payload mixes hypothesis territories (b103 in particular), prefer
+/// `v2_boundary_label_for_index` which disambiguates by the divergent
+/// sub-field.
+fn v2_boundary_label(boundary_id: i32) -> (&'static str, &'static str) {
+    match boundary_id {
+        100 => ("F1 post-LP_variable_cutoff", "G7"),
+        101 => ("F3 post-find_pitch_lags", "G6"),
+        102 => ("F4 post-noise_shape_analysis", "G5"),
+        103 => ("F5 post-find_pred_coefs", "G4"),
+        104 => ("F6 post-process_gains", "G3"),
+        105 => ("F7 post-LBRR_encode", "G9"),
+        106 => ("F8 pre-NSQ (per iter)", "G8"),
+        107 => ("F8a post-NSQ (per iter)", "G2"),
+        108 => ("F8b post-encode_indices (per iter)", "G1a"),
+        109 => ("F8c post-encode_pulses (per iter)", "G1b"),
+        _ => ("(unknown V2 boundary)", "?"),
+    }
+}
+
+/// Recover `nb_subfr` from a b103 payload length.
+///
+/// b103 schema (see `silk/encoder.rs` near `boundary_id: 103` push):
+///   2*MAX_LPC_ORDER + LTP_ORDER*nb + MAX_SHAPE_LPC_ORDER*nb
+///     + 1 + (MAX_LPC_ORDER+1) + nb + 2
+/// = 32 + 5*nb + 24*nb + 1 + 17 + nb + 2
+/// = 30*nb + 52.
+/// Solve `nb = (len - 52) / 30`, validate `nb in 2..=4` and `30*nb+52 == len`.
+fn b103_nb_subfr(payload_len: usize) -> Option<usize> {
+    if payload_len < 52 + 30 * 2 {
+        return None;
+    }
+    let rem = payload_len.checked_sub(52)?;
+    if rem % 30 != 0 {
+        return None;
+    }
+    let nb = rem / 30;
+    if (2..=4).contains(&nb) {
+        Some(nb)
+    } else {
+        None
+    }
+}
+
+/// Sub-field-aware label/hypothesis for a V2 boundary payload. Falls
+/// back to the coarse `v2_boundary_label` when the divergent index
+/// doesn't change the call. Currently only b103 has cross-hypothesis
+/// territory (the F5 push includes ar_q13, which is computed in F4
+/// noise_shape_analysis — so an ar_q13 divergence at b103 actually
+/// localizes to G5, not G4). b105 sub-fields are all G9-related, so
+/// no disambiguation is needed there.
+fn v2_boundary_label_for_index(
+    boundary_id: i32,
+    first_divergent_index: usize,
+    payload_len: usize,
+) -> (&'static str, &'static str) {
+    if boundary_id == 103 {
+        const LTP_ORDER: usize = 5;
+        const MAX_SHAPE_LPC_ORDER: usize = 24;
+        const PRED_COEF_END: usize = 32; // 2 * MAX_LPC_ORDER
+
+        if let Some(nb) = b103_nb_subfr(payload_len) {
+            let ltp_end = PRED_COEF_END + LTP_ORDER * nb;
+            let ar_end = ltp_end + MAX_SHAPE_LPC_ORDER * nb;
+            let scale_end = ar_end + 1;
+            let i = first_divergent_index;
+            if i < PRED_COEF_END {
+                return ("F5 post-find_pred_coefs (pred_coef_q12)", "G4");
+            } else if i < ltp_end {
+                return ("F5 post-find_pred_coefs (ltp_coef_q14)", "G4 sub-LTP");
+            } else if i < ar_end {
+                return (
+                    "F4 noise_shape_analysis (ar_q13) — surfaces at b103 because b102 schema omits ar_q13",
+                    "G5",
+                );
+            } else if i < scale_end {
+                return ("F5 sub-LTP-scale", "G4");
+            } else {
+                return ("F5 sub-NLSF/LTP-index", "G4");
+            }
+        }
+        // Fall through if length is malformed.
+    }
+    v2_boundary_label(boundary_id)
+}
+
+/// Format an i32 slice as `[a, b, c, ...]` truncated to `max` elements.
+fn fmt_vec(p: &[i32], max: usize) -> String {
+    if p.len() <= max {
+        let parts: Vec<String> = p.iter().map(|v| v.to_string()).collect();
+        format!("[{}]", parts.join(", "))
+    } else {
+        let parts: Vec<String> = p[..max].iter().map(|v| v.to_string()).collect();
+        format!("[{}, ... ({} more)]", parts.join(", "), p.len() - max)
+    }
+}
+
+/// Format an i32 slice as `[head..., (...), ...tail]` for very long
+/// slices (e.g. `ar_q13` with up to 96 elts). When the slice fits in
+/// `head + tail`, prints in full.
+fn fmt_vec_head_tail(p: &[i32], head: usize, tail: usize) -> String {
+    if p.len() <= head + tail {
+        let parts: Vec<String> = p.iter().map(|v| v.to_string()).collect();
+        return format!("[{}]", parts.join(", "));
+    }
+    let head_parts: Vec<String> = p[..head].iter().map(|v| v.to_string()).collect();
+    let tail_parts: Vec<String> = p[p.len() - tail..].iter().map(|v| v.to_string()).collect();
+    format!(
+        "[{}, (... {} elided ...), {}]",
+        head_parts.join(", "),
+        p.len() - head - tail,
+        tail_parts.join(", ")
+    )
+}
+
+/// Decode a payload into a one-line named-column summary per the §4.1
+/// schema. `nb_subfr` is inferred from payload length where possible
+/// (boundary-specific). For unknown boundaries / malformed payloads,
+/// fall back to a hex dump preview.
+fn format_v2_payload(boundary_id: i32, payload: &[i32]) -> String {
+    match boundary_id {
+        100 => {
+            // input_buf[1..=frame_length], up to 480 i32s. Just show length
+            // + first 8 elements.
+            format!(
+                "input_buf[len={}] first8={}",
+                payload.len(),
+                fmt_vec(payload, 8)
+            )
+        }
+        101 => {
+            // pitchL[0..nb_subfr] ‖ [lagIndex, contourIndex] = (nb_subfr + 2) elts.
+            // For NB nb_subfr=4 → 6 elts; for SWB nb_subfr=2 → 4 elts.
+            if payload.len() < 2 {
+                return format!("(malformed: len={})", payload.len());
+            }
+            let n = payload.len() - 2;
+            let pitch_l = &payload[..n];
+            let lag_idx = payload[n];
+            let contour = payload[n + 1];
+            format!(
+                "pitch_l={} lag_index={} contour_index={}",
+                fmt_vec(pitch_l, 8),
+                lag_idx,
+                contour
+            )
+        }
+        102 => {
+            // 4*nb_subfr + 2 elts. Recover nb_subfr.
+            if payload.len() < 2 || (payload.len() - 2) % 4 != 0 {
+                return format!("(malformed: len={})", payload.len());
+            }
+            let n = (payload.len() - 2) / 4;
+            let harm = &payload[0..n];
+            let tilt = &payload[n..2 * n];
+            let lf_shp = &payload[2 * n..3 * n];
+            let gains_unq = &payload[3 * n..4 * n];
+            let harm_boost = payload[4 * n];
+            let tilt_smth = payload[4 * n + 1];
+            format!(
+                "harm_shape_gain_q14={} tilt_q14={} lf_shp_q14={} gains_unq_q16={} harm_boost_smth={} tilt_smth={}",
+                fmt_vec(harm, 8),
+                fmt_vec(tilt, 8),
+                fmt_vec(lf_shp, 8),
+                fmt_vec(gains_unq, 8),
+                harm_boost,
+                tilt_smth,
+            )
+        }
+        103 => {
+            // 2*MAX_LPC_ORDER + LTP_ORDER*nb_subfr + MAX_SHAPE_LPC_ORDER*nb_subfr
+            //  + 1 + (MAX_LPC_ORDER+1) + nb_subfr + 2 = 30*nb_subfr + 52.
+            const MAX_LPC_ORDER: usize = 16;
+            const LTP_ORDER: usize = 5;
+            const MAX_SHAPE_LPC_ORDER: usize = 24;
+            let Some(nb) = b103_nb_subfr(payload.len()) else {
+                return format!(
+                    "(malformed b103: len={} not 30*nb+52 for nb in 2..=4)",
+                    payload.len()
+                );
+            };
+            let p0_end = MAX_LPC_ORDER;
+            let p1_end = 2 * MAX_LPC_ORDER;
+            let ltp_end = p1_end + LTP_ORDER * nb;
+            let ar_end = ltp_end + MAX_SHAPE_LPC_ORDER * nb;
+            let scale_end = ar_end + 1;
+            let nlsf_end = scale_end + (MAX_LPC_ORDER + 1);
+            let ltpidx_end = nlsf_end + nb;
+            let pred0 = &payload[0..p0_end];
+            let pred1 = &payload[p0_end..p1_end];
+            let ltp_coef = &payload[p1_end..ltp_end];
+            let ar_q13 = &payload[ltp_end..ar_end];
+            let ltp_scale_q14 = payload[ar_end];
+            let nlsf_indices = &payload[scale_end..nlsf_end];
+            let ltp_index = &payload[nlsf_end..ltpidx_end];
+            let ltp_scale_index = payload[ltpidx_end];
+            let nlsf_interp = payload[ltpidx_end + 1];
+            format!(
+                "pred_coef_q12[0]={} pred_coef_q12[1]={} ltp_coef_q14={} ar_q13={} ltp_scale_q14={} nlsf_indices={} ltp_index={} ltp_scale_index={} nlsf_interp_coef_q2={}",
+                fmt_vec(pred0, MAX_LPC_ORDER),
+                fmt_vec(pred1, MAX_LPC_ORDER),
+                fmt_vec(ltp_coef, LTP_ORDER * nb),
+                fmt_vec_head_tail(ar_q13, 8, 4),
+                ltp_scale_q14,
+                fmt_vec(nlsf_indices, MAX_LPC_ORDER + 1),
+                fmt_vec(ltp_index, nb),
+                ltp_scale_index,
+                nlsf_interp,
+            )
+        }
+        104 => {
+            // Gains_Q16[0..nb_subfr] ‖ [Lambda_Q10, lastGainIndexPrev]
+            //  ‖ GainsIndices[0..nb_subfr]. Length = 2*nb_subfr + 2.
+            if payload.len() < 2 || (payload.len() - 2) % 2 != 0 {
+                return format!("(malformed: len={})", payload.len());
+            }
+            let n = (payload.len() - 2) / 2;
+            let gains_q16 = &payload[0..n];
+            let lambda_q10 = payload[n];
+            let last_gain_index_prev = payload[n + 1];
+            let gains_indices = &payload[n + 2..2 * n + 2];
+            format!(
+                "gains_q16={} lambda_q10={} last_gain_index_prev={} gains_indices={}",
+                fmt_vec(gains_q16, 8),
+                lambda_q10,
+                last_gain_index_prev,
+                fmt_vec(gains_indices, 8),
+            )
+        }
+        105 => {
+            // Gains_Q16[0..nb_subfr] ‖ [LBRR_flag] ‖ GainsIndices_LBRR[0..nb_subfr]
+            //  ‖ [signalType, quantOffsetType]. Length = 2*nb_subfr + 3.
+            //
+            // No sub-field hypothesis disambiguation here: every field on
+            // b105 lives in G9 (LBRR_encode_FIX) territory, so the coarse
+            // `v2_boundary_label(105) = ("F7 post-LBRR_encode", "G9")`
+            // already attributes correctly. b103 is the only V2 boundary
+            // that mixes hypothesis territories — see
+            // `v2_boundary_label_for_index`.
+            if payload.len() < 3 || (payload.len() - 3) % 2 != 0 {
+                return format!("(malformed: len={})", payload.len());
+            }
+            let n = (payload.len() - 3) / 2;
+            let gains_q16 = &payload[0..n];
+            let lbrr_flag = payload[n];
+            let gains_idx_lbrr = &payload[n + 1..2 * n + 1];
+            let signal_type = payload[2 * n + 1];
+            let quant_offset_type = payload[2 * n + 2];
+            format!(
+                "gains_q16={} LBRR_flag={} indices_LBRR.gains_indices={} signalType={} quantOffsetType={}",
+                fmt_vec(gains_q16, 8),
+                lbrr_flag,
+                fmt_vec(gains_idx_lbrr, 8),
+                signal_type,
+                quant_offset_type,
+            )
+        }
+        106 => {
+            // [iter, gainsID, gainsID_lower, gainsID_upper, found_lower, found_upper, gainMult_Q8].
+            if payload.len() != 7 {
+                return format!("(malformed: len={}, expected 7)", payload.len());
+            }
+            format!(
+                "iter={} gainsID={} gainsID_lower={} gainsID_upper={} found_lower={} found_upper={} gainMult_Q8={}",
+                payload[0], payload[1], payload[2], payload[3], payload[4], payload[5], payload[6]
+            )
+        }
+        107 => {
+            // [iter] ‖ pulses[0..frame_length] ‖ [signalType, quantOffsetType, Seed, lagPrev].
+            if payload.len() < 5 {
+                return format!("(malformed: len={})", payload.len());
+            }
+            let n = payload.len() - 5;
+            let iter = payload[0];
+            let pulses = &payload[1..1 + n];
+            let signal_type = payload[1 + n];
+            let quant_offset_type = payload[1 + n + 1];
+            let seed = payload[1 + n + 2];
+            let lag_prev = payload[1 + n + 3];
+            format!(
+                "iter={} pulses[len={}] first16={} signalType={} quantOffsetType={} Seed={} lagPrev={}",
+                iter,
+                pulses.len(),
+                fmt_vec(pulses, 16),
+                signal_type,
+                quant_offset_type,
+                seed,
+                lag_prev,
+            )
+        }
+        108 | 109 => {
+            // [iter, ec_tell, rng_lo, rng_hi].
+            if payload.len() != 4 {
+                return format!("(malformed: len={}, expected 4)", payload.len());
+            }
+            let rng_hex = rng_pair_to_hex(payload[2], payload[3]);
+            format!("iter={} ec_tell={} rng={}", payload[0], payload[1], rng_hex)
+        }
+        _ => format!("(unknown boundary) payload[len={}] {}", payload.len(), fmt_vec(payload, 8)),
+    }
+}
+
+/// Find the first divergent index between two payloads. Returns
+/// `min(R.len, C.len)` when one is a strict prefix of the other.
+fn first_divergent_index(rust_payload: &[i32], c_payload: &[i32]) -> usize {
+    let n_min = rust_payload.len().min(c_payload.len());
+    (0..n_min)
+        .find(|&i| rust_payload[i] != c_payload[i])
+        .unwrap_or(n_min)
+}
+
+/// Print a per-element divergence highlight when a payload differs.
+/// Shows up to `WINDOW` elements before and after the first divergent
+/// index, formatted side-by-side.
+fn print_payload_divergence(boundary_id: i32, rust_payload: &[i32], c_payload: &[i32]) {
+    const WINDOW: usize = 4;
+    if rust_payload == c_payload {
+        return;
+    }
+    let first_div = first_divergent_index(rust_payload, c_payload);
+
+    let lo = first_div.saturating_sub(WINDOW);
+    let hi_r = (first_div + WINDOW + 1).min(rust_payload.len());
+    let hi_c = (first_div + WINDOW + 1).min(c_payload.len());
+
+    println!("        first divergent element at index {}:", first_div);
+    println!(
+        "          R[{}..{}] = {:?}",
+        lo,
+        hi_r,
+        &rust_payload[lo..hi_r]
+    );
+    println!(
+        "          C[{}..{}] = {:?}",
+        lo,
+        hi_c,
+        &c_payload[lo..hi_c]
+    );
+    if rust_payload.len() != c_payload.len() {
+        println!(
+            "          (length mismatch: R.len={} C.len={})",
+            rust_payload.len(),
+            c_payload.len()
+        );
+    }
+    // Annotate the bug class hint per HLD V2 §3, using the
+    // sub-field-aware mapping where applicable (b103 mixes G4 and G5
+    // territory because the F5 push includes ar_q13 from F4).
+    let payload_len = rust_payload.len().max(c_payload.len());
+    let (label, hyp) = v2_boundary_label_for_index(boundary_id, first_div, payload_len);
+    println!(
+        "          → b{} {} divergence — hypothesis {}",
+        boundary_id, label, hyp
+    );
+}
+
+/// Match key for V2 tuples. Channel is intentionally omitted (Rust emits
+/// `-1` sentinel; C emits the per-channel global). Boundaries 100..=105
+/// fire once per encode (`iter = -1`); boundaries 106..=109 fire per
+/// rate-control iter (`iter` 0..maxIter).
+type V2Key = (i32, i32); // (boundary_id, iter)
+
+fn v2_key(t: &ropus::silk_trace::Tuple) -> V2Key {
+    (t.boundary_id, t.iter)
+}
+
+/// Print the Phase C (HLD V2) trace diff for boundaries 100..=109.
+/// Returns the `(boundary_id, iter)` of the first divergent tuple, if any,
+/// and a free-form descriptor — used by the caller to print a top-level
+/// "FIRST DIVERGENT V2 BOUNDARY" call-out.
+fn print_phase_c_trace_diff(
+    rust_trace: &[ropus::silk_trace::Tuple],
+    c_trace: &[ropus::silk_trace::Tuple],
+) {
+    let rust_v2: Vec<&ropus::silk_trace::Tuple> = rust_trace
+        .iter()
+        .filter(|t| t.boundary_id >= 100 && t.boundary_id <= 109)
+        .collect();
+    let c_v2: Vec<&ropus::silk_trace::Tuple> = c_trace
+        .iter()
+        .filter(|t| t.boundary_id >= 100 && t.boundary_id <= 109)
+        .collect();
+
+    println!("\n--- Phase C (HLD V2) inner-function trace tuples (boundaries 100..=109) ---");
+    println!("  count: Rust={} C={}", rust_v2.len(), c_v2.len());
+
+    if rust_v2.is_empty() && c_v2.is_empty() {
+        println!("  (no V2 tuples emitted — non-SILK or pre-Stage-3 build)");
+        return;
+    }
+
+    // Build keyed maps. V2 setup boundaries (100..=105) are unique by
+    // boundary_id alone (iter=-1). V2 per-iter boundaries (106..=109) may
+    // appear multiple times per encode (one per rate-control iter).
+    use std::collections::BTreeMap;
+    let rust_map: BTreeMap<V2Key, &ropus::silk_trace::Tuple> =
+        rust_v2.iter().map(|t| (v2_key(t), *t)).collect();
+    let c_map: BTreeMap<V2Key, &ropus::silk_trace::Tuple> =
+        c_v2.iter().map(|t| (v2_key(t), *t)).collect();
+
+    // Union of keys, sorted: setup boundaries first (100..=105 with iter=-1),
+    // then per-iter (106..=109 with iter 0, 1, 2 ...). BTreeMap natural
+    // ordering of (boundary_id, iter) gives close-enough output: all
+    // boundary 100 tuples (one), then 101 (one), ..., then 106 iter=0,
+    // 106 iter=1, etc — but since iters are interleaved across boundaries
+    // within the rate-control loop, we re-sort by (iter, boundary_id) for
+    // the per-iter group so iter 0 of 106/107/108/109 appears together.
+    let mut all_keys: Vec<V2Key> = rust_map
+        .keys()
+        .chain(c_map.keys())
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    all_keys.sort_by(|a, b| {
+        let (ba, ia) = *a;
+        let (bb, ib) = *b;
+        // Setup boundaries first (sorted by id), then per-iter (sorted by
+        // iter, then id).
+        let setup_a = ba < 106;
+        let setup_b = bb < 106;
+        match (setup_a, setup_b) {
+            (true, true) => ba.cmp(&bb),
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            (false, false) => ia.cmp(&ib).then(ba.cmp(&bb)),
+        }
+    });
+
+    // (boundary, channel, iter, first_divergent_index, payload_len, kind).
+    // `first_divergent_index` and `payload_len` are used to disambiguate
+    // hypothesis territory at boundaries whose payload spans hypotheses
+    // (b103: G4 pred_coef vs G5 ar_q13). For Rust-only / C-only cases
+    // we record the index as 0 and the available payload length.
+    let mut first_divergent: Option<(i32, i32, i32, usize, usize, String)> = None;
+
+    // Rate-control loop iter-count summary (per HLD V2 §3 G8 hypothesis).
+    let mut rust_iter_max: i32 = -1;
+    let mut c_iter_max: i32 = -1;
+    for t in &rust_v2 {
+        if t.boundary_id >= 106 && t.boundary_id <= 109 {
+            rust_iter_max = rust_iter_max.max(t.iter);
+        }
+    }
+    for t in &c_v2 {
+        if t.boundary_id >= 106 && t.boundary_id <= 109 {
+            c_iter_max = c_iter_max.max(t.iter);
+        }
+    }
+    let rust_iter_count = (rust_iter_max + 1).max(0);
+    let c_iter_count = (c_iter_max + 1).max(0);
+    if rust_iter_count != c_iter_count {
+        println!(
+            "  rate-control iter counts differ: Rust={} C={} (G8 candidate)",
+            rust_iter_count, c_iter_count
+        );
+    } else if rust_iter_count > 0 {
+        println!("  rate-control iter count: {} (matches)", rust_iter_count);
+    }
+
+    for key in all_keys {
+        let (bid, iter) = key;
+        let r = rust_map.get(&key);
+        let c = c_map.get(&key);
+        let (label, hyp) = v2_boundary_label(bid);
+        let iter_label = if iter < 0 {
+            "setup".to_string()
+        } else {
+            format!("iter={}", iter)
+        };
+        match (r, c) {
+            (Some(r), Some(c)) => {
+                let same = r.payload == c.payload;
+                let marker = if same { " " } else { "*" };
+                println!(
+                    "  {marker} b{:3} ({})  [{:>5}]  ({})",
+                    bid, label, iter_label, hyp
+                );
+                println!("        R: {}", format_v2_payload(bid, &r.payload));
+                if !same {
+                    println!("        C: {}", format_v2_payload(bid, &c.payload));
+                    print_payload_divergence(bid, &r.payload, &c.payload);
+                    if first_divergent.is_none() {
+                        let idx = first_divergent_index(&r.payload, &c.payload);
+                        let plen = r.payload.len().max(c.payload.len());
+                        first_divergent = Some((
+                            bid,
+                            r.channel,
+                            iter,
+                            idx,
+                            plen,
+                            "payload-mismatch".to_string(),
+                        ));
+                    }
+                }
+            }
+            (Some(r), None) => {
+                println!(
+                    "  * b{:3} ({})  [{:>5}]  ({})  Rust-only (C did not emit)",
+                    bid, label, iter_label, hyp
+                );
+                println!("        R: {}", format_v2_payload(bid, &r.payload));
+                if first_divergent.is_none() {
+                    first_divergent = Some((
+                        bid,
+                        r.channel,
+                        iter,
+                        0,
+                        r.payload.len(),
+                        "Rust emitted but C did not (rate-control iter-count divergence?)"
+                            .to_string(),
+                    ));
+                }
+            }
+            (None, Some(c)) => {
+                println!(
+                    "  * b{:3} ({})  [{:>5}]  ({})  C-only (Rust did not emit)",
+                    bid, label, iter_label, hyp
+                );
+                println!("        C: {}", format_v2_payload(bid, &c.payload));
+                if first_divergent.is_none() {
+                    first_divergent = Some((
+                        bid,
+                        c.channel,
+                        iter,
+                        0,
+                        c.payload.len(),
+                        "C emitted but Rust did not (rate-control iter-count divergence?)"
+                            .to_string(),
+                    ));
+                }
+            }
+            (None, None) => unreachable!(),
+        }
+    }
+
+    if let Some((bid, channel, iter, first_idx, payload_len, kind)) = first_divergent {
+        let (label, hyp) = v2_boundary_label_for_index(bid, first_idx, payload_len);
+        let iter_label = if iter < 0 {
+            "setup".to_string()
+        } else {
+            format!("{}", iter)
+        };
+        println!(
+            "\n  >>> FIRST DIVERGENT V2 BOUNDARY: b{} (channel={}, iter={}) → hypothesis {} ({}) <<<",
+            bid, channel, iter_label, hyp, label
+        );
+        println!("      kind: {}", kind);
+        if bid == 106 && rust_iter_count != c_iter_count {
+            println!(
+                "      G8 SIGNAL: rate-control loop iter counts differ: Rust={}, C={}",
+                rust_iter_count, c_iter_count
+            );
+        }
+    } else {
+        println!("\n  >>> V2 trace tuples match across all boundaries <<<");
     }
 }
 
@@ -1275,6 +1929,7 @@ fn run_multistream_repro(path: &PathBuf) {
     );
 
     print_phase_b_trace_diff(&rust_trace, &c_trace);
+    print_phase_c_trace_diff(&rust_trace, &c_trace);
 
     // Family=0/ch=1 = single-stream wrapper. Inspect that sub-encoder's
     // state on the Rust side; on the C side we don't have a stable accessor
