@@ -4599,8 +4599,6 @@ pub fn silk_nsq(
         .copy_within(frame_length..frame_length + ltp_mem_length, 0);
     nsq.s_ltp_shp_q14
         .copy_within(frame_length..frame_length + ltp_mem_length, 0);
-    nsq.s_ltp_buf_idx = ltp_mem_length as i32;
-    nsq.s_ltp_shp_buf_idx = ltp_mem_length as i32;
 }
 
 // ===========================================================================
@@ -8205,6 +8203,10 @@ pub fn silk_encode(
         // Resample and buffer input per channel (C: enc_API.c lines 291-341)
         let api_in = &samples_in[samples_offset..];
         if enc_control.n_channels_api == 2 && n_channels_internal == 2 {
+            if enc.n_prev_channels_internal == 1 && enc.state_fxx[0].s_cmn.n_frames_encoded == 0 {
+                enc.state_fxx[1].s_cmn.resampler_state =
+                    enc.state_fxx[0].s_cmn.resampler_state.clone();
+            }
             for n in 0..2 {
                 let input: Vec<i16> = (0..n_samples_from_input)
                     .map(|i| api_in[i * 2 + n])
@@ -9646,8 +9648,9 @@ mod tests {
 
         assert!(pulses.iter().any(|&pulse| pulse != 0));
         assert_eq!(nsq.lag_prev, 4);
-        assert_eq!(nsq.s_ltp_buf_idx, ps_enc.ltp_mem_length);
-        assert_eq!(nsq.s_ltp_shp_buf_idx, ps_enc.ltp_mem_length);
+        let expected_buf_idx = ps_enc.ltp_mem_length + ps_enc.frame_length;
+        assert_eq!(nsq.s_ltp_buf_idx, expected_buf_idx);
+        assert_eq!(nsq.s_ltp_shp_buf_idx, expected_buf_idx);
         assert!(
             nsq.xq[..ps_enc.ltp_mem_length as usize]
                 .iter()

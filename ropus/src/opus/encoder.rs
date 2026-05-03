@@ -2937,11 +2937,15 @@ impl OpusEncoder {
                 }
                 if redundancy {
                     enc.encode_bit_logp(celt_to_silk, 1);
+                    let max_redundancy;
                     if self.mode == MODE_HYBRID {
-                        let max_redundancy =
-                            ((8 * (max_data_bytes - 1) - enc.tell()) - 8 - 3 * 8) / 8;
-                        redundancy_bytes = imin(imin(257, max_redundancy), redundancy_bytes);
-                        redundancy_bytes = imax(2, redundancy_bytes);
+                        max_redundancy = (max_data_bytes - 1) - ((enc.tell() + 8 + 3 + 7) >> 3);
+                    } else {
+                        max_redundancy = (max_data_bytes - 1) - ((enc.tell() + 7) >> 3);
+                    }
+                    redundancy_bytes = imin(max_redundancy, redundancy_bytes);
+                    redundancy_bytes = imin(257, imax(2, redundancy_bytes));
+                    if self.mode == MODE_HYBRID {
                         enc.encode_uint((redundancy_bytes - 2) as u32, 256);
                     }
                 }
