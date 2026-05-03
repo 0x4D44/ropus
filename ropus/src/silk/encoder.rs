@@ -9648,6 +9648,7 @@ mod tests {
 
         assert!(pulses.iter().any(|&pulse| pulse != 0));
         assert_eq!(nsq.lag_prev, 4);
+        // These debug-visible final indices match C; standard NSQ resets them on entry.
         let expected_buf_idx = ps_enc.ltp_mem_length + ps_enc.frame_length;
         assert_eq!(nsq.s_ltp_buf_idx, expected_buf_idx);
         assert_eq!(nsq.s_ltp_shp_buf_idx, expected_buf_idx);
