@@ -1011,7 +1011,7 @@ impl OpusMSEncoder {
             let ch = if s < coupled_streams { 2 } else { 1 };
             let mut enc = OpusEncoder::new(fs, ch, application)?;
             if s == lfe_stream {
-                enc.ms_set_lfe(1);
+                enc.set_lfe(1);
             }
             encoders.push(enc);
         }
@@ -1062,7 +1062,7 @@ impl OpusMSEncoder {
         lsb_depth: i32,
     ) -> Result<i32, i32> {
         let fs = self.encoders[0].fs;
-        let vbr = self.encoders[0].ms_get_vbr();
+        let vbr = self.encoders[0].get_vbr();
 
         let frame_size = frame_size_select(analysis_frame_size, self.variable_duration, fs);
         if frame_size <= 0 {
@@ -1084,7 +1084,7 @@ impl OpusMSEncoder {
 
         // Surround analysis
         if self.mapping_type == MappingType::Surround {
-            if let Some(celt_mode) = self.encoders[0].ms_get_celt_mode() {
+            if let Some(celt_mode) = self.encoders[0].celt_mode() {
                 surround_analysis(
                     celt_mode,
                     pcm,
@@ -1121,10 +1121,13 @@ impl OpusMSEncoder {
             }
         }
 
-        // Configure and encode each stream
+        // Configure and encode each stream. Mirrors C
+        // opus_multistream_encoder.c L935-955: per-stream `OPUS_SET_BITRATE`
+        // (= public `set_bitrate`) and surround/ambisonics overrides via the
+        // same CTL family.
         for s in 0..self.layout.nb_streams as usize {
             let enc = &mut self.encoders[s];
-            enc.ms_set_user_bitrate(bitrates[s]);
+            enc.set_bitrate(bitrates[s]);
 
             if self.mapping_type == MappingType::Surround {
                 let equiv_rate =
@@ -1138,20 +1141,20 @@ impl OpusMSEncoder {
                     adj_rate -= 60 * (fs / frame_size - 50) * self.layout.nb_channels;
                 }
                 if adj_rate > 10000 * self.layout.nb_channels {
-                    enc.ms_set_bandwidth(OPUS_BANDWIDTH_FULLBAND);
+                    enc.set_bandwidth(OPUS_BANDWIDTH_FULLBAND);
                 } else if adj_rate > 7000 * self.layout.nb_channels {
-                    enc.ms_set_bandwidth(OPUS_BANDWIDTH_SUPERWIDEBAND);
+                    enc.set_bandwidth(OPUS_BANDWIDTH_SUPERWIDEBAND);
                 } else if adj_rate > 5000 * self.layout.nb_channels {
-                    enc.ms_set_bandwidth(OPUS_BANDWIDTH_WIDEBAND);
+                    enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND);
                 } else {
-                    enc.ms_set_bandwidth(OPUS_BANDWIDTH_NARROWBAND);
+                    enc.set_bandwidth(OPUS_BANDWIDTH_NARROWBAND);
                 }
                 if (s as i32) < self.layout.nb_coupled_streams {
-                    enc.ms_set_force_mode(MODE_CELT_ONLY);
-                    enc.ms_set_force_channels(2);
+                    enc.set_force_mode(MODE_CELT_ONLY);
+                    enc.set_force_channels(2);
                 }
             } else if self.mapping_type == MappingType::Ambisonics {
-                enc.ms_set_force_mode(MODE_CELT_ONLY);
+                enc.set_force_mode(MODE_CELT_ONLY);
             }
         }
 
@@ -1219,9 +1222,10 @@ impl OpusMSEncoder {
                 curr_max -= if curr_max > 253 { 2 } else { 1 };
             }
 
-            // CBR last-stream adjustment
+            // CBR last-stream adjustment. Matches C
+            // opus_multistream_encoder.c L1023-1027 (`OPUS_SET_BITRATE`).
             if vbr == 0 && s_i32 == self.layout.nb_streams - 1 {
-                self.encoders[s].ms_set_user_bitrate(bits_to_bitrate(curr_max * 8, fs, frame_size));
+                self.encoders[s].set_bitrate(bits_to_bitrate(curr_max * 8, fs, frame_size));
             }
 
             // Encode this stream
@@ -1296,10 +1300,14 @@ impl OpusMSEncoder {
     }
 
     pub fn get_bitrate(&self) -> i32 {
-        // Sum of per-stream bitrates
+        // Sum of per-stream effective bitrates. Reads each sub-encoder's
+        // `bitrate_bps` (the value the last encode used, which is what the
+        // pre-existing `ms_get_bitrate` returned). Differs from the public
+        // `OpusEncoder::get_bitrate`, which recomputes from `user_bitrate_bps`
+        // — the historical MS aggregate is preserved here.
         let mut total = 0i32;
         for enc in &self.encoders {
-            total += enc.ms_get_bitrate();
+            total += enc.current_bitrate_bps();
         }
         total
     }
@@ -1313,101 +1321,152 @@ impl OpusMSEncoder {
         val
     }
 
+    // -----------------------------------------------------------------------
+    // Per-stream CTL fan-out. Mirrors C `opus_multistream_encoder_ctl`'s
+    // SET_* fall-through block at `opus_multistream_encoder.c:1245-1278`,
+    // which forwards every `OPUS_SET_*` request to each sub-encoder via
+    // `opus_encoder_ctl(enc, request, value)` — i.e. the equivalent of our
+    // public `OpusEncoder::set_*` family. Returning the first non-OK status
+    // matches C's `if (ret != OPUS_OK) break;` early-exit.
+    // -----------------------------------------------------------------------
+
     /// Set a parameter on all sub-encoders.
     pub fn set_complexity(&mut self, v: i32) -> i32 {
         for enc in &mut self.encoders {
-            enc.ms_set_complexity(v);
+            let r = enc.set_complexity(v);
+            if r != OPUS_OK {
+                return r;
+            }
         }
         OPUS_OK
     }
 
     pub fn set_vbr(&mut self, v: i32) -> i32 {
         for enc in &mut self.encoders {
-            enc.ms_set_vbr(v);
+            let r = enc.set_vbr(v);
+            if r != OPUS_OK {
+                return r;
+            }
         }
         OPUS_OK
     }
 
     pub fn set_vbr_constraint(&mut self, v: i32) -> i32 {
         for enc in &mut self.encoders {
-            enc.ms_set_vbr_constraint(v);
+            let r = enc.set_vbr_constraint(v);
+            if r != OPUS_OK {
+                return r;
+            }
         }
         OPUS_OK
     }
 
     pub fn set_signal(&mut self, v: i32) -> i32 {
         for enc in &mut self.encoders {
-            enc.ms_set_signal(v);
+            let r = enc.set_signal(v);
+            if r != OPUS_OK {
+                return r;
+            }
         }
         OPUS_OK
     }
 
     pub fn set_bandwidth(&mut self, v: i32) -> i32 {
         for enc in &mut self.encoders {
-            enc.ms_set_bandwidth(v);
+            let r = enc.set_bandwidth(v);
+            if r != OPUS_OK {
+                return r;
+            }
         }
         OPUS_OK
     }
 
     pub fn set_max_bandwidth(&mut self, v: i32) -> i32 {
         for enc in &mut self.encoders {
-            enc.ms_set_max_bandwidth(v);
+            let r = enc.set_max_bandwidth(v);
+            if r != OPUS_OK {
+                return r;
+            }
         }
         OPUS_OK
     }
 
     pub fn set_inband_fec(&mut self, v: i32) -> i32 {
         for enc in &mut self.encoders {
-            enc.ms_set_inband_fec(v);
+            let r = enc.set_inband_fec(v);
+            if r != OPUS_OK {
+                return r;
+            }
         }
         OPUS_OK
     }
 
     pub fn set_packet_loss_perc(&mut self, v: i32) -> i32 {
         for enc in &mut self.encoders {
-            enc.ms_set_packet_loss_perc(v);
+            let r = enc.set_packet_loss_perc(v);
+            if r != OPUS_OK {
+                return r;
+            }
         }
         OPUS_OK
     }
 
     pub fn set_dtx(&mut self, v: i32) -> i32 {
         for enc in &mut self.encoders {
-            enc.ms_set_dtx(v);
+            let r = enc.set_dtx(v);
+            if r != OPUS_OK {
+                return r;
+            }
         }
         OPUS_OK
     }
 
     pub fn set_lsb_depth(&mut self, v: i32) -> i32 {
         for enc in &mut self.encoders {
-            enc.ms_set_lsb_depth(v);
+            let r = enc.set_lsb_depth(v);
+            if r != OPUS_OK {
+                return r;
+            }
         }
         OPUS_OK
     }
 
     pub fn set_prediction_disabled(&mut self, v: i32) -> i32 {
         for enc in &mut self.encoders {
-            enc.ms_set_prediction_disabled(v);
+            let r = enc.set_prediction_disabled(v);
+            if r != OPUS_OK {
+                return r;
+            }
         }
         OPUS_OK
     }
 
     pub fn set_phase_inversion_disabled(&mut self, v: i32) -> i32 {
         for enc in &mut self.encoders {
-            enc.ms_set_phase_inversion_disabled(v);
+            let r = enc.set_phase_inversion_disabled(v);
+            if r != OPUS_OK {
+                return r;
+            }
         }
         OPUS_OK
     }
 
     pub fn set_force_mode(&mut self, v: i32) -> i32 {
         for enc in &mut self.encoders {
-            enc.ms_set_force_mode(v);
+            let r = enc.set_force_mode(v);
+            if r != OPUS_OK {
+                return r;
+            }
         }
         OPUS_OK
     }
 
     pub fn set_force_channels(&mut self, v: i32) -> i32 {
         for enc in &mut self.encoders {
-            enc.ms_set_force_channels(v);
+            let r = enc.set_force_channels(v);
+            if r != OPUS_OK {
+                return r;
+            }
         }
         OPUS_OK
     }
@@ -1484,10 +1543,19 @@ impl OpusMSEncoder {
     }
 
     pub fn set_application(&mut self, v: i32) -> i32 {
-        self.application = v;
+        // Mirror C `opus_multistream_encoder_ctl` (case
+        // `OPUS_SET_APPLICATION_REQUEST` falls through to the SET-fan-out at
+        // L1245-1278): forward via `opus_encoder_ctl`, which validates and
+        // returns `OPUS_BAD_ARG` for unknown application values. Reject
+        // before mutating `self.application` so the wrapper's stored value
+        // stays consistent with the sub-encoders'.
         for enc in &mut self.encoders {
-            enc.ms_set_application(v);
+            let r = enc.set_application(v);
+            if r != OPUS_OK {
+                return r;
+            }
         }
+        self.application = v;
         OPUS_OK
     }
 
@@ -1508,7 +1576,10 @@ impl OpusMSEncoder {
     }
 
     pub fn get_lookahead(&self) -> i32 {
-        self.encoders[0].ms_get_lookahead()
+        // Historical MS aggregate semantics: report just `delay_compensation`
+        // from stream 0 (not the public `OpusEncoder::get_lookahead`, which
+        // also adds `fs/400`). Preserved unchanged in this commit.
+        self.encoders[0].delay_compensation()
     }
 
     pub fn get_encoder(&self, stream_id: usize) -> Option<&OpusEncoder> {
@@ -3164,7 +3235,7 @@ mod tests {
         assert_eq!(enc.get_sample_rate(), 48000);
         assert_eq!(
             enc.get_lookahead(),
-            enc.get_encoder(0).unwrap().ms_get_lookahead()
+            enc.get_encoder(0).unwrap().delay_compensation()
         );
         assert!(enc.get_encoder(1).is_some());
         assert!(enc.get_encoder(99).is_none());
@@ -3194,16 +3265,16 @@ mod tests {
 
         {
             let child = enc.get_encoder_mut(0).unwrap();
-            child.ms_set_variable_duration(OPUS_FRAMESIZE_20_MS);
-            child.ms_set_lsb_depth(14);
+            assert_eq!(child.set_expert_frame_duration(OPUS_FRAMESIZE_20_MS), OPUS_OK);
+            assert_eq!(child.set_lsb_depth(14), OPUS_OK);
         }
 
         let child = enc.get_encoder(0).unwrap();
-        assert_eq!(child.ms_get_complexity(), 7);
-        assert_eq!(child.ms_get_vbr(), 0);
-        assert_eq!(child.ms_get_variable_duration(), OPUS_FRAMESIZE_20_MS);
-        assert_eq!(child.ms_get_lsb_depth(), 14);
-        assert_eq!(child.ms_get_lookahead(), enc.get_lookahead());
+        assert_eq!(child.get_complexity(), 7);
+        assert_eq!(child.get_vbr(), 0);
+        assert_eq!(child.get_expert_frame_duration(), OPUS_FRAMESIZE_20_MS);
+        assert_eq!(child.get_lsb_depth(), 14);
+        assert_eq!(child.delay_compensation(), enc.get_lookahead());
 
         enc.preemph_mem[0] = 17;
         enc.window_mem[0] = 29;
@@ -3286,10 +3357,10 @@ mod tests {
         assert!(len > 0);
         assert_eq!(enc.get_final_range(), enc.ms_encoder.get_final_range());
         assert_eq!(
-            enc.ms_encoder.get_encoder(0).unwrap().ms_get_complexity(),
+            enc.ms_encoder.get_encoder(0).unwrap().get_complexity(),
             4
         );
-        assert_eq!(enc.ms_encoder.get_encoder(0).unwrap().ms_get_vbr(), 0);
+        assert_eq!(enc.ms_encoder.get_encoder(0).unwrap().get_vbr(), 0);
 
         enc.reset();
         assert_eq!(enc.get_final_range(), 0);

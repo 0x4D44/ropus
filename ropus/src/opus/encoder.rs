@@ -1338,126 +1338,45 @@ impl OpusEncoder {
 
     // -----------------------------------------------------------------------
     // pub(crate) accessors for multistream module
-    // These are used by the multistream encoder wrapper (opus/multistream.rs).
-    // Suppressing dead_code: they're called when multistream encoding is used.
+    //
+    // The multistream wrapper used to call a parallel `ms_*` setter family
+    // here that was a side-effect-stripped shortcut around the public CTL
+    // setters. That asymmetry caused Cluster A finding H1
+    // (`ms_set_inband_fec` writing only `fec_config`, missing
+    // `silk_mode.use_in_band_fec`) and the latent H2 (`ms_set_vbr` skipping
+    // `silk_mode.use_cbr`). Both `OpusMSEncoder` setter routing and its
+    // internal encode flow now go through the public `OpusEncoder::set_*`
+    // family — matching the C reference's
+    // `opus_multistream_encoder_ctl` → `opus_encoder_ctl` dispatch.
+    //
+    // The few read-only field views below have no public equivalent with
+    // matching semantics (`get_bitrate` recomputes from `user_bitrate_bps`;
+    // `get_lookahead` adds `fs/400`). They expose private state in a
+    // narrowly-scoped, side-effect-free way so multistream can preserve its
+    // historical aggregate behavior unchanged in this commit.
     // -----------------------------------------------------------------------
 
-    #[allow(dead_code)]
-    pub(crate) fn ms_get_vbr(&self) -> i32 {
-        self.use_vbr
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_get_bitrate(&self) -> i32 {
+    /// Current encode-time bitrate in bits/s. `bitrate_bps` is set by the
+    /// per-frame derivation in `encode_native` (see L1738/L1751); this is
+    /// the *effective* rate the last encode used, not a recomputation from
+    /// `user_bitrate_bps`. Used by `OpusMSEncoder::get_bitrate` to sum
+    /// per-stream effective rates.
+    pub(crate) fn current_bitrate_bps(&self) -> i32 {
         self.bitrate_bps
     }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_user_bitrate(&mut self, rate: i32) {
-        self.user_bitrate_bps = rate;
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_bandwidth(&mut self, bw: i32) {
-        self.user_bandwidth = bw;
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_max_bandwidth(&mut self, bw: i32) {
-        self.max_bandwidth = bw;
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_force_mode(&mut self, mode: i32) {
-        self.user_forced_mode = mode;
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_force_channels(&mut self, ch: i32) {
-        self.force_channels = ch;
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_lfe(&mut self, lfe: i32) {
-        self.lfe = lfe;
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_get_variable_duration(&self) -> i32 {
-        self.variable_duration
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_variable_duration(&mut self, v: i32) {
-        self.variable_duration = v;
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_get_lsb_depth(&self) -> i32 {
-        self.lsb_depth
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_lsb_depth(&mut self, v: i32) {
-        self.lsb_depth = v;
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_get_complexity(&self) -> i32 {
-        self.silk_mode.complexity
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_complexity(&mut self, v: i32) {
-        self.silk_mode.complexity = v;
-        if let Some(ref mut celt) = self.celt_enc {
-            celt.complexity = v;
-        }
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_vbr(&mut self, v: i32) {
-        self.use_vbr = v;
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_vbr_constraint(&mut self, v: i32) {
-        self.vbr_constraint = v;
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_signal(&mut self, v: i32) {
-        self.signal_type = v;
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_inband_fec(&mut self, v: i32) {
-        self.fec_config = v;
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_packet_loss_perc(&mut self, v: i32) {
-        self.silk_mode.packet_loss_percentage = v;
-        if let Some(ref mut celt) = self.celt_enc {
-            celt.loss_rate = v;
-        }
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_dtx(&mut self, v: i32) {
-        self.use_dtx = v;
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_prediction_disabled(&mut self, v: i32) {
-        if let Some(ref mut celt) = self.celt_enc {
-            celt.disable_pf = v;
-        }
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_phase_inversion_disabled(&mut self, v: i32) {
-        if let Some(ref mut celt) = self.celt_enc {
-            celt.disable_inv = v;
-        }
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_set_application(&mut self, v: i32) {
-        // Only update if valid
-        if v == OPUS_APPLICATION_VOIP
-            || v == OPUS_APPLICATION_AUDIO
-            || v == OPUS_APPLICATION_RESTRICTED_LOWDELAY
-        {
-            self.application = v;
-            // Matches C opus_encoder.c:2803 (analysis sees application updates too).
-            self.analysis.application = v;
-        }
-    }
-    #[allow(dead_code)]
-    pub(crate) fn ms_get_lookahead(&self) -> i32 {
+
+    /// Codec delay compensation in samples. Used by
+    /// `OpusMSEncoder::get_lookahead` to report the wrapper's lookahead
+    /// (which historically returns just `delay_compensation`, not the full
+    /// public `get_lookahead` value).
+    pub(crate) fn delay_compensation(&self) -> i32 {
         self.delay_compensation
     }
-    #[allow(dead_code)]
-    pub(crate) fn ms_get_celt_mode(&self) -> Option<&'static crate::celt::modes::CELTMode> {
+
+    /// CELT mode handle, if a CELT sub-encoder exists. Used by surround
+    /// analysis in `OpusMSEncoder::encode_native` to drive the per-band
+    /// mask computation.
+    pub(crate) fn celt_mode(&self) -> Option<&'static crate::celt::modes::CELTMode> {
         self.celt_enc.as_ref().map(|c| c.mode)
     }
 
@@ -4665,28 +4584,31 @@ mod tests {
     }
 
     #[test]
-    fn test_multistream_accessors_reset_and_public_getters() {
+    fn test_public_setters_round_trip_state_and_reset() {
         let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
 
-        enc.ms_set_user_bitrate(54321);
-        enc.ms_set_bandwidth(OPUS_BANDWIDTH_WIDEBAND);
-        enc.ms_set_max_bandwidth(OPUS_BANDWIDTH_SUPERWIDEBAND);
-        enc.ms_set_force_mode(MODE_CELT_ONLY);
-        enc.ms_set_force_channels(1);
-        enc.ms_set_lfe(1);
-        enc.ms_set_variable_duration(OPUS_FRAMESIZE_10_MS);
-        enc.ms_set_lsb_depth(12);
-        enc.ms_set_complexity(7);
-        enc.ms_set_vbr(0);
-        enc.ms_set_vbr_constraint(1);
-        enc.ms_set_signal(OPUS_SIGNAL_MUSIC);
-        enc.ms_set_inband_fec(1);
-        enc.ms_set_packet_loss_perc(17);
-        enc.ms_set_dtx(1);
-        enc.ms_set_prediction_disabled(1);
-        enc.ms_set_phase_inversion_disabled(1);
-        enc.ms_set_application(OPUS_APPLICATION_RESTRICTED_LOWDELAY);
-        enc.ms_set_application(12345);
+        // Public setters mirror the C `opus_encoder_ctl` SET_* requests.
+        // Includes the side-effects (`silk_mode.use_in_band_fec`,
+        // `silk_mode.use_cbr`) that the deleted `ms_*` family was missing.
+        assert_eq!(enc.set_bitrate(54321), OPUS_OK);
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        assert_eq!(enc.set_max_bandwidth(OPUS_BANDWIDTH_SUPERWIDEBAND), OPUS_OK);
+        assert_eq!(enc.set_force_mode(MODE_CELT_ONLY), OPUS_OK);
+        assert_eq!(enc.set_force_channels(1), OPUS_OK);
+        assert_eq!(enc.set_lfe(1), OPUS_OK);
+        assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_10_MS), OPUS_OK);
+        assert_eq!(enc.set_lsb_depth(12), OPUS_OK);
+        assert_eq!(enc.set_complexity(7), OPUS_OK);
+        assert_eq!(enc.set_vbr(0), OPUS_OK);
+        assert_eq!(enc.set_vbr_constraint(1), OPUS_OK);
+        assert_eq!(enc.set_signal(OPUS_SIGNAL_MUSIC), OPUS_OK);
+        assert_eq!(enc.set_inband_fec(1), OPUS_OK);
+        assert_eq!(enc.set_packet_loss_perc(17), OPUS_OK);
+        assert_eq!(enc.set_dtx(1), OPUS_OK);
+        assert_eq!(enc.set_prediction_disabled(1), OPUS_OK);
+        assert_eq!(enc.set_phase_inversion_disabled(1), OPUS_OK);
+        assert_eq!(enc.set_application(OPUS_APPLICATION_RESTRICTED_LOWDELAY), OPUS_OK);
+        assert_eq!(enc.set_application(12345), OPUS_BAD_ARG);
 
         enc.hp_mem = [1, 2, 3, 4];
         enc.variable_hp_smth2_q15 = 123456;
@@ -4695,13 +4617,12 @@ mod tests {
         enc.prev_mode = MODE_SILK_ONLY;
         enc.stream_channels = 1;
 
-        assert_eq!(enc.ms_get_vbr(), 0);
-        assert_eq!(enc.ms_get_bitrate(), enc.bitrate_bps);
-        assert_eq!(enc.ms_get_variable_duration(), OPUS_FRAMESIZE_10_MS);
-        assert_eq!(enc.ms_get_lsb_depth(), 12);
-        assert_eq!(enc.ms_get_complexity(), 7);
-        assert_eq!(enc.ms_get_lookahead(), enc.delay_compensation);
-        assert!(enc.ms_get_celt_mode().is_some());
+        assert_eq!(enc.get_vbr(), 0);
+        assert_eq!(enc.get_expert_frame_duration(), OPUS_FRAMESIZE_10_MS);
+        assert_eq!(enc.get_lsb_depth(), 12);
+        assert_eq!(enc.get_complexity(), 7);
+        assert_eq!(enc.delay_compensation(), enc.delay_compensation);
+        assert!(enc.celt_mode().is_some());
         assert_eq!(enc.get_hp_mem(), [1, 2, 3, 4]);
         assert_eq!(enc.get_variable_hp_smth2(), 123456);
         assert_eq!(enc.get_sample_rate(), 48000);
@@ -4721,45 +4642,46 @@ mod tests {
     }
 
     #[test]
-    fn test_ms_helper_accessors_cover_none_and_some_celt_paths() {
+    fn test_public_setters_cover_none_and_some_celt_paths() {
         let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
 
+        // Force the celt_enc-None branch in the public setters that fan out
+        // to CELT (`set_complexity`, `set_packet_loss_perc`,
+        // `set_phase_inversion_disabled`).
         enc.celt_enc = None;
-        enc.ms_set_complexity(4);
-        enc.ms_set_packet_loss_perc(9);
-        enc.ms_set_prediction_disabled(1);
-        enc.ms_set_phase_inversion_disabled(1);
-        enc.ms_set_application(12_345);
-        assert_eq!(enc.ms_get_complexity(), 4);
+        assert_eq!(enc.set_complexity(4), OPUS_OK);
+        assert_eq!(enc.set_packet_loss_perc(9), OPUS_OK);
+        assert_eq!(enc.set_prediction_disabled(1), OPUS_OK);
+        assert_eq!(enc.set_phase_inversion_disabled(1), OPUS_OK);
+        assert_eq!(enc.set_application(12_345), OPUS_BAD_ARG);
+        assert_eq!(enc.get_complexity(), 4);
         assert_eq!(enc.silk_mode.packet_loss_percentage, 9);
         assert_eq!(enc.get_application(), OPUS_APPLICATION_AUDIO);
 
         enc.celt_enc = Some(CeltEncoder::new(48000, 2).unwrap());
-        enc.bitrate_bps = 48_000;
-        enc.ms_set_user_bitrate(64_321);
-        enc.ms_set_bandwidth(OPUS_BANDWIDTH_WIDEBAND);
-        enc.ms_set_max_bandwidth(OPUS_BANDWIDTH_FULLBAND);
-        enc.ms_set_force_mode(MODE_CELT_ONLY);
-        enc.ms_set_force_channels(1);
-        enc.ms_set_lfe(1);
-        enc.ms_set_variable_duration(OPUS_FRAMESIZE_10_MS);
-        enc.ms_set_lsb_depth(14);
-        enc.ms_set_complexity(8);
-        enc.ms_set_vbr(0);
-        enc.ms_set_vbr_constraint(1);
-        enc.ms_set_signal(OPUS_SIGNAL_MUSIC);
-        enc.ms_set_inband_fec(2);
-        enc.ms_set_packet_loss_perc(17);
-        enc.ms_set_dtx(1);
-        enc.ms_set_prediction_disabled(1);
-        enc.ms_set_phase_inversion_disabled(1);
-        enc.ms_set_application(OPUS_APPLICATION_RESTRICTED_LOWDELAY);
+        assert_eq!(enc.set_bitrate(64_321), OPUS_OK);
+        assert_eq!(enc.set_bandwidth(OPUS_BANDWIDTH_WIDEBAND), OPUS_OK);
+        assert_eq!(enc.set_max_bandwidth(OPUS_BANDWIDTH_FULLBAND), OPUS_OK);
+        assert_eq!(enc.set_force_mode(MODE_CELT_ONLY), OPUS_OK);
+        assert_eq!(enc.set_force_channels(1), OPUS_OK);
+        assert_eq!(enc.set_lfe(1), OPUS_OK);
+        assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_10_MS), OPUS_OK);
+        assert_eq!(enc.set_lsb_depth(14), OPUS_OK);
+        assert_eq!(enc.set_complexity(8), OPUS_OK);
+        assert_eq!(enc.set_vbr(0), OPUS_OK);
+        assert_eq!(enc.set_vbr_constraint(1), OPUS_OK);
+        assert_eq!(enc.set_signal(OPUS_SIGNAL_MUSIC), OPUS_OK);
+        assert_eq!(enc.set_inband_fec(2), OPUS_OK);
+        assert_eq!(enc.set_packet_loss_perc(17), OPUS_OK);
+        assert_eq!(enc.set_dtx(1), OPUS_OK);
+        assert_eq!(enc.set_prediction_disabled(1), OPUS_OK);
+        assert_eq!(enc.set_phase_inversion_disabled(1), OPUS_OK);
+        assert_eq!(enc.set_application(OPUS_APPLICATION_RESTRICTED_LOWDELAY), OPUS_OK);
 
-        assert_eq!(enc.ms_get_vbr(), 0);
-        assert_eq!(enc.ms_get_bitrate(), 48_000);
-        assert_eq!(enc.ms_get_variable_duration(), OPUS_FRAMESIZE_10_MS);
-        assert_eq!(enc.ms_get_lsb_depth(), 14);
-        assert_eq!(enc.ms_get_complexity(), 8);
+        assert_eq!(enc.get_vbr(), 0);
+        assert_eq!(enc.get_expert_frame_duration(), OPUS_FRAMESIZE_10_MS);
+        assert_eq!(enc.get_lsb_depth(), 14);
+        assert_eq!(enc.get_complexity(), 8);
         assert_eq!(enc.user_bitrate_bps, 64_321);
         assert_eq!(enc.user_bandwidth, OPUS_BANDWIDTH_WIDEBAND);
         assert_eq!(enc.max_bandwidth, OPUS_BANDWIDTH_FULLBAND);
@@ -4768,20 +4690,33 @@ mod tests {
         assert_eq!(enc.lfe, 1);
         assert_eq!(enc.signal_type, OPUS_SIGNAL_MUSIC);
         assert_eq!(enc.fec_config, 2);
+        // Public `set_inband_fec` also writes `silk_mode.use_in_band_fec`
+        // (the H1 fix) — the old `ms_set_inband_fec` skipped this and was
+        // the cluster-A H1 root cause.
+        assert_eq!(enc.silk_mode.use_in_band_fec, 1);
+        // Public `set_vbr` also writes `silk_mode.use_cbr = 1 - vbr` (H2).
+        assert_eq!(enc.silk_mode.use_cbr, 1);
         assert_eq!(enc.use_dtx, 1);
         assert_eq!(enc.get_application(), OPUS_APPLICATION_RESTRICTED_LOWDELAY);
 
         let celt = enc.celt_enc.as_ref().unwrap();
         assert_eq!(celt.complexity, 8);
         assert_eq!(celt.loss_rate, 17);
-        assert_eq!(celt.disable_pf, 1);
-        assert_eq!(celt.disable_inv, 1);
+        // `set_prediction_disabled` writes `silk_mode.reduced_dependency`
+        // (matches C `OPUS_SET_PREDICTION_DISABLED`); it does NOT touch
+        // `celt.disable_pf` (the deleted `ms_set_prediction_disabled` did,
+        // which was wrong — `disable_pf` is CELT pre-filter, not SILK
+        // dependency reduction).
+        assert_eq!(enc.silk_mode.reduced_dependency, 1);
     }
 
     #[test]
     fn test_encode_wrappers_reject_invalid_selected_frame_size() {
         let mut enc = OpusEncoder::new(48000, 2, OPUS_APPLICATION_AUDIO).unwrap();
-        enc.ms_set_variable_duration(12_345);
+        // Bypass `set_expert_frame_duration`'s validation to force the
+        // encode-time `frame_size_select` reject path. Public setter would
+        // return OPUS_BAD_ARG before the encoder saw the bogus value.
+        enc.variable_duration = 12_345;
 
         let pcm_i16 = patterned_pcm_i16(960, 2, 77);
         let pcm_f32 = patterned_pcm_f32(960, 2, 77);
@@ -5438,7 +5373,7 @@ mod tests {
     #[test]
     fn test_lfe_forces_celt_only_narrowband() {
         let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
-        enc.ms_set_lfe(1);
+        assert_eq!(enc.set_lfe(1), OPUS_OK);
         assert_eq!(enc.set_bitrate(32000), OPUS_OK);
         assert_eq!(enc.set_vbr(1), OPUS_OK);
 
