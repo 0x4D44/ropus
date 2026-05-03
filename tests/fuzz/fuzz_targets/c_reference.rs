@@ -750,10 +750,19 @@ pub fn apply_c_ms_setter_sequence(enc: *mut OpusMSEncoder, bytes: &[u8]) {
                     opus_multistream_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, bitrate);
                 }
                 1 => {
+                    // Stage 6a: align with Rust-side `% 10` cap (see
+                    // `fuzz_multistream.rs:165`), matching the analysis.c
+                    // divergence dodge documented at line 121-126 of
+                    // fuzz_multistream.rs. The previous `% 11` cap let the
+                    // C side reach complexity=10 while the Rust side
+                    // capped at 9, which produced systematic
+                    // bytes-divergence reports for `multistream-encode-bytes-
+                    // divergence` that were harness artefacts, not codec
+                    // bugs.
                     opus_multistream_encoder_ctl(
                         enc,
                         OPUS_SET_COMPLEXITY_REQUEST,
-                        (chunk[1] % 11) as c_int,
+                        (chunk[1] % 10) as c_int,
                     );
                 }
                 2 => {

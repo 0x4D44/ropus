@@ -1738,9 +1738,8 @@ fn run_multistream_repro(path: &PathBuf) {
     }
 
     // Setter shuffle. We mirror apply_ms_encoder_setter_sequence /
-    // apply_c_ms_setter_sequence symbol-for-symbol (incl the chunk[1] % 11
-    // for complexity that the C side uses, vs %10 on Rust — that's a
-    // pre-existing edge but isn't the bug under investigation; leave alone).
+    // apply_c_ms_setter_sequence symbol-for-symbol. Stage 6a aligned both
+    // sides to the same complexity modulus (see the `1 => { ... }` arm).
     println!("\n--- Setter shuffle ({} chunks) ---", input.setter_bytes.len() / 2);
     for (i, chunk) in input.setter_bytes.chunks_exact(2).take(8).enumerate() {
         let sel = chunk[0] % 7;
@@ -1753,11 +1752,20 @@ fn run_multistream_repro(path: &PathBuf) {
                 ("set_bitrate", bindings::OPUS_SET_BITRATE_REQUEST, rate)
             }
             1 => {
+                // Stage 6a fix: align Rust and C to the same modulus (10),
+                // matching the Rust-side `% 10` cap at
+                // `tests/fuzz/fuzz_targets/fuzz_multistream.rs:165` (which
+                // intentionally dodges the analysis.c divergence class for
+                // complexity=10, see lines 121-126 there). The previous
+                // mismatch (Rust % 10, C % 11) systematically delivered
+                // different complexities whenever arg_byte >= 10,
+                // producing the `multistream-encode-bytes-divergence`
+                // crash cluster — those are harness artefacts, not codec
+                // bugs. The matching fix to the fuzz-target C wrapper
+                // lives in `tests/fuzz/fuzz_targets/c_reference.rs:756`.
                 let cx = (arg_byte % 10) as i32;
                 let _ = rust_enc.set_complexity(cx);
-                // C uses chunk[1] % 11 — see fuzz_multistream c_reference.rs:756.
-                let cx_c = (arg_byte % 11) as i32;
-                ("set_complexity", bindings::OPUS_SET_COMPLEXITY_REQUEST, cx_c)
+                ("set_complexity", bindings::OPUS_SET_COMPLEXITY_REQUEST, cx)
             }
             2 => {
                 let v = (arg_byte & 1) as i32;
