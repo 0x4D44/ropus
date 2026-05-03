@@ -1,8 +1,8 @@
 //! ropus-fuzz-repro-diff: encoder state-accumulation diagnostic.
 //!
 //! Runs each of the eight `tests/fuzz/known_failures/` repros (4 multiframe
-//! + 4 multistream) through both the Rust and C reference encoders with
-//! identical setter sequences, then dumps SILK + top-level Opus state per
+//! and 4 multistream) through both the Rust and C reference encoders with
+//! identical setter sequences, then dumps SILK and top-level Opus state per
 //! frame (and pre-/post-setter for the multistream variants) to pinpoint
 //! the first divergent field.
 //!
@@ -1184,7 +1184,7 @@ fn format_v2_payload(boundary_id: i32, payload: &[i32]) -> String {
         }
         102 => {
             // 4*nb_subfr + 2 elts. Recover nb_subfr.
-            if payload.len() < 2 || (payload.len() - 2) % 4 != 0 {
+            if payload.len() < 2 || !(payload.len() - 2).is_multiple_of(4) {
                 return format!("(malformed: len={})", payload.len());
             }
             let n = (payload.len() - 2) / 4;
@@ -1248,7 +1248,7 @@ fn format_v2_payload(boundary_id: i32, payload: &[i32]) -> String {
         104 => {
             // Gains_Q16[0..nb_subfr] ‖ [Lambda_Q10, lastGainIndexPrev]
             //  ‖ GainsIndices[0..nb_subfr]. Length = 2*nb_subfr + 2.
-            if payload.len() < 2 || (payload.len() - 2) % 2 != 0 {
+            if payload.len() < 2 || !(payload.len() - 2).is_multiple_of(2) {
                 return format!("(malformed: len={})", payload.len());
             }
             let n = (payload.len() - 2) / 2;
@@ -1274,7 +1274,7 @@ fn format_v2_payload(boundary_id: i32, payload: &[i32]) -> String {
             // already attributes correctly. b103 is the only V2 boundary
             // that mixes hypothesis territories — see
             // `v2_boundary_label_for_index`.
-            if payload.len() < 3 || (payload.len() - 3) % 2 != 0 {
+            if payload.len() < 3 || !(payload.len() - 3).is_multiple_of(2) {
                 return format!("(malformed: len={})", payload.len());
             }
             let n = (payload.len() - 3) / 2;
@@ -1699,7 +1699,8 @@ fn run_multistream_repro(path: &PathBuf) {
     // Apply baseline + setter shuffle and dump pre-/post-state at the
     // per-call granularity. Mirrors fuzz_multistream.rs:693-700 (baseline)
     // and lines 157-187 (shuffle).
-    let baseline: [(&str, fn(&mut RustOpusMSEncoder, i32) -> i32, i32); 6] = [
+    type BaselineSetter = (&'static str, fn(&mut RustOpusMSEncoder, i32) -> i32, i32);
+    let baseline: [BaselineSetter; 6] = [
         ("set_bitrate", RustOpusMSEncoder::set_bitrate, input.bitrate),
         ("set_vbr", RustOpusMSEncoder::set_vbr, input.vbr),
         ("set_inband_fec", RustOpusMSEncoder::set_inband_fec, 0),
@@ -1902,7 +1903,7 @@ fn run_multistream_repro(path: &PathBuf) {
 
     // Encode one frame on each side. Clear and capture Phase B trace
     // tuples around each encode so we can diff the per-boundary stream.
-    let max_data_bytes = (4000 * streams.max(1)) as i32;
+    let max_data_bytes = 4000 * streams.max(1);
     let mut rust_out = vec![0u8; max_data_bytes as usize];
     ropus::silk_trace::clear();
     let rust_ret = rust_enc.encode(&pcm, frame_size, &mut rust_out, max_data_bytes);
@@ -2201,14 +2202,16 @@ fn dump_rust_extended(enc: &RustOpusEncoder, channel: usize) -> ExtendedState {
     let silk = enc.silk_encoder().expect("SILK encoder allocated");
     let ch = &silk.state_fxx[channel];
     let st = &ch.s_cmn;
-    let mut s = ExtendedState::default();
-    s.nsq_rand_seed = st.s_nsq.rand_seed;
-    s.nsq_slf_ar_shp_q14 = st.s_nsq.s_lf_ar_shp_q14;
-    s.nsq_lag_prev = st.s_nsq.lag_prev;
-    s.nsq_sdiff_shp_q14 = st.s_nsq.s_diff_shp_q14;
-    s.nsq_sltp_buf_idx = st.s_nsq.s_ltp_buf_idx;
-    s.nsq_sltp_shp_buf_idx = st.s_nsq.s_ltp_shp_buf_idx;
-    s.nsq_rewhite_flag = st.s_nsq.rewhite_flag;
+    let mut s = ExtendedState {
+        nsq_rand_seed: st.s_nsq.rand_seed,
+        nsq_slf_ar_shp_q14: st.s_nsq.s_lf_ar_shp_q14,
+        nsq_lag_prev: st.s_nsq.lag_prev,
+        nsq_sdiff_shp_q14: st.s_nsq.s_diff_shp_q14,
+        nsq_sltp_buf_idx: st.s_nsq.s_ltp_buf_idx,
+        nsq_sltp_shp_buf_idx: st.s_nsq.s_ltp_shp_buf_idx,
+        nsq_rewhite_flag: st.s_nsq.rewhite_flag,
+        ..Default::default()
+    };
     for i in 0..16 {
         s.nsq_slpc_q14[i] = st.s_nsq.s_lpc_q14[i];
         s.nsq_sar2_q14[i] = st.s_nsq.s_ar2_q14[i];

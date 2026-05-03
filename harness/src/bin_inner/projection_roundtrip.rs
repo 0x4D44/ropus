@@ -318,7 +318,7 @@ fn run_fixture(path: &Path, bitrate: i32) -> FixtureResult {
         );
     }
     assert_eq!(
-        r_gain, c_enc.demixing_matrix_gain as i32,
+        r_gain, c_enc.demixing_matrix_gain,
         "demixing matrix gain mismatch: ropus={}, C={}",
         r_gain, c_enc.demixing_matrix_gain
     );

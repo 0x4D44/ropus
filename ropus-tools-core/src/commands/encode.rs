@@ -327,8 +327,7 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
     // overhead, which is what `--bitrate` controls and what users compare
     // against the target). RFC 7845 fixes the granule clock at 48 kHz, so
     // duration_seconds = samples_written / OPUS_SR.
-    if samples_written > 0 {
-        let avg_bps = payload_bytes * 8 * (OPUS_SR as u64) / samples_written;
+    if let Some(avg_bps) = (payload_bytes * 8 * (OPUS_SR as u64)).checked_div(samples_written) {
         report!(
             "bitrate  {} kbps avg (payload)",
             format!("{:.1}", avg_bps as f64 / 1000.0).bright_white(),

@@ -1161,7 +1161,7 @@ fn silk_plc_update(dec: &mut SilkDecoderState, dec_ctrl: &SilkDecoderControl) {
     for i in 0..dec.lpc_order {
         dec.s_plc.prev_lpc_q12[i] = dec_ctrl.pred_coef_q12[1][i];
     }
-    dec.s_plc.prev_gain_q16[0] = dec_ctrl.gains_q16[nb_subfr.saturating_sub(2).max(0)];
+    dec.s_plc.prev_gain_q16[0] = dec_ctrl.gains_q16[nb_subfr - 2];
     dec.s_plc.prev_gain_q16[1] = dec_ctrl.gains_q16[nb_subfr - 1];
     dec.s_plc.prev_ltp_scale_q14 = dec_ctrl.ltp_scale_q14 as i16;
 

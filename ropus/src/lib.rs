@@ -97,12 +97,13 @@ pub mod opus;
 pub mod silk;
 pub mod types;
 
-/// Phase B encode-side trace tuples (Cluster A stage 2b). Gated entirely
-/// behind the `trace-silk-encode` Cargo feature; with the feature off
-/// (the default), this module compiles to nothing and the SILK encoder
-/// emits no trace calls.
 #[cfg(feature = "trace-silk-encode")]
 pub mod silk_trace {
+    //! Phase B encode-side trace tuples (Cluster A stage 2b). Gated
+    //! entirely behind the `trace-silk-encode` Cargo feature; with the
+    //! feature off (the default), this module compiles to nothing and
+    //! the SILK encoder emits no trace calls.
+    //!
     //! See `wrk_docs/2026.05.02 - HLD - encoder-state-accumulation-fix.md`
     //! §2.3 for the boundary semantics. The diagnostic binary
     //! `harness/src/bin/fuzz_repro_diff.rs` drains this buffer after
