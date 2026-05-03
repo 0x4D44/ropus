@@ -1,0 +1,249 @@
+
+========================================================
+REPRO multistream: tests/fuzz/known_failures/multistream-encode-bytes-divergence/crash-01.bin
+========================================================
+Config: op=0 sr=8000 ch=1 family=0 app=2048 br=15472 cx=6 vbr=0
+Mapping: streams=1 coupled=0 mapping=[0]
+
+--- Baseline setters ---
+  baseline set_bitrate(15472)  Rust top: use_vbr=1 use_dtx=0 fec_config=0 bitrate_bps=11000
+                              C top: use_vbr=1 use_dtx=0 fec_config=0 bitrate_bps=11000  silk_mode useInBandFEC=0 useCBR=0 useDTX=0
+  baseline set_vbr(0)  Rust top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000
+                              C top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000  silk_mode useInBandFEC=0 useCBR=1 useDTX=0
+  baseline set_inband_fec(0)  Rust top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000
+                              C top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000  silk_mode useInBandFEC=0 useCBR=1 useDTX=0
+  baseline set_dtx(0)  Rust top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000
+                              C top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000  silk_mode useInBandFEC=0 useCBR=1 useDTX=0
+  baseline set_packet_loss_perc(0)  Rust top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000
+                              C top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000  silk_mode useInBandFEC=0 useCBR=1 useDTX=0
+  baseline set_complexity(6)  Rust top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000
+                              C top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000  silk_mode useInBandFEC=0 useCBR=1 useDTX=0
+
+--- Setter shuffle (8 chunks) ---
+  shuffle[0] sel=0 val=  6000  Rust top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000
+                              C top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000  silk_mode useInBandFEC=0 useCBR=1 useDTX=0
+  shuffle[1] sel=2 val=     0  Rust top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000
+                              C top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000  silk_mode useInBandFEC=0 useCBR=1 useDTX=0
+  shuffle[2] sel=0 val=  6000  Rust top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000
+                              C top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000  silk_mode useInBandFEC=0 useCBR=1 useDTX=0
+  shuffle[3] sel=0 val=  6000  Rust top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000
+                              C top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000  silk_mode useInBandFEC=0 useCBR=1 useDTX=0
+  shuffle[4] sel=0 val=  6000  Rust top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000
+                              C top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000  silk_mode useInBandFEC=0 useCBR=1 useDTX=0
+  shuffle[5] sel=1 val=     2  Rust top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000
+                              C top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000  silk_mode useInBandFEC=0 useCBR=1 useDTX=0
+  shuffle[6] sel=0 val= 39024  Rust top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000
+                              C top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000  silk_mode useInBandFEC=0 useCBR=1 useDTX=0
+  shuffle[7] sel=0 val=  6000  Rust top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000
+                              C top: use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=11000  silk_mode useInBandFEC=0 useCBR=1 useDTX=0
+  pre-encode SILK extended-state mismatches (1):
+    nsq_lag_prev: C=0 R=100
+  pre-encode SILK interframe-state mismatches (3):
+    last_gain_index: C=0 R=10
+    prev_gain_q16: C=0 R=65536
+    prev_lag: C=0 R=100
+
+--- Encode result ---
+  Rust=15 bytes  C=15 bytes  match=false  first-diff-at=Some(2)
+
+--- Phase B trace tuples (boundary, ec_tell, rng, target_rate, n_bits_exceeded, curr_lbrr, n_lbrr, mid_only, prev_d_only_mid) ---
+  count: Rust=7 C=7
+    [  0] b1/ch-1 R: tell=    3 rng=20000000 tr=     0 nx=    0 cl=    0 nl=    0 mo=-1 pdm= 0
+    [  1] b2/ch-1 R: tell=    3 rng=20000000 tr=     0 nx=    0 cl=    0 nl=    0 mo=-1 pdm= 0
+    [  2] b3/ch-1 R: tell=    3 rng=20000000 tr=  5600 nx=    0 cl=    0 nl=    0 mo=-1 pdm= 0
+    [  3] b4/ch-1 R: tell=    3 rng=20000000 tr=  5600 nx=    0 cl=    0 nl=    0 mo=-1 pdm= 0
+    [  4] b5/ch 0 R: tell=    3 rng=20000000 tr=  5600 nx=    0 cl=    0 nl=    0 mo=-1 pdm= 0
+  * [  5] b6/ch 0 R: tell=  110 rng=051df9bc tr=  5600 nx=    0 cl=    0 nl=    0 mo=-1 pdm= 0
+         b6/ch 0 C: tell=  110 rng=05101042 tr=  5600 nx=    0 cl=    0 nl=    0 mo=-1 pdm= 0
+  * [  6] b7/ch-1 R: tell=  110 rng=051df9bc tr=  5600 nx=    0 cl=    0 nl=    0 mo=-1 pdm= 0
+         b7/ch-1 C: tell=  110 rng=05101042 tr=  5600 nx=    0 cl=    0 nl=    0 mo=-1 pdm= 0
+
+  >>> FIRST DIVERGENCE at boundary 6 (channel 0), index 5 <<<
+  L1.4.6 — per-channel after silk_encode_frame_Fxx [B1 candidate]
+
+--- Phase C (HLD V2) inner-function trace tuples (boundaries 100..=109) ---
+  count: Rust=22 C=18
+  rate-control iter counts differ: Rust=4 C=3 (G8 candidate)
+    b100 (F1 post-LP_variable_cutoff)  [setup]  (G7)
+        R: input_buf[len=160] first8=[0, 0, 0, 0, 0, 0, 0, -246, ... (152 more)]
+    b101 (F3 post-find_pitch_lags)  [setup]  (G6)
+        R: pitch_l=[0, 0, 0, 0] lag_index=0 contour_index=0
+    b102 (F4 post-noise_shape_analysis)  [setup]  (G5)
+        R: harm_shape_gain_q14=[0, 0, 0, 0] tilt_q14=[-1638, -2621, -3211, -3565] lf_shp_q14=[539871846, 539871846, 539871846, 539871846] gains_unq_q16=[0, 0, 0, 0] harm_boost_smth=0 tilt_smth=-14262
+  * b103 (F5 post-find_pred_coefs)  [setup]  (G4)
+        R: pred_coef+ltp_coef+ar+nlsf payload[len=172] first16=[1672, -145, 803, -467, -849, 557, -420, -85, -311, 655, 0, 0, 0, 0, 0, 0, ... (156 more)]
+        C: pred_coef+ltp_coef+ar+nlsf payload[len=172] first16=[1672, -145, 803, -467, -849, 557, -420, -85, -311, 655, 0, 0, 0, 0, 0, 0, ... (156 more)]
+        first divergent element at index 52:
+          R[48..57] = [0, 0, 0, 0, -3437, -2119, -987, -976, -1520]
+          C[48..57] = [0, 0, 0, 0, -2028, -1081, -287, -119, -279]
+          → b103 F5 post-find_pred_coefs divergence — hypothesis G4
+  * b104 (F6 post-process_gains)  [setup]  (G3)
+        R: gains_q16=[406847488, 1686110208, 1686110208, 1224736768] lambda_q10=911 last_gain_index_prev=10 gains_indices=[54, 13, 4, 2]
+        C: gains_q16=[253755392, 1686110208, 1686110208, 1224736768] lambda_q10=911 last_gain_index_prev=10 gains_indices=[51, 16, 4, 2]
+        first divergent element at index 0:
+          R[0..5] = [406847488, 1686110208, 1686110208, 1224736768, 911]
+          C[0..5] = [253755392, 1686110208, 1686110208, 1224736768, 911]
+          → b104 F6 post-process_gains divergence — hypothesis G3
+  * b105 (F7 post-LBRR_encode)  [setup]  (G9)
+        R: gains_q16=[406847488, 1686110208, 1686110208, 1224736768] LBRR_flag=0 indices_LBRR.gains_indices=[0, 0, 0, 0] signalType=0 quantOffsetType=0
+        C: gains_q16=[253755392, 1686110208, 1686110208, 1224736768] LBRR_flag=0 indices_LBRR.gains_indices=[0, 0, 0, 0] signalType=0 quantOffsetType=0
+        first divergent element at index 0:
+          R[0..5] = [406847488, 1686110208, 1686110208, 1224736768, 0]
+          C[0..5] = [253755392, 1686110208, 1686110208, 1224736768, 0]
+          → b105 F7 post-LBRR_encode divergence — hypothesis G9
+  * b106 (F8 pre-NSQ (per iter))  [iter=0]  (G8)
+        R: iter=0 gainsID=906822658 gainsID_lower=-1 gainsID_upper=-1 found_lower=0 found_upper=0 gainMult_Q8=256
+        C: iter=0 gainsID=856687618 gainsID_lower=-1 gainsID_upper=-1 found_lower=0 found_upper=0 gainMult_Q8=256
+        first divergent element at index 1:
+          R[0..6] = [0, 906822658, -1, -1, 0, 0]
+          C[0..6] = [0, 856687618, -1, -1, 0, 0]
+          → b106 F8 pre-NSQ (per iter) divergence — hypothesis G8
+  * b107 (F8a post-NSQ (per iter))  [iter=0]  (G2)
+        R: iter=0 pulses[len=160] first16=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ... (144 more)] signalType=1 quantOffsetType=0 Seed=0 lagPrev=0
+        C: iter=0 pulses[len=160] first16=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ... (144 more)] signalType=1 quantOffsetType=0 Seed=0 lagPrev=0
+        first divergent element at index 26:
+          R[22..31] = [0, 0, 0, 0, -1, 0, 0, 0, -1]
+          C[22..31] = [0, 0, 0, 0, 0, 0, -1, 0, 0]
+          → b107 F8a post-NSQ (per iter) divergence — hypothesis G2
+    b108 (F8b post-encode_indices (per iter))  [iter=0]  (G1a)
+        R: iter=0 ec_tell=49 rng=0x008bce5a
+  * b109 (F8c post-encode_pulses (per iter))  [iter=0]  (G1b)
+        R: iter=0 ec_tell=100 rng=0x1d6a50dc
+        C: iter=0 ec_tell=101 rng=0x0b1a8642
+        first divergent element at index 1:
+          R[0..4] = [0, 100, 20700, 7530]
+          C[0..4] = [0, 101, 34370, 2842]
+          → b109 F8c post-encode_pulses (per iter) divergence — hypothesis G1b
+  * b106 (F8 pre-NSQ (per iter))  [iter=1]  (G8)
+        R: iter=1 gainsID=890045696 gainsID_lower=906822658 gainsID_upper=-1 found_lower=1 found_upper=0 gainMult_Q8=204
+        C: iter=1 gainsID=823198976 gainsID_lower=856687618 gainsID_upper=-1 found_lower=1 found_upper=0 gainMult_Q8=204
+        first divergent element at index 1:
+          R[0..6] = [1, 890045696, 906822658, -1, 1, 0]
+          C[0..6] = [1, 823198976, 856687618, -1, 1, 0]
+          → b106 F8 pre-NSQ (per iter) divergence — hypothesis G8
+  * b107 (F8a post-NSQ (per iter))  [iter=1]  (G2)
+        R: iter=1 pulses[len=160] first16=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ... (144 more)] signalType=1 quantOffsetType=0 Seed=0 lagPrev=0
+        C: iter=1 pulses[len=160] first16=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ... (144 more)] signalType=1 quantOffsetType=0 Seed=0 lagPrev=0
+        first divergent element at index 26:
+          R[22..31] = [0, 0, 0, 0, -1, 0, 0, 0, -1]
+          C[22..31] = [0, 0, 0, 0, 0, 0, -1, 0, 0]
+          → b107 F8a post-NSQ (per iter) divergence — hypothesis G2
+    b108 (F8b post-encode_indices (per iter))  [iter=1]  (G1a)
+        R: iter=1 ec_tell=53 rng=0x0c21cfcb
+  * b109 (F8c post-encode_pulses (per iter))  [iter=1]  (G1b)
+        R: iter=1 ec_tell=113 rng=0x00d067e8
+        C: iter=1 ec_tell=113 rng=0x00ce34fc
+        first divergent element at index 2:
+          R[0..4] = [1, 113, 26600, 208]
+          C[0..4] = [1, 113, 13564, 206]
+          → b109 F8c post-encode_pulses (per iter) divergence — hypothesis G1b
+  * b106 (F8 pre-NSQ (per iter))  [iter=2]  (G8)
+        R: iter=2 gainsID=890110977 gainsID_lower=906822658 gainsID_upper=890045696 found_lower=1 found_upper=1 gainMult_Q8=217
+        C: iter=2 gainsID=839975936 gainsID_lower=856687618 gainsID_upper=823198976 found_lower=1 found_upper=1 gainMult_Q8=217
+        first divergent element at index 1:
+          R[0..6] = [2, 890110977, 906822658, 890045696, 1, 1]
+          C[0..6] = [2, 839975936, 856687618, 823198976, 1, 1]
+          → b106 F8 pre-NSQ (per iter) divergence — hypothesis G8
+  * b107 (F8a post-NSQ (per iter))  [iter=2]  (G2)
+        R: iter=2 pulses[len=160] first16=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ... (144 more)] signalType=1 quantOffsetType=0 Seed=0 lagPrev=0
+        C: iter=2 pulses[len=160] first16=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ... (144 more)] signalType=1 quantOffsetType=0 Seed=0 lagPrev=0
+        first divergent element at index 26:
+          R[22..31] = [0, 0, 0, 0, -1, 0, 0, 0, -1]
+          C[22..31] = [0, 0, 0, 0, 0, 0, -1, 0, 0]
+          → b107 F8a post-NSQ (per iter) divergence — hypothesis G2
+  * b108 (F8b post-encode_indices (per iter))  [iter=2]  (G1a)
+        R: iter=2 ec_tell=51 rng=0x3f8c4900
+        C: iter=2 ec_tell=50 rng=0x4c417d00
+        first divergent element at index 1:
+          R[0..4] = [2, 51, 18688, 16268]
+          C[0..4] = [2, 50, 32000, 19521]
+          → b108 F8b post-encode_indices (per iter) divergence — hypothesis G1a
+  * b109 (F8c post-encode_pulses (per iter))  [iter=2]  (G1b)
+        R: iter=2 ec_tell=101 rng=0x0d5e6af6
+        C: iter=2 ec_tell=110 rng=0x05101042
+        first divergent element at index 1:
+          R[0..4] = [2, 101, 27382, 3422]
+          C[0..4] = [2, 110, 4162, 1296]
+          → b109 F8c post-encode_pulses (per iter) divergence — hypothesis G1b
+  * b106 (F8 pre-NSQ (per iter))  [iter=3]  (G8)  Rust-only (C did not emit)
+        R: iter=3 gainsID=890110976 gainsID_lower=890110977 gainsID_upper=890045696 found_lower=1 found_upper=1 gainMult_Q8=208
+  * b107 (F8a post-NSQ (per iter))  [iter=3]  (G2)  Rust-only (C did not emit)
+        R: iter=3 pulses[len=160] first16=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ... (144 more)] signalType=1 quantOffsetType=0 Seed=0 lagPrev=0
+  * b108 (F8b post-encode_indices (per iter))  [iter=3]  (G1a)  Rust-only (C did not emit)
+        R: iter=3 ec_tell=50 rng=0x4c417d00
+  * b109 (F8c post-encode_pulses (per iter))  [iter=3]  (G1b)  Rust-only (C did not emit)
+        R: iter=3 ec_tell=110 rng=0x051df9bc
+
+  >>> FIRST DIVERGENT V2 BOUNDARY: b103 (channel=-1, iter=setup) → hypothesis G4 (F5 post-find_pred_coefs) <<<
+      kind: payload-mismatch
+  Rust post-encode top:    use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=6000
+  C    post-encode top:    use_vbr=0 use_dtx=0 fec_config=0 bitrate_bps=6000  silk_mode useInBandFEC=0 useCBR=1 useDTX=0 LBRR_coded=0 bitRate=5600
+  post-encode SILK interframe-state OK
+  post-encode SILK extended-state mismatches (66):
+    nsq_slf_ar_shp_q14: C=2148 R=972
+    nsq_sdiff_shp_q14: C=8688 R=4368
+    nsq_slpc_q14[0]: C=1888 R=1728
+    nsq_slpc_q14[1]: C=560 R=5488
+    nsq_slpc_q14[2]: C=704 R=1584
+    nsq_slpc_q14[3]: C=1392 R=-2064
+    nsq_slpc_q14[4]: C=272 R=1040
+    nsq_slpc_q14[5]: C=816 R=-864
+    nsq_slpc_q14[6]: C=3760 R=-720
+    nsq_slpc_q14[7]: C=3088 R=-1856
+    nsq_slpc_q14[8]: C=2192 R=-512
+    nsq_slpc_q14[9]: C=80 R=-1488
+    nsq_slpc_q14[10]: C=-1472 R=1104
+    nsq_slpc_q14[11]: C=-2832 R=2944
+    nsq_slpc_q14[12]: C=32 R=80
+    nsq_slpc_q14[13]: C=-2048 R=1472
+    nsq_slpc_q14[14]: C=240 R=128
+    nsq_slpc_q14[15]: C=1984 R=-2336
+    nsq_sar2_q14[0]: C=7264 R=8323
+    nsq_sar2_q14[1]: C=5296 R=9576
+    nsq_sar2_q14[2]: C=7712 R=5478
+    nsq_sar2_q14[3]: C=-4368 R=-2020
+    nsq_sar2_q14[4]: C=-3296 R=-3243
+    nsq_sar2_q14[5]: C=-2048 R=-5020
+    nsq_sar2_q14[6]: C=-272 R=-4161
+    nsq_sar2_q14[7]: C=288 R=-5407
+    nsq_sar2_q14[8]: C=608 R=-3875
+    nsq_sar2_q14[9]: C=-2720 R=-4753
+    nsq_sar2_q14[10]: C=-3648 R=-3156
+    nsq_sar2_q14[11]: C=-2928 R=-550
+    nsq_sar2_q14[12]: C=0 R=3211
+    nsq_sar2_q14[13]: C=0 R=1400
+    nsq_sar2_q14[14]: C=0 R=4906
+    nsq_sar2_q14[15]: C=0 R=-1692
+    nsq_sltp_shp_q14[0]: C=394 R=621
+    nsq_sltp_shp_q14[1]: C=54 R=180
+    nsq_sltp_shp_q14[2]: C=-399 R=-543
+    nsq_sltp_shp_q14[3]: C=-754 R=-1231
+    nsq_sltp_shp_q14[4]: C=-414 R=-868
+    nsq_sltp_shp_q14[5]: C=-17 R=-220
+    nsq_sltp_shp_q14[6]: C=-284 R=-555
+    nsq_sltp_shp_q14[7]: C=324 R=300
+    nsq_sltp_shp_q14[8]: C=826 R=1128
+    nsq_sltp_shp_q14[9]: C=199 R=398
+    nsq_sltp_shp_q14[10]: C=479 R=1023
+    nsq_sltp_shp_q14[11]: C=298 R=747
+    nsq_sltp_shp_q14[12]: C=-327 R=-294
+    nsq_sltp_shp_q14[13]: C=-966 R=-1377
+    nsq_sltp_shp_q14[14]: C=-457 R=-865
+    nsq_sltp_shp_q14[15]: C=56 R=-207
+    nsq_sltp_shp_q14[16]: C=-419 R=-874
+    nsq_sltp_shp_q14[17]: C=285 R=210
+    nsq_sltp_shp_q14[18]: C=967 R=1376
+    nsq_sltp_shp_q14[19]: C=995 R=1726
+    nsq_sltp_shp_q14[20]: C=1337 R=2661
+    nsq_sltp_shp_q14[21]: C=1925 R=3743
+    nsq_sltp_shp_q14[22]: C=1311 R=2926
+    nsq_sltp_shp_q14[23]: C=1138 R=2759
+    nsq_sltp_shp_q14[24]: C=1517 R=3373
+    nsq_sltp_shp_q14[25]: C=1722 R=-2084
+    nsq_sltp_shp_q14[26]: C=1822 R=-3143
+    nsq_sltp_shp_q14[27]: C=-1330 R=-3472
+    nsq_sltp_shp_q14[28]: C=-2067 R=-4725
+    nsq_sltp_shp_q14[29]: C=-1774 R=567
+    nsq_sltp_shp_q14[30]: C=-2324 R=2417
+    nsq_sltp_shp_q14[31]: C=-1481 R=2291
+  Rust post-encode SILK mirror (state_fxx[0].s_cmn): use_in_band_fec=0 use_cbr=1 use_dtx=0 lbrr_enabled=0

@@ -1,0 +1,6 @@
+
+========================================================
+REPRO multistream: tests/fuzz/known_failures/multistream-encode-bytes-divergence/crash-04-roundtrip-cx4-vbr1.bin
+========================================================
+Config: op=2 sr=8000 ch=1 family=0 app=2048 br=15472 cx=4 vbr=1
+(repro op != encode; skipping — encoder-state diagnostic only)

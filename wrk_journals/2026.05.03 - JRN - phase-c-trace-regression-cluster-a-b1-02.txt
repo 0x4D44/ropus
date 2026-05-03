@@ -1,0 +1,45 @@
+
+========================================================
+REPRO multiframe: tests/fuzz/seeds/fuzz_encode_multiframe/regression-cluster-a-b1-02.bin
+========================================================
+Config: sr=8000 ch=2 app=2048 frames=2
+
+--- Frame 0 pre-encode ---  br=71535 cx=5 vbr=1 fec=0 dtx=0 loss=0
+  C silk_mode (post-setter, pre-encode): silk_mode useInBandFEC=0 useCBR=0 useDTX=0 LBRR_coded=0 complexity=5 packet_loss_perc=0 bitRate=25000
+    top: use_vbr=1 use_dtx=0 fec_config=0 user_bitrate=71535 bitrate_bps=19000 app=2048
+  Rust top (post-setter, pre-encode): use_vbr=1 use_dtx=0 fec_config=0 bitrate_bps=71535 app=2048
+[frame 0] BYTES-OK  Rust=332B C=332B
+
+--- Phase B trace tuples (boundary, ec_tell, rng, target_rate, n_bits_exceeded, curr_lbrr, n_lbrr, mid_only, prev_d_only_mid) ---
+  count: Rust=0 C=0
+
+  >>> trace tuples match across all 0 boundaries <<<
+
+--- Phase C (HLD V2) inner-function trace tuples (boundaries 100..=109) ---
+  count: Rust=0 C=0
+  (no V2 tuples emitted — non-SILK or pre-Stage-3 build)
+[frame 0 ch0] interframe-state mismatches (3):
+    last_gain_index: C=0 R=10
+    prev_gain_q16: C=0 R=65536
+    prev_lag: C=0 R=100
+[frame 0 ch0] extended-state mismatches (1); first 8:
+    nsq_lag_prev: C=0 R=100
+[frame 0 ch1] interframe-state mismatches (3):
+    last_gain_index: C=0 R=10
+    prev_gain_q16: C=0 R=65536
+    prev_lag: C=0 R=100
+[frame 0 ch1] extended-state mismatches (1); first 8:
+    nsq_lag_prev: C=0 R=100
+[frame 1] BYTES-OK  Rust=175B C=175B
+
+=== SUMMARY tests/fuzz/seeds/fuzz_encode_multiframe/regression-cluster-a-b1-02.bin ===
+All frames matched (no divergence reproduced)
+Findings (8):
+  - frame 0 ch0 last_gain_index: C=0 R=10
+  - frame 0 ch0 prev_gain_q16: C=0 R=65536
+  - frame 0 ch0 prev_lag: C=0 R=100
+  - frame 0 ch0 ext nsq_lag_prev: C=0 R=100
+  - frame 0 ch1 last_gain_index: C=0 R=10
+  - frame 0 ch1 prev_gain_q16: C=0 R=65536
+  - frame 0 ch1 prev_lag: C=0 R=100
+  - frame 0 ch1 ext nsq_lag_prev: C=0 R=100
