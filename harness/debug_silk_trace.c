@@ -1,8 +1,10 @@
 /*
- * debug_silk_trace.c — SILK decode tracing for Bug #13 investigation.
+ * debug_silk_trace.c — SILK decode tracing for Bug #13 investigation,
+ * plus encode-side Phase B trace (Cluster A stage 2b).
  *
  * Provides functions to extract SILK decoder intermediate state from a C
- * OpusDecoder after a decode call.
+ * OpusDecoder after a decode call, and a thread-local FIFO for the
+ * encode-side trace tuples emitted by `silk_enc_api_traced.c`.
  */
 
 #include "opus.h"
@@ -281,3 +283,123 @@ void debug_silk_trace_reset(OpusDecoder *dec) {
     ch0->prevSignalType = 0;
     ch0->nFramesDecoded = 0;
 }
+
+/* ======================================================================
+ * Phase B encode-side trace FIFO (Cluster A stage 2b).
+ *
+ * Thread-local circular collector for `(boundary_id, channel, ec_tell,
+ * rng, target_rate_bps, n_bits_exceeded, curr_n_bits_used_lbrr,
+ * n_bits_used_lbrr, mid_only_flag, prev_decode_only_middle)` tuples
+ * pushed from `silk_enc_api_traced.c::silk_Encode_traced`. The Rust
+ * side mirrors the same tuple shape via the `trace-silk-encode`
+ * Cargo feature on the `ropus` crate, gated on per-frame in
+ * `ropus/src/silk/encoder.rs`.
+ *
+ * The FIFO is bounded: 1024 tuples is enough for the per-frame trace
+ * granularity we need. The harness binary clears the FIFO before each
+ * encode and reads it back via `dbg_silk_trace_read`.
+ * ====================================================================== */
+
+#define DBG_SILK_TRACE_MAX 1024
+
+typedef struct {
+    int boundary_id;
+    int channel;
+    opus_int32 ec_tell;
+    opus_uint32 rng;
+    opus_int32 target_rate_bps;
+    opus_int32 n_bits_exceeded;
+    opus_int32 curr_n_bits_used_lbrr;
+    opus_int32 n_bits_used_lbrr;
+    opus_int32 mid_only_flag;
+    opus_int32 prev_decode_only_middle;
+} dbg_silk_trace_tuple_t;
+
+/* TLS keyword availability across the toolchain matrix is uneven; the
+ * harness is single-threaded for these diagnostics, so plain globals
+ * are sufficient. Document the assumption: only one encode at a time. */
+static dbg_silk_trace_tuple_t dbg_silk_trace_buf[DBG_SILK_TRACE_MAX];
+static int dbg_silk_trace_count = 0;
+
+void dbg_silk_trace_clear(void) {
+    dbg_silk_trace_count = 0;
+}
+
+void dbg_silk_trace_push(
+    int boundary_id,
+    int channel,
+    opus_int32 ec_tell,
+    opus_uint32 rng,
+    opus_int32 target_rate_bps,
+    opus_int32 n_bits_exceeded,
+    opus_int32 curr_n_bits_used_lbrr,
+    opus_int32 n_bits_used_lbrr,
+    opus_int32 mid_only_flag,
+    opus_int32 prev_decode_only_middle)
+{
+    if (dbg_silk_trace_count >= DBG_SILK_TRACE_MAX) return;
+    dbg_silk_trace_tuple_t *t = &dbg_silk_trace_buf[dbg_silk_trace_count++];
+    t->boundary_id = boundary_id;
+    t->channel = channel;
+    t->ec_tell = ec_tell;
+    t->rng = rng;
+    t->target_rate_bps = target_rate_bps;
+    t->n_bits_exceeded = n_bits_exceeded;
+    t->curr_n_bits_used_lbrr = curr_n_bits_used_lbrr;
+    t->n_bits_used_lbrr = n_bits_used_lbrr;
+    t->mid_only_flag = mid_only_flag;
+    t->prev_decode_only_middle = prev_decode_only_middle;
+}
+
+/* Read out a single tuple by index. Returns 0 on success, -1 if oob. */
+int dbg_silk_trace_read(
+    int idx,
+    int *boundary_id,
+    int *channel,
+    opus_int32 *ec_tell,
+    opus_uint32 *rng,
+    opus_int32 *target_rate_bps,
+    opus_int32 *n_bits_exceeded,
+    opus_int32 *curr_n_bits_used_lbrr,
+    opus_int32 *n_bits_used_lbrr,
+    opus_int32 *mid_only_flag,
+    opus_int32 *prev_decode_only_middle)
+{
+    if (idx < 0 || idx >= dbg_silk_trace_count) return -1;
+    const dbg_silk_trace_tuple_t *t = &dbg_silk_trace_buf[idx];
+    *boundary_id = t->boundary_id;
+    *channel = t->channel;
+    *ec_tell = t->ec_tell;
+    *rng = t->rng;
+    *target_rate_bps = t->target_rate_bps;
+    *n_bits_exceeded = t->n_bits_exceeded;
+    *curr_n_bits_used_lbrr = t->curr_n_bits_used_lbrr;
+    *n_bits_used_lbrr = t->n_bits_used_lbrr;
+    *mid_only_flag = t->mid_only_flag;
+    *prev_decode_only_middle = t->prev_decode_only_middle;
+    return 0;
+}
+
+int dbg_silk_trace_count_get(void) {
+    return dbg_silk_trace_count;
+}
+
+/* ----------------------------------------------------------------------
+ * Encode-side wrapper: drives a normal `opus_encode` but with the
+ * traced silk_Encode_traced rather than xiph's silk_Encode. Exposed via
+ * a separate path so the existing encode comparison harness keeps using
+ * the unmodified xiph reference; only fuzz_repro_diff opts in.
+ *
+ * Implementation: we call the xiph `opus_encode` — which itself calls
+ * `silk_Encode` (xiph) — and accept that on this path the tuples come
+ * solely from the Rust side. The C side gets its tuples by a separate
+ * helper that calls silk_Encode_traced directly on a pre-configured
+ * encoder state (TODO if Rust-only tuples prove insufficient).
+ *
+ * For the initial diagnostic, the Rust-side trace + C-side post-encode
+ * SILK state mirror (already extracted by the existing
+ * `debug_get_silk_extended_state`) are sufficient to localise where
+ * the Rust trace first goes off-rails: we expect Rust to diverge from
+ * its own design predictions at exactly the boundary where Rust's
+ * `silk_Encode` mirror differs from the C reference's behaviour.
+ * ---------------------------------------------------------------------- */

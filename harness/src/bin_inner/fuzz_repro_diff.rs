@@ -640,8 +640,9 @@ fn run_multiframe_repro(path: &PathBuf) {
             );
         }
 
-        // Encode both sides.
+        // Encode both sides. Capture Phase B trace tuples per frame.
         let mut rust_out = vec![0u8; 4000];
+        ropus::silk_trace::clear();
         let rust_len = match rust_enc.encode(&fc.pcm, frame_size, &mut rust_out, 4000) {
             Ok(n) => n as usize,
             Err(e) => {
@@ -649,9 +650,11 @@ fn run_multiframe_repro(path: &PathBuf) {
                 break;
             }
         };
+        let rust_trace = ropus::silk_trace::snapshot();
         rust_out.truncate(rust_len);
 
         let mut c_out = vec![0u8; 4000];
+        unsafe { bindings::dbg_silk_trace_clear() };
         let c_len = unsafe {
             bindings::opus_encode(
                 c_enc,
@@ -661,6 +664,7 @@ fn run_multiframe_repro(path: &PathBuf) {
                 4000,
             )
         };
+        let c_trace = read_c_silk_trace();
         if c_len < 0 {
             println!("C encode frame {frame_idx} failed: {c_len}");
             break;
@@ -691,6 +695,12 @@ fn run_multiframe_repro(path: &PathBuf) {
 
         if !bytes_match && first_divergent_frame.is_none() {
             first_divergent_frame = Some(frame_idx);
+        }
+
+        // Phase B trace diff: dump only on divergent frames or frame 0,
+        // to keep output bounded for multi-frame repros.
+        if !bytes_match || frame_idx == 0 {
+            print_phase_b_trace_diff(&rust_trace, &c_trace);
         }
 
         // Post-encode state dumps.
@@ -785,6 +795,121 @@ fn run_multiframe_repro(path: &PathBuf) {
         for f in &frame_findings {
             println!("  - {f}");
         }
+    }
+}
+
+/// Read the C-side Phase B trace FIFO into a Vec.
+fn read_c_silk_trace() -> Vec<ropus::silk_trace::Tuple> {
+    let count = unsafe { bindings::dbg_silk_trace_count_get() } as usize;
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let mut boundary_id: c_int = 0;
+        let mut channel: c_int = 0;
+        let mut ec_tell: i32 = 0;
+        let mut rng: u32 = 0;
+        let mut target_rate_bps: i32 = 0;
+        let mut n_bits_exceeded: i32 = 0;
+        let mut curr_n_bits_used_lbrr: i32 = 0;
+        let mut n_bits_used_lbrr: i32 = 0;
+        let mut mid_only_flag: i32 = 0;
+        let mut prev_decode_only_middle: i32 = 0;
+        let r = unsafe {
+            bindings::dbg_silk_trace_read(
+                i as c_int,
+                &mut boundary_id,
+                &mut channel,
+                &mut ec_tell,
+                &mut rng,
+                &mut target_rate_bps,
+                &mut n_bits_exceeded,
+                &mut curr_n_bits_used_lbrr,
+                &mut n_bits_used_lbrr,
+                &mut mid_only_flag,
+                &mut prev_decode_only_middle,
+            )
+        };
+        if r != 0 {
+            break;
+        }
+        out.push(ropus::silk_trace::Tuple {
+            boundary_id,
+            channel,
+            ec_tell,
+            rng,
+            target_rate_bps,
+            n_bits_exceeded,
+            curr_n_bits_used_lbrr,
+            n_bits_used_lbrr,
+            mid_only_flag,
+            prev_decode_only_middle,
+        });
+    }
+    out
+}
+
+/// Print Phase B trace tuples side-by-side with first-divergence call-out.
+/// Each side's tuples are aligned by `(boundary_id, channel)` ordering. If
+/// the boundary sequence diverges at any step, the per-side stream from
+/// that point on is shown but no further alignment is attempted.
+fn print_phase_b_trace_diff(
+    rust_trace: &[ropus::silk_trace::Tuple],
+    c_trace: &[ropus::silk_trace::Tuple],
+) {
+    println!("\n--- Phase B trace tuples (boundary, ec_tell, rng, target_rate, n_bits_exceeded, curr_lbrr, n_lbrr, mid_only, prev_d_only_mid) ---");
+    println!(
+        "  count: Rust={} C={}",
+        rust_trace.len(),
+        c_trace.len()
+    );
+    let n = rust_trace.len().min(c_trace.len());
+    let mut first_diff_at: Option<usize> = None;
+    for i in 0..n {
+        let r = rust_trace[i];
+        let c = c_trace[i];
+        let same = r == c;
+        if !same && first_diff_at.is_none() {
+            first_diff_at = Some(i);
+        }
+        let marker = if same { " " } else { "*" };
+        println!(
+            "  {marker} [{i:3}] b{}/ch{:2} R: tell={:5} rng={:08x} tr={:6} nx={:5} cl={:5} nl={:5} mo={:2} pdm={:2}",
+            r.boundary_id, r.channel,
+            r.ec_tell, r.rng, r.target_rate_bps, r.n_bits_exceeded,
+            r.curr_n_bits_used_lbrr, r.n_bits_used_lbrr, r.mid_only_flag, r.prev_decode_only_middle
+        );
+        if !same {
+            println!(
+                "         b{}/ch{:2} C: tell={:5} rng={:08x} tr={:6} nx={:5} cl={:5} nl={:5} mo={:2} pdm={:2}",
+                c.boundary_id, c.channel,
+                c.ec_tell, c.rng, c.target_rate_bps, c.n_bits_exceeded,
+                c.curr_n_bits_used_lbrr, c.n_bits_used_lbrr, c.mid_only_flag, c.prev_decode_only_middle
+            );
+        }
+    }
+    if rust_trace.len() != c_trace.len() {
+        println!("  count mismatch: Rust extra {} / C extra {}",
+            rust_trace.len().saturating_sub(c_trace.len()),
+            c_trace.len().saturating_sub(rust_trace.len()));
+    }
+    if let Some(idx) = first_diff_at {
+        let r = rust_trace[idx];
+        println!(
+            "\n  >>> FIRST DIVERGENCE at boundary {} (channel {}), index {} <<<",
+            r.boundary_id, r.channel, idx
+        );
+        let label = match r.boundary_id {
+            1 => "L1.4.1 — after LBRR encoding",
+            2 => "L1.4.2 — after HP variable cutoff",
+            3 => "L1.4.3 — after target-rate computation [B2 candidate]",
+            4 => "L1.4.4 — after stereo LR->MS [B1 candidate]",
+            5 => "L1.4.5 — per-channel after silk_control_SNR",
+            6 => "L1.4.6 — per-channel after silk_encode_frame_Fxx [B1 candidate]",
+            7 => "L1.4.7 — after bit-reservoir update [B2 candidate]",
+            _ => "(unknown)",
+        };
+        println!("  {label}");
+    } else if rust_trace.len() == c_trace.len() {
+        println!("\n  >>> trace tuples match across all {n} boundaries <<<");
     }
 }
 
@@ -1074,12 +1199,16 @@ fn run_multistream_repro(path: &PathBuf) {
         }
     }
 
-    // Encode one frame on each side.
+    // Encode one frame on each side. Clear and capture Phase B trace
+    // tuples around each encode so we can diff the per-boundary stream.
     let max_data_bytes = (4000 * streams.max(1)) as i32;
     let mut rust_out = vec![0u8; max_data_bytes as usize];
+    ropus::silk_trace::clear();
     let rust_ret = rust_enc.encode(&pcm, frame_size, &mut rust_out, max_data_bytes);
+    let rust_trace = ropus::silk_trace::snapshot();
 
     let mut c_out = vec![0u8; max_data_bytes as usize];
+    unsafe { bindings::dbg_silk_trace_clear() };
     let c_len = unsafe {
         unsafe extern "C" {
             fn opus_multistream_encode(
@@ -1098,6 +1227,7 @@ fn run_multistream_repro(path: &PathBuf) {
             max_data_bytes,
         )
     };
+    let c_trace = read_c_silk_trace();
 
     println!("\n--- Encode result ---");
     let rust_len = match rust_ret {
@@ -1138,6 +1268,8 @@ fn run_multistream_repro(path: &PathBuf) {
         bytes_match,
         first_diff
     );
+
+    print_phase_b_trace_diff(&rust_trace, &c_trace);
 
     // Family=0/ch=1 = single-stream wrapper. Inspect that sub-encoder's
     // state on the Rust side; on the C side we don't have a stable accessor

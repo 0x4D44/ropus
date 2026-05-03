@@ -726,6 +726,26 @@ unsafe extern "C" {
     );
 
     pub fn debug_silk_trace_reset(dec: *mut OpusDecoder);
+
+    // -- Phase B encode-side trace FIFO (Cluster A stage 2b).
+    //    Defined in `harness/debug_silk_trace.c`. The C trace push at
+    //    each of the 7 boundaries fires from `harness/silk_enc_api_traced.c`,
+    //    which replaces xiph's enc_API.c in the harness build.
+    pub fn dbg_silk_trace_clear();
+    pub fn dbg_silk_trace_count_get() -> c_int;
+    pub fn dbg_silk_trace_read(
+        idx: c_int,
+        boundary_id: *mut c_int,
+        channel: *mut c_int,
+        ec_tell: *mut opus_int32,
+        rng: *mut u32,
+        target_rate_bps: *mut opus_int32,
+        n_bits_exceeded: *mut opus_int32,
+        curr_n_bits_used_lbrr: *mut opus_int32,
+        n_bits_used_lbrr: *mut opus_int32,
+        mid_only_flag: *mut opus_int32,
+        prev_decode_only_middle: *mut opus_int32,
+    ) -> c_int;
 }
 
 // ---------------------------------------------------------------------------

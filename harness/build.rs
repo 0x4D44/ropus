@@ -68,7 +68,11 @@ fn main() {
         "silk/decode_pulses.c",
         "silk/decoder_set_fs.c",
         "silk/dec_API.c",
-        "silk/enc_API.c",
+        // "silk/enc_API.c" — replaced by our trace-instrumented copy
+        // `harness/silk_enc_api_traced.c`. Defines `silk_Encode` (same
+        // name) so opus_encoder.c links against the traced variant.
+        // Cluster A stage 2b (Phase B); revert by re-enabling this
+        // entry and removing the harness file from the build.
         "silk/encode_indices.c",
         "silk/encode_pulses.c",
         "silk/gain_quant.c",
@@ -353,8 +357,17 @@ fn main() {
     // Debug helper for direct function comparisons
     build.file(harness_dir.join("debug_helper.c"));
 
-    // SILK decode trace helper for Bug #13 investigation
+    // SILK decode trace helper for Bug #13 investigation, plus the
+    // Phase B encode-side trace FIFO (Cluster A stage 2b).
     build.file(harness_dir.join("debug_silk_trace.c"));
+
+    // Phase B trace-instrumented copy of enc_API.c. Defines `silk_Encode`
+    // (same name, replacing xiph's enc_API.c which is excluded from the
+    // build above). Each `opus_encode` call now emits per-boundary tuples
+    // to `dbg_silk_trace_push`. The trace buffer is single-instance and
+    // reset between encodes by the diagnostic binary; harmless overhead
+    // for normal comparison runs.
+    build.file(harness_dir.join("silk_enc_api_traced.c"));
 
     build.compile("opus_ref");
 

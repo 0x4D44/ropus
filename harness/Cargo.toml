@@ -6,7 +6,12 @@ license = "BSD-3-Clause"
 publish = false
 
 [dependencies]
-ropus = { path = "../ropus" }
+# `trace-silk-encode` enables the Phase B encode-side trace tuples used
+# by the `fuzz_repro_diff` Cluster A diagnostic. Off-by-default in
+# ropus; the harness opts in unconditionally because the trace push
+# is cheap (one Mutex-guarded Vec push) and uniformly available means
+# the diagnostic never has to maintain a feature-toggle build matrix.
+ropus = { path = "../ropus", features = ["trace-silk-encode"] }
 ogg = "0.9"
 
 [build-dependencies]

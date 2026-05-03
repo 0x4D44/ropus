@@ -1,6 +1,6 @@
 [package]
 name = "ropus"
-version = "0.12.2"
+version = "0.12.3"
 edition = "2024"
 rust-version = "1.88"
 description = "Rust port of the xiph Opus audio codec (fixed-point), bit-exact against the reference."
@@ -19,6 +19,17 @@ include = [
     "README.md",
     "LICENSE",
 ]
+
+[features]
+default = []
+# Phase B encode-side trace tuples for Cluster A stage 2b. Emits
+# `(boundary_id, channel, ec_tell, rng, target_rate_bps, n_bits_exceeded,
+# curr_n_bits_used_lbrr, n_bits_used_lbrr, mid_only_flag,
+# prev_decode_only_middle)` records at the 7 boundary points enumerated
+# in the encoder-state-accumulation HLD §2.3. Off by default; the
+# diagnostic binary `fuzz_repro_diff` opts in. No production code path
+# has trace-emit calls outside this gate.
+trace-silk-encode = []
 
 [dependencies]
 wide = "0.7"

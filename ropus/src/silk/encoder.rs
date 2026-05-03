@@ -8145,9 +8145,35 @@ pub fn silk_encode(
 
                 curr_n_bits_used_lbrr = range_enc.tell() - curr_n_bits_used_lbrr_start;
             }
+            #[cfg(feature = "trace-silk-encode")]
+            crate::silk_trace::push(crate::silk_trace::Tuple {
+                boundary_id: 1,
+                channel: -1,
+                ec_tell: range_enc.tell(),
+                rng: range_enc.get_rng(),
+                target_rate_bps: 0,
+                n_bits_exceeded: enc.n_bits_exceeded,
+                curr_n_bits_used_lbrr,
+                n_bits_used_lbrr: enc.n_bits_used_lbrr,
+                mid_only_flag: -1,
+                prev_decode_only_middle: enc.prev_decode_only_middle,
+            });
 
             // --- HP variable cutoff ---
             silk_hp_variable_cutoff(&mut enc.state_fxx[0]);
+            #[cfg(feature = "trace-silk-encode")]
+            crate::silk_trace::push(crate::silk_trace::Tuple {
+                boundary_id: 2,
+                channel: -1,
+                ec_tell: range_enc.tell(),
+                rng: range_enc.get_rng(),
+                target_rate_bps: 0,
+                n_bits_exceeded: enc.n_bits_exceeded,
+                curr_n_bits_used_lbrr,
+                n_bits_used_lbrr: enc.n_bits_used_lbrr,
+                mid_only_flag: -1,
+                prev_decode_only_middle: enc.prev_decode_only_middle,
+            });
 
             // --- Target bitrate (C enc_API.c:412-443) ---
             const BITRESERVOIR_DECAY_TIME_MS: i32 = 500;
@@ -8185,6 +8211,19 @@ pub fn silk_encode(
                     silk_div32_16(silk_mul(bits_balance, 1000), BITRESERVOIR_DECAY_TIME_MS);
             }
             let target_rate = target_rate.max(5000).min(enc_control.bit_rate);
+            #[cfg(feature = "trace-silk-encode")]
+            crate::silk_trace::push(crate::silk_trace::Tuple {
+                boundary_id: 3,
+                channel: -1,
+                ec_tell: range_enc.tell(),
+                rng: range_enc.get_rng(),
+                target_rate_bps: target_rate,
+                n_bits_exceeded: enc.n_bits_exceeded,
+                curr_n_bits_used_lbrr,
+                n_bits_used_lbrr: enc.n_bits_used_lbrr,
+                mid_only_flag: -1,
+                prev_decode_only_middle: enc.prev_decode_only_middle,
+            });
 
             // --- Stereo LR→MS / mono buffer ---
             let mut ms_target_rates_bps = [0i32; 2];
@@ -8268,6 +8307,27 @@ pub fn silk_encode(
                     enc.s_stereo.s_mid[1] = enc.state_fxx[0].s_cmn.input_buf[fl + 1];
                 }
             }
+            #[cfg(feature = "trace-silk-encode")]
+            {
+                let mid_only = if n_channels_internal == 2 {
+                    let nfe = enc.state_fxx[0].s_cmn.n_frames_encoded as usize;
+                    enc.s_stereo.mid_only_flags[nfe] as i32
+                } else {
+                    -1
+                };
+                crate::silk_trace::push(crate::silk_trace::Tuple {
+                    boundary_id: 4,
+                    channel: -1,
+                    ec_tell: range_enc.tell(),
+                    rng: range_enc.get_rng(),
+                    target_rate_bps: target_rate,
+                    n_bits_exceeded: enc.n_bits_exceeded,
+                    curr_n_bits_used_lbrr,
+                    n_bits_used_lbrr: enc.n_bits_used_lbrr,
+                    mid_only_flag: mid_only,
+                    prev_decode_only_middle: enc.prev_decode_only_middle,
+                });
+            }
 
             // --- VAD on channel 0 ---
             {
@@ -8310,6 +8370,19 @@ pub fn silk_encode(
 
                 if channel_rate > 0 {
                     silk_control_snr(&mut enc.state_fxx[n].s_cmn, channel_rate);
+                    #[cfg(feature = "trace-silk-encode")]
+                    crate::silk_trace::push(crate::silk_trace::Tuple {
+                        boundary_id: 5,
+                        channel: n as i32,
+                        ec_tell: range_enc.tell(),
+                        rng: range_enc.get_rng(),
+                        target_rate_bps: channel_rate,
+                        n_bits_exceeded: enc.n_bits_exceeded,
+                        curr_n_bits_used_lbrr,
+                        n_bits_used_lbrr: enc.n_bits_used_lbrr,
+                        mid_only_flag: -1,
+                        prev_decode_only_middle: enc.prev_decode_only_middle,
+                    });
 
                     // Use independent coding if no previous frame available
                     let cond_coding = if enc.state_fxx[0]
@@ -8334,6 +8407,19 @@ pub fn silk_encode(
                         max_bits,
                         use_cbr,
                     );
+                    #[cfg(feature = "trace-silk-encode")]
+                    crate::silk_trace::push(crate::silk_trace::Tuple {
+                        boundary_id: 6,
+                        channel: n as i32,
+                        ec_tell: range_enc.tell(),
+                        rng: range_enc.get_rng(),
+                        target_rate_bps: channel_rate,
+                        n_bits_exceeded: enc.n_bits_exceeded,
+                        curr_n_bits_used_lbrr,
+                        n_bits_used_lbrr: enc.n_bits_used_lbrr,
+                        mid_only_flag: -1,
+                        prev_decode_only_middle: enc.prev_decode_only_middle,
+                    });
                 }
 
                 enc.state_fxx[n].s_cmn.controlled_since_last_payload = 0;
@@ -8379,6 +8465,19 @@ pub fn silk_encode(
                     1000,
                 );
                 enc.n_bits_exceeded = enc.n_bits_exceeded.max(0).min(10000);
+                #[cfg(feature = "trace-silk-encode")]
+                crate::silk_trace::push(crate::silk_trace::Tuple {
+                    boundary_id: 7,
+                    channel: -1,
+                    ec_tell: range_enc.tell(),
+                    rng: range_enc.get_rng(),
+                    target_rate_bps: target_rate,
+                    n_bits_exceeded: enc.n_bits_exceeded,
+                    curr_n_bits_used_lbrr,
+                    n_bits_used_lbrr: enc.n_bits_used_lbrr,
+                    mid_only_flag: -1,
+                    prev_decode_only_middle: enc.prev_decode_only_middle,
+                });
 
                 // Update flag indicating if bandwidth switching is allowed
                 // Matches C enc_API.c:559-568

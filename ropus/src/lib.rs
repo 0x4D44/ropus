@@ -97,6 +97,53 @@ pub mod opus;
 pub mod silk;
 pub mod types;
 
+/// Phase B encode-side trace tuples (Cluster A stage 2b). Gated entirely
+/// behind the `trace-silk-encode` Cargo feature; with the feature off
+/// (the default), this module compiles to nothing and the SILK encoder
+/// emits no trace calls.
+#[cfg(feature = "trace-silk-encode")]
+pub mod silk_trace {
+    //! See `wrk_docs/2026.05.02 - HLD - encoder-state-accumulation-fix.md`
+    //! §2.3 for the boundary semantics. The diagnostic binary
+    //! `harness/src/bin/fuzz_repro_diff.rs` drains this buffer after
+    //! each encode and diffs against the C-side FIFO populated by
+    //! `harness/silk_enc_api_traced.c`.
+
+    use std::sync::Mutex;
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct Tuple {
+        pub boundary_id: i32,
+        pub channel: i32,
+        pub ec_tell: i32,
+        pub rng: u32,
+        pub target_rate_bps: i32,
+        pub n_bits_exceeded: i32,
+        pub curr_n_bits_used_lbrr: i32,
+        pub n_bits_used_lbrr: i32,
+        pub mid_only_flag: i32,
+        pub prev_decode_only_middle: i32,
+    }
+
+    static BUF: Mutex<Vec<Tuple>> = Mutex::new(Vec::new());
+
+    pub fn clear() {
+        if let Ok(mut g) = BUF.lock() {
+            g.clear();
+        }
+    }
+
+    pub fn push(t: Tuple) {
+        if let Ok(mut g) = BUF.lock() {
+            g.push(t);
+        }
+    }
+
+    pub fn snapshot() -> Vec<Tuple> {
+        BUF.lock().map(|g| g.clone()).unwrap_or_default()
+    }
+}
+
 mod api;
 pub use api::{
     Application, Bandwidth, Bitrate, Channels, DecodeError, DecodeMode, Decoder, DecoderInitError,
