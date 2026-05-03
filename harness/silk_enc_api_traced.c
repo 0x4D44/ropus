@@ -82,12 +82,30 @@ extern void dbg_silk_trace_push(
     opus_int32 mid_only_flag,
     opus_int32 prev_decode_only_middle);
 
+/* The DBG_TRACE macro is a no-op when `psRangeEnc` is NULL — that
+ * indicates a prefill call from `opus_encoder.c::opus_encode_native`
+ * (reference/src/opus_encoder.c:2206) where SILK is invoked solely to
+ * advance its internal buffers and no range coding happens. The
+ * production encoder path emits no trace records during prefill on
+ * either side, so guarding the macro keeps the per-frame Rust↔C tuple
+ * streams aligned without losing any boundary observations.
+ *
+ * Likewise, `prefillFlag != 0` is checked: the C reference always
+ * passes NULL for psRangeEnc on prefill, but the explicit flag check
+ * keeps the macro robust if a future caller passes a non-NULL dummy.
+ * The Rust mirror does the equivalent gate: it skips trace pushes
+ * when `prefillFlag != 0`.
+ */
 #define DBG_TRACE(boundary, channel, target_rate, mid_only)            \
-    dbg_silk_trace_push((boundary), (channel),                          \
-        ec_tell( psRangeEnc ), psRangeEnc->rng,                         \
-        (target_rate), psEnc->nBitsExceeded,                            \
-        curr_nBitsUsedLBRR, psEnc->nBitsUsedLBRR,                       \
-        (mid_only), psEnc->prev_decode_only_middle)
+    do {                                                                \
+        if (psRangeEnc != NULL && !prefillFlag) {                       \
+            dbg_silk_trace_push((boundary), (channel),                  \
+                ec_tell( psRangeEnc ), psRangeEnc->rng,                 \
+                (target_rate), psEnc->nBitsExceeded,                    \
+                curr_nBitsUsedLBRR, psEnc->nBitsUsedLBRR,               \
+                (mid_only), psEnc->prev_decode_only_middle);            \
+        }                                                               \
+    } while (0)
 
 /***************************************/
 /* Read control structure from encoder */
