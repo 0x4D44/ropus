@@ -45,11 +45,9 @@ fn init_panic_capture() {
                             bytes.len(),
                             path.display()
                         ),
-                        Err(e) => eprintln!(
-                            "[PANIC CAPTURE] Failed to write {}: {}",
-                            path.display(),
-                            e
-                        ),
+                        Err(e) => {
+                            eprintln!("[PANIC CAPTURE] Failed to write {}: {}", path.display(), e)
+                        }
                     }
                 }
             });
@@ -180,7 +178,11 @@ fuzz_target!(|data: &[u8]| {
     let vbr = (data[6] & 0b0001) != 0;
     let vbr_constraint = (data[6] & 0b0010) != 0;
     let inband_fec_raw = ((data[6] & 0b1100) >> 2) as i32;
-    let inband_fec = if inband_fec_raw == 3 { 0 } else { inband_fec_raw };
+    let inband_fec = if inband_fec_raw == 3 {
+        0
+    } else {
+        inband_fec_raw
+    };
     let dtx = (data[7] & 0b0001) != 0;
     let loss_perc = (((data[7] & 0b1111_1110) >> 1) as i32) % 101;
     let pcm_bytes = &data[8..];
@@ -222,7 +224,11 @@ fuzz_target!(|data: &[u8]| {
             .map(|c| {
                 let f = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
                 // NaN/Inf produces differential mismatch — see wrk_journals/2026.05.01 - JRN - fuzz-coverage-expansion-impl.md
-                if f.is_finite() { f } else { 0.0 }
+                if f.is_finite() {
+                    f
+                } else {
+                    0.0
+                }
             })
             .collect();
 

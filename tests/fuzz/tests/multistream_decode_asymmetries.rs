@@ -11,11 +11,11 @@ mod c_reference;
 mod oracle;
 
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
-use ropus::opus::encoder::OPUS_APPLICATION_AUDIO;
 use ropus::opus::decoder::{
-    OpusDecoder, opus_packet_get_bandwidth, opus_packet_get_nb_channels,
-    opus_packet_get_nb_frames, opus_packet_get_nb_samples, opus_packet_get_samples_per_frame,
+    opus_packet_get_bandwidth, opus_packet_get_nb_channels, opus_packet_get_nb_frames,
+    opus_packet_get_nb_samples, opus_packet_get_samples_per_frame, OpusDecoder,
 };
+use ropus::opus::encoder::OPUS_APPLICATION_AUDIO;
 use ropus::opus::multistream::{OpusMSDecoder, OpusMSEncoder};
 
 const SAMPLE_RATES: [i32; 5] = [8000, 12000, 16000, 24000, 48000];
@@ -98,7 +98,10 @@ impl DecodeObservation {
     fn snr_db(&self) -> Option<f64> {
         let rust_samples = self.rust_ret.ok()? as usize;
         let total = rust_samples * self.channels as usize;
-        Some(oracle::snr_db(self.c_ret.as_ref().ok()?, &self.rust_pcm[..total]))
+        Some(oracle::snr_db(
+            self.c_ret.as_ref().ok()?,
+            &self.rust_pcm[..total],
+        ))
     }
 }
 
@@ -110,9 +113,13 @@ fn decode_observation(bytes: &[u8]) -> DecodeObservation {
     let channels = input.channels as i32;
     let mapping_family = input.mapping_family as i32;
 
-    let (_probe_enc, streams, coupled_streams, mapping) =
-        OpusMSEncoder::new_surround(sample_rate, channels, mapping_family, OPUS_APPLICATION_AUDIO)
-            .expect("fixture surround mapping");
+    let (_probe_enc, streams, coupled_streams, mapping) = OpusMSEncoder::new_surround(
+        sample_rate,
+        channels,
+        mapping_family,
+        OPUS_APPLICATION_AUDIO,
+    )
+    .expect("fixture surround mapping");
     assert!(streams + coupled_streams <= 16);
 
     let mut rust_dec =
@@ -248,10 +255,9 @@ fn c_ms_decode_with_range(
 
 #[test]
 fn family0_celt_only_decode_artifact_matches_c_reference() {
-    let bytes = include_bytes!(
-        "../seeds/fuzz_multistream/regression-ms-decode-celt-plc-neural-gate.bin"
-    )
-    .as_slice();
+    let bytes =
+        include_bytes!("../seeds/fuzz_multistream/regression-ms-decode-celt-plc-neural-gate.bin")
+            .as_slice();
     let obs = decode_observation(bytes);
     assert_eq!(obs.sample_rate, 12000);
     assert_eq!(obs.channels, 1);
@@ -262,23 +268,22 @@ fn family0_celt_only_decode_artifact_matches_c_reference() {
     assert_eq!(
         obs.payload,
         [
-            0xe2, 0x11, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00,
-            0x05, 0x35, 0x04, 0xff, 0x00, 0x00, 0x00,
+            0xe2, 0x11, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x05,
+            0x35, 0x04, 0xff, 0x00, 0x00, 0x00,
         ]
     );
 
-    let c_bandwidth =
-        unsafe { c_reference::opus_packet_get_bandwidth(obs.payload.as_ptr()) };
-    let c_channels =
-        unsafe { c_reference::opus_packet_get_nb_channels(obs.payload.as_ptr()) };
+    let c_bandwidth = unsafe { c_reference::opus_packet_get_bandwidth(obs.payload.as_ptr()) };
+    let c_channels = unsafe { c_reference::opus_packet_get_nb_channels(obs.payload.as_ptr()) };
     let c_frames = unsafe {
         c_reference::opus_packet_get_nb_frames(
             obs.payload.as_ptr(),
             obs.payload.len() as c_reference::opus_int32,
         )
     };
-    let c_samples_per_frame =
-        unsafe { c_reference::opus_packet_get_samples_per_frame(obs.payload.as_ptr(), obs.sample_rate) };
+    let c_samples_per_frame = unsafe {
+        c_reference::opus_packet_get_samples_per_frame(obs.payload.as_ptr(), obs.sample_rate)
+    };
     let c_samples = unsafe {
         c_reference::opus_packet_get_nb_samples(
             obs.payload.as_ptr(),
@@ -293,7 +298,10 @@ fn family0_celt_only_decode_artifact_matches_c_reference() {
         opus_packet_get_samples_per_frame(&obs.payload, obs.sample_rate),
         c_samples_per_frame
     );
-    assert_eq!(opus_packet_get_nb_samples(&obs.payload, obs.sample_rate), Ok(c_samples));
+    assert_eq!(
+        opus_packet_get_nb_samples(&obs.payload, obs.sample_rate),
+        Ok(c_samples)
+    );
     assert_eq!(obs.payload[0] >> 3, 28, "TOC config must be CELT-only");
     assert!(obs.is_celt_only());
 
@@ -336,14 +344,18 @@ fn family0_celt_only_decode_artifact_matches_c_reference() {
     assert_eq!(rust_range, c_range.unwrap());
 
     let first_frame_packet = [
-        0xe0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x05, 0x35,
-        0x04, 0xff, 0x00, 0x00,
+        0xe0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x05, 0x35, 0x04,
+        0xff, 0x00, 0x00,
     ];
     let second_frame_packet = [0xe0, 0x00];
     let mut rust_first_dec = OpusDecoder::new(obs.sample_rate, obs.channels).unwrap();
     let mut rust_first_pcm = vec![0i16; frame_cap as usize * obs.channels as usize];
-    let rust_first =
-        rust_first_dec.decode(Some(&first_frame_packet), &mut rust_first_pcm, frame_cap, false);
+    let rust_first = rust_first_dec.decode(
+        Some(&first_frame_packet),
+        &mut rust_first_pcm,
+        frame_cap,
+        false,
+    );
     let rust_first_range = rust_first_dec.get_final_range();
     let (c_first, c_first_range) =
         c_decode_with_range(&first_frame_packet, obs.sample_rate, obs.channels);
@@ -355,11 +367,21 @@ fn family0_celt_only_decode_artifact_matches_c_reference() {
     let mut rust_seq_dec = OpusDecoder::new(obs.sample_rate, obs.channels).unwrap();
     let mut rust_seq_pcm = vec![0i16; frame_cap as usize * obs.channels as usize];
     assert_eq!(
-        rust_seq_dec.decode(Some(&first_frame_packet), &mut rust_seq_pcm, frame_cap, false),
+        rust_seq_dec.decode(
+            Some(&first_frame_packet),
+            &mut rust_seq_pcm,
+            frame_cap,
+            false
+        ),
         Ok(30)
     );
     assert_eq!(
-        rust_seq_dec.decode(Some(&second_frame_packet), &mut rust_seq_pcm, frame_cap, false),
+        rust_seq_dec.decode(
+            Some(&second_frame_packet),
+            &mut rust_seq_pcm,
+            frame_cap,
+            false
+        ),
         Ok(30)
     );
 
@@ -420,7 +442,9 @@ fn family1_vorbis_surround_over_rejection_is_tracked_precisely() {
         assert_eq!(obs.streams, 2);
         assert_eq!(obs.coupled_streams, 1);
         assert_eq!(obs.mapping, [0, 2, 1]);
-        let rust_samples = obs.rust_ret.expect("Rust should now decode family=1 fixture");
+        let rust_samples = obs
+            .rust_ret
+            .expect("Rust should now decode family=1 fixture");
         assert_eq!(obs.c_samples_per_channel(), Some(5760));
         assert_eq!(rust_samples, 5760);
     }
@@ -447,6 +471,11 @@ fn multistream_recovery_repros_are_silk_hybrid_pcm_only_divergences() {
         assert!(
             !obs.is_celt_only(),
             "recovery fixture must stay on SILK/Hybrid oracle path"
+        );
+        assert_eq!(
+            oracle::classify_multistream_decode_packet(&obs.payload, obs.streams),
+            oracle::DecodeOracleClass::RecoveryOrDtxOnly,
+            "recovery fixture must route to sample-count-only oracle"
         );
         let snr = obs.snr_db().expect("SNR for Ok/Ok fixture");
         assert!(

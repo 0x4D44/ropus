@@ -11,19 +11,14 @@
 //!   `cargo test --workspace --lib --tests --no-fail-fast -- --test-threads=1
 //!   [--skip testvector]`.
 //!
-//! The trailing `--skip ::testvector` is injected iff Stage 0 reported
-//! `ietf_vectors_present == false`. HLD proposes `--exclude conformance`
-//! for this case, but that flag removes the *entire* conformance crate
-//! (30 tests) rather than just the 24 IETF vector probes, which would
-//! silently reduce the conformance surface.
+//! The trailing `--skip testvector` is injected only when Stage 0 could not
+//! provision the IETF vectors. We still run the rest of Stage 2 for signal, but
+//! add a synthetic conformance failure so the gate cannot pass green without
+//! the spec vectors.
 //!
-//! libtest's `--skip` is a substring match, not a path-prefix match, so a
-//! bare `--skip testvector` would also drop any future test whose name
-//! merely *contains* the word `testvector`. We use `--skip ::testvector`:
-//! the leading `::` pins the match to a module-path component boundary,
-//! which only the 24 IETF probes (`conformance::ietf_vectors::testvectorNN`)
-//! satisfy today. Verified via `cargo test -p conformance -- --list`.
-//! Documented here and in the Phase 2 journal.
+//! libtest's `--skip` is a substring match. The IETF vector integration tests
+//! are named `testvectorNN_mono` / `testvectorNN_stereo`, so the filter must
+//! be the flat `testvector` token.
 //!
 //! Stdout/stderr are captured separately because cargo sends per-test
 //! outcome lines to stdout and build progress / diagnostics to stderr;
@@ -34,7 +29,10 @@ use std::time::Instant;
 
 use colored::Colorize;
 
-use crate::cargo_parse::{self, TestsResult};
+use crate::cargo_parse::{
+    self, BinaryResult, Outcome as TestOutcomeKind, TestOutcome, TestsResult,
+};
+use crate::ietf_vectors::IetfVectorProvision;
 use crate::issues;
 use crate::llvm_cov_parse::{self, CoverageResult};
 
@@ -83,10 +81,10 @@ impl Outcome {
 ///
 /// - `skip_coverage=false` → `llvm-cov --json --output-path <path> test ...`.
 /// - `skip_coverage=true`  → `test ...` (plain cargo test, no instrumentation).
-/// - `ietf_vectors_present=false` appends `--skip ::testvector`.
+/// - `skip_ietf_vectors=true` appends `--skip testvector`.
 fn build_cargo_args(
     skip_coverage: bool,
-    ietf_vectors_present: bool,
+    skip_ietf_vectors: bool,
     cov_path: Option<&std::path::Path>,
 ) -> Vec<std::ffi::OsString> {
     use std::ffi::OsString;
@@ -115,28 +113,30 @@ fn build_cargo_args(
     }
     args.push(OsString::from("--"));
     args.push(OsString::from("--test-threads=1"));
-    if !ietf_vectors_present {
-        // `--skip` is libtest's substring filter; prefix with `::` to pin
-        // the match to a module-path component boundary so only the IETF
-        // `conformance::ietf_vectors::testvectorNN` tests are dropped.
+    if skip_ietf_vectors {
         args.push(OsString::from("--skip"));
-        args.push(OsString::from("::testvector"));
+        args.push(OsString::from("testvector"));
     }
     args
 }
 
-/// Canonical skip-reason text for the IETF-vectors fallback. Matched by unit
+/// Canonical failure text for an unavailable IETF vector set. Matched by unit
 /// tests and surfaced in the JSON envelope.
-fn skip_reason_text() -> String {
-    "tests/vectors/ietf/testvector01.bit missing — IETF probes \
-     (testvector01..24) filtered out; run tools/fetch_ietf_vectors.sh \
-     to enable"
-        .to_string()
+fn unavailable_reason_text(ietf_vectors: &IetfVectorProvision) -> String {
+    let reason = ietf_vectors
+        .reason
+        .as_deref()
+        .unwrap_or("fetch script did not produce a complete vector set");
+    format!(
+        "IETF vectors unavailable after provisioning; filtered \
+         testvectorNN_mono/stereo probes to preserve non-IETF \
+         Stage 2 signal. {reason}"
+    )
 }
 
-/// Run Stage 2. `ietf_vectors_present` comes from Stage 0; when false we
-/// inject `--skip testvector` with a reason captured for the HTML report.
-pub fn run(skip_coverage: bool, ietf_vectors_present: bool) -> Outcome {
+/// Run Stage 2. If Stage 0 could not provision IETF vectors, filter the 24
+/// vector probes but add a synthetic failure so the gate stays honest.
+pub fn run(skip_coverage: bool, ietf_vectors: &IetfVectorProvision) -> Outcome {
     let start = Instant::now();
     let (label, header) = if skip_coverage {
         (
@@ -186,11 +186,12 @@ pub fn run(skip_coverage: bool, ietf_vectors_present: bool) -> Outcome {
 
     let cov_path = cov_tmp.as_ref().map(|f| f.path().to_path_buf());
 
-    let args = build_cargo_args(skip_coverage, ietf_vectors_present, cov_path.as_deref());
-    let skip_reason: Option<String> = if ietf_vectors_present {
-        None
+    let skip_ietf_vectors = !ietf_vectors.available();
+    let args = build_cargo_args(skip_coverage, skip_ietf_vectors, cov_path.as_deref());
+    let skip_reason: Option<String> = if skip_ietf_vectors {
+        Some(unavailable_reason_text(ietf_vectors))
     } else {
-        Some(skip_reason_text())
+        None
     };
 
     let mut cmd = Command::new("cargo");
@@ -223,6 +224,9 @@ pub fn run(skip_coverage: bool, ietf_vectors_present: bool) -> Outcome {
     if let Some(e) = spawn_err {
         tests.build_failed = true;
         tests.skip_reason = Some(format!("failed to spawn cargo: {e}"));
+    }
+    if skip_ietf_vectors {
+        append_ietf_provisioning_failure(&mut tests, ietf_vectors);
     }
 
     // Coverage: resolve to Some(result) only when cargo actually wrote a
@@ -289,10 +293,37 @@ pub fn run(skip_coverage: bool, ietf_vectors_present: bool) -> Outcome {
     }
 }
 
+fn append_ietf_provisioning_failure(tests: &mut TestsResult, ietf_vectors: &IetfVectorProvision) {
+    const FQN: &str = "conformance::ietf_vectors::provisioning";
+    const BINARY: &str = "ietf_vectors";
+
+    tests.total_failed += 1;
+    tests.failed_test_names.push(FQN.to_string());
+    tests.per_test.push(TestOutcome {
+        fqn: FQN.to_string(),
+        outcome: TestOutcomeKind::Fail,
+        binary: BINARY.to_string(),
+    });
+    match tests.binaries.iter_mut().find(|b| b.name == BINARY) {
+        Some(binary) => binary.failed += 1,
+        None => tests.binaries.push(BinaryResult {
+            name: BINARY.to_string(),
+            passed: 0,
+            failed: 1,
+            ignored: 0,
+            duration_ms: 0,
+        }),
+    }
+    if tests.skip_reason.is_none() {
+        tests.skip_reason = Some(unavailable_reason_text(ietf_vectors));
+    }
+}
+
 #[cfg(test)]
 mod unit_tests {
     use super::*;
     use crate::cargo_parse::TestsResult;
+    use crate::ietf_vectors::ProvisionStatus;
     use std::path::Path;
 
     fn outcome_with(tests: TestsResult) -> Outcome {
@@ -311,7 +342,7 @@ mod unit_tests {
 
     #[test]
     fn skip_coverage_builds_plain_test_command() {
-        let args = build_cargo_args(true, true, None);
+        let args = build_cargo_args(true, false, None);
         let s = args_as_strings(&args);
         assert_eq!(
             s,
@@ -330,7 +361,7 @@ mod unit_tests {
     #[test]
     fn coverage_on_builds_llvm_cov_command_with_path() {
         let p = Path::new("/tmp/sample.json");
-        let args = build_cargo_args(false, true, Some(p));
+        let args = build_cargo_args(false, false, Some(p));
         let s = args_as_strings(&args);
         // Leading chunk is the llvm-cov wrapper. `--ignore-run-fail` keeps
         // report generation running when a test fails — without it cargo
@@ -355,7 +386,7 @@ mod unit_tests {
         // exclusive on cargo-llvm-cov's CLI. Putting both back would cause a
         // hard error at invocation time. See Phase 5 smoke-run findings.
         let p = Path::new("/tmp/sample.json");
-        let args = build_cargo_args(false, true, Some(p));
+        let args = build_cargo_args(false, false, Some(p));
         let s = args_as_strings(&args);
         assert!(s.contains(&"--ignore-run-fail".to_string()));
         assert!(!s.contains(&"--no-fail-fast".to_string()));
@@ -363,29 +394,62 @@ mod unit_tests {
 
     #[test]
     fn missing_ietf_vectors_appends_skip_filter() {
-        let args = build_cargo_args(true, false, None);
+        let args = build_cargo_args(true, true, None);
         let s = args_as_strings(&args);
-        // The tail after `--test-threads=1` is `--skip ::testvector`.
-        // The leading `::` pins the match to a module-path boundary so we
-        // don't accidentally drop an unrelated future test whose name merely
-        // contains "testvector".
+        // The tail after `--test-threads=1` is `--skip testvector`, matching
+        // the flat IETF integration-test names (`testvectorNN_mono/stereo`).
         let tail: &[String] = &s[s.len() - 2..];
-        assert_eq!(tail, &["--skip".to_string(), "::testvector".to_string()]);
+        assert_eq!(tail, &["--skip".to_string(), "testvector".to_string()]);
     }
 
     #[test]
     fn present_ietf_vectors_does_not_append_skip_filter() {
-        let args = build_cargo_args(true, true, None);
+        let args = build_cargo_args(true, false, None);
         let s = args_as_strings(&args);
         assert!(!s.iter().any(|a| a == "--skip"));
-        assert!(!s.iter().any(|a| a == "::testvector"));
+        assert!(!s.iter().any(|a| a == "testvector"));
     }
 
     #[test]
-    fn skip_reason_text_references_fetch_script() {
-        let r = skip_reason_text();
-        assert!(r.contains("testvector01.bit"));
-        assert!(r.contains("fetch_ietf_vectors.sh"));
+    fn unavailable_reason_text_explains_filtered_vectors() {
+        let provision = IetfVectorProvision {
+            status: ProvisionStatus::Unavailable,
+            attempted_fetch: true,
+            script: None,
+            exit_code: Some(7),
+            reason: Some("network unavailable".to_string()),
+        };
+        let r = unavailable_reason_text(&provision);
+        assert!(r.contains("IETF vectors unavailable"));
+        assert!(r.contains("testvectorNN"));
+        assert!(r.contains("network unavailable"));
+    }
+
+    #[test]
+    fn unavailable_vectors_append_synthetic_failure() {
+        let provision = IetfVectorProvision {
+            status: ProvisionStatus::Unavailable,
+            attempted_fetch: true,
+            script: None,
+            exit_code: Some(7),
+            reason: Some("network unavailable".to_string()),
+        };
+        let mut t = TestsResult {
+            total_passed: 10,
+            ..TestsResult::default()
+        };
+        append_ietf_provisioning_failure(&mut t, &provision);
+
+        assert_eq!(t.total_passed, 10);
+        assert_eq!(t.total_failed, 1);
+        assert_eq!(
+            t.failed_test_names,
+            vec!["conformance::ietf_vectors::provisioning".to_string()]
+        );
+        assert_eq!(t.binaries.len(), 1);
+        assert_eq!(t.binaries[0].name, "ietf_vectors");
+        assert_eq!(t.binaries[0].failed, 1);
+        assert!(t.skip_reason.unwrap().contains("network unavailable"));
     }
 
     #[test]

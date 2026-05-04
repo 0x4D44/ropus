@@ -45,11 +45,9 @@ fn init_panic_capture() {
                             bytes.len(),
                             path.display()
                         ),
-                        Err(e) => eprintln!(
-                            "[PANIC CAPTURE] Failed to write {}: {}",
-                            path.display(),
-                            e
-                        ),
+                        Err(e) => {
+                            eprintln!("[PANIC CAPTURE] Failed to write {}: {}", path.display(), e)
+                        }
                     }
                 }
             });
@@ -101,9 +99,11 @@ fuzz_target!(|data: &[u8]| {
         Err(_) => return,
     };
     let max_pcm = MAX_FRAME as usize * channels as usize;
-    // SILK/Hybrid modes have known numerical divergences — only compare PCM for
-    // CELT-only packets. Sample counts and error agreement are checked for all modes.
+    // CELT-only packets are byte-exact. SILK/Hybrid attacker-controlled packets
+    // use the bounded SNR oracle only when every sub-frame is coded-comparable;
+    // recovery/DTX sub-frames fall back to sample-count parity.
     let celt_only = is_celt_only_packet(packet);
+    let decode_class = oracle::classify_decode_packet(packet);
 
     if use_float_pcm {
         let mut rust_pcm = vec![0f32; max_pcm];
@@ -116,7 +116,8 @@ fuzz_target!(|data: &[u8]| {
                 let c_samples = c_pcm.len() / channels as usize;
 
                 assert_eq!(
-                    rust_samples, c_samples,
+                    rust_samples,
+                    c_samples,
                     "Float sample count mismatch: Rust={rust_samples}, C={c_samples}, \
                      sr={sample_rate}, ch={channels}, pkt_len={}",
                     packet.len()
@@ -140,10 +141,22 @@ fuzz_target!(|data: &[u8]| {
                             packet.len()
                         );
                     }
+                } else {
+                    let to_i16 =
+                        |x: f32| -> i16 { (x * 32768.0).round().clamp(-32768.0, 32767.0) as i16 };
+                    let rust_i16: Vec<i16> = rust_slice.iter().map(|&x| to_i16(x)).collect();
+                    let c_i16: Vec<i16> = c_slice.iter().map(|&x| to_i16(x)).collect();
+                    if oracle::snr_oracle_applicable_for_decode_class(&c_i16, decode_class) {
+                        let snr = oracle::snr_db(&c_i16, &rust_i16);
+                        assert!(
+                            snr >= oracle::SILK_DECODE_MIN_SNR_DB,
+                            "Float SILK/Hybrid decode SNR {snr:.2} dB < {:.0} dB \
+                             (sr={sample_rate}, ch={channels}, pkt_len={}, samples={rust_samples})",
+                            oracle::SILK_DECODE_MIN_SNR_DB,
+                            packet.len()
+                        );
+                    }
                 }
-                // SILK/Hybrid SNR oracle disabled in the float path too —
-                // see the i16 path above for the rationale (recovery-
-                // divergence class on legal-DTX-style 0-byte sub-frames).
                 let _ = (rust_slice, c_slice);
             }
             (Err(_), Err(_)) => {}
@@ -199,7 +212,8 @@ fuzz_target!(|data: &[u8]| {
 
                 // Sample counts must match for all modes
                 assert_eq!(
-                    rust_samples, c_samples,
+                    rust_samples,
+                    c_samples,
                     "Sample count mismatch: Rust={rust_samples}, C={c_samples}, \
                      sr={sample_rate}, ch={channels}, pkt_len={}",
                     packet.len()
@@ -214,17 +228,16 @@ fuzz_target!(|data: &[u8]| {
                         "PCM mismatch at sr={sample_rate}, ch={channels}, pkt_len={}, samples={rust_samples}",
                         packet.len()
                     );
+                } else if oracle::snr_oracle_applicable_for_decode_class(&c_pcm[..], decode_class) {
+                    let snr = oracle::snr_db(&c_pcm[..], rust_slice);
+                    assert!(
+                        snr >= oracle::SILK_DECODE_MIN_SNR_DB,
+                        "SILK/Hybrid decode SNR {snr:.2} dB < {:.0} dB \
+                         (sr={sample_rate}, ch={channels}, pkt_len={}, samples={rust_samples})",
+                        oracle::SILK_DECODE_MIN_SNR_DB,
+                        packet.len()
+                    );
                 }
-                // SILK/Hybrid SNR oracle deliberately omitted — see
-                // tests/fuzz/known_failures/silk_decode_recovery_divergence_loud/
-                // and multistream-decode-recovery-divergence/. The 50 dB tier-2
-                // floor trips on packets whose code-2 second sub-frame is 0
-                // bytes (legal DTX-style); the well_formed gate via
-                // opus_packet_get_nb_samples doesn't filter that case. Sample-
-                // count parity (asserted above) is the only oracle on
-                // SILK/Hybrid PCM until either the recovery-divergence root
-                // cause is fixed or a structural per-sub-frame gate is built.
-                let _ = rust_slice; // suppress unused warning when oracle is off
             }
             (Err(_), Err(_)) => {
                 // Both errored — that's fine, errors don't have to match exactly

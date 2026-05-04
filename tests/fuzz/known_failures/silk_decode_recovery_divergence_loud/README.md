@@ -41,8 +41,19 @@ The proper resolution is one of:
 3. Fix the decoder-side error-recovery divergence so malformed-but-
    parseable packets produce equivalent PCM on both sides.
 
-Stream D's energy precheck is sufficient for the original 4-byte case
-(deleted) but not for the broader class. Tracking here for follow-up.
+## 2026-05-04 resolution
+
+The attacker-controlled decode oracle now uses a packet comparability
+classifier instead of the energy-only precheck:
+
+- CELT-only packets keep byte-exact PCM checks.
+- SILK/Hybrid packets with all parsed sub-frame sizes `> 1` re-enter the
+  50 dB SNR oracle.
+- SILK/Hybrid packets with any parsed sub-frame size `<= 1` are classified as
+  recovery/DTX and only assert decode-result symmetry plus sample-count parity.
+
+This fixture classifies as recovery/DTX because its code-2 second sub-frame is
+0 bytes, so replaying it must not assert SNR.
 
 ## Reproducer
 

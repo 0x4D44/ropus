@@ -29,6 +29,7 @@ use crate::banner::{BENCH_WARN_RATIO, Banner};
 use crate::bench::{BenchResult, VectorBench};
 use crate::cargo_parse::{Outcome as TestOutcomeKind, TestOutcome};
 use crate::cli::Options;
+use crate::ietf_vectors::{IetfVectorProvision, ProvisionStatus};
 use crate::llvm_cov_parse::CoverageMetrics;
 use crate::quality::Outcome as QualityOutcome;
 use crate::tests::Outcome as TestsOutcome;
@@ -42,6 +43,7 @@ pub struct ReportContext<'a> {
     pub commit_subject: &'a str,
     pub timestamp: chrono::DateTime<chrono::Local>,
     pub banner: Banner,
+    pub ietf_vectors: IetfVectorProvision,
     pub ietf_vectors_present: bool,
     pub options: &'a Options,
     pub quality: &'a QualityOutcome,
@@ -135,6 +137,7 @@ color:var(--meta); font-size:0.8em; text-align:center; }
 // ---------------------------------------------------------------------------
 
 fn render_header(out: &mut String, ctx: &ReportContext<'_>) {
+    debug_assert_eq!(ctx.ietf_vectors_present, ctx.ietf_vectors.available());
     let ts = ctx.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
     out.push_str(&format!(
         "<h1>ropus Test Report <span class=\"badge\" style=\"background:{color}\">{label}</span></h1>\n",
@@ -150,14 +153,9 @@ fn render_header(out: &mut String, ctx: &ReportContext<'_>) {
         subj = html_escape(ctx.commit_subject),
     ));
 
-    // Skip note strip — IETF vectors + flag surface.
+    // Note strip — IETF vectors + flag surface.
     let mut notes: Vec<String> = Vec::new();
-    if !ctx.ietf_vectors_present {
-        notes.push(
-            "IETF vectors missing: run <code>tools/fetch_ietf_vectors.sh</code> to enable the testvector01..12 probes."
-                .to_string(),
-        );
-    }
+    notes.push(ietf_vectors_note(&ctx.ietf_vectors));
     if ctx.options.quick {
         notes.push("Flag: <code>--quick</code> (quality + benchmarks skipped).".to_string());
     }
@@ -180,11 +178,38 @@ fn render_header(out: &mut String, ctx: &ReportContext<'_>) {
                 out.push_str(" &bull; ");
             }
             // Notes contain trusted literal HTML (`<code>…</code>`) above;
-            // the variable parts (flag names) are static constants, so no
-            // escape needed.
+            // dynamic parts are escaped before they enter the note string.
             out.push_str(n);
         }
         out.push_str("</p>\n");
+    }
+}
+
+fn ietf_vectors_note(v: &IetfVectorProvision) -> String {
+    match v.status {
+        ProvisionStatus::Present => "IETF vectors: present.".to_string(),
+        ProvisionStatus::Provisioned => {
+            let script = script_note(v);
+            format!("IETF vectors: provisioned during this run{script}.")
+        }
+        ProvisionStatus::Unavailable => {
+            let script = script_note(v);
+            let reason = v
+                .reason
+                .as_deref()
+                .map(html_escape)
+                .unwrap_or_else(|| "no diagnostic available".to_string());
+            format!(
+                "<span class=\"fail\">IETF vectors unavailable after provisioning</span>{script}: {reason}"
+            )
+        }
+    }
+}
+
+fn script_note(v: &IetfVectorProvision) -> String {
+    match &v.script {
+        Some(path) => format!(" via <code>{}</code>", html_escape(&path.to_string_lossy())),
+        None => String::new(),
     }
 }
 
@@ -870,6 +895,7 @@ mod tests {
             commit_subject: "fix(silk): clamp pitch_out",
             timestamp: now(),
             banner,
+            ietf_vectors: IetfVectorProvision::present(),
             ietf_vectors_present: true,
             options,
             quality,
@@ -944,6 +970,7 @@ mod tests {
             commit_subject: "\"pwn\" & rm -rf /",
             timestamp: now(),
             banner: Banner::Pass,
+            ietf_vectors: IetfVectorProvision::present(),
             ietf_vectors_present: true,
             options: &opts,
             quality: &q,
@@ -1349,6 +1376,13 @@ mod tests {
             commit_subject: "subj",
             timestamp: now(),
             banner: Banner::Pass,
+            ietf_vectors: IetfVectorProvision {
+                status: ProvisionStatus::Unavailable,
+                attempted_fetch: true,
+                script: Some("tools/fetch_ietf_vectors.sh".into()),
+                exit_code: Some(7),
+                reason: Some("network unavailable".to_string()),
+            },
             ietf_vectors_present: false,
             options: &opts,
             quality: &q,
@@ -1357,8 +1391,9 @@ mod tests {
             bench: &b,
         };
         let html = render(&c);
-        assert!(html.contains("IETF vectors missing"));
+        assert!(html.contains("IETF vectors unavailable"));
         assert!(html.contains("fetch_ietf_vectors.sh"));
+        assert!(html.contains("network unavailable"));
     }
 
     #[test]

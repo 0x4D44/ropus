@@ -505,13 +505,9 @@ fn float_to_sig(x: f32) -> i32 {
     const FLOAT2SIG_MULT: f32 = 134_217_728.0;
     const SIG_CLAMP_MAX: f32 = 268_435_456.0;
     const SIG_CLAMP_MIN: f32 = -268_435_456.0;
-    let mut y = x * FLOAT2SIG_MULT;
-    if y > SIG_CLAMP_MAX {
-        y = SIG_CLAMP_MAX;
-    }
-    if y < SIG_CLAMP_MIN {
-        y = SIG_CLAMP_MIN;
-    }
+    let y = x * FLOAT2SIG_MULT;
+    let y = if y > SIG_CLAMP_MIN { y } else { SIG_CLAMP_MIN };
+    let y = if y < SIG_CLAMP_MAX { y } else { SIG_CLAMP_MAX };
     y.round_ties_even() as i32
 }
 
@@ -590,6 +586,15 @@ pub(crate) fn downmix_float(
     // FIXED_POINT: the C `#ifndef FIXED_POINT` ±6 dBFS cap does not run
     // on this path. The clamp inside `float_to_sig` already keeps samples
     // within `±(65536<<SIG_SHIFT)`.
+}
+
+pub(crate) struct EncodeAnalysisInput<'a> {
+    pub(crate) pcm: &'a [u8],
+    pub(crate) frame_size: i32,
+    pub(crate) c1: i32,
+    pub(crate) c2: i32,
+    pub(crate) channels: i32,
+    pub(crate) downmix: DownmixFunc,
 }
 
 /// Convert an Opus-layer `AnalysisInfo` into the CELT-layer struct.
@@ -677,6 +682,11 @@ fn user_bitrate_to_bitrate(
     frame_size: i32,
     max_data_bytes: i32,
 ) -> i32 {
+    let frame_size = if frame_size == 0 {
+        fs / 400
+    } else {
+        frame_size
+    };
     let max_bitrate = bits_to_bitrate(max_data_bytes * 8, fs, frame_size);
     let user_bitrate = if user_bitrate_bps == OPUS_AUTO {
         60 * fs / frame_size + fs * channels
@@ -1294,7 +1304,7 @@ impl OpusEncoder {
             mode: MODE_HYBRID,
             prev_mode: 0,
             prev_channels: 0,
-            prev_framesize: fs / 50, // 20ms
+            prev_framesize: 0,
             bandwidth: OPUS_BANDWIDTH_FULLBAND,
             detected_bandwidth: 0,
             auto_bandwidth: OPUS_BANDWIDTH_FULLBAND,
@@ -1392,7 +1402,7 @@ impl OpusEncoder {
         self.mode = MODE_HYBRID;
         self.prev_mode = 0;
         self.prev_channels = self.channels;
-        self.prev_framesize = self.fs / 50;
+        self.prev_framesize = 0;
         self.bandwidth = OPUS_BANDWIDTH_FULLBAND;
         self.detected_bandwidth = 0;
         self.auto_bandwidth = OPUS_BANDWIDTH_FULLBAND;
@@ -1448,7 +1458,14 @@ impl OpusEncoder {
             data,
             max_data_bytes,
             16,
-            Some((pcm_bytes, analysis_frame_size, downmix_int as DownmixFunc)),
+            Some(EncodeAnalysisInput {
+                pcm: pcm_bytes,
+                frame_size: analysis_frame_size,
+                c1: 0,
+                c2: -2,
+                channels: self.channels,
+                downmix: downmix_int as DownmixFunc,
+            }),
         )
     }
 
@@ -1489,7 +1506,14 @@ impl OpusEncoder {
             // noise-floor formula and reshuffles bit allocation. See
             // `wrk_docs/2026.05.02 - HLD - float-pcm-ingest-fix.md`.
             MAX_ENCODING_DEPTH,
-            Some((pcm_bytes, analysis_frame_size, downmix_float as DownmixFunc)),
+            Some(EncodeAnalysisInput {
+                pcm: pcm_bytes,
+                frame_size: analysis_frame_size,
+                c1: 0,
+                c2: -2,
+                channels: self.channels,
+                downmix: downmix_float as DownmixFunc,
+            }),
         )
     }
 
@@ -1497,9 +1521,8 @@ impl OpusEncoder {
     // opus_encode_native — top-level orchestrator
     // -----------------------------------------------------------------------
 
-    /// Convenience wrapper for internal callers that don't run analysis.
-    /// Matches the legacy three-arg signature used by `opus/multistream.rs`
-    /// where each sub-stream already handles its own PCM dispatch.
+    /// Convenience wrapper for tests that deliberately skip tonality analysis.
+    #[cfg(test)]
     pub(crate) fn encode_native(
         &mut self,
         pcm: &[i16],
@@ -1511,10 +1534,10 @@ impl OpusEncoder {
         self.encode_native_with_analysis(pcm, frame_size, data, out_data_bytes, lsb_depth, None)
     }
 
-    /// Full-fat encode entry point. `analysis` is `Some((pcm_bytes, analysis_frame_size, downmix))`
-    /// when the caller wants the tonality analyzer to run over the input
-    /// (matches C `opus_encode_native` with `analysis_pcm`, `analysis_size`,
-    /// `downmix` parameters) or `None` to skip it.
+    /// Full-fat encode entry point. `analysis` is `Some` when the caller wants
+    /// the tonality analyzer to run over the input (matches C
+    /// `opus_encode_native` with `analysis_pcm`, `analysis_size`, `c1`, `c2`,
+    /// `analysis_channels`, and `downmix` parameters) or `None` to skip it.
     pub(crate) fn encode_native_with_analysis(
         &mut self,
         pcm: &[i16],
@@ -1522,7 +1545,7 @@ impl OpusEncoder {
         data: &mut [u8],
         out_data_bytes: i32,
         lsb_depth: i32,
-        analysis: Option<(&[u8], i32, DownmixFunc)>,
+        analysis: Option<EncodeAnalysisInput<'_>>,
     ) -> Result<i32, i32> {
         let max_data_bytes = imin(1276 * 6, out_data_bytes);
         self.range_final = 0;
@@ -1555,7 +1578,7 @@ impl OpusEncoder {
             && self.fs <= 48000
             && self.application != OPUS_APPLICATION_RESTRICTED_SILK
         {
-            if let Some((analysis_pcm, analysis_frame_size, downmix)) = analysis {
+            if let Some(analysis) = analysis {
                 let celt_mode = self
                     .celt_enc
                     .as_ref()
@@ -1566,15 +1589,15 @@ impl OpusEncoder {
                 run_analysis(
                     self.analysis.as_mut(),
                     celt_mode,
-                    Some(analysis_pcm),
-                    analysis_frame_size,
+                    Some(analysis.pcm),
+                    analysis.frame_size,
                     frame_size,
-                    0,  // c1
-                    -2, // c2 — downmix all non-primary channels
-                    self.channels,
+                    analysis.c1,
+                    analysis.c2,
+                    analysis.channels,
                     self.fs,
                     lsb_depth,
-                    downmix,
+                    analysis.downmix,
                     &mut analysis_info,
                 );
             }
@@ -3676,6 +3699,9 @@ impl OpusEncoder {
     }
 
     pub fn set_phase_inversion_disabled(&mut self, disabled: i32) -> i32 {
+        if disabled < 0 || disabled > 1 {
+            return OPUS_BAD_ARG;
+        }
         if let Some(ref mut celt) = self.celt_enc {
             celt.ctl(CeltEncoderCtl::SetPhaseInversionDisabled(disabled));
         }
@@ -3797,6 +3823,9 @@ impl OpusEncoder {
             && application != OPUS_APPLICATION_AUDIO
             && application != OPUS_APPLICATION_RESTRICTED_LOWDELAY
         {
+            return OPUS_BAD_ARG;
+        }
+        if self.first == 0 && self.application != application {
             return OPUS_BAD_ARG;
         }
         self.application = application;

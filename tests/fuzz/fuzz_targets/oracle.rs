@@ -8,6 +8,8 @@
 
 #![allow(dead_code)]
 
+use ropus::opus::decoder::{opus_packet_parse_impl, MAX_FRAMES};
+
 /// Minimum acceptable SNR (in decibels) when comparing the Rust port's
 /// SILK/Hybrid PCM output against the C reference. CELT-only packets remain
 /// byte-exact compared elsewhere; this floor only governs the lossy modes.
@@ -23,6 +25,20 @@ pub const SILK_DECODE_MIN_SNR_DB: f64 = 50.0;
 /// reference energy in the 1e6–1e7 range; bumping the floor to 1e7
 /// classifies it as recovery-divergence rather than a tier-2 violation.
 pub const SNR_PRECHECK_MIN_REF_ENERGY: f64 = 1e7;
+
+/// How strong a PCM oracle is meaningful for a decoded packet.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DecodeOracleClass {
+    /// CELT-only coded audio is expected to be byte-exact.
+    CeltCodedComparable,
+    /// SILK/Hybrid coded audio is comparable through the bounded-SNR oracle.
+    SilkHybridCodedComparable,
+    /// At least one SILK/Hybrid sub-frame routes through PLC/DTX recovery.
+    RecoveryOrDtxOnly,
+    /// Packet structure is not usable for PCM comparison; decode result
+    /// symmetry and sample-count parity are the only meaningful checks.
+    ErrorAgreementOnly,
+}
 
 /// Sum-of-squares energy of a reference signal.
 pub fn signal_energy(samples: &[i16]) -> f64 {
@@ -45,6 +61,103 @@ pub fn snr_oracle_applicable(reference: &[i16]) -> bool {
 /// the `silk_decode_recovery_divergence_loud` finding (2026-05-01).
 pub fn snr_oracle_applicable_for_packet(reference: &[i16], packet_well_formed: bool) -> bool {
     packet_well_formed && snr_oracle_applicable(reference)
+}
+
+/// Whether the SNR oracle is meaningful for this reference and decode class.
+pub fn snr_oracle_applicable_for_decode_class(reference: &[i16], class: DecodeOracleClass) -> bool {
+    class == DecodeOracleClass::SilkHybridCodedComparable && snr_oracle_applicable(reference)
+}
+
+/// Classify a single Opus packet for attacker-controlled decode comparison.
+pub fn classify_decode_packet(packet: &[u8]) -> DecodeOracleClass {
+    classify_single_packet(packet, false).0
+}
+
+/// Classify a multistream packet by parsing each sub-packet.
+pub fn classify_multistream_decode_packet(packet: &[u8], streams: i32) -> DecodeOracleClass {
+    if packet.is_empty() || streams <= 0 {
+        return DecodeOracleClass::ErrorAgreementOnly;
+    }
+
+    let mut offset = 0usize;
+    let mut saw_silk_or_hybrid = false;
+    for stream_idx in 0..streams as usize {
+        if offset >= packet.len() {
+            return DecodeOracleClass::ErrorAgreementOnly;
+        }
+
+        let self_delimited = stream_idx + 1 != streams as usize;
+        let (class, packet_offset) = classify_single_packet(&packet[offset..], self_delimited);
+        match class {
+            DecodeOracleClass::RecoveryOrDtxOnly => return class,
+            DecodeOracleClass::ErrorAgreementOnly => return class,
+            DecodeOracleClass::SilkHybridCodedComparable => saw_silk_or_hybrid = true,
+            DecodeOracleClass::CeltCodedComparable => {}
+        }
+
+        let Some(packet_offset) = packet_offset else {
+            return DecodeOracleClass::ErrorAgreementOnly;
+        };
+        if packet_offset == 0 || offset + packet_offset > packet.len() {
+            return DecodeOracleClass::ErrorAgreementOnly;
+        }
+        offset += packet_offset;
+    }
+
+    if offset != packet.len() {
+        return DecodeOracleClass::ErrorAgreementOnly;
+    }
+    if saw_silk_or_hybrid {
+        DecodeOracleClass::SilkHybridCodedComparable
+    } else {
+        DecodeOracleClass::CeltCodedComparable
+    }
+}
+
+fn classify_single_packet(
+    packet: &[u8],
+    self_delimited: bool,
+) -> (DecodeOracleClass, Option<usize>) {
+    if packet.is_empty() {
+        return (DecodeOracleClass::ErrorAgreementOnly, None);
+    }
+
+    let mut toc = 0u8;
+    let mut sizes = [0i16; MAX_FRAMES];
+    let mut payload_offset = 0i32;
+    let mut packet_offset = 0i32;
+    let count = opus_packet_parse_impl(
+        packet,
+        packet.len() as i32,
+        self_delimited,
+        &mut toc,
+        &mut sizes,
+        &mut payload_offset,
+        Some(&mut packet_offset),
+    );
+    if count <= 0 || packet_offset <= 0 {
+        return (DecodeOracleClass::ErrorAgreementOnly, None);
+    }
+
+    if toc & 0x80 != 0 {
+        return (
+            DecodeOracleClass::CeltCodedComparable,
+            Some(packet_offset as usize),
+        );
+    }
+
+    let frame_sizes = &sizes[..count as usize];
+    if frame_sizes.iter().any(|&size| size <= 1) {
+        (
+            DecodeOracleClass::RecoveryOrDtxOnly,
+            Some(packet_offset as usize),
+        )
+    } else {
+        (
+            DecodeOracleClass::SilkHybridCodedComparable,
+            Some(packet_offset as usize),
+        )
+    }
 }
 
 /// Compute SNR (signal-to-noise ratio) in decibels of `test` against

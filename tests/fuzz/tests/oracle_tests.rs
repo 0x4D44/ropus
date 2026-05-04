@@ -68,9 +68,7 @@ fn snr_oracle_skipped_for_silence_or_near_silence() {
         "expected oracle to skip pure silence"
     );
     // [1, -1, 1, -1, ...] over 1000 samples: energy = 1000, well below 1e6.
-    let near_silence: Vec<i16> = (0..1000)
-        .map(|i| if i & 1 == 0 { 1 } else { -1 })
-        .collect();
+    let near_silence: Vec<i16> = (0..1000).map(|i| if i & 1 == 0 { 1 } else { -1 }).collect();
     assert!(
         !snr_oracle_applicable(&near_silence),
         "expected oracle to skip ±1 LSB toggle, energy={}",
@@ -84,7 +82,9 @@ fn snr_oracle_for_packet_skips_when_not_well_formed() {
     // Mirrors the silk_decode_recovery_divergence_loud finding (2026-05-01):
     // both decoders enter recovery on a malformed packet, their PCM diverges
     // wildly, and asserting SNR would produce a false positive.
-    let loud: Vec<i16> = (0..960).map(|i| ((i * 31) as i16).wrapping_add(20_000)).collect();
+    let loud: Vec<i16> = (0..960)
+        .map(|i| ((i * 31) as i16).wrapping_add(20_000))
+        .collect();
     assert!(
         snr_oracle_applicable(&loud),
         "preflight: loud signal must pass the energy precheck"
@@ -97,7 +97,9 @@ fn snr_oracle_for_packet_skips_when_not_well_formed() {
 
 #[test]
 fn snr_oracle_for_packet_passes_when_both_gates_clear() {
-    let loud: Vec<i16> = (0..960).map(|i| ((i * 31) as i16).wrapping_add(20_000)).collect();
+    let loud: Vec<i16> = (0..960)
+        .map(|i| ((i * 31) as i16).wrapping_add(20_000))
+        .collect();
     assert!(snr_oracle_applicable_for_packet(&loud, true));
 }
 
@@ -105,6 +107,42 @@ fn snr_oracle_for_packet_passes_when_both_gates_clear() {
 fn snr_oracle_for_packet_skips_silence_even_if_well_formed() {
     let zeros = vec![0i16; 1000];
     assert!(!snr_oracle_applicable_for_packet(&zeros, true));
+}
+
+#[test]
+fn standalone_recovery_fixture_classifies_as_recovery_or_dtx() {
+    let data = include_bytes!("../known_failures/silk_decode_recovery_divergence_loud/crash.bin");
+    let packet = &data[2..];
+    assert_eq!(
+        classify_decode_packet(packet),
+        DecodeOracleClass::RecoveryOrDtxOnly
+    );
+
+    let loud: Vec<i16> = (0..960)
+        .map(|i| ((i * 31) as i16).wrapping_add(20_000))
+        .collect();
+    assert!(snr_oracle_applicable(&loud));
+    assert!(!snr_oracle_applicable_for_decode_class(
+        &loud,
+        DecodeOracleClass::RecoveryOrDtxOnly
+    ));
+}
+
+#[test]
+fn silk_hybrid_coded_packet_classifies_as_snr_comparable() {
+    let packet = [0x62, 0x02, 0xaa, 0xbb, 0xcc, 0xdd];
+    assert_eq!(
+        classify_decode_packet(&packet),
+        DecodeOracleClass::SilkHybridCodedComparable
+    );
+
+    let loud: Vec<i16> = (0..960)
+        .map(|i| ((i * 31) as i16).wrapping_add(20_000))
+        .collect();
+    assert!(snr_oracle_applicable_for_decode_class(
+        &loud,
+        DecodeOracleClass::SilkHybridCodedComparable
+    ));
 }
 
 #[test]

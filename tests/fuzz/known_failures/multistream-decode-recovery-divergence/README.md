@@ -75,3 +75,16 @@ SILK/Hybrid rather than CELT-only, and only recovery PCM diverges below the
 50 dB SNR floor. These repros stay in this directory as markers until the
 gating SILK recovery class is fixed and the multistream SILK/Hybrid SNR oracle
 can be re-armed.
+
+## 2026-05-04 resolution
+
+The SILK/Hybrid SNR oracle has been re-armed for attacker-controlled
+multistream decode when every parsed sub-packet is coded-comparable. The
+classifier walks each multistream sub-packet with the same self-delimited
+framing convention used by the decoder. If any SILK/Hybrid sub-frame has size
+`<= 1`, the packet is treated as recovery/DTX and only sample-count parity is
+asserted.
+
+All four fixtures in this directory classify as recovery/DTX because they are
+family-0 mono decode inputs whose payloads contain a code-2 final sub-frame of
+0 bytes. They remain tracked as regression markers for the classifier.

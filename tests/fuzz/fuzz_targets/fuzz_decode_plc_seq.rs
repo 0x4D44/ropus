@@ -59,8 +59,7 @@ fn init_panic_capture() {
                     let dir = std::env::var("FUZZ_PANIC_CAPTURE_DIR")
                         .unwrap_or_else(|_| "fuzz_crashes".to_string());
                     let _ = std::fs::create_dir_all(&dir);
-                    let path = std::path::Path::new(&dir)
-                        .join(format!("crash_{:016x}.bin", hash));
+                    let path = std::path::Path::new(&dir).join(format!("crash_{:016x}.bin", hash));
                     let _ = std::fs::write(&path, bytes.as_slice());
                 }
             });
@@ -254,7 +253,10 @@ fuzz_target!(|input: PlcSeqInput| {
         c_results.len()
     );
 
-    for (i, ((r, c), &drop)) in rust_per_frame.iter().zip(c_results.iter()).zip(dropped.iter())
+    for (i, ((r, c), &drop)) in rust_per_frame
+        .iter()
+        .zip(c_results.iter())
+        .zip(dropped.iter())
         .enumerate()
     {
         match (r, c) {

@@ -25,15 +25,41 @@ pub const OPUS_APPLICATION_AUDIO: c_int = 2049;
 pub const OPUS_APPLICATION_RESTRICTED_LOWDELAY: c_int = 2051;
 
 // CTL request codes
+pub const OPUS_SET_APPLICATION_REQUEST: c_int = 4000;
+pub const OPUS_GET_APPLICATION_REQUEST: c_int = 4001;
 pub const OPUS_SET_BITRATE_REQUEST: c_int = 4002;
+pub const OPUS_GET_BITRATE_REQUEST: c_int = 4003;
+pub const OPUS_SET_MAX_BANDWIDTH_REQUEST: c_int = 4004;
+pub const OPUS_GET_MAX_BANDWIDTH_REQUEST: c_int = 4005;
 pub const OPUS_SET_VBR_REQUEST: c_int = 4006;
+pub const OPUS_GET_VBR_REQUEST: c_int = 4007;
 pub const OPUS_SET_BANDWIDTH_REQUEST: c_int = 4008;
+pub const OPUS_GET_BANDWIDTH_REQUEST: c_int = 4009;
 pub const OPUS_SET_COMPLEXITY_REQUEST: c_int = 4010;
+pub const OPUS_GET_COMPLEXITY_REQUEST: c_int = 4011;
 pub const OPUS_SET_INBAND_FEC_REQUEST: c_int = 4012;
+pub const OPUS_GET_INBAND_FEC_REQUEST: c_int = 4013;
 pub const OPUS_SET_PACKET_LOSS_PERC_REQUEST: c_int = 4014;
+pub const OPUS_GET_PACKET_LOSS_PERC_REQUEST: c_int = 4015;
 pub const OPUS_SET_DTX_REQUEST: c_int = 4016;
+pub const OPUS_GET_DTX_REQUEST: c_int = 4017;
 pub const OPUS_SET_VBR_CONSTRAINT_REQUEST: c_int = 4020;
+pub const OPUS_GET_VBR_CONSTRAINT_REQUEST: c_int = 4021;
 pub const OPUS_SET_FORCE_CHANNELS_REQUEST: c_int = 4022;
+pub const OPUS_GET_FORCE_CHANNELS_REQUEST: c_int = 4023;
+pub const OPUS_SET_SIGNAL_REQUEST: c_int = 4024;
+pub const OPUS_GET_SIGNAL_REQUEST: c_int = 4025;
+pub const OPUS_GET_LOOKAHEAD_REQUEST: c_int = 4027;
+pub const OPUS_RESET_STATE: c_int = 4028;
+pub const OPUS_SET_LSB_DEPTH_REQUEST: c_int = 4036;
+pub const OPUS_GET_LSB_DEPTH_REQUEST: c_int = 4037;
+pub const OPUS_SET_EXPERT_FRAME_DURATION_REQUEST: c_int = 4040;
+pub const OPUS_GET_EXPERT_FRAME_DURATION_REQUEST: c_int = 4041;
+pub const OPUS_SET_PREDICTION_DISABLED_REQUEST: c_int = 4042;
+pub const OPUS_GET_PREDICTION_DISABLED_REQUEST: c_int = 4043;
+pub const OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST: c_int = 4046;
+pub const OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST: c_int = 4047;
+pub const OPUS_GET_IN_DTX_REQUEST: c_int = 4049;
 
 // Getter CTL request codes
 pub const OPUS_GET_FINAL_RANGE_REQUEST: c_int = 4031;
@@ -538,14 +564,7 @@ pub fn c_decode_seq_with_drops(
         for (pkt, &drop) in packets.iter().zip(dropped.iter()) {
             let mut pcm = vec![0i16; max_pcm];
             let ret = if drop {
-                opus_decode(
-                    dec,
-                    std::ptr::null(),
-                    0,
-                    pcm.as_mut_ptr(),
-                    frame_size,
-                    0,
-                )
+                opus_decode(dec, std::ptr::null(), 0, pcm.as_mut_ptr(), frame_size, 0)
             } else {
                 opus_decode(
                     dec,
@@ -630,11 +649,7 @@ pub struct CRepackOutcome {
 /// Cat each packet via the C `OpusRepacketizer`, then call `out()` and
 /// `out_range(begin, end)` on the accumulated state. Returns all C-side
 /// outputs so the Rust fuzz target can compare step-by-step.
-pub fn c_repack_cat_then_out_range(
-    packets: &[&[u8]],
-    begin: i32,
-    end: i32,
-) -> CRepackOutcome {
+pub fn c_repack_cat_then_out_range(packets: &[&[u8]], begin: i32, end: i32) -> CRepackOutcome {
     let total_len: usize = packets.iter().map(|p| p.len()).sum();
     let buf_cap = total_len + 1024;
 

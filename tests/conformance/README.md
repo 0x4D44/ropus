@@ -32,7 +32,7 @@ and will produce spurious failures and (worse) silently wrong passes.
 
 All 7 binaries pass with 0 failures under `cargo test -p conformance -- --test-threads=1`.
 
-## IETF vectors — fetch once
+## IETF vectors — provisioned gate, manual direct run
 
 ```
 tools/fetch_ietf_vectors.sh      # Linux/macOS/Git Bash
@@ -44,8 +44,16 @@ verifies its SHA-256, and extracts the 12 vectors (~71 MB) into
 `tests/vectors/ietf/` (gitignored). If the SHA doesn't match, the script
 aborts without overwriting anything.
 
+`full-test` invokes this provisioning path before it treats conformance as a
+gate. If vectors are missing and cannot be provisioned, `full-test` keeps the
+non-IETF Stage 2 signal where possible but reports a FAIL-level IETF
+provisioning failure; it no longer produces a green gate by silently skipping
+the RFC vectors.
+
 If the directory is missing, `cargo test -p conformance --test
 ietf_vectors` panics with a message telling you to run the fetch script.
+Direct conformance runs stay local-only and do not perform network I/O inside
+libtest.
 
 ## Notes on the build
 

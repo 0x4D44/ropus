@@ -1,8 +1,6 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use ropus::opus::decoder::{
-    opus_packet_get_nb_frames, opus_packet_get_nb_samples, OpusDecoder,
-};
+use ropus::opus::decoder::{opus_packet_get_nb_frames, opus_packet_get_nb_samples, OpusDecoder};
 use ropus::opus::encoder::{
     OpusEncoder, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
     OPUS_APPLICATION_VOIP,
@@ -47,11 +45,9 @@ fn init_panic_capture() {
                             bytes.len(),
                             path.display()
                         ),
-                        Err(e) => eprintln!(
-                            "[PANIC CAPTURE] Failed to write {}: {}",
-                            path.display(),
-                            e
-                        ),
+                        Err(e) => {
+                            eprintln!("[PANIC CAPTURE] Failed to write {}: {}", path.display(), e)
+                        }
                     }
                 }
             });
@@ -78,12 +74,7 @@ const APPLICATIONS: [i32; 3] = [
 // `wrk_docs/2026.05.02 - HLD - float-pcm-ingest-fix.md`. The empty
 // stub is kept so future divergence classes have an obvious place to
 // register without churning the call site.
-fn is_known_class(
-    _sample_rate: i32,
-    _application: i32,
-    _use_float_pcm: bool,
-    _vbr: bool,
-) -> bool {
+fn is_known_class(_sample_rate: i32, _application: i32, _use_float_pcm: bool, _vbr: bool) -> bool {
     false
 }
 
@@ -137,7 +128,11 @@ fuzz_target!(|data: &[u8]| {
     let vbr = (data[6] & 0b0001) != 0;
     let vbr_constraint = (data[6] & 0b0010) != 0;
     let inband_fec_raw = ((data[6] & 0b1100) >> 2) as i32;
-    let inband_fec = if inband_fec_raw == 3 { 0 } else { inband_fec_raw };
+    let inband_fec = if inband_fec_raw == 3 {
+        0
+    } else {
+        inband_fec_raw
+    };
     let dtx = (data[7] & 0b0001) != 0;
     let loss_perc = (((data[7] & 0b1111_1110) >> 1) as i32) % 101;
     let pcm_bytes = &data[8..];
@@ -188,18 +183,14 @@ fuzz_target!(|data: &[u8]| {
     if use_float_pcm {
         let pcm: Vec<f32> = pcm_bytes[..bytes_needed]
             .chunks_exact(4)
-            .map(|c| {
-                let f = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
-                // NaN/Inf produces differential mismatch — see wrk_journals/2026.05.01 - JRN - fuzz-coverage-expansion-impl.md
-                if f.is_finite() { f } else { 0.0 }
-            })
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
 
-        let rust_enc_len =
-            match rust_enc.encode_float(&pcm, frame_size, &mut rust_compressed, 4000) {
-                Ok(l) => l as usize,
-                Err(_) => return,
-            };
+        let rust_enc_len = match rust_enc.encode_float(&pcm, frame_size, &mut rust_compressed, 4000)
+        {
+            Ok(l) => l as usize,
+            Err(_) => return,
+        };
 
         let mut rust_decoded = vec![0f32; samples_needed];
         let rust_dec_ret = rust_dec.decode_float(
@@ -262,7 +253,9 @@ fuzz_target!(|data: &[u8]| {
                     // is bounded by the SNR oracle (HLD V2 gap 6).
                     let celt_only = !packet.is_empty() && (packet[0] & 0x80) != 0;
                     if celt_only {
-                        for (i, (r, c)) in rust_decoded[..n].iter().zip(c_decoded.iter()).enumerate() {
+                        for (i, (r, c)) in
+                            rust_decoded[..n].iter().zip(c_decoded.iter()).enumerate()
+                        {
                             assert_eq!(
                                 r.to_bits(),
                                 c.to_bits(),
@@ -274,10 +267,10 @@ fuzz_target!(|data: &[u8]| {
                         let to_i16 = |x: f32| -> i16 {
                             (x * 32768.0).round().clamp(-32768.0, 32767.0) as i16
                         };
-                        let rust_i16: Vec<i16> = rust_decoded[..n].iter().map(|&x| to_i16(x)).collect();
+                        let rust_i16: Vec<i16> =
+                            rust_decoded[..n].iter().map(|&x| to_i16(x)).collect();
                         let c_i16: Vec<i16> = c_decoded.iter().map(|&x| to_i16(x)).collect();
-                        let well_formed =
-                            opus_packet_get_nb_samples(packet, sample_rate).is_ok();
+                        let well_formed = opus_packet_get_nb_samples(packet, sample_rate).is_ok();
                         if oracle::snr_oracle_applicable_for_packet(&c_i16, well_formed) {
                             let snr = oracle::snr_db(&c_i16, &rust_i16);
                             assert!(
@@ -326,12 +319,11 @@ fuzz_target!(|data: &[u8]| {
         );
 
         // === C reference round-trip ===
-        let c_compressed = match c_reference::c_encode(
-            &pcm, frame_size, sample_rate, channels, &cfg,
-        ) {
-            Ok(c) => c,
-            Err(_) => return, // C encode failed — skip (Rust encode succeeded above)
-        };
+        let c_compressed =
+            match c_reference::c_encode(&pcm, frame_size, sample_rate, channels, &cfg) {
+                Ok(c) => c,
+                Err(_) => return, // C encode failed — skip (Rust encode succeeded above)
+            };
 
         let c_decoded = match c_reference::c_decode(&c_compressed, sample_rate, channels) {
             Ok(d) => d,
@@ -384,8 +376,7 @@ fuzz_target!(|data: &[u8]| {
                         "Decoded PCM mismatch at sr={sample_rate}, ch={channels}"
                     );
                 } else {
-                    let well_formed =
-                        opus_packet_get_nb_samples(packet, sample_rate).is_ok();
+                    let well_formed = opus_packet_get_nb_samples(packet, sample_rate).is_ok();
                     if oracle::snr_oracle_applicable_for_packet(&c_decoded[..], well_formed) {
                         let snr = oracle::snr_db(&c_decoded[..], rust_slice);
                         assert!(

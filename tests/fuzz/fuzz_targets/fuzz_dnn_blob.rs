@@ -37,11 +37,9 @@ fn init_panic_capture() {
                             bytes.len(),
                             path.display()
                         ),
-                        Err(e) => eprintln!(
-                            "[PANIC CAPTURE] Failed to write {}: {}",
-                            path.display(),
-                            e
-                        ),
+                        Err(e) => {
+                            eprintln!("[PANIC CAPTURE] Failed to write {}: {}", path.display(), e)
+                        }
                     }
                 }
             });

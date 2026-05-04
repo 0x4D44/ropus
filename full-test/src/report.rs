@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::ambisonics::AmbisonicsResult;
 use crate::bench::BenchResult;
+use crate::ietf_vectors::IetfVectorProvision;
 use crate::quality::{Check, Outcome as QualityOutcome};
 use crate::setup::SetupInfo;
 use crate::tests::Outcome as TestsOutcome;
@@ -42,6 +43,7 @@ fn setup_to_json(s: &SetupInfo) -> Value {
         "branch": s.branch,
         "version": s.version,
         "ietf_vectors_present": s.ietf_vectors_present,
+        "ietf_vectors": ietf_vectors_to_json(&s.ietf_vectors),
         "flags": {
             "quick": s.options_snapshot.quick,
             "skip_quality": s.options_snapshot.skip_quality,
@@ -49,6 +51,17 @@ fn setup_to_json(s: &SetupInfo) -> Value {
             "skip_benchmarks": s.options_snapshot.skip_benchmarks,
             "skip_ambisonics": s.options_snapshot.skip_ambisonics,
         },
+    })
+}
+
+fn ietf_vectors_to_json(v: &IetfVectorProvision) -> Value {
+    json!({
+        "status": v.status_label(),
+        "available": v.available(),
+        "attempted_fetch": v.attempted_fetch,
+        "script": v.script.as_ref().map(|p| p.to_string_lossy().replace('\\', "/")),
+        "exit_code": v.exit_code,
+        "reason": v.reason,
     })
 }
 
@@ -119,6 +132,7 @@ mod tests {
     use crate::bench::{BenchResult, VectorBench};
     use crate::cargo_parse::{BinaryResult, Outcome as OutcomeKind, TestOutcome, TestsResult};
     use crate::cli::Options;
+    use crate::ietf_vectors::IetfVectorProvision;
     use crate::llvm_cov_parse::{CoverageMetrics, CoverageResult};
     use crate::tests::Outcome as TestsStageOutcome;
 
@@ -127,6 +141,7 @@ mod tests {
             commit: "dd3fb17".to_string(),
             branch: "main".to_string(),
             version: "0.9.0".to_string(),
+            ietf_vectors: IetfVectorProvision::present(),
             ietf_vectors_present: true,
             options_snapshot: Options::default(),
         }
@@ -342,6 +357,9 @@ mod tests {
         assert_eq!(v["setup"]["branch"], "main");
         assert_eq!(v["setup"]["version"], "0.9.0");
         assert_eq!(v["setup"]["ietf_vectors_present"], true);
+        assert_eq!(v["setup"]["ietf_vectors"]["status"], "present");
+        assert_eq!(v["setup"]["ietf_vectors"]["available"], true);
+        assert_eq!(v["setup"]["ietf_vectors"]["attempted_fetch"], false);
         assert_eq!(v["setup"]["flags"]["quick"], false);
 
         let checks = v["stages"]["quality"]["checks"].as_array().unwrap();

@@ -440,8 +440,8 @@ pub fn float2int(x: f32) -> i32 {
 #[inline(always)]
 pub fn float2int16(x: f32) -> i16 {
     let x = x * CELT_SIG_SCALE;
-    let x = if x > 32767.0 { 32767.0 } else { x };
-    let x = if x < -32768.0 { -32768.0 } else { x };
+    let x = if x > -32768.0 { x } else { -32768.0 };
+    let x = if x < 32767.0 { x } else { 32767.0 };
     float2int(x) as i16
 }
 
@@ -644,5 +644,10 @@ mod tests {
         assert_eq!(float2int16(0.5), 16384);
         assert_eq!(float2int16(1.0), 32767);
         assert_eq!(float2int16(-1.0), -32768);
+        assert_eq!(float2int16(f32::INFINITY), 32767);
+        assert_eq!(float2int16(f32::NEG_INFINITY), -32768);
+        assert_eq!(float2int16(f32::from_bits(0x7fc0_0000)), -32768);
+        assert_eq!(float2int16(f32::from_bits(0xfffa_fffa)), -32768);
+        assert_eq!(float2int16(f32::from_bits(0xffae_ffae)), -32768);
     }
 }

@@ -47,11 +47,9 @@ fn init_panic_capture() {
                             bytes.len(),
                             path.display()
                         ),
-                        Err(e) => eprintln!(
-                            "[PANIC CAPTURE] Failed to write {}: {}",
-                            path.display(),
-                            e
-                        ),
+                        Err(e) => {
+                            eprintln!("[PANIC CAPTURE] Failed to write {}: {}", path.display(), e)
+                        }
                     }
                 }
             });
@@ -388,7 +386,12 @@ fn run_decode(input: &MSInput, sample_rate: i32, channels: i32, mapping_family: 
     // Derive mapping from `new_surround` so Rust + C share a single source of
     // truth. Fail-fast on validator rejection (mapping family + channel
     // combinations that aren't supported).
-    let probe = match OpusMSEncoder::new_surround(sample_rate, channels, mapping_family, OPUS_APPLICATION_AUDIO) {
+    let probe = match OpusMSEncoder::new_surround(
+        sample_rate,
+        channels,
+        mapping_family,
+        OPUS_APPLICATION_AUDIO,
+    ) {
         Ok(t) => t,
         Err(_) => return,
     };
@@ -397,14 +400,21 @@ fn run_decode(input: &MSInput, sample_rate: i32, channels: i32, mapping_family: 
         return;
     }
 
-    let mut rust_dec = match OpusMSDecoder::new(sample_rate, channels, streams, coupled_streams, &mapping) {
-        Ok(d) => d,
-        Err(_) => return,
-    };
+    let mut rust_dec =
+        match OpusMSDecoder::new(sample_rate, channels, streams, coupled_streams, &mapping) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
 
     let frame_cap = 5760usize;
     let mut rust_pcm = vec![0i16; frame_cap * channels as usize];
-    let rust_ret = rust_dec.decode(Some(&input.payload), input.payload.len() as i32, &mut rust_pcm, frame_cap as i32, false);
+    let rust_ret = rust_dec.decode(
+        Some(&input.payload),
+        input.payload.len() as i32,
+        &mut rust_pcm,
+        frame_cap as i32,
+        false,
+    );
     let c_ret = c_reference::c_ms_decode(
         &input.payload,
         sample_rate,
@@ -415,7 +425,7 @@ fn run_decode(input: &MSInput, sample_rate: i32, channels: i32, mapping_family: 
         frame_cap as i32,
     );
 
-    let celt_only = is_celt_only_packet(&input.payload);
+    let decode_class = oracle::classify_multistream_decode_packet(&input.payload, streams);
 
     match (&rust_ret, &c_ret) {
         (Ok(rust_samples), Ok(c_pcm)) => {
@@ -427,32 +437,31 @@ fn run_decode(input: &MSInput, sample_rate: i32, channels: i32, mapping_family: 
                 "MS decode sample count mismatch: Rust={rust_samples}, C={}, ch={channels}",
                 c_pcm.len() / channels as usize
             );
-            // SILK/Hybrid sub-packets have known numerical drift; assert
-            // byte-exact PCM for CELT-only and bound SILK/Hybrid by the SNR
-            // oracle (HLD V2 gap 6). Sample count parity is checked above.
-            if celt_only {
-                assert_eq!(
-                    &rust_pcm[..total],
-                    &c_pcm[..],
-                    "MS decode PCM mismatch: sr={sample_rate}, ch={channels}, family={mapping_family}, \
-                     packet_len={}",
-                    input.payload.len()
-                );
+            match decode_class {
+                oracle::DecodeOracleClass::CeltCodedComparable => {
+                    assert_eq!(
+                        &rust_pcm[..total],
+                        &c_pcm[..],
+                        "MS decode PCM mismatch: sr={sample_rate}, ch={channels}, family={mapping_family}, \
+                         packet_len={}",
+                        input.payload.len()
+                    );
+                }
+                oracle::DecodeOracleClass::SilkHybridCodedComparable => {
+                    if oracle::snr_oracle_applicable_for_decode_class(&c_pcm[..], decode_class) {
+                        let snr = oracle::snr_db(&c_pcm[..], &rust_pcm[..total]);
+                        assert!(
+                            snr >= oracle::SILK_DECODE_MIN_SNR_DB,
+                            "MS decode SILK/Hybrid SNR {snr:.2} dB < {:.0} dB \
+                             (sr={sample_rate}, ch={channels}, family={mapping_family}, packet_len={})",
+                            oracle::SILK_DECODE_MIN_SNR_DB,
+                            input.payload.len()
+                        );
+                    }
+                }
+                oracle::DecodeOracleClass::RecoveryOrDtxOnly
+                | oracle::DecodeOracleClass::ErrorAgreementOnly => {}
             }
-            // SILK/Hybrid PCM oracle deliberately omitted in the multistream
-            // decode path. Stream D's SNR floor (50 dB) trips on the same
-            // recovery-divergence class that affects standalone fuzz_decode
-            // (silk_decode_recovery_divergence_loud, 2026-05-01) — but for
-            // multistream there is no clean structural-validity gate when
-            // mapping_family > 0, and the family=0 gate via
-            // opus_packet_get_nb_samples doesn't filter 0-byte DTX-style
-            // sub-frames. Sample-count parity (asserted above) is the only
-            // oracle here until the recovery-divergence root cause is fixed
-            // or a per-sub-packet structural gate is implemented.
-            // else: reference is silence or near-silence; both
-            // implementations' recovery PCM is unconstrained.
-            // Sample-count match (already asserted earlier) is the
-            // only oracle.
         }
         (Err(_), Err(_)) => {}
         // Asymmetric decode errors are no longer tolerated. The old family=1
@@ -587,10 +596,11 @@ fn run_roundtrip(
     rust_packet.truncate(rust_enc_len);
 
     // ---- Decode the (matched) packet on both sides. ----
-    let mut rust_dec = match OpusMSDecoder::new(sample_rate, channels, streams, coupled_streams, &mapping) {
-        Ok(d) => d,
-        Err(_) => return,
-    };
+    let mut rust_dec =
+        match OpusMSDecoder::new(sample_rate, channels, streams, coupled_streams, &mapping) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
     let frame_cap = 5760usize;
     let mut rust_dec_pcm = vec![0i16; frame_cap * channels as usize];
     let rust_dec_ret = rust_dec.decode(

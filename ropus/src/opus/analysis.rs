@@ -1935,13 +1935,9 @@ mod tests {
         const SIG_CLAMP_MIN: f32 = -268_435_456.0;
         #[inline(always)]
         fn float2sig(x: f32) -> i32 {
-            let mut y = x * FLOAT2SIG_MULT;
-            if y > SIG_CLAMP_MAX {
-                y = SIG_CLAMP_MAX;
-            }
-            if y < SIG_CLAMP_MIN {
-                y = SIG_CLAMP_MIN;
-            }
+            let y = x * FLOAT2SIG_MULT;
+            let y = if y > SIG_CLAMP_MIN { y } else { SIG_CLAMP_MIN };
+            let y = if y < SIG_CLAMP_MAX { y } else { SIG_CLAMP_MAX };
             y.round_ties_even() as i32
         }
         for j in 0..subframe as usize {
@@ -1968,26 +1964,210 @@ mod tests {
         out
     }
 
+    fn assert_analysis_info_semantically_eq(
+        index: usize,
+        left: &AnalysisInfo,
+        right: &AnalysisInfo,
+    ) {
+        let AnalysisInfo {
+            valid: left_valid,
+            tonality: left_tonality,
+            tonality_slope: left_tonality_slope,
+            noisiness: left_noisiness,
+            activity: left_activity,
+            music_prob: left_music_prob,
+            music_prob_min: left_music_prob_min,
+            music_prob_max: left_music_prob_max,
+            bandwidth: left_bandwidth,
+            activity_probability: left_activity_probability,
+            max_pitch_ratio: left_max_pitch_ratio,
+            leak_boost: left_leak_boost,
+        } = left;
+        let AnalysisInfo {
+            valid: right_valid,
+            tonality: right_tonality,
+            tonality_slope: right_tonality_slope,
+            noisiness: right_noisiness,
+            activity: right_activity,
+            music_prob: right_music_prob,
+            music_prob_min: right_music_prob_min,
+            music_prob_max: right_music_prob_max,
+            bandwidth: right_bandwidth,
+            activity_probability: right_activity_probability,
+            max_pitch_ratio: right_max_pitch_ratio,
+            leak_boost: right_leak_boost,
+        } = right;
+
+        assert_eq!(left_valid, right_valid, "info[{index}].valid");
+        assert_eq!(left_tonality, right_tonality, "info[{index}].tonality");
+        assert_eq!(
+            left_tonality_slope, right_tonality_slope,
+            "info[{index}].tonality_slope"
+        );
+        assert_eq!(left_noisiness, right_noisiness, "info[{index}].noisiness");
+        assert_eq!(left_activity, right_activity, "info[{index}].activity");
+        assert_eq!(
+            left_music_prob, right_music_prob,
+            "info[{index}].music_prob"
+        );
+        assert_eq!(
+            left_music_prob_min, right_music_prob_min,
+            "info[{index}].music_prob_min"
+        );
+        assert_eq!(
+            left_music_prob_max, right_music_prob_max,
+            "info[{index}].music_prob_max"
+        );
+        assert_eq!(left_bandwidth, right_bandwidth, "info[{index}].bandwidth");
+        assert_eq!(
+            left_activity_probability, right_activity_probability,
+            "info[{index}].activity_probability"
+        );
+        assert_eq!(
+            left_max_pitch_ratio, right_max_pitch_ratio,
+            "info[{index}].max_pitch_ratio"
+        );
+        assert_eq!(
+            left_leak_boost, right_leak_boost,
+            "info[{index}].leak_boost"
+        );
+    }
+
+    fn assert_analysis_state_semantically_eq(
+        left: &TonalityAnalysisState,
+        right: &TonalityAnalysisState,
+    ) {
+        let TonalityAnalysisState {
+            arch: left_arch,
+            application: left_application,
+            fs: left_fs,
+            angle: left_angle,
+            d_angle: left_d_angle,
+            d2_angle: left_d2_angle,
+            inmem: left_inmem,
+            mem_fill: left_mem_fill,
+            prev_band_tonality: left_prev_band_tonality,
+            prev_tonality: left_prev_tonality,
+            prev_bandwidth: left_prev_bandwidth,
+            e_frames: left_e_frames,
+            log_e_frames: left_log_e_frames,
+            low_e: left_low_e,
+            high_e: left_high_e,
+            mean_e: left_mean_e,
+            mem: left_mem,
+            cmean: left_cmean,
+            std: left_std,
+            e_tracker: left_e_tracker,
+            low_e_count: left_low_e_count,
+            e_count: left_e_count,
+            count: left_count,
+            analysis_offset: left_analysis_offset,
+            write_pos: left_write_pos,
+            read_pos: left_read_pos,
+            read_subframe: left_read_subframe,
+            hp_ener_accum: left_hp_ener_accum,
+            initialized: left_initialized,
+            rnn_state: left_rnn_state,
+            downmix_state: left_downmix_state,
+            info: left_info,
+        } = left;
+        let TonalityAnalysisState {
+            arch: right_arch,
+            application: right_application,
+            fs: right_fs,
+            angle: right_angle,
+            d_angle: right_d_angle,
+            d2_angle: right_d2_angle,
+            inmem: right_inmem,
+            mem_fill: right_mem_fill,
+            prev_band_tonality: right_prev_band_tonality,
+            prev_tonality: right_prev_tonality,
+            prev_bandwidth: right_prev_bandwidth,
+            e_frames: right_e_frames,
+            log_e_frames: right_log_e_frames,
+            low_e: right_low_e,
+            high_e: right_high_e,
+            mean_e: right_mean_e,
+            mem: right_mem,
+            cmean: right_cmean,
+            std: right_std,
+            e_tracker: right_e_tracker,
+            low_e_count: right_low_e_count,
+            e_count: right_e_count,
+            count: right_count,
+            analysis_offset: right_analysis_offset,
+            write_pos: right_write_pos,
+            read_pos: right_read_pos,
+            read_subframe: right_read_subframe,
+            hp_ener_accum: right_hp_ener_accum,
+            initialized: right_initialized,
+            rnn_state: right_rnn_state,
+            downmix_state: right_downmix_state,
+            info: right_info,
+        } = right;
+
+        assert_eq!(left_arch, right_arch, "arch");
+        assert_eq!(left_application, right_application, "application");
+        assert_eq!(left_fs, right_fs, "fs");
+        assert_eq!(left_angle, right_angle, "angle");
+        assert_eq!(left_d_angle, right_d_angle, "d_angle");
+        assert_eq!(left_d2_angle, right_d2_angle, "d2_angle");
+        assert_eq!(left_inmem, right_inmem, "inmem");
+        assert_eq!(left_mem_fill, right_mem_fill, "mem_fill");
+        assert_eq!(
+            left_prev_band_tonality, right_prev_band_tonality,
+            "prev_band_tonality"
+        );
+        assert_eq!(left_prev_tonality, right_prev_tonality, "prev_tonality");
+        assert_eq!(left_prev_bandwidth, right_prev_bandwidth, "prev_bandwidth");
+        assert_eq!(left_e_frames, right_e_frames, "e_frames");
+        assert_eq!(left_log_e_frames, right_log_e_frames, "log_e_frames");
+        assert_eq!(left_low_e, right_low_e, "low_e");
+        assert_eq!(left_high_e, right_high_e, "high_e");
+        assert_eq!(left_mean_e, right_mean_e, "mean_e");
+        assert_eq!(left_mem, right_mem, "mem");
+        assert_eq!(left_cmean, right_cmean, "cmean");
+        assert_eq!(left_std, right_std, "std");
+        assert_eq!(left_e_tracker, right_e_tracker, "e_tracker");
+        assert_eq!(left_low_e_count, right_low_e_count, "low_e_count");
+        assert_eq!(left_e_count, right_e_count, "e_count");
+        assert_eq!(left_count, right_count, "count");
+        assert_eq!(
+            left_analysis_offset, right_analysis_offset,
+            "analysis_offset"
+        );
+        assert_eq!(left_write_pos, right_write_pos, "write_pos");
+        assert_eq!(left_read_pos, right_read_pos, "read_pos");
+        assert_eq!(left_read_subframe, right_read_subframe, "read_subframe");
+        assert_eq!(left_hp_ener_accum, right_hp_ener_accum, "hp_ener_accum");
+        assert_eq!(left_initialized, right_initialized, "initialized");
+        assert_eq!(left_rnn_state, right_rnn_state, "rnn_state");
+        assert_eq!(left_downmix_state, right_downmix_state, "downmix_state");
+
+        for (index, (left_info, right_info)) in left_info.iter().zip(right_info).enumerate() {
+            assert_analysis_info_semantically_eq(index, left_info, right_info);
+        }
+    }
+
     #[test]
     fn test_new_boxed_is_equivalent_to_new() {
         let stack = TonalityAnalysisState::new();
         let heap = TonalityAnalysisState::new_boxed();
-        // Bit-for-bit compare — both should be all-zero.
-        let stack_bytes: &[u8] = unsafe {
-            core::slice::from_raw_parts(
-                (&stack as *const TonalityAnalysisState) as *const u8,
-                core::mem::size_of::<TonalityAnalysisState>(),
-            )
-        };
+
+        assert_analysis_state_semantically_eq(&stack, heap.as_ref());
+
+        // `new_boxed()` zeroes the heap allocation in place, including padding.
+        // Do not compare this with `new()`: stack padding has no semantic value.
         let heap_bytes: &[u8] = unsafe {
             core::slice::from_raw_parts(
                 (heap.as_ref() as *const TonalityAnalysisState) as *const u8,
                 core::mem::size_of::<TonalityAnalysisState>(),
             )
         };
-        assert_eq!(stack_bytes, heap_bytes, "new_boxed must byte-match new()");
-        // Sanity: every byte is zero (both constructors promise this).
-        assert!(heap_bytes.iter().all(|&b| b == 0), "state must be zeroed");
+        assert!(
+            heap_bytes.iter().all(|&b| b == 0),
+            "new_boxed allocation bytes must be zeroed"
+        );
     }
 
     #[test]

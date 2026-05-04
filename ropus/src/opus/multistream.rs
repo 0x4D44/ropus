@@ -27,7 +27,8 @@ use super::decoder::{
     OPUS_BANDWIDTH_WIDEBAND,
 };
 use super::encoder::{
-    OPUS_AUTO, OPUS_BITRATE_MAX, OPUS_FRAMESIZE_ARG, OpusEncoder, frame_size_select,
+    EncodeAnalysisInput, OPUS_AUTO, OPUS_BITRATE_MAX, OPUS_FRAMESIZE_ARG, OpusEncoder, downmix_int,
+    frame_size_select,
 };
 use super::repacketizer::OpusRepacketizer;
 
@@ -1078,20 +1079,27 @@ impl OpusMSEncoder {
         let mut tot_size: i32 = 0;
         let mut data_offset: usize = 0;
         let mut tmp_data = [0u8; MS_FRAME_TMP];
+        let analysis_pcm = unsafe {
+            core::slice::from_raw_parts(pcm.as_ptr() as *const u8, std::mem::size_of_val(pcm))
+        };
 
         for s in 0..self.layout.nb_streams as usize {
             let s_i32 = s as i32;
+            let c1: i32;
+            let c2: i32;
 
             // Extract channel(s) for this stream
             if s_i32 < self.layout.nb_coupled_streams {
-                let left = get_left_channel(&self.layout, s_i32, -1) as usize;
-                let right = get_right_channel(&self.layout, s_i32, -1) as usize;
+                let left = get_left_channel(&self.layout, s_i32, -1);
+                let right = get_right_channel(&self.layout, s_i32, -1);
+                let left_idx = left as usize;
+                let right_idx = right as usize;
                 copy_channel_in_short(
                     &mut buf,
                     2,
                     pcm,
                     self.layout.nb_channels as usize,
-                    left,
+                    left_idx,
                     frame_size as usize,
                 );
                 copy_channel_in_short(
@@ -1099,30 +1107,35 @@ impl OpusMSEncoder {
                     2,
                     pcm,
                     self.layout.nb_channels as usize,
-                    right,
+                    right_idx,
                     frame_size as usize,
                 );
                 if self.mapping_type == MappingType::Surround {
                     for i in 0..21 {
-                        band_log_e[i] = band_smr[21 * left + i];
-                        band_log_e[21 + i] = band_smr[21 * right + i];
+                        band_log_e[i] = band_smr[21 * left_idx + i];
+                        band_log_e[21 + i] = band_smr[21 * right_idx + i];
                     }
                 }
+                c1 = left;
+                c2 = right;
             } else {
-                let chan = get_mono_channel(&self.layout, s_i32, -1) as usize;
+                let chan = get_mono_channel(&self.layout, s_i32, -1);
+                let chan_idx = chan as usize;
                 copy_channel_in_short(
                     &mut buf,
                     1,
                     pcm,
                     self.layout.nb_channels as usize,
-                    chan,
+                    chan_idx,
                     frame_size as usize,
                 );
                 if self.mapping_type == MappingType::Surround {
                     for i in 0..21 {
-                        band_log_e[i] = band_smr[21 * chan + i];
+                        band_log_e[i] = band_smr[21 * chan_idx + i];
                     }
                 }
+                c1 = chan;
+                c2 = -1;
             }
 
             // Compute max bytes for this stream
@@ -1146,7 +1159,21 @@ impl OpusMSEncoder {
 
             // Encode this stream
             let enc = &mut self.encoders[s];
-            let len = enc.encode_native(&buf, frame_size, &mut tmp_data, curr_max, lsb_depth)?;
+            let len = enc.encode_native_with_analysis(
+                &buf,
+                frame_size,
+                &mut tmp_data,
+                curr_max,
+                lsb_depth,
+                Some(EncodeAnalysisInput {
+                    pcm: analysis_pcm,
+                    frame_size: analysis_frame_size,
+                    c1,
+                    c2,
+                    channels: self.layout.nb_channels,
+                    downmix: downmix_int,
+                }),
+            )?;
 
             // Repacketize with self-delimiting framing
             let mut rp = OpusRepacketizer::new();

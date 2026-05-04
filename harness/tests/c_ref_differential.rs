@@ -15,7 +15,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use ropus::opus::decoder::OpusDecoder;
-use ropus::opus::encoder::{OPUS_APPLICATION_VOIP, OpusEncoder};
+use ropus::opus::encoder::{OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_VOIP, OpusEncoder};
 use ropus::silk::common::silk_lpc_inverse_pred_gain;
 
 use std::os::raw::c_int;
@@ -89,6 +89,10 @@ unsafe extern "C" {
 const OPUS_SET_BITRATE_REQUEST: c_int = 4002;
 const OPUS_SET_VBR_REQUEST: c_int = 4006;
 const OPUS_SET_COMPLEXITY_REQUEST: c_int = 4010;
+const OPUS_SET_INBAND_FEC_REQUEST: c_int = 4012;
+const OPUS_SET_PACKET_LOSS_PERC_REQUEST: c_int = 4014;
+const OPUS_SET_DTX_REQUEST: c_int = 4016;
+const OPUS_SET_VBR_CONSTRAINT_REQUEST: c_int = 4020;
 
 /// Generate a patterned PCM buffer that is deterministic across runs.
 /// Copied verbatim from the original test helper in ropus/src/opus/decoder.rs.
@@ -1947,7 +1951,9 @@ fn rust_downmix_float(
     const SIG_CLAMP_MIN: f32 = -268_435_456.0;
     #[inline(always)]
     fn float2sig(x: f32) -> i32 {
-        let y = (x * FLOAT2SIG_MULT).clamp(SIG_CLAMP_MIN, SIG_CLAMP_MAX);
+        let y = x * FLOAT2SIG_MULT;
+        let y = if y > SIG_CLAMP_MIN { y } else { SIG_CLAMP_MIN };
+        let y = if y < SIG_CLAMP_MAX { y } else { SIG_CLAMP_MAX };
         // float2int uses round-half-even (matches `lrintf` on Windows).
         y.round_ties_even() as i32
     }
@@ -3618,6 +3624,45 @@ fn assert_float_encode_byte_exact(
         sample_rate.wrapping_add(channels.wrapping_mul(31)),
     );
 
+    assert_float_encode_pcm_byte_exact(
+        label,
+        sample_rate,
+        channels,
+        application,
+        bitrate,
+        complexity,
+        vbr,
+        0,
+        0,
+        0,
+        0,
+        &pcm,
+    );
+}
+
+/// Single float-PCM differential cell with caller-supplied PCM. Used for
+/// pathological float values where the exact bit pattern is the regression.
+fn assert_float_encode_pcm_byte_exact(
+    label: &str,
+    sample_rate: i32,
+    channels: i32,
+    application: i32,
+    bitrate: i32,
+    complexity: i32,
+    vbr: i32,
+    vbr_constraint: i32,
+    inband_fec: i32,
+    dtx: i32,
+    loss_perc: i32,
+    pcm: &[f32],
+) {
+    let frame_size: i32 = sample_rate / 50; // 20 ms
+    assert_eq!(
+        pcm.len(),
+        frame_size as usize * channels as usize,
+        "[{label}] PCM length does not match one 20 ms frame"
+    );
+
     // C side
     let c_out = unsafe {
         let mut error: c_int = 0;
@@ -3628,6 +3673,10 @@ fn assert_float_encode_byte_exact(
         );
         opus_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, bitrate);
         opus_encoder_ctl(enc, OPUS_SET_VBR_REQUEST, vbr);
+        opus_encoder_ctl(enc, OPUS_SET_VBR_CONSTRAINT_REQUEST, vbr_constraint);
+        opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC_REQUEST, inband_fec);
+        opus_encoder_ctl(enc, OPUS_SET_DTX_REQUEST, dtx);
+        opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC_REQUEST, loss_perc);
         opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY_REQUEST, complexity);
         let mut out = vec![0u8; 4000];
         let ret = opus_encode_float(
@@ -3648,12 +3697,16 @@ fn assert_float_encode_byte_exact(
         OpusEncoder::new(sample_rate, channels, application).expect("Rust encoder create failed");
     rust_enc.set_bitrate(bitrate);
     rust_enc.set_vbr(vbr);
+    rust_enc.set_vbr_constraint(vbr_constraint);
+    rust_enc.set_inband_fec(inband_fec);
+    rust_enc.set_dtx(dtx);
+    rust_enc.set_packet_loss_perc(loss_perc);
     rust_enc.set_complexity(complexity);
 
     let mut rust_out = vec![0u8; 4000];
     let rust_cap = rust_out.len() as i32;
     let rust_len = rust_enc
-        .encode_float(&pcm, frame_size, &mut rust_out, rust_cap)
+        .encode_float(pcm, frame_size, &mut rust_out, rust_cap)
         .unwrap_or_else(|e| panic!("[{label}] Rust encode_float failed: {e}"))
         as usize;
 
@@ -3710,4 +3763,60 @@ fn test_float_pcm_single_frame_byte_exact_below_analysis_gate() {
     for &(label, sr, ch, app, br, cx, vbr) in grid {
         assert_float_encode_byte_exact(label, sr, ch, app, br, cx, vbr);
     }
+}
+
+#[test]
+fn test_float_pcm_nan_encode_matches_c_reference() {
+    let sample_rate = 12_000;
+    let channels = 1;
+    let frame_size = sample_rate / 50;
+    let mut pcm = patterned_pcm_f32(frame_size as usize, channels as usize, 49_970);
+
+    pcm[68] = f32::from_bits(0xfffa_fffa);
+    pcm[69] = f32::from_bits(0xfffa_fffa);
+    pcm[114] = f32::from_bits(0xffae_ffae);
+    pcm[115] = f32::from_bits(0xffae_ffae);
+
+    assert_float_encode_pcm_byte_exact(
+        "nan-encode-float",
+        sample_rate,
+        channels,
+        OPUS_APPLICATION_VOIP,
+        49_970,
+        7,
+        1,
+        1,
+        2,
+        1,
+        22,
+        &pcm,
+    );
+}
+
+#[test]
+fn test_float_pcm_nan_encode_matches_c_reference_with_analysis() {
+    let sample_rate = 16_000;
+    let channels = 1;
+    let frame_size = sample_rate / 50;
+    let mut pcm = patterned_pcm_f32(frame_size as usize, channels as usize, 16_010);
+
+    pcm[68] = f32::from_bits(0xfffa_fffa);
+    pcm[69] = f32::from_bits(0xfffa_fffa);
+    pcm[114] = f32::from_bits(0xffae_ffae);
+    pcm[115] = f32::from_bits(0xffae_ffae);
+
+    assert_float_encode_pcm_byte_exact(
+        "nan-encode-float-analysis",
+        sample_rate,
+        channels,
+        OPUS_APPLICATION_AUDIO,
+        32_000,
+        10,
+        1,
+        1,
+        0,
+        0,
+        0,
+        &pcm,
+    );
 }

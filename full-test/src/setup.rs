@@ -2,18 +2,20 @@
 //!
 //! Runs unconditionally before any timed stage. Not surfaced in the HTML
 //! report (Phase 4), but its fields feed into the envelope and Phase 2+
-//! decisions (e.g. the IETF-vectors pre-flight).
+//! decisions (e.g. the IETF-vectors provisioning gate).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::cli::Options;
+use crate::ietf_vectors::{self, IetfVectorProvision};
 
 #[derive(Debug, Clone)]
 pub struct SetupInfo {
     pub commit: String,
     pub branch: String,
     pub version: String,
+    pub ietf_vectors: IetfVectorProvision,
     pub ietf_vectors_present: bool,
     // Mirror the CLI flags so the JSON envelope can round-trip them for
     // supervisor logs. Phase 2+ consumes these directly.
@@ -21,14 +23,21 @@ pub struct SetupInfo {
 }
 
 /// Capture the runtime context: git commit + branch, workspace version, and
-/// the IETF-vectors pre-flight.
+/// the IETF-vectors provisioning status.
 pub fn capture(options: &Options) -> SetupInfo {
+    let ietf_vectors = ietf_vectors::provision(&workspace_root());
+    capture_with_ietf_vectors(options, ietf_vectors)
+}
+
+fn capture_with_ietf_vectors(options: &Options, ietf_vectors: IetfVectorProvision) -> SetupInfo {
     let commit = git_short_sha().unwrap_or_else(|| "unknown".to_string());
+    let ietf_vectors_present = ietf_vectors.available();
     SetupInfo {
         branch: resolve_branch(&commit),
         commit,
         version: workspace_version().unwrap_or_else(|| "unknown".to_string()),
-        ietf_vectors_present: ietf_vectors_present(),
+        ietf_vectors,
+        ietf_vectors_present,
         options_snapshot: options.clone(),
     }
 }
@@ -92,23 +101,6 @@ fn workspace_version() -> Option<String> {
     None
 }
 
-fn ietf_vectors_present() -> bool {
-    // The conformance suite runs `testvector01`..`testvector12` (each in mono
-    // and stereo variants, so 24 tests from 12 `.bit` files). A partial fetch
-    // that delivered only a subset would pass a single-file probe and then
-    // blow up on the missing ones mid-Stage-2. Require all 12 present.
-    // See HLD § Stage 0.
-    let root = workspace_root().join("tests").join("vectors").join("ietf");
-    all_ietf_bitstreams_present(&root)
-}
-
-/// True when every `testvectorNN.bit` (NN=01..=12) exists under `root`.
-/// Factored out for unit testing against a temp dir. Pure — no I/O on `root`
-/// beyond `is_file()` on each candidate.
-fn all_ietf_bitstreams_present(root: &Path) -> bool {
-    (1..=12).all(|n| root.join(format!("testvector{n:02}.bit")).is_file())
-}
-
 fn workspace_root() -> PathBuf {
     // `CARGO_MANIFEST_DIR` points at full-test/; go up one.
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -159,13 +151,12 @@ mod tests {
     fn capture_does_not_panic_and_fields_populate() {
         // We don't assert specific values — the repo's commit/branch/version
         // change under us — only that the capture path returns strings rather
-        // than panicking and that the IETF probe resolves to some boolean.
-        let info = capture(&Options::default());
+        // than panicking. Inject IETF state so this unit test never fetches.
+        let info = capture_with_ietf_vectors(&Options::default(), IetfVectorProvision::present());
         assert!(!info.commit.is_empty());
         assert!(!info.branch.is_empty());
         assert!(!info.version.is_empty());
-        // Boolean: either true or false is fine; force a read.
-        let _: bool = info.ietf_vectors_present;
+        assert!(info.ietf_vectors_present);
     }
 
     #[test]
@@ -198,23 +189,9 @@ mod tests {
     }
 
     #[test]
-    fn ietf_preflight_requires_all_twelve_bitstreams() {
-        // Empty dir → false.
-        let tmp = tempfile::TempDir::new().expect("temp dir");
-        assert!(!all_ietf_bitstreams_present(tmp.path()));
-
-        // Only testvectors 01..06 → still false (partial fetch scenario).
-        for n in 1..=6 {
-            let p = tmp.path().join(format!("testvector{n:02}.bit"));
-            std::fs::write(&p, b"").expect("write stub");
-        }
-        assert!(!all_ietf_bitstreams_present(tmp.path()));
-
-        // Fill in 07..12 → true.
-        for n in 7..=12 {
-            let p = tmp.path().join(format!("testvector{n:02}.bit"));
-            std::fs::write(&p, b"").expect("write stub");
-        }
-        assert!(all_ietf_bitstreams_present(tmp.path()));
+    fn injected_ietf_status_drives_present_flag() {
+        let info = capture_with_ietf_vectors(&Options::default(), IetfVectorProvision::present());
+        assert!(info.ietf_vectors_present);
+        assert!(info.ietf_vectors.available());
     }
 }

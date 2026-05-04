@@ -18,6 +18,7 @@ mod bench;
 mod cargo_parse;
 mod cli;
 mod html;
+mod ietf_vectors;
 mod issues;
 mod llvm_cov_parse;
 mod quality;
@@ -64,7 +65,7 @@ fn main() -> ExitCode {
     // When `--quick` is combined with `--skip-coverage`, stage 2 downgrades
     // to plain `cargo test` — which is already what happens here, since the
     // `run()` call sees `skip_coverage=true`.
-    let tests_outcome = tests::run(options.skip_coverage, setup_info.ietf_vectors_present);
+    let tests_outcome = tests::run(options.skip_coverage, &setup_info.ietf_vectors);
 
     // HLD § Stages: if stage 2 failed to *compile* (not fails a test — fails
     // to compile), stages 3 and 4 are marked "skipped (upstream build
@@ -119,6 +120,7 @@ fn main() -> ExitCode {
         commit_subject: &commit_subject,
         timestamp,
         banner: banner_kind,
+        ietf_vectors: setup_info.ietf_vectors.clone(),
         ietf_vectors_present: setup_info.ietf_vectors_present,
         options: &options,
         quality: &quality_outcome,

@@ -45,11 +45,9 @@ fn init_panic_capture() {
                             bytes.len(),
                             path.display()
                         ),
-                        Err(e) => eprintln!(
-                            "[PANIC CAPTURE] Failed to write {}: {}",
-                            path.display(),
-                            e
-                        ),
+                        Err(e) => {
+                            eprintln!("[PANIC CAPTURE] Failed to write {}: {}", path.display(), e)
+                        }
                     }
                 }
             });
@@ -291,7 +289,8 @@ fuzz_target!(|input: MultiframeInput| {
         );
 
         assert_eq!(
-            rust_pkt, c_pkt,
+            rust_pkt,
+            c_pkt,
             "Frame {i}/{} byte mismatch: \
              sr={sample_rate}, ch={channels}, app={application}, \
              br={}, cx={}, vbr={}, fec={}, dtx={}, loss={}, len={}",
@@ -333,8 +332,7 @@ fuzz_target!(|input: MultiframeInput| {
         match rust_dec.decode(Some(pkt), &mut decoded, frame_size, false) {
             Ok(samples) => {
                 assert_eq!(
-                    samples as usize,
-                    frame_size as usize,
+                    samples as usize, frame_size as usize,
                     "Frame {i}: decoded sample count {samples} != frame_size {frame_size}"
                 );
             }

@@ -41,11 +41,9 @@ fn init_panic_capture() {
                             bytes.len(),
                             path.display()
                         ),
-                        Err(e) => eprintln!(
-                            "[PANIC CAPTURE] Failed to write {}: {}",
-                            path.display(),
-                            e
-                        ),
+                        Err(e) => {
+                            eprintln!("[PANIC CAPTURE] Failed to write {}: {}", path.display(), e)
+                        }
                     }
                 }
             });
@@ -134,8 +132,12 @@ fuzz_target!(|input: RepacketizerSeq| {
     let rust_out_ret = rust_rp.out(&mut rust_out, buf_cap as i32);
 
     let mut rust_out_range = vec![0u8; buf_cap];
-    let rust_out_range_ret =
-        rust_rp.out_range(begin as usize, end as usize, &mut rust_out_range, buf_cap as i32);
+    let rust_out_range_ret = rust_rp.out_range(
+        begin as usize,
+        end as usize,
+        &mut rust_out_range,
+        buf_cap as i32,
+    );
 
     // --- C reference: same sequence. ---
     let c_outcome = c_reference::c_repack_cat_then_out_range(&packet_refs, begin, end);
@@ -156,7 +158,8 @@ fuzz_target!(|input: RepacketizerSeq| {
         let r_ok = *r == c_reference::OPUS_OK;
         let c_ok = *c == c_reference::OPUS_OK;
         assert_eq!(
-            r_ok, c_ok,
+            r_ok,
+            c_ok,
             "cat[{i}] agreement mismatch: Rust={r}, C={c}, packet_len={}",
             packet_refs[i].len()
         );
@@ -164,7 +167,8 @@ fuzz_target!(|input: RepacketizerSeq| {
 
     // Frame-count agreement after all cats.
     assert_eq!(
-        rust_nb_frames, c_outcome.nb_frames,
+        rust_nb_frames,
+        c_outcome.nb_frames,
         "nb_frames mismatch: Rust={rust_nb_frames}, C={}, n_packets={}",
         c_outcome.nb_frames,
         packet_refs.len()

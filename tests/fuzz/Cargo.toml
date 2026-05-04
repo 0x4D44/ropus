@@ -1,6 +1,6 @@
 [package]
 name = "ropus-fuzz"
-version = "0.0.0"
+version = "0.0.1"
 publish = false
 edition = "2021"
 license = "BSD-3-Clause"
@@ -57,6 +57,11 @@ doc = false
 [[bin]]
 name = "fuzz_encode_multiframe"
 path = "fuzz_targets/fuzz_encode_multiframe.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_ctl_sequence"
+path = "fuzz_targets/fuzz_ctl_sequence.rs"
 doc = false
 
 [[bin]]
