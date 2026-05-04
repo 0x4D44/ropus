@@ -1107,12 +1107,10 @@ fn gain_fade(
             pcm[idx] = mult16_16_q15(g, pcm[idx] as i32) as i16;
         }
     }
-    if g2 != Q15ONE {
-        for i in overlap as usize..frame_size as usize {
-            for c in 0..channels as usize {
-                let idx = i * channels as usize + c;
-                pcm[idx] = mult16_16_q15(g2, pcm[idx] as i32) as i16;
-            }
+    for i in overlap as usize..frame_size as usize {
+        for c in 0..channels as usize {
+            let idx = i * channels as usize + c;
+            pcm[idx] = mult16_16_q15(g2, pcm[idx] as i32) as i16;
         }
     }
 }
@@ -6322,14 +6320,14 @@ mod tests {
             48000,
         );
         // In overlap region (0..120), gain fades from g1=0 to g2=Q15ONE.
-        // After overlap (120..150), g2=Q15ONE so no change (g2==Q15ONE branch skips).
+        // After overlap (120..150), C still applies MULT16_RES_Q15(Q15ONE, x).
         assert_eq!(pcm[0], 0);
         assert_eq!(pcm[1], 0);
         assert_eq!(pcm[10], 8);
         assert_eq!(pcm[60], 5102);
         assert_eq!(pcm[119], 9999);
-        assert_eq!(pcm[120], 10000);
-        assert_eq!(pcm[149], 10000);
+        assert_eq!(pcm[120], 9999);
+        assert_eq!(pcm[149], 9999);
 
         // Case 2: stereo, g1=Q15ONE, g2=Q15ONE/2, fs=8000
         // overlap = 120 * 8000 / 48000 = 20. inc = 48000/8000 = 6.
