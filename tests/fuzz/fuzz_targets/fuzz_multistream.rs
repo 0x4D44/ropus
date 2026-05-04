@@ -346,27 +346,20 @@ fn run_encode(
                 "MS mapping mismatch: ch={channels}, family={mapping_family}"
             );
 
-            // Bytes/length differential — skipped on documented
-            // multistream-encode-bytes-divergence class
-            // (sr=8000, ch=1, family=0 — thin wrapper over single-encoder
-            // state-accumulation bug, 4 variants spanning CBR/VBR/cx).
-            let skip_diff = sample_rate == 8000 && channels == 1 && mapping_family == 0;
-            if !skip_diff {
-                let rust_len = *rust_len as usize;
-                assert_eq!(
-                    rust_len,
-                    c_out.packet.len(),
-                    "MS encode length mismatch: Rust={rust_len}, C={}, sr={sample_rate}, \
-                     ch={channels}, family={mapping_family}, br={bitrate}, cx={complexity}, vbr={vbr}",
-                    c_out.packet.len()
-                );
-                assert_eq!(
-                    &rust_out[..rust_len],
-                    &c_out.packet[..],
-                    "MS encode bytes mismatch: sr={sample_rate}, ch={channels}, family={mapping_family}, \
-                     br={bitrate}, cx={complexity}, vbr={vbr}, len={rust_len}"
-                );
-            }
+            let rust_len = *rust_len as usize;
+            assert_eq!(
+                rust_len,
+                c_out.packet.len(),
+                "MS encode length mismatch: Rust={rust_len}, C={}, sr={sample_rate}, \
+                 ch={channels}, family={mapping_family}, br={bitrate}, cx={complexity}, vbr={vbr}",
+                c_out.packet.len()
+            );
+            assert_eq!(
+                &rust_out[..rust_len],
+                &c_out.packet[..],
+                "MS encode bytes mismatch: sr={sample_rate}, ch={channels}, family={mapping_family}, \
+                 br={bitrate}, cx={complexity}, vbr={vbr}, len={rust_len}"
+            );
         }
         (Err(_), Err(_)) => {}
         (Ok(rust_len), Err(c_err)) => {
@@ -561,25 +554,19 @@ fn run_roundtrip(
             );
 
             let rust_len = *rust_len as usize;
-            // Same skip filter as run_encode — multistream-encode-bytes
-            // class fires here on the roundtrip path too. Documented
-            // crash-04-roundtrip-cx4-vbr1 in known_failures/.
-            let skip_diff = sample_rate == 8000 && channels == 1 && mapping_family == 0;
-            if !skip_diff {
-                assert_eq!(
-                    rust_len,
-                    c_out.packet.len(),
-                    "MS roundtrip encode length mismatch: Rust={rust_len}, C={}, sr={sample_rate}, \
-                     ch={channels}, family={mapping_family}, br={bitrate}, cx={complexity}, vbr={vbr}",
-                    c_out.packet.len()
-                );
-                assert_eq!(
-                    &rust_packet[..rust_len],
-                    &c_out.packet[..],
-                    "MS roundtrip encode bytes mismatch: sr={sample_rate}, ch={channels}, family={mapping_family}, \
-                     br={bitrate}, cx={complexity}, vbr={vbr}, len={rust_len}"
-                );
-            }
+            assert_eq!(
+                rust_len,
+                c_out.packet.len(),
+                "MS roundtrip encode length mismatch: Rust={rust_len}, C={}, sr={sample_rate}, \
+                 ch={channels}, family={mapping_family}, br={bitrate}, cx={complexity}, vbr={vbr}",
+                c_out.packet.len()
+            );
+            assert_eq!(
+                &rust_packet[..rust_len],
+                &c_out.packet[..],
+                "MS roundtrip encode bytes mismatch: sr={sample_rate}, ch={channels}, family={mapping_family}, \
+                 br={bitrate}, cx={complexity}, vbr={vbr}, len={rust_len}"
+            );
             rust_len
         }
         (Err(_), Err(_)) => return,
