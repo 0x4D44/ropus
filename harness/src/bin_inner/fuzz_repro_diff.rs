@@ -317,6 +317,17 @@ struct OpusTopState {
     application: i32,
 }
 
+#[derive(Default, Debug, PartialEq, Eq, Clone)]
+struct OpusFilterState {
+    hp_mem: [i32; 4],
+    variable_hp_smth2: i32,
+    mode: i32,
+    stream_channels: i32,
+    bandwidth: i32,
+    delay_hash: i32,
+    delay_len: i32,
+}
+
 fn dump_c_top(enc: *mut bindings::OpusEncoder) -> (SilkModeState, OpusTopState) {
     let mut sm = SilkModeState::default();
     let mut top = OpusTopState::default();
@@ -374,6 +385,174 @@ fn dump_rust_top(enc: &RustOpusEncoder) -> OpusTopState {
         lfe: 0,
         application: enc.application,
     }
+}
+
+fn dump_c_filter(enc: *mut bindings::OpusEncoder) -> OpusFilterState {
+    let mut s = OpusFilterState::default();
+    unsafe {
+        bindings::debug_get_encoder_hp_state(
+            enc,
+            s.hp_mem.as_mut_ptr(),
+            &mut s.variable_hp_smth2,
+            &mut s.mode,
+            &mut s.stream_channels,
+            &mut s.bandwidth,
+        );
+        bindings::debug_get_encoder_delay_hash(enc, &mut s.delay_hash, &mut s.delay_len);
+    }
+    s
+}
+
+fn dump_rust_filter(enc: &RustOpusEncoder) -> OpusFilterState {
+    let (delay_hash, delay_len) = enc.debug_delay_buffer_hash();
+    OpusFilterState {
+        hp_mem: enc.get_hp_mem(),
+        variable_hp_smth2: enc.get_variable_hp_smth2(),
+        mode: enc.get_mode(),
+        stream_channels: enc.get_stream_channels(),
+        bandwidth: enc.get_bandwidth(),
+        delay_hash,
+        delay_len,
+    }
+}
+
+fn diff_filter_state(c: &OpusFilterState, r: &OpusFilterState) -> Vec<String> {
+    let mut hits = Vec::new();
+    for i in 0..4 {
+        if c.hp_mem[i] != r.hp_mem[i] {
+            hits.push(format!("hp_mem[{i}]: C={} R={}", c.hp_mem[i], r.hp_mem[i]));
+        }
+    }
+    macro_rules! cmp {
+        ($name:ident) => {
+            if c.$name != r.$name {
+                hits.push(format!(
+                    "{}: C={} R={}",
+                    stringify!($name),
+                    c.$name,
+                    r.$name
+                ));
+            }
+        };
+    }
+    cmp!(variable_hp_smth2);
+    cmp!(mode);
+    cmp!(stream_channels);
+    cmp!(bandwidth);
+    cmp!(delay_hash);
+    cmp!(delay_len);
+    hits
+}
+
+#[derive(Default, Debug, PartialEq, Eq, Clone)]
+struct SilkResamplerDebug {
+    s_iir_hash: i32,
+    s_fir_i32_hash: i32,
+    s_fir_i16_hash: i32,
+    delay_buf_hash: i32,
+    resampler_function: i32,
+    batch_size: i32,
+    inv_ratio_q16: i32,
+    fir_order: i32,
+    fir_fracs: i32,
+    fs_in_khz: i32,
+    fs_out_khz: i32,
+    input_delay: i32,
+    coefs_nonnull: i32,
+}
+
+fn hash_i32(xs: &[i32]) -> i32 {
+    let mut h = 0i32;
+    for &x in xs {
+        h = h.wrapping_mul(31).wrapping_add(x);
+    }
+    h
+}
+
+fn hash_i16(xs: &[i16]) -> i32 {
+    let mut h = 0i32;
+    for &x in xs {
+        h = h.wrapping_mul(31).wrapping_add(x as i32);
+    }
+    h
+}
+
+fn dump_c_resampler(enc: *mut bindings::OpusEncoder, channel: i32) -> SilkResamplerDebug {
+    let mut s = SilkResamplerDebug::default();
+    unsafe {
+        bindings::debug_get_silk_resampler_state(
+            enc,
+            channel,
+            &mut s.s_iir_hash,
+            &mut s.s_fir_i32_hash,
+            &mut s.s_fir_i16_hash,
+            &mut s.delay_buf_hash,
+            &mut s.resampler_function,
+            &mut s.batch_size,
+            &mut s.inv_ratio_q16,
+            &mut s.fir_order,
+            &mut s.fir_fracs,
+            &mut s.fs_in_khz,
+            &mut s.fs_out_khz,
+            &mut s.input_delay,
+            &mut s.coefs_nonnull,
+        );
+    }
+    s
+}
+
+fn dump_rust_resampler(enc: &RustOpusEncoder, channel: usize) -> Option<SilkResamplerDebug> {
+    let silk = enc.silk_encoder()?;
+    let rs = &silk.state_fxx[channel].s_cmn.resampler_state;
+    Some(SilkResamplerDebug {
+        s_iir_hash: hash_i32(&rs.s_iir),
+        s_fir_i32_hash: hash_i32(&rs.s_fir_i32),
+        s_fir_i16_hash: hash_i16(&rs.s_fir_i16),
+        delay_buf_hash: hash_i16(&rs.delay_buf),
+        resampler_function: rs.resampler_function,
+        batch_size: rs.batch_size,
+        inv_ratio_q16: rs.inv_ratio_q16,
+        fir_order: rs.fir_order,
+        fir_fracs: rs.fir_fracs,
+        fs_in_khz: rs.fs_in_khz,
+        fs_out_khz: rs.fs_out_khz,
+        input_delay: rs.input_delay,
+        coefs_nonnull: if matches!(rs.coefs, ropus::silk::decoder::ResamplerCoefs::None) {
+            0
+        } else {
+            1
+        },
+    })
+}
+
+fn diff_resampler_state(c: &SilkResamplerDebug, r: &SilkResamplerDebug) -> Vec<String> {
+    let mut hits = Vec::new();
+    macro_rules! cmp {
+        ($name:ident) => {
+            if c.$name != r.$name {
+                hits.push(format!(
+                    "{}: C={} R={}",
+                    stringify!($name),
+                    c.$name,
+                    r.$name
+                ));
+            }
+        };
+    }
+    cmp!(s_iir_hash);
+    cmp!(s_fir_i32_hash);
+    cmp!(s_fir_i16_hash);
+    cmp!(delay_buf_hash);
+    cmp!(resampler_function);
+    cmp!(batch_size);
+    cmp!(inv_ratio_q16);
+    cmp!(fir_order);
+    cmp!(fir_fracs);
+    cmp!(fs_in_khz);
+    cmp!(fs_out_khz);
+    cmp!(input_delay);
+    cmp!(coefs_nonnull);
+    hits
 }
 
 #[derive(Default, Debug, PartialEq, Eq, Clone)]
@@ -571,6 +750,7 @@ fn run_multiframe_repro(path: &PathBuf) {
     let n_channels = input.channels as usize;
     let mut first_divergent_frame: Option<usize> = None;
     let mut frame_findings: Vec<String> = Vec::new();
+    let dump_all_extended = std::env::var_os("ROPUS_REPRO_EXT_ALL").is_some();
 
     for (frame_idx, fc) in input.frames.iter().enumerate() {
         let bitrate = raw_to_bitrate(fc.bitrate_raw);
@@ -712,6 +892,24 @@ fn run_multiframe_repro(path: &PathBuf) {
             print_phase_c_trace_diff(&rust_trace, &c_trace);
         }
 
+        if dump_all_extended || !bytes_match || frame_idx == 0 {
+            let c_filter = dump_c_filter(c_enc);
+            let r_filter = dump_rust_filter(&rust_enc);
+            let filter_diffs = diff_filter_state(&c_filter, &r_filter);
+            if filter_diffs.is_empty() {
+                println!("[frame {frame_idx}] opus-filter-state OK");
+            } else {
+                println!(
+                    "[frame {frame_idx}] opus-filter-state mismatches ({}):",
+                    filter_diffs.len()
+                );
+                for d in &filter_diffs {
+                    println!("    {d}");
+                    frame_findings.push(format!("frame {frame_idx} filter {d}"));
+                }
+            }
+        }
+
         // Post-encode state dumps.
         for ch in 0..n_channels {
             let c_if = dump_c_interframe(c_enc, ch as i32);
@@ -732,19 +930,41 @@ fn run_multiframe_repro(path: &PathBuf) {
             // Extended state diff at frame 0 only (initial baseline) and
             // at the first divergent frame (the smoking-gun frame). Skip
             // intermediate frames to keep output bounded.
-            if frame_idx == 0 || first_divergent_frame == Some(frame_idx) {
+            if dump_all_extended || frame_idx == 0 || first_divergent_frame == Some(frame_idx) {
                 let ext_diffs = compare_extended_state(c_enc, &rust_enc, ch);
                 if !ext_diffs.is_empty() {
                     println!(
-                        "[frame {frame_idx} ch{ch}] extended-state mismatches ({}); first 8:",
-                        ext_diffs.len()
+                        "[frame {frame_idx} ch{ch}] extended-state mismatches ({}):",
+                        ext_diffs.len(),
                     );
-                    for d in ext_diffs.iter().take(8) {
+                    let max_diffs = if dump_all_extended {
+                        ext_diffs.len()
+                    } else {
+                        8
+                    };
+                    for d in ext_diffs.iter().take(max_diffs) {
                         println!("    {d}");
                         frame_findings.push(format!("frame {frame_idx} ch{ch} ext {d}"));
                     }
                 } else {
                     println!("[frame {frame_idx} ch{ch}] extended-state OK");
+                }
+            }
+            if dump_all_extended || frame_idx == 0 || first_divergent_frame == Some(frame_idx) {
+                let c_rs = dump_c_resampler(c_enc, ch as i32);
+                let r_rs = dump_rust_resampler(&rust_enc, ch).expect("Rust SILK encoder allocated");
+                let rs_diffs = diff_resampler_state(&c_rs, &r_rs);
+                if !rs_diffs.is_empty() {
+                    println!(
+                        "[frame {frame_idx} ch{ch}] resampler-state mismatches ({}):",
+                        rs_diffs.len()
+                    );
+                    for d in &rs_diffs {
+                        println!("    {d}");
+                        frame_findings.push(format!("frame {frame_idx} ch{ch} resampler {d}"));
+                    }
+                } else {
+                    println!("[frame {frame_idx} ch{ch}] resampler-state OK");
                 }
             }
 
@@ -812,7 +1032,7 @@ fn run_multiframe_repro(path: &PathBuf) {
 /// Drains BOTH the V1 7-tuple ring (`dbg_silk_trace_read`) and the V2
 /// payload ring (`dbg_silk_trace_read_payload`) into a single combined
 /// `Vec<Tuple>`. V1 records have `boundary_id ∈ 1..=7` and `payload = []`;
-/// V2 records have `boundary_id ∈ 100..=109` and `payload` populated per
+/// V2 records have `boundary_id ∈ 99..=109` and `payload` populated per
 /// the §4.1 schema. The two are interleaved here in V1-first order, but
 /// the diff-side filters by `boundary_id` so the order is irrelevant for
 /// correctness — it just keeps the sequential dump readable.
@@ -926,11 +1146,11 @@ fn print_phase_b_trace_diff(
 ) {
     let rust_v1: Vec<&ropus::silk_trace::Tuple> = rust_trace
         .iter()
-        .filter(|t| t.boundary_id > 0 && t.boundary_id < 100)
+        .filter(|t| t.boundary_id > 0 && t.boundary_id < 99)
         .collect();
     let c_v1: Vec<&ropus::silk_trace::Tuple> = c_trace
         .iter()
-        .filter(|t| t.boundary_id > 0 && t.boundary_id < 100)
+        .filter(|t| t.boundary_id > 0 && t.boundary_id < 99)
         .collect();
 
     println!(
@@ -1041,6 +1261,7 @@ fn rng_pair_to_hex(lo: i32, hi: i32) -> String {
 /// sub-field.
 fn v2_boundary_label(boundary_id: i32) -> (&'static str, &'static str) {
     match boundary_id {
+        99 => ("F0 pre-LP_variable_cutoff", "G7"),
         100 => ("F1 post-LP_variable_cutoff", "G7"),
         101 => ("F3 post-find_pitch_lags", "G6"),
         102 => ("F4 post-noise_shape_analysis", "G5"),
@@ -1156,6 +1377,20 @@ fn fmt_vec_head_tail(p: &[i32], head: usize, tail: usize) -> String {
 /// fall back to a hex dump preview.
 fn format_v2_payload(boundary_id: i32, payload: &[i32]) -> String {
     match boundary_id {
+        99 => {
+            if payload.len() < 4 {
+                return format!("(malformed: len={})", payload.len());
+            }
+            format!(
+                "lp_mode={} transition_frame_no={} in_lp_state=[{}, {}] input_buf[len={}] first8={}",
+                payload[0],
+                payload[1],
+                payload[2],
+                payload[3],
+                payload.len() - 4,
+                fmt_vec(&payload[4..], 8)
+            )
+        }
         100 => {
             // input_buf[1..=frame_length], up to 480 i32s. Just show length
             // + first 8 elements.
@@ -1410,14 +1645,14 @@ fn print_phase_c_trace_diff(
 ) {
     let rust_v2: Vec<&ropus::silk_trace::Tuple> = rust_trace
         .iter()
-        .filter(|t| t.boundary_id >= 100 && t.boundary_id <= 109)
+        .filter(|t| t.boundary_id >= 99 && t.boundary_id <= 109)
         .collect();
     let c_v2: Vec<&ropus::silk_trace::Tuple> = c_trace
         .iter()
-        .filter(|t| t.boundary_id >= 100 && t.boundary_id <= 109)
+        .filter(|t| t.boundary_id >= 99 && t.boundary_id <= 109)
         .collect();
 
-    println!("\n--- Phase C (HLD V2) inner-function trace tuples (boundaries 100..=109) ---");
+    println!("\n--- Phase C (HLD V2) inner-function trace tuples (boundaries 99..=109) ---");
     println!("  count: Rust={} C={}", rust_v2.len(), c_v2.len());
 
     if rust_v2.is_empty() && c_v2.is_empty() {

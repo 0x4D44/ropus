@@ -289,7 +289,8 @@ const fn gconst(x: f64) -> i32 {
 }
 
 /// Rough approximation of log2(2^a + 2^b) in fixed-point.
-/// Matches C `logSum` (fixed-point path).
+/// Matches C `logSum` (fixed-point path), including its `opus_val16`
+/// return type truncation before the value is stored back into `celt_glog`.
 fn log_sum(a: i32, b: i32) -> i32 {
     static DIFF_TABLE: [i32; 17] = [
         gconst(0.5000000),
@@ -316,13 +317,15 @@ fn log_sum(a: i32, b: i32) -> i32 {
     let (max_val, diff) = if a > b { (a, a - b) } else { (b, b - a) };
     // Inverted comparison to catch large values (NaN-like guard from C)
     if !(diff < gconst(8.0)) {
-        return max_val;
+        return max_val as i16 as i32;
     }
     // low = floor(2*diff) in Q(DB_SHIFT-1)
     let low = (diff >> (DB_SHIFT - 1)) as usize;
     // frac in Q16 for interpolation
     let frac = vshr32(diff - ((low as i32) << (DB_SHIFT - 1)), DB_SHIFT - 16);
-    max_val + DIFF_TABLE[low] + mult16_32_q15(frac, DIFF_TABLE[low + 1] - DIFF_TABLE[low])
+    let sum =
+        max_val + DIFF_TABLE[low] + mult16_32_q15(frac, DIFF_TABLE[low + 1] - DIFF_TABLE[low]);
+    sum as i16 as i32
 }
 
 /// Variable shift right — handles both positive and negative shifts.
@@ -1136,6 +1139,18 @@ impl OpusMSEncoder {
                 }
                 c1 = chan;
                 c2 = -1;
+            }
+
+            if self.mapping_type == MappingType::Surround {
+                let mask_len = if s_i32 < self.layout.nb_coupled_streams {
+                    42
+                } else {
+                    21
+                };
+                let ret = self.encoders[s].set_energy_mask(Some(&band_log_e[..mask_len]));
+                if ret != OPUS_OK {
+                    return Err(ret);
+                }
             }
 
             // Compute max bytes for this stream
@@ -2775,25 +2790,19 @@ mod tests {
 
     #[test]
     fn test_log_sum_equal_values() {
-        // log2(2^a + 2^a) = log2(2 * 2^a) = a + 1
-        // In fixed-point (Q24), a = 4.0 → 4 << 24 = 67108864
-        // Expected: ~5.0 → 83886080
         let a = gconst(4.0);
         let result = log_sum(a, a);
-        // log_sum should approximate a + 0.5 (from the table), giving ~4.5
-        // Actually log2(2^a + 2^a) = a + 1, but the function uses base-2 logs
-        // With equal inputs, diff=0, so result = max + diff_table[0] = a + 0.5
-        let expected = a + gconst(0.5);
-        assert!((result - expected).abs() < gconst(0.01));
+        let full_width = a + gconst(0.5);
+        assert_eq!(result, full_width as i16 as i32);
     }
 
     #[test]
     fn test_log_sum_large_diff() {
-        // When difference >= 8, return max
+        // When difference >= 8, C returns max through opus_val16.
         let a = gconst(10.0);
         let b = gconst(1.0);
         let result = log_sum(a, b);
-        assert_eq!(result, a);
+        assert_eq!(result, a as i16 as i32);
     }
 
     #[test]

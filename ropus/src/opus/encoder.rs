@@ -2602,12 +2602,46 @@ impl OpusEncoder {
                         hb_gain = Q15ONE - shr32(celt_exp2(-celt_rate), 1);
                         hb_gain = imax(0, hb_gain);
                     }
-                    // TODO(energy_masking): port `opus_encoder.c` L2069-2108
-                    // — when `energy_masking && use_vbr && !lfe`, adjust
-                    // `silk_mode.bit_rate` based on per-band surround masking
-                    // depth. Not yet ported.
                 } else {
                     self.silk_mode.bit_rate = total_bit_rate;
+                }
+
+                if let Some(masking) = self.energy_masking.as_ref()
+                    && self.use_vbr != 0
+                    && self.lfe == 0
+                {
+                    let mut mask_sum = 0;
+                    let (end, srate) = if self.bandwidth == OPUS_BANDWIDTH_NARROWBAND {
+                        (13, 8000)
+                    } else if self.bandwidth == OPUS_BANDWIDTH_MEDIUMBAND {
+                        (15, 12000)
+                    } else {
+                        (17, 16000)
+                    };
+                    for c in 0..self.channels as usize {
+                        for i in 0..end as usize {
+                            let mut mask = masking[21 * c + i].clamp(
+                                -qconst32(2.0, DB_SHIFT as u32),
+                                qconst32(0.5, DB_SHIFT as u32),
+                            );
+                            if mask > 0 {
+                                mask = half32(mask);
+                            }
+                            mask_sum += mask;
+                        }
+                    }
+                    let mut masking_depth = mask_sum / end * self.channels;
+                    masking_depth += qconst32(0.2, DB_SHIFT as u32);
+                    let mut rate_offset =
+                        pshr32(mult16_16(srate, shr32(masking_depth, DB_SHIFT - 10)), 10);
+                    rate_offset = imax(rate_offset, -2 * self.silk_mode.bit_rate / 3);
+                    if self.bandwidth == OPUS_BANDWIDTH_SUPERWIDEBAND
+                        || self.bandwidth == OPUS_BANDWIDTH_FULLBAND
+                    {
+                        self.silk_mode.bit_rate += 3 * rate_offset / 5;
+                    } else {
+                        self.silk_mode.bit_rate += rate_offset;
+                    }
                 }
 
                 // SILK mode parameters
@@ -2736,8 +2770,6 @@ impl OpusEncoder {
                             }
                         }
                         let mut prefill_control = self.silk_mode.clone();
-                        prefill_control.payload_size_ms = 10;
-                        prefill_control.complexity = 0;
                         let mut zero = 0i32;
                         let prefill_pcm = self.delay_buffer[..db_samples].to_vec();
                         silk_encode(
@@ -3670,6 +3702,16 @@ impl OpusEncoder {
     /// Debug accessor for variable HP smoothing state.
     pub fn get_variable_hp_smth2(&self) -> i32 {
         self.variable_hp_smth2_q15
+    }
+
+    /// Debug accessor for the Opus delay buffer hash and active length.
+    pub fn debug_delay_buffer_hash(&self) -> (i32, i32) {
+        let len = (self.encoder_buffer * self.channels).max(0) as usize;
+        let mut h = 0i32;
+        for &sample in self.delay_buffer.iter().take(len) {
+            h = h.wrapping_mul(31).wrapping_add(sample as i32);
+        }
+        (h, len as i32)
     }
 
     pub fn set_expert_frame_duration(&mut self, duration: i32) -> i32 {

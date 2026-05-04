@@ -17,6 +17,8 @@
 #include <stddef.h>
 
 /* Internal opus_encoder layout - first two i32 fields are offsets */
+#define DEBUG_MAX_ENCODER_BUFFER 480
+
 typedef struct {
     opus_int32 celt_enc_offset;
     opus_int32 silk_enc_offset;
@@ -829,6 +831,11 @@ typedef struct {
     opus_val16 width_mem_smoothed_width;
     opus_val16 width_mem_max_follower;
     int detected_bandwidth;
+    int nb_no_activity_ms_Q1;
+    opus_val32 peak_signal_energy;
+    int nonfinal_frame;
+    opus_uint32 rangeFinal;
+    opus_res delay_buffer[DEBUG_MAX_ENCODER_BUFFER * 2];
 } OpusEncoderTrace;
 
 /* INSTRUMENT: Return the Opus-level width_mem accumulators plus
@@ -865,39 +872,88 @@ void debug_get_encoder_hp_state(OpusEncoder *enc,
     opus_int32 *stream_channels_out,
     opus_int32 *bandwidth_out)
 {
-    /* Use byte offsets from the original struct definition in opus_encoder.c.
-     * The OpusEncoder is opaque, but we know its layout. Use sizeof checks. */
     OpusEncoderTrace *st = (OpusEncoderTrace *)enc;
 
-    /* Verify our struct matches by checking known values */
-    fprintf(stderr, "[debug] sizeof(silk_EncControlStruct)=%d sizeof(OpusEncoderTrace)=%d\n",
-        (int)sizeof(silk_EncControlStruct), (int)sizeof(OpusEncoderTrace));
-    fprintf(stderr, "[debug] app=%d channels=%d Fs=%d enc_buf=%d\n",
-        st->application, st->channels, st->Fs, st->encoder_buffer);
-    fprintf(stderr, "[debug] stream_ch=%d hw_Q14=%d hp_smth2=%d prev_hb=%d\n",
-        st->stream_channels, (int)st->hybrid_stereo_width_Q14,
-        st->variable_HP_smth2_Q15, (int)st->prev_HB_gain);
-    fprintf(stderr, "[debug] mode=%d prev_mode=%d\n", st->mode, st->prev_mode);
-
     int i;
-    /* Scan bytes around expected location to find the right offset */
-    opus_int32 *raw = (opus_int32 *)enc;
-    int total_ints = (int)sizeof(OpusEncoderTrace) / 4;
-    fprintf(stderr, "[debug] scanning for hp_smth2 (expect ~2903 after frame 0):\n");
-    /* Print the int32 values around the expected location */
-    int start_field = (int)(((char*)&st->variable_HP_smth2_Q15 - (char*)st) / 4);
-    for (i = start_field - 3; i <= start_field + 5 && i < total_ints; i++) {
-        if (i >= 0) {
-            fprintf(stderr, "  raw[%d] = %d (0x%08x)%s\n", i, raw[i], (unsigned)raw[i],
-                i == start_field ? " <-- variable_HP_smth2_Q15" : "");
-        }
-    }
-
     for (i = 0; i < 4; i++) hp_mem_out[i] = st->hp_mem[i];
     *variable_hp_smth2 = st->variable_HP_smth2_Q15;
     *mode_out = st->mode;
     *stream_channels_out = st->stream_channels;
-    *bandwidth_out = 0;
+    *bandwidth_out = st->bandwidth;
+}
+
+void debug_get_encoder_delay_hash(OpusEncoder *enc,
+    opus_int32 *delay_hash,
+    opus_int32 *delay_len)
+{
+    OpusEncoderTrace *st = (OpusEncoderTrace *)enc;
+    int len = st->encoder_buffer * st->channels;
+    int i;
+    opus_int32 h = 0;
+    if (len < 0) len = 0;
+    if (len > DEBUG_MAX_ENCODER_BUFFER * 2) len = DEBUG_MAX_ENCODER_BUFFER * 2;
+    for (i = 0; i < len; i++) {
+        h = h * 31 + st->delay_buffer[i];
+    }
+    *delay_hash = h;
+    *delay_len = len;
+}
+
+void debug_get_silk_resampler_state(OpusEncoder *enc, int channel,
+    opus_int32 *s_iir_hash,
+    opus_int32 *s_fir_i32_hash,
+    opus_int32 *s_fir_i16_hash,
+    opus_int32 *delay_buf_hash,
+    opus_int32 *resampler_function,
+    opus_int32 *batch_size,
+    opus_int32 *inv_ratio_q16,
+    opus_int32 *fir_order,
+    opus_int32 *fir_fracs,
+    opus_int32 *fs_in_khz,
+    opus_int32 *fs_out_khz,
+    opus_int32 *input_delay,
+    opus_int32 *coefs_nonnull)
+{
+    OpusEncoderOffsets *hdr = (OpusEncoderOffsets *)enc;
+    silk_encoder *silk = (silk_encoder *)((char *)enc + hdr->silk_enc_offset);
+    silk_resampler_state_struct *rs =
+        &silk->state_Fxx[channel].sCmn.resampler_state;
+    int i;
+    opus_int32 h;
+
+    h = 0;
+    for (i = 0; i < SILK_RESAMPLER_MAX_IIR_ORDER; i++) {
+        h = h * 31 + rs->sIIR[i];
+    }
+    *s_iir_hash = h;
+
+    h = 0;
+    for (i = 0; i < SILK_RESAMPLER_MAX_FIR_ORDER; i++) {
+        h = h * 31 + rs->sFIR.i32[i];
+    }
+    *s_fir_i32_hash = h;
+
+    h = 0;
+    for (i = 0; i < SILK_RESAMPLER_MAX_FIR_ORDER; i++) {
+        h = h * 31 + rs->sFIR.i16[i];
+    }
+    *s_fir_i16_hash = h;
+
+    h = 0;
+    for (i = 0; i < 96; i++) {
+        h = h * 31 + rs->delayBuf[i];
+    }
+    *delay_buf_hash = h;
+
+    *resampler_function = rs->resampler_function;
+    *batch_size = rs->batchSize;
+    *inv_ratio_q16 = rs->invRatio_Q16;
+    *fir_order = rs->FIR_Order;
+    *fir_fracs = rs->FIR_Fracs;
+    *fs_in_khz = rs->Fs_in_kHz;
+    *fs_out_khz = rs->Fs_out_kHz;
+    *input_delay = rs->inputDelay;
+    *coefs_nonnull = rs->Coefs != 0;
 }
 
 /* Run the C hp_cutoff biquad on stereo data and return the result.
@@ -1460,4 +1516,3 @@ OpusEncoder *debug_get_inner_opus_encoder(struct OpusMSEncoder *ms, int stream_i
     }
     return (OpusEncoder *)ptr;
 }
-

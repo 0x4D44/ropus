@@ -74,12 +74,12 @@ extern void dbg_silk_trace_push_payload(
     int payload_len);
 extern int dbg_silk_trace_current_channel;
 
-/* Push a payload boundary tuple unless we're in prefill (no entropy
- * coding happens in prefill, so the Rust mirror also skips its trace
- * pushes there to keep the per-encode tuple streams aligned). */
+/* Push payload boundary tuples unless we're in prefill. Boundaries 99/100
+ * are diagnostic LP-state boundaries and are also useful during prefill, so
+ * those are emitted with iter=prefillFlag. */
 #define DBG_TRACE_F(boundary, iter, payload, len)                       \
     do {                                                                 \
-        if (!psEnc->sCmn.prefillFlag) {                                  \
+        if (!psEnc->sCmn.prefillFlag || (boundary) == 99 || (boundary) == 100) { \
             dbg_silk_trace_push_payload((boundary),                      \
                 dbg_silk_trace_current_channel, (iter),                  \
                 (payload), (len));                                       \
@@ -183,6 +183,19 @@ opus_int silk_encode_frame_FIX_traced(
     /* start of frame to encode */
     x_frame = psEnc->x_buf + psEnc->sCmn.ltp_mem_length;
 
+    /* Phase C boundary 99: before silk_LP_variable_cutoff. Payload =
+     * sLP.mode, sLP.transition_frame_no, sLP.In_LP_State[0..2],
+     * then inputBuf[1..=frame_length] (i16 cast to i32). */
+    dbg_n = 0;
+    dbg_payload[ dbg_n++ ] = (opus_int32)psEnc->sCmn.sLP.mode;
+    dbg_payload[ dbg_n++ ] = (opus_int32)psEnc->sCmn.sLP.transition_frame_no;
+    dbg_payload[ dbg_n++ ] = psEnc->sCmn.sLP.In_LP_State[ 0 ];
+    dbg_payload[ dbg_n++ ] = psEnc->sCmn.sLP.In_LP_State[ 1 ];
+    for( i = 0; i < psEnc->sCmn.frame_length && dbg_n < 512; i++ ) {
+        dbg_payload[ dbg_n++ ] = (opus_int32)psEnc->sCmn.inputBuf[ 1 + i ];
+    }
+    DBG_TRACE_F( 99, psEnc->sCmn.prefillFlag, dbg_payload, dbg_n );
+
     /***************************************/
     /* Ensure smooth bandwidth transitions */
     /***************************************/
@@ -194,7 +207,7 @@ opus_int silk_encode_frame_FIX_traced(
     for( i = 0; i < psEnc->sCmn.frame_length && dbg_n < 512; i++ ) {
         dbg_payload[ dbg_n++ ] = (opus_int32)psEnc->sCmn.inputBuf[ 1 + i ];
     }
-    DBG_TRACE_F( 100, -1, dbg_payload, dbg_n );
+    DBG_TRACE_F( 100, psEnc->sCmn.prefillFlag, dbg_payload, dbg_n );
 
     /*******************************************/
     /* Copy new frame to front of input buffer */

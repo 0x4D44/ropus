@@ -417,6 +417,28 @@ unsafe extern "C" {
         stream_channels_out: *mut opus_int32,
         bandwidth_out: *mut opus_int32,
     );
+    pub fn debug_get_encoder_delay_hash(
+        enc: *mut OpusEncoder,
+        delay_hash: *mut opus_int32,
+        delay_len: *mut opus_int32,
+    );
+    pub fn debug_get_silk_resampler_state(
+        enc: *mut OpusEncoder,
+        channel: c_int,
+        s_iir_hash: *mut opus_int32,
+        s_fir_i32_hash: *mut opus_int32,
+        s_fir_i16_hash: *mut opus_int32,
+        delay_buf_hash: *mut opus_int32,
+        resampler_function: *mut opus_int32,
+        batch_size: *mut opus_int32,
+        inv_ratio_q16: *mut opus_int32,
+        fir_order: *mut opus_int32,
+        fir_fracs: *mut opus_int32,
+        fs_in_khz: *mut opus_int32,
+        fs_out_khz: *mut opus_int32,
+        input_delay: *mut opus_int32,
+        coefs_nonnull: *mut opus_int32,
+    );
 
     pub fn debug_c_stereo_lr_to_ms(
         x1_in: *const opus_int16,

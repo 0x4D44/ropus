@@ -66,7 +66,7 @@ pub const NLSF_QUANT_DEL_DEC_STATES_LOG2: usize = 2;
 pub const NLSF_QUANT_DEL_DEC_STATES: usize = 1 << NLSF_QUANT_DEL_DEC_STATES_LOG2;
 pub const NLSF_QUANT_MAX_AMPLITUDE_EXT: i32 = 10;
 
-pub const TRANSITION_FRAMES: i32 = 80;
+pub const TRANSITION_FRAMES: i32 = 256;
 
 pub const BIN_DIV_STEPS_A2NLSF: usize = 3;
 pub const MAX_ITERATIONS_A2NLSF: usize = 16;
@@ -7066,6 +7066,28 @@ pub fn silk_encode_frame_fix(
     // x_frame points into x_buf at offset ltp_mem_length
     let x_frame_offset = ltp_mem;
 
+    // Phase C boundary 99: before silk_lp_variable_cutoff. Payload =
+    // s_lp.mode, s_lp.transition_frame_no, s_lp.in_lp_state[0..2],
+    // then input_buf[1..=frame_length] (i16 cast to i32).
+    #[cfg(feature = "trace-silk-encode")]
+    {
+        let mut payload = Vec::with_capacity(frame_length + 4);
+        payload.push(ps_enc.s_cmn.s_lp.mode);
+        payload.push(ps_enc.s_cmn.s_lp.transition_frame_no);
+        payload.push(ps_enc.s_cmn.s_lp.in_lp_state[0]);
+        payload.push(ps_enc.s_cmn.s_lp.in_lp_state[1]);
+        for i in 0..frame_length {
+            payload.push(ps_enc.s_cmn.input_buf[1 + i] as i32);
+        }
+        crate::silk_trace::push(crate::silk_trace::Tuple {
+            boundary_id: 99,
+            channel: -1,
+            iter: ps_enc.s_cmn.prefill_flag,
+            payload,
+            ..Default::default()
+        });
+    }
+
     // LP variable cutoff
     silk_lp_variable_cutoff(
         &mut ps_enc.s_cmn.s_lp,
@@ -7077,7 +7099,7 @@ pub fn silk_encode_frame_fix(
     // input_buf[1..=frame_length] (i16 cast to i32). Mirrors C
     // harness/silk_encode_frame_FIX_traced.c boundary 100.
     #[cfg(feature = "trace-silk-encode")]
-    if ps_enc.s_cmn.prefill_flag == 0 {
+    {
         let mut payload = Vec::with_capacity(frame_length);
         for i in 0..frame_length {
             payload.push(ps_enc.s_cmn.input_buf[1 + i] as i32);
@@ -7085,6 +7107,7 @@ pub fn silk_encode_frame_fix(
         crate::silk_trace::push(crate::silk_trace::Tuple {
             boundary_id: 100,
             channel: -1,
+            iter: ps_enc.s_cmn.prefill_flag,
             payload,
             ..Default::default()
         });

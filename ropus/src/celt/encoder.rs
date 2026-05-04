@@ -2103,7 +2103,7 @@ fn compute_vbr(
     max_depth: i32,
     lfe: i32,
     has_surround_mask: bool,
-    _surround_masking: i32,
+    surround_masking: i32,
     temporal_vbr: i32,
 ) -> i32 {
     let nb_ebands = mode.nb_ebands;
@@ -2175,8 +2175,14 @@ fn compute_vbr(
         target = tonal_target;
     }
 
-    // Surround masking (not applicable for non-surround, but keep structure)
-    // (skipped: has_surround_mask is false for standard encoding)
+    if has_surround_mask && lfe == 0 {
+        let surround_target = target
+            + shr32(
+                mult16_16(shr32(surround_masking, DB_SHIFT - 10), coded_bins << BITRES),
+                10,
+            );
+        target = imax(target / 4, surround_target);
+    }
 
     // Floor depth: cap target based on signal energy
     {
@@ -2651,7 +2657,78 @@ fn celt_encode_core(
     let mut spread_weight = [1i32; NB_EBANDS];
     let mut tot_boost = 0i32;
 
-    let surround_dynalloc = [0i32; 2 * NB_EBANDS];
+    let mut surround_dynalloc = [0i32; 2 * NB_EBANDS];
+    let mut surround_trim = 0;
+    let mut surround_masking = 0;
+    if !hybrid && st.energy_mask.is_some() && st.lfe == 0 {
+        let energy_mask = st.energy_mask.as_ref().unwrap();
+        let mask_end = imax(2, st.last_coded_bands);
+        let mut mask_avg = 0;
+        let mut diff = 0;
+        let mut count = 0;
+
+        for ch in 0..c as usize {
+            for i in 0..mask_end as usize {
+                let mut mask =
+                    energy_mask[nb_ebands as usize * ch + i].clamp(-gconst(2.0), gconst(0.25));
+                if mask > 0 {
+                    mask = half32(mask);
+                }
+                let mask16 = shr32(mask, DB_SHIFT - 10);
+                let width = e_bands[i + 1] as i32 - e_bands[i] as i32;
+                mask_avg += mult16_16(mask16, width);
+                count += width;
+                diff += mult16_16(mask16, 1 + 2 * i as i32 - mask_end);
+            }
+        }
+
+        mask_avg = shl32(div32_16(mask_avg, count), DB_SHIFT - 10);
+        mask_avg += gconst(0.2);
+        diff = shl32(
+            diff * 6 / (c * (mask_end - 1) * (mask_end + 1) * mask_end),
+            DB_SHIFT - 10,
+        );
+        diff = half32(diff);
+        diff = max32(min32(diff, gconst(0.031)), -gconst(0.031));
+
+        let mut midband = 0usize;
+        while e_bands[midband + 1] < e_bands[mask_end as usize] / 2 {
+            midband += 1;
+        }
+
+        let mut count_dynalloc = 0;
+        for i in 0..mask_end as usize {
+            let lin = mask_avg + diff * (i as i32 - midband as i32);
+            let mut unmask = if c == 2 {
+                max32(energy_mask[i], energy_mask[nb_ebands as usize + i])
+            } else {
+                energy_mask[i]
+            };
+            unmask = min32(unmask, gconst(0.0));
+            unmask -= lin;
+            if unmask > gconst(0.25) {
+                surround_dynalloc[i] = unmask - gconst(0.25);
+                count_dynalloc += 1;
+            }
+        }
+
+        if count_dynalloc >= 3 {
+            mask_avg += gconst(0.25);
+            if mask_avg > 0 {
+                mask_avg = 0;
+                diff = 0;
+                surround_dynalloc[..mask_end as usize].fill(0);
+            } else {
+                for dynalloc in surround_dynalloc.iter_mut().take(mask_end as usize) {
+                    *dynalloc = max32(0, *dynalloc - gconst(0.25));
+                }
+            }
+        }
+
+        mask_avg += gconst(0.2);
+        surround_trim = 64 * diff;
+        surround_masking = mask_avg;
+    }
 
     let max_depth = dynalloc_analysis(
         &band_log_e,
@@ -2877,7 +2954,7 @@ fn celt_encode_core(
                 &mut st.stereo_saving,
                 tf_estimate,
                 st.intensity,
-                0,
+                surround_trim,
                 equiv_rate,
             );
         }
@@ -2939,7 +3016,7 @@ fn celt_encode_core(
                 max_depth,
                 st.lfe,
                 st.energy_mask.is_some(),
-                0,
+                surround_masking,
                 temporal_vbr,
             )
         } else {

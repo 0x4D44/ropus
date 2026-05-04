@@ -326,6 +326,25 @@ fn run_encode(
 
     match (&rust_ret, &c_ret) {
         (Ok(rust_len), Ok(c_out)) => {
+            if std::env::var_os("ROPUS_FUZZ_DUMP").is_some() {
+                let rust_len = *rust_len as usize;
+                eprintln!(
+                    "[ROPUS_FUZZ_DUMP] shape op={} sr={sample_rate} ch={channels} family={mapping_family} app={application} br={bitrate} cx={complexity} vbr={vbr} payload_len={} setter_bytes={:02x?}",
+                    input.op,
+                    input.payload.len(),
+                    input.setter_bytes,
+                );
+                eprintln!(
+                    "[ROPUS_FUZZ_DUMP] rust_len={rust_len} rust={:02x?}",
+                    &rust_out[..rust_len]
+                );
+                eprintln!(
+                    "[ROPUS_FUZZ_DUMP] c_len={} c={:02x?}",
+                    c_out.packet.len(),
+                    c_out.packet
+                );
+            }
+
             // Mapping/streams parity is structural — assert unconditionally
             // (no documented divergence here; mismatch is always a finding).
             assert_eq!(

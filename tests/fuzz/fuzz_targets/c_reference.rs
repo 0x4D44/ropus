@@ -283,7 +283,7 @@ pub fn c_decode(data: &[u8], sample_rate: i32, channels: i32) -> Result<Vec<i16>
 
 /// Configuration for the C-side encoder, mirroring the Rust prologue setters
 /// in the differential fuzz targets so byte-exact compare stays valid.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct CEncodeConfig {
     pub bitrate: i32,
     pub complexity: i32,

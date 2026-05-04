@@ -271,6 +271,31 @@ fuzz_target!(|input: MultiframeInput| {
 
     for (i, (rust_pkt, c_pkt)) in rust_packets.iter().zip(c_packets.iter()).enumerate() {
         let cfg = &frame_cfgs[i];
+        if std::env::var_os("ROPUS_FUZZ_DUMP").is_some()
+            && (rust_pkt.len() != c_pkt.len() || rust_pkt != c_pkt)
+        {
+            eprintln!(
+                "[ROPUS_FUZZ_DUMP] shape sr={sample_rate} ch={channels} app={application} frames={}",
+                input.frames.len()
+            );
+            for (j, cfg) in frame_cfgs.iter().enumerate() {
+                eprintln!("[ROPUS_FUZZ_DUMP] frame_cfg[{j}]={cfg:?}");
+            }
+            for (j, pkt) in rust_packets.iter().enumerate() {
+                eprintln!(
+                    "[ROPUS_FUZZ_DUMP] rust_packet[{j}] len={} {:02x?}",
+                    pkt.len(),
+                    pkt
+                );
+            }
+            for (j, pkt) in c_packets.iter().enumerate() {
+                eprintln!(
+                    "[ROPUS_FUZZ_DUMP] c_packet[{j}] len={} {:02x?}",
+                    pkt.len(),
+                    pkt
+                );
+            }
+        }
         assert_eq!(
             rust_pkt.len(),
             c_pkt.len(),

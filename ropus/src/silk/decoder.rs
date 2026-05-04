@@ -1758,20 +1758,14 @@ fn silk_resampler_init(s: &mut SilkResamplerState, fs_hz_in: i32, fs_hz_out: i32
 
     s.batch_size = s.fs_in_khz * RESAMPLER_MAX_BATCH_SIZE_MS;
 
+    let mut up2x = 0i32;
     if fs_hz_out == fs_hz_in {
         s.resampler_function = USE_SILK_RESAMPLER_COPY;
     } else if fs_hz_out == 2 * fs_hz_in {
         s.resampler_function = USE_SILK_RESAMPLER_UP2_HQ;
     } else if fs_hz_out > fs_hz_in {
         s.resampler_function = USE_SILK_RESAMPLER_IIR_FIR;
-        // Compute inverse ratio with up2x factor
-        let up2x = 1i32;
-        let temp = ((fs_hz_in as i64) << (14 + up2x)) / fs_hz_out as i64;
-        s.inv_ratio_q16 = (temp << 2) as i32;
-        // silk_SMULWW: (a * b) >> 16
-        while ((s.inv_ratio_q16 as i64 * fs_hz_out as i64) >> 16) < ((fs_hz_in as i64) << up2x) {
-            s.inv_ratio_q16 += 1;
-        }
+        up2x = 1;
         s.fir_order = RESAMPLER_ORDER_FIR_12 as i32;
         s.fir_fracs = 12;
     } else {
@@ -1803,13 +1797,13 @@ fn silk_resampler_init(s: &mut SilkResamplerState, fs_hz_in: i32, fs_hz_out: i32
             s.fir_order = RESAMPLER_DOWN_ORDER_FIR2 as i32;
             s.coefs = ResamplerCoefs::Ratio1_6;
         }
+    }
 
-        let temp = ((fs_hz_in as i64) << 14) / fs_hz_out as i64;
-        s.inv_ratio_q16 = (temp << 2) as i32;
-        // silk_SMULWW: (a * b) >> 16
-        while ((s.inv_ratio_q16 as i64 * fs_hz_out as i64) >> 16) < ((fs_hz_in as i64) << 0) {
-            s.inv_ratio_q16 += 1;
-        }
+    let temp = ((fs_hz_in as i64) << (14 + up2x)) / fs_hz_out as i64;
+    s.inv_ratio_q16 = (temp << 2) as i32;
+    // silk_SMULWW: (a * b) >> 16
+    while ((s.inv_ratio_q16 as i64 * fs_hz_out as i64) >> 16) < ((fs_hz_in as i64) << up2x) {
+        s.inv_ratio_q16 += 1;
     }
 }
 
