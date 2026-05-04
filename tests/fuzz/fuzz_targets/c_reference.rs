@@ -199,6 +199,7 @@ unsafe extern "C" {
         frame_size: c_int,
         decode_fec: c_int,
     ) -> c_int;
+    pub fn opus_multistream_decoder_ctl(st: *mut OpusMSDecoder, request: c_int, ...) -> c_int;
     pub fn opus_multistream_decoder_destroy(st: *mut OpusMSDecoder);
 
     // Packet introspection

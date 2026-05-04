@@ -536,7 +536,11 @@ impl OpusDecoder {
             return Err(OPUS_BAD_ARG);
         }
 
-        let celt_dec = CeltDecoder::new(fs, channels).map_err(|_| OPUS_INTERNAL_ERROR)?;
+        let mut celt_dec = CeltDecoder::new(fs, channels).map_err(|_| OPUS_INTERNAL_ERROR)?;
+        // Keep the nested CELT decoder's PLC-quality gate in sync with the
+        // public Opus decoder state. Without this, a fresh Opus decoder reports
+        // complexity 0 while CELT starts at 5 and can take neural PLC by default.
+        let _ = celt_dec.set_complexity(0);
         let mut silk_dec = SilkDecoder::new();
         silk_dec.init();
 
