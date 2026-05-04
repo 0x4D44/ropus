@@ -473,7 +473,7 @@ fn multistream_recovery_repros_are_silk_hybrid_pcm_only_divergences() {
             "recovery fixture must stay on SILK/Hybrid oracle path"
         );
         assert_eq!(
-            oracle::classify_multistream_decode_packet(&obs.payload, obs.streams),
+            oracle::classify_multistream_decode_packet(&obs.payload, obs.streams, obs.sample_rate),
             oracle::DecodeOracleClass::RecoveryOrDtxOnly,
             "recovery fixture must route to sample-count-only oracle"
         );

@@ -31,8 +31,12 @@ pub const SNR_PRECHECK_MIN_REF_ENERGY: f64 = 1e7;
 pub enum DecodeOracleClass {
     /// CELT-only coded audio is expected to be byte-exact.
     CeltCodedComparable,
-    /// SILK/Hybrid coded audio is comparable through the bounded-SNR oracle.
+    /// SILK or low-rate Hybrid coded audio is comparable through the
+    /// bounded-SNR oracle.
     SilkHybridCodedComparable,
+    /// The packet can still be decoded and sample-count checked, but its PCM
+    /// is not a stable SNR oracle for attacker-controlled decode inputs.
+    SampleCountOnly,
     /// At least one SILK/Hybrid sub-frame routes through PLC/DTX recovery.
     RecoveryOrDtxOnly,
     /// Packet structure is not usable for PCM comparison; decode result
@@ -69,12 +73,16 @@ pub fn snr_oracle_applicable_for_decode_class(reference: &[i16], class: DecodeOr
 }
 
 /// Classify a single Opus packet for attacker-controlled decode comparison.
-pub fn classify_decode_packet(packet: &[u8]) -> DecodeOracleClass {
-    classify_single_packet(packet, false).0
+pub fn classify_decode_packet(packet: &[u8], sample_rate: i32) -> DecodeOracleClass {
+    classify_single_packet(packet, false, sample_rate).0
 }
 
 /// Classify a multistream packet by parsing each sub-packet.
-pub fn classify_multistream_decode_packet(packet: &[u8], streams: i32) -> DecodeOracleClass {
+pub fn classify_multistream_decode_packet(
+    packet: &[u8],
+    streams: i32,
+    sample_rate: i32,
+) -> DecodeOracleClass {
     if packet.is_empty() || streams <= 0 {
         return DecodeOracleClass::ErrorAgreementOnly;
     }
@@ -87,8 +95,10 @@ pub fn classify_multistream_decode_packet(packet: &[u8], streams: i32) -> Decode
         }
 
         let self_delimited = stream_idx + 1 != streams as usize;
-        let (class, packet_offset) = classify_single_packet(&packet[offset..], self_delimited);
+        let (class, packet_offset) =
+            classify_single_packet(&packet[offset..], self_delimited, sample_rate);
         match class {
+            DecodeOracleClass::SampleCountOnly => return class,
             DecodeOracleClass::RecoveryOrDtxOnly => return class,
             DecodeOracleClass::ErrorAgreementOnly => return class,
             DecodeOracleClass::SilkHybridCodedComparable => saw_silk_or_hybrid = true,
@@ -117,6 +127,7 @@ pub fn classify_multistream_decode_packet(packet: &[u8], streams: i32) -> Decode
 fn classify_single_packet(
     packet: &[u8],
     self_delimited: bool,
+    sample_rate: i32,
 ) -> (DecodeOracleClass, Option<usize>) {
     if packet.is_empty() {
         return (DecodeOracleClass::ErrorAgreementOnly, None);
@@ -150,6 +161,16 @@ fn classify_single_packet(
     if frame_sizes.iter().any(|&size| size <= 1) {
         (
             DecodeOracleClass::RecoveryOrDtxOnly,
+            Some(packet_offset as usize),
+        )
+    } else if (12..=15).contains(&(toc >> 3)) && sample_rate > 16_000 {
+        // Hybrid packets decoded above 16 kHz include CELT high-band synthesis.
+        // Attacker-controlled Hybrid payloads can drift in that high-band path
+        // while SILK low-band, frame sizes, and final range all agree with C;
+        // keep roundtrip/encoder-produced Hybrid SNR checks, but do not use
+        // high-band arbitrary decode as a standalone PCM oracle.
+        (
+            DecodeOracleClass::SampleCountOnly,
             Some(packet_offset as usize),
         )
     } else {

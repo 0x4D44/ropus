@@ -425,7 +425,8 @@ fn run_decode(input: &MSInput, sample_rate: i32, channels: i32, mapping_family: 
         frame_cap as i32,
     );
 
-    let decode_class = oracle::classify_multistream_decode_packet(&input.payload, streams);
+    let decode_class =
+        oracle::classify_multistream_decode_packet(&input.payload, streams, sample_rate);
 
     match (&rust_ret, &c_ret) {
         (Ok(rust_samples), Ok(c_pcm)) => {
@@ -460,6 +461,7 @@ fn run_decode(input: &MSInput, sample_rate: i32, channels: i32, mapping_family: 
                     }
                 }
                 oracle::DecodeOracleClass::RecoveryOrDtxOnly
+                | oracle::DecodeOracleClass::SampleCountOnly
                 | oracle::DecodeOracleClass::ErrorAgreementOnly => {}
             }
         }

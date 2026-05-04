@@ -114,7 +114,7 @@ fn standalone_recovery_fixture_classifies_as_recovery_or_dtx() {
     let data = include_bytes!("../known_failures/silk_decode_recovery_divergence_loud/crash.bin");
     let packet = &data[2..];
     assert_eq!(
-        classify_decode_packet(packet),
+        classify_decode_packet(packet, 48_000),
         DecodeOracleClass::RecoveryOrDtxOnly
     );
 
@@ -129,10 +129,10 @@ fn standalone_recovery_fixture_classifies_as_recovery_or_dtx() {
 }
 
 #[test]
-fn silk_hybrid_coded_packet_classifies_as_snr_comparable() {
-    let packet = [0x62, 0x02, 0xaa, 0xbb, 0xcc, 0xdd];
+fn silk_coded_packet_classifies_as_snr_comparable() {
+    let packet = [0x00, 0xaa, 0xbb, 0xcc];
     assert_eq!(
-        classify_decode_packet(&packet),
+        classify_decode_packet(&packet, 48_000),
         DecodeOracleClass::SilkHybridCodedComparable
     );
 
@@ -143,6 +143,19 @@ fn silk_hybrid_coded_packet_classifies_as_snr_comparable() {
         &loud,
         DecodeOracleClass::SilkHybridCodedComparable
     ));
+}
+
+#[test]
+fn hybrid_highband_packet_uses_sample_count_only_at_high_rates() {
+    let packet = [0x60, 0xaa, 0xbb, 0xcc];
+    assert_eq!(
+        classify_decode_packet(&packet, 48_000),
+        DecodeOracleClass::SampleCountOnly
+    );
+    assert_eq!(
+        classify_decode_packet(&packet, 16_000),
+        DecodeOracleClass::SilkHybridCodedComparable
+    );
 }
 
 #[test]

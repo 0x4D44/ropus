@@ -103,7 +103,7 @@ fuzz_target!(|data: &[u8]| {
     // use the bounded SNR oracle only when every sub-frame is coded-comparable;
     // recovery/DTX sub-frames fall back to sample-count parity.
     let celt_only = is_celt_only_packet(packet);
-    let decode_class = oracle::classify_decode_packet(packet);
+    let decode_class = oracle::classify_decode_packet(packet, sample_rate);
 
     if use_float_pcm {
         let mut rust_pcm = vec![0f32; max_pcm];
