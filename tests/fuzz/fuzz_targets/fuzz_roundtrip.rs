@@ -11,6 +11,9 @@ use std::sync::Once;
 #[path = "c_reference.rs"]
 mod c_reference;
 
+#[path = "frame_duration.rs"]
+mod frame_duration;
+
 #[path = "oracle.rs"]
 mod oracle;
 
@@ -110,7 +113,7 @@ fuzz_target!(|data: &[u8]| {
         buf.extend_from_slice(data);
     });
 
-    if data.len() < 8 + 320 {
+    if data.len() < 8 + 40 {
         return;
     }
 
@@ -135,9 +138,12 @@ fuzz_target!(|data: &[u8]| {
     };
     let dtx = (data[7] & 0b0001) != 0;
     let loss_perc = (((data[7] & 0b1111_1110) >> 1) as i32) % 101;
+    let frame_duration_selector = data[7] >> 5;
+    let frame_duration_label = frame_duration::legal_frame_duration_label(frame_duration_selector);
     let pcm_bytes = &data[8..];
 
-    let frame_size = sample_rate / 50; // 20ms
+    let frame_size =
+        frame_duration::legal_frame_size_samples_per_channel(sample_rate, frame_duration_selector);
     let samples_needed = frame_size as usize * channels as usize;
     let sample_size_bytes = if use_float_pcm { 4 } else { 2 };
     let bytes_needed = samples_needed * sample_size_bytes;
@@ -217,7 +223,8 @@ fuzz_target!(|data: &[u8]| {
             assert_eq!(
                 &rust_compressed[..rust_enc_len], &c_compressed[..],
                 "Float compressed output mismatch: Rust={rust_enc_len}B, C={}B, \
-                 sr={sample_rate}, ch={channels}, app={application}, br={bitrate}, cx={complexity}, vbr={vbr}",
+                 sr={sample_rate}, ch={channels}, frame_duration={frame_duration_label}, \
+                 frame_size={frame_size}, app={application}, br={bitrate}, cx={complexity}, vbr={vbr}",
                 c_compressed.len()
             );
         }
@@ -227,13 +234,15 @@ fuzz_target!(|data: &[u8]| {
             let nb_frames = opus_packet_get_nb_frames(packet);
             assert!(
                 nb_frames.is_ok() && nb_frames.unwrap() > 0,
-                "Float encoded packet not parseable: len={rust_enc_len}"
+                "Float encoded packet not parseable: len={rust_enc_len}, \
+                 frame_duration={frame_duration_label}, frame_size={frame_size}"
             );
             let nb_samples = opus_packet_get_nb_samples(packet, sample_rate);
             if let Ok(ns) = nb_samples {
                 assert_eq!(
                     ns, frame_size,
-                    "Float encoded packet nb_samples ({ns}) != frame_size ({frame_size})"
+                    "Float encoded packet nb_samples ({ns}) != frame_size ({frame_size}), \
+                     frame_duration={frame_duration_label}"
                 );
             }
         }
@@ -245,7 +254,8 @@ fuzz_target!(|data: &[u8]| {
                 if !skip_diff {
                     assert_eq!(
                         rust_samples, c_samples,
-                        "Float decoded sample count mismatch: Rust={rust_samples}, C={c_samples}"
+                        "Float decoded sample count mismatch: Rust={rust_samples}, C={c_samples}, \
+                         frame_duration={frame_duration_label}, frame_size={frame_size}"
                     );
                     let n = rust_samples * channels as usize;
                     // Float decode is a deterministic i16/32768 mapping over the
@@ -260,7 +270,7 @@ fuzz_target!(|data: &[u8]| {
                                 r.to_bits(),
                                 c.to_bits(),
                                 "Float decoded PCM mismatch at sample {i}: \
-                                 sr={sample_rate}, ch={channels}, br={bitrate}"
+                                 sr={sample_rate}, ch={channels}, frame_duration={frame_duration_label}, br={bitrate}"
                             );
                         }
                     } else {
@@ -276,7 +286,8 @@ fuzz_target!(|data: &[u8]| {
                             assert!(
                                 snr >= oracle::SILK_DECODE_MIN_SNR_DB,
                                 "Float roundtrip SILK/Hybrid SNR {snr:.2} dB < {:.0} dB \
-                                 (sr={sample_rate}, ch={channels}, br={bitrate}, cx={complexity}, vbr={vbr})",
+                                 (sr={sample_rate}, ch={channels}, frame_duration={frame_duration_label}, \
+                                  frame_size={frame_size}, br={bitrate}, cx={complexity}, vbr={vbr})",
                                 oracle::SILK_DECODE_MIN_SNR_DB
                             );
                         }
@@ -288,13 +299,14 @@ fuzz_target!(|data: &[u8]| {
                 }
                 assert_eq!(
                     rust_samples, frame_size as usize,
-                    "Float decoded samples ({rust_samples}) != frame_size ({frame_size})"
+                    "Float decoded samples ({rust_samples}) != frame_size ({frame_size}), \
+                     frame_duration={frame_duration_label}"
                 );
             }
             Err(e) => {
                 panic!(
                     "Float: Rust decode failed ({e}) but C decode succeeded ({} samples), \
-                     sr={sample_rate}, ch={channels}",
+                     sr={sample_rate}, ch={channels}, frame_duration={frame_duration_label}, frame_size={frame_size}",
                     c_decoded.len() / channels as usize
                 );
             }
@@ -334,9 +346,11 @@ fuzz_target!(|data: &[u8]| {
 
         // Compressed output must match
         assert_eq!(
-            &rust_compressed[..rust_enc_len], &c_compressed[..],
+            &rust_compressed[..rust_enc_len],
+            &c_compressed[..],
             "Compressed output mismatch: Rust={rust_enc_len}B, C={}B, \
-             sr={sample_rate}, ch={channels}, app={application}, br={bitrate}, cx={complexity}, vbr={vbr}",
+             sr={sample_rate}, ch={channels}, frame_duration={frame_duration_label}, \
+             frame_size={frame_size}, app={application}, br={bitrate}, cx={complexity}, vbr={vbr}",
             c_compressed.len()
         );
 
@@ -346,13 +360,15 @@ fuzz_target!(|data: &[u8]| {
             let nb_frames = opus_packet_get_nb_frames(packet);
             assert!(
                 nb_frames.is_ok() && nb_frames.unwrap() > 0,
-                "Encoded packet not parseable: len={rust_enc_len}"
+                "Encoded packet not parseable: len={rust_enc_len}, \
+                 frame_duration={frame_duration_label}, frame_size={frame_size}"
             );
             let nb_samples = opus_packet_get_nb_samples(packet, sample_rate);
             if let Ok(ns) = nb_samples {
                 assert_eq!(
                     ns, frame_size,
-                    "Encoded packet nb_samples ({ns}) != frame_size ({frame_size})"
+                    "Encoded packet nb_samples ({ns}) != frame_size ({frame_size}), \
+                     frame_duration={frame_duration_label}"
                 );
             }
         }
@@ -366,14 +382,16 @@ fuzz_target!(|data: &[u8]| {
                 let c_samples = c_decoded.len() / channels as usize;
                 assert_eq!(
                     rust_samples, c_samples,
-                    "Decoded sample count mismatch: Rust={rust_samples}, C={c_samples}"
+                    "Decoded sample count mismatch: Rust={rust_samples}, C={c_samples}, \
+                     frame_duration={frame_duration_label}, frame_size={frame_size}"
                 );
                 let rust_slice = &rust_decoded[..rust_samples * channels as usize];
                 if celt_only {
                     assert_eq!(
                         rust_slice,
                         &c_decoded[..],
-                        "Decoded PCM mismatch at sr={sample_rate}, ch={channels}"
+                        "Decoded PCM mismatch at sr={sample_rate}, ch={channels}, \
+                         frame_duration={frame_duration_label}, frame_size={frame_size}"
                     );
                 } else {
                     let well_formed = opus_packet_get_nb_samples(packet, sample_rate).is_ok();
@@ -382,7 +400,8 @@ fuzz_target!(|data: &[u8]| {
                         assert!(
                             snr >= oracle::SILK_DECODE_MIN_SNR_DB,
                             "Roundtrip SILK/Hybrid SNR {snr:.2} dB < {:.0} dB \
-                             (sr={sample_rate}, ch={channels}, br={bitrate}, cx={complexity}, vbr={vbr}, packet_len={})",
+                             (sr={sample_rate}, ch={channels}, frame_duration={frame_duration_label}, \
+                              frame_size={frame_size}, br={bitrate}, cx={complexity}, vbr={vbr}, packet_len={})",
                             oracle::SILK_DECODE_MIN_SNR_DB,
                             packet.len()
                         );
@@ -396,13 +415,14 @@ fuzz_target!(|data: &[u8]| {
                 // --- Semantic invariant: decoded sample count == frame_size ---
                 assert_eq!(
                     rust_samples, frame_size as usize,
-                    "Decoded samples ({rust_samples}) != frame_size ({frame_size})"
+                    "Decoded samples ({rust_samples}) != frame_size ({frame_size}), \
+                     frame_duration={frame_duration_label}"
                 );
             }
             Err(e) => {
                 panic!(
                     "Rust decode failed ({e}) but C decode succeeded ({} samples), \
-                     sr={sample_rate}, ch={channels}",
+                     sr={sample_rate}, ch={channels}, frame_duration={frame_duration_label}, frame_size={frame_size}",
                     c_decoded.len() / channels as usize
                 );
             }
