@@ -1,6 +1,6 @@
 //! CLI parsing for `full-test`.
 //!
-//! The five HLD flags plus Phase 4/C1 additions:
+//! The five HLD flags plus Phase 4/release-gate additions:
 //! - `--quick`
 //! - `--skip-quality`
 //! - `--skip-coverage`
@@ -9,7 +9,7 @@
 //! - `--emit-json` (Phase 4: keep the old JSON envelope on stdout in addition
 //!   to the HTML report — opt-in so the default shell output is the one-line
 //!   summary plus report path, not a 200 KiB JSON dump).
-//! - `--release-preflight` (C1: fixed core profile, no selectable profiles).
+//! - `--release-preflight` (asset policy depends on whether `--quick` is set).
 //!
 //! `--help` / `-h` prints usage and exits 0. Any other argument is an error
 //! (exit 2). The surface here is tiny enough that a hand parser keeps the
@@ -61,13 +61,13 @@ pub fn help_text() -> &'static str {
         "    cargo run --release -p full-test -- [FLAGS]\n",
         "\n",
         "FLAGS:\n",
-        "    --quick             Skip stages 1 and 4; with --release-preflight, use a narrower Stage 2 smoke profile.\n",
+        "    --quick             Skip stages 1 and 4; with --release-preflight, use a core smoke profile with no neural/DRED claim.\n",
         "    --skip-quality      Skip stage 1 (cargo fmt + clippy).\n",
         "    --skip-coverage     Downgrade stage 2 to plain `cargo test`.\n",
         "    --skip-benchmarks   Skip stage 4 (bench sweep).\n",
         "    --skip-ambisonics   Skip stage 3 (projection roundtrip).\n",
         "    --emit-json         Also print the JSON envelope on stdout.\n",
-        "    --release-preflight Check the fixed core release asset profile.\n",
+        "    --release-preflight Check release assets; non-quick claims core + neural/DRED gates.\n",
         "    -h, --help          Show this help and exit.\n",
         "\n",
         "Report lands at tests/results/full_test_<YYYYMMDD_HHMMSS>.html.\n",
@@ -148,9 +148,12 @@ mod tests {
     }
 
     #[test]
-    fn help_text_documents_quick_release_preflight_stage2_profile() {
+    fn help_text_documents_release_preflight_claim_profiles() {
         assert!(help_text().contains(
-            "    --quick             Skip stages 1 and 4; with --release-preflight, use a narrower Stage 2 smoke profile."
+            "    --quick             Skip stages 1 and 4; with --release-preflight, use a core smoke profile with no neural/DRED claim."
+        ));
+        assert!(help_text().contains(
+            "    --release-preflight Check release assets; non-quick claims core + neural/DRED gates."
         ));
     }
 

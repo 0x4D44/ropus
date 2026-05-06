@@ -29,7 +29,8 @@ pub struct SetupInfo {
 pub fn capture(options: &Options) -> SetupInfo {
     let root = workspace_root();
     let ietf_vectors = ietf_vectors::provision(&root);
-    let preflight = preflight::capture(&root, options.release_preflight, &ietf_vectors);
+    let policy = preflight::PreflightPolicy::from_flags(options.quick, options.release_preflight);
+    let preflight = preflight::capture(&root, policy, &ietf_vectors);
     capture_with_ietf_vectors(options, ietf_vectors, preflight)
 }
 

@@ -1,10 +1,11 @@
 //! Release preflight asset probes.
 //!
-//! C1 intentionally has one fixed `--release-preflight` core profile. Missing
-//! fixed C reference and upstream conformance sources are banner-failing only
-//! when that flag is set. IETF vector absence is shown here, but the existing
-//! Stage 2 synthetic conformance failure remains the only failure accounting path
-//! for vectors so totals are not double-counted.
+//! `--release-preflight` has two claim profiles. The quick profile is a core
+//! smoke gate and does not claim neural/DRED coverage; the non-quick profile
+//! includes the deep-PLC/DRED package lane and requires its assets. IETF vector
+//! absence is shown here, but the existing Stage 2 synthetic conformance failure
+//! remains the only failure accounting path for vectors so totals are not
+//! double-counted.
 
 use std::path::{Path, PathBuf};
 
@@ -21,6 +22,75 @@ impl AssetRequirement {
         match self {
             AssetRequirement::Required => "required",
             AssetRequirement::Optional => "optional",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreflightPolicy {
+    DefaultReportOnly,
+    ReleaseCoreSmokeNoNeuralClaim,
+    ReleaseCorePlusNeuralDredGate,
+}
+
+impl PreflightPolicy {
+    pub fn from_flags(quick: bool, release_preflight: bool) -> Self {
+        if !release_preflight {
+            Self::DefaultReportOnly
+        } else if quick {
+            Self::ReleaseCoreSmokeNoNeuralClaim
+        } else {
+            Self::ReleaseCorePlusNeuralDredGate
+        }
+    }
+
+    pub fn release_preflight(self) -> bool {
+        !matches!(self, Self::DefaultReportOnly)
+    }
+
+    pub fn profile(self) -> &'static str {
+        match self {
+            Self::DefaultReportOnly => "default-report-only",
+            Self::ReleaseCoreSmokeNoNeuralClaim => "release-core-smoke-no-neural-claim",
+            Self::ReleaseCorePlusNeuralDredGate => "release-core-plus-neural-dred-gate",
+        }
+    }
+
+    pub fn claim_note(self) -> &'static str {
+        match self {
+            Self::DefaultReportOnly => "default full-test report-only; no release coverage claim",
+            Self::ReleaseCoreSmokeNoNeuralClaim => {
+                "core smoke only; neural/DRED gates are not claimed"
+            }
+            Self::ReleaseCorePlusNeuralDredGate => {
+                "core plus neural/DRED gate; DNN PLC and DRED format gates are claimed"
+            }
+        }
+    }
+
+    pub fn neural_dred_coverage_claimed(self) -> bool {
+        matches!(self, Self::ReleaseCorePlusNeuralDredGate)
+    }
+
+    fn neural_asset_requirement(self) -> AssetRequirement {
+        if self.neural_dred_coverage_claimed() {
+            AssetRequirement::Required
+        } else {
+            AssetRequirement::Optional
+        }
+    }
+
+    fn neural_asset_note(self) -> &'static str {
+        match self {
+            Self::DefaultReportOnly => {
+                "report-only in default full-test; no release coverage claim"
+            }
+            Self::ReleaseCoreSmokeNoNeuralClaim => {
+                "report-only in quick release-preflight; neural/DRED gates are not claimed"
+            }
+            Self::ReleaseCorePlusNeuralDredGate => {
+                "required for non-quick release-preflight neural/DRED gate"
+            }
         }
     }
 }
@@ -68,19 +138,26 @@ pub struct AssetProbe {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Outcome {
+    pub policy: PreflightPolicy,
     pub release_preflight: bool,
     pub profile: &'static str,
+    pub claim_note: &'static str,
+    pub neural_dred_coverage_claimed: bool,
     pub assets: Vec<AssetProbe>,
 }
 
 impl Outcome {
     #[cfg(test)]
     pub fn inactive(ietf_vectors: &IetfVectorProvision) -> Self {
-        capture_with_root(Path::new("."), false, ietf_vectors)
+        capture_with_root(
+            Path::new("."),
+            PreflightPolicy::DefaultReportOnly,
+            ietf_vectors,
+        )
     }
 
     pub fn banner_blocking_missing(&self) -> bool {
-        self.release_preflight && self.assets.iter().any(|asset| asset.banner_blocking)
+        self.assets.iter().any(|asset| asset.banner_blocking)
     }
 
     #[cfg(test)]
@@ -97,15 +174,15 @@ impl Outcome {
 
 pub fn capture(
     workspace_root: &Path,
-    release_preflight: bool,
+    policy: PreflightPolicy,
     ietf_vectors: &IetfVectorProvision,
 ) -> Outcome {
-    capture_with_root(workspace_root, release_preflight, ietf_vectors)
+    capture_with_root(workspace_root, policy, ietf_vectors)
 }
 
 fn capture_with_root(
     workspace_root: &Path,
-    release_preflight: bool,
+    policy: PreflightPolicy,
     ietf_vectors: &IetfVectorProvision,
 ) -> Outcome {
     let fixed_reference_path = workspace_root
@@ -149,28 +226,42 @@ fn capture_with_root(
             "fixed_reference",
             "Fixed-point C reference",
             fixed_reference_path,
-            release_preflight,
+            policy.release_preflight(),
         ),
         required_file(
             "conformance_sources",
             "Upstream conformance C tests",
             conformance_path,
-            release_preflight,
+            policy.release_preflight(),
         ),
         ietf_asset(ietf_vectors),
-        optional_files("dnn_base_weights", "DNN base weights", &dnn_base_paths),
-        optional_files("dred_rdovae_weights", "DRED RDOVAE weights", &dred_paths),
-        optional_derived(
+        policy_files(
+            "dnn_base_weights",
+            "DNN base weights",
+            &dnn_base_paths,
+            policy,
+        ),
+        policy_files(
+            "dred_rdovae_weights",
+            "DRED RDOVAE weights",
+            &dred_paths,
+            policy,
+        ),
+        policy_derived(
             "float_deep_plc_assets",
             "Float-mode deep PLC harness assets",
             fixed_reference_present && dnn_base_present,
             "requires fixed_reference and dnn_base_weights",
+            policy,
         ),
     ];
 
     Outcome {
-        release_preflight,
-        profile: "core",
+        policy,
+        release_preflight: policy.release_preflight(),
+        profile: policy.profile(),
+        claim_note: policy.claim_note(),
+        neural_dred_coverage_claimed: policy.neural_dred_coverage_claimed(),
         assets,
     }
 }
@@ -198,41 +289,50 @@ fn required_file(
     }
 }
 
-fn optional_files(key: &'static str, label: &'static str, paths: &[PathBuf]) -> AssetProbe {
-    let present = paths.iter().all(|p| p.is_file());
-    AssetProbe {
-        key,
-        label,
-        requirement: AssetRequirement::Optional,
-        status: if present {
-            AssetStatus::PresentOptional
-        } else {
-            AssetStatus::MissingOptional
-        },
-        probes: paths.iter().map(|p| display_path(p)).collect(),
-        note: Some("report-only in C1".to_string()),
-        banner_blocking: false,
+fn status_for_requirement(requirement: AssetRequirement, present: bool) -> AssetStatus {
+    match (requirement, present) {
+        (AssetRequirement::Required, true) => AssetStatus::PresentRequired,
+        (AssetRequirement::Required, false) => AssetStatus::MissingRequired,
+        (AssetRequirement::Optional, true) => AssetStatus::PresentOptional,
+        (AssetRequirement::Optional, false) => AssetStatus::MissingOptional,
     }
 }
 
-fn optional_derived(
+fn policy_files(
+    key: &'static str,
+    label: &'static str,
+    paths: &[PathBuf],
+    policy: PreflightPolicy,
+) -> AssetProbe {
+    let present = paths.iter().all(|p| p.is_file());
+    let requirement = policy.neural_asset_requirement();
+    AssetProbe {
+        key,
+        label,
+        requirement,
+        status: status_for_requirement(requirement, present),
+        probes: paths.iter().map(|p| display_path(p)).collect(),
+        note: Some(policy.neural_asset_note().to_string()),
+        banner_blocking: requirement == AssetRequirement::Required && !present,
+    }
+}
+
+fn policy_derived(
     key: &'static str,
     label: &'static str,
     present: bool,
     note: &'static str,
+    policy: PreflightPolicy,
 ) -> AssetProbe {
+    let requirement = policy.neural_asset_requirement();
     AssetProbe {
         key,
         label,
-        requirement: AssetRequirement::Optional,
-        status: if present {
-            AssetStatus::PresentOptional
-        } else {
-            AssetStatus::MissingOptional
-        },
+        requirement,
+        status: status_for_requirement(requirement, present),
         probes: Vec::new(),
-        note: Some(format!("{note}; report-only in C1")),
-        banner_blocking: false,
+        note: Some(format!("{note}; {}", policy.neural_asset_note())),
+        banner_blocking: requirement == AssetRequirement::Required && !present,
     }
 }
 
@@ -278,13 +378,29 @@ mod tests {
             .expect("asset exists")
     }
 
+    fn write_core_assets(root: &Path) {
+        write(root, "reference/celt/bands.c");
+        write(root, "reference/tests/test_opus_api.c");
+    }
+
+    fn write_neural_assets(root: &Path) {
+        write(root, "reference/dnn/pitchdnn_data.c");
+        write(root, "reference/dnn/fargan_data.c");
+        write(root, "reference/dnn/plc_data.c");
+        write(root, "reference/dnn/dred_rdovae_enc_data.c");
+        write(root, "reference/dnn/dred_rdovae_dec_data.c");
+    }
+
     #[test]
     fn core_required_assets_are_present_when_probe_files_exist() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        write(tmp.path(), "reference/celt/bands.c");
-        write(tmp.path(), "reference/tests/test_opus_api.c");
+        write_core_assets(tmp.path());
 
-        let outcome = capture(tmp.path(), true, &IetfVectorProvision::present());
+        let outcome = capture(
+            tmp.path(),
+            PreflightPolicy::ReleaseCoreSmokeNoNeuralClaim,
+            &IetfVectorProvision::present(),
+        );
 
         assert_eq!(
             asset(&outcome, "fixed_reference").status,
@@ -300,7 +416,11 @@ mod tests {
     #[test]
     fn release_preflight_blocks_on_missing_non_ietf_required_assets() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let outcome = capture(tmp.path(), true, &IetfVectorProvision::present());
+        let outcome = capture(
+            tmp.path(),
+            PreflightPolicy::ReleaseCoreSmokeNoNeuralClaim,
+            &IetfVectorProvision::present(),
+        );
 
         assert_eq!(
             asset(&outcome, "fixed_reference").status,
@@ -322,7 +442,11 @@ mod tests {
     #[test]
     fn missing_required_assets_are_report_only_without_release_flag() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let outcome = capture(tmp.path(), false, &IetfVectorProvision::present());
+        let outcome = capture(
+            tmp.path(),
+            PreflightPolicy::DefaultReportOnly,
+            &IetfVectorProvision::present(),
+        );
 
         assert_eq!(
             asset(&outcome, "fixed_reference").status,
@@ -337,7 +461,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let outcome = capture(
             tmp.path(),
-            true,
+            PreflightPolicy::ReleaseCoreSmokeNoNeuralClaim,
             &IetfVectorProvision {
                 status: ProvisionStatus::Unavailable,
                 attempted_fetch: true,
@@ -359,9 +483,14 @@ mod tests {
     }
 
     #[test]
-    fn optional_dnn_and_dred_assets_never_banner_block() {
+    fn default_reports_missing_neural_assets_without_banner_blocking() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let outcome = capture(tmp.path(), true, &IetfVectorProvision::present());
+        write_core_assets(tmp.path());
+        let outcome = capture(
+            tmp.path(),
+            PreflightPolicy::DefaultReportOnly,
+            &IetfVectorProvision::present(),
+        );
 
         for key in [
             "dnn_base_weights",
@@ -371,32 +500,130 @@ mod tests {
             let row = asset(&outcome, key);
             assert_eq!(row.status, AssetStatus::MissingOptional);
             assert!(!row.banner_blocking);
+            assert_eq!(row.requirement, AssetRequirement::Optional);
+        }
+        assert_eq!(outcome.profile, "default-report-only");
+        assert!(!outcome.release_preflight);
+        assert!(!outcome.neural_dred_coverage_claimed);
+        assert!(!outcome.banner_blocking_missing());
+    }
+
+    #[test]
+    fn quick_release_preflight_reports_neural_assets_without_claiming_them() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write_core_assets(tmp.path());
+
+        let outcome = capture(
+            tmp.path(),
+            PreflightPolicy::ReleaseCoreSmokeNoNeuralClaim,
+            &IetfVectorProvision::present(),
+        );
+
+        assert_eq!(outcome.profile, "release-core-smoke-no-neural-claim");
+        assert!(outcome.release_preflight);
+        assert!(!outcome.neural_dred_coverage_claimed);
+        assert!(outcome.claim_note.contains("not claimed"));
+        assert!(!outcome.banner_blocking_missing());
+
+        for key in [
+            "dnn_base_weights",
+            "dred_rdovae_weights",
+            "float_deep_plc_assets",
+        ] {
+            let row = asset(&outcome, key);
+            assert_eq!(row.requirement, AssetRequirement::Optional);
+            assert_eq!(row.status, AssetStatus::MissingOptional);
+            assert!(!row.banner_blocking);
+            assert!(row.note.as_deref().unwrap().contains("not claimed"));
         }
     }
 
     #[test]
-    fn optional_assets_become_present_when_all_probe_files_exist() {
+    fn non_quick_release_preflight_blocks_missing_neural_assets() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        write(tmp.path(), "reference/celt/bands.c");
-        write(tmp.path(), "reference/dnn/pitchdnn_data.c");
-        write(tmp.path(), "reference/dnn/fargan_data.c");
-        write(tmp.path(), "reference/dnn/plc_data.c");
-        write(tmp.path(), "reference/dnn/dred_rdovae_enc_data.c");
-        write(tmp.path(), "reference/dnn/dred_rdovae_dec_data.c");
+        write_core_assets(tmp.path());
 
-        let outcome = capture(tmp.path(), false, &IetfVectorProvision::present());
+        let outcome = capture(
+            tmp.path(),
+            PreflightPolicy::ReleaseCorePlusNeuralDredGate,
+            &IetfVectorProvision::present(),
+        );
+
+        assert_eq!(outcome.profile, "release-core-plus-neural-dred-gate");
+        assert!(outcome.release_preflight);
+        assert!(outcome.neural_dred_coverage_claimed);
+        assert!(outcome.banner_blocking_missing());
+        let keys: Vec<&str> = outcome
+            .missing_required_for_banner()
+            .iter()
+            .map(|asset| asset.key)
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                "dnn_base_weights",
+                "dred_rdovae_weights",
+                "float_deep_plc_assets"
+            ]
+        );
+
+        for key in [
+            "dnn_base_weights",
+            "dred_rdovae_weights",
+            "float_deep_plc_assets",
+        ] {
+            let row = asset(&outcome, key);
+            assert_eq!(row.requirement, AssetRequirement::Required);
+            assert_eq!(row.status, AssetStatus::MissingRequired);
+            assert!(row.banner_blocking);
+            assert!(row.note.as_deref().unwrap().contains("required"));
+        }
+    }
+
+    #[test]
+    fn present_dnn_and_dred_assets_clear_non_quick_neural_blockers() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write_core_assets(tmp.path());
+        write_neural_assets(tmp.path());
+
+        let outcome = capture(
+            tmp.path(),
+            PreflightPolicy::ReleaseCorePlusNeuralDredGate,
+            &IetfVectorProvision::present(),
+        );
 
         assert_eq!(
             asset(&outcome, "dnn_base_weights").status,
-            AssetStatus::PresentOptional
+            AssetStatus::PresentRequired
         );
         assert_eq!(
             asset(&outcome, "dred_rdovae_weights").status,
-            AssetStatus::PresentOptional
+            AssetStatus::PresentRequired
         );
         assert_eq!(
             asset(&outcome, "float_deep_plc_assets").status,
-            AssetStatus::PresentOptional
+            AssetStatus::PresentRequired
+        );
+        assert!(!outcome.banner_blocking_missing());
+    }
+
+    #[test]
+    fn preflight_policy_profiles_follow_release_and_quick_flags() {
+        assert_eq!(
+            PreflightPolicy::from_flags(false, false),
+            PreflightPolicy::DefaultReportOnly
+        );
+        assert_eq!(
+            PreflightPolicy::from_flags(true, false),
+            PreflightPolicy::DefaultReportOnly
+        );
+        assert_eq!(
+            PreflightPolicy::from_flags(true, true),
+            PreflightPolicy::ReleaseCoreSmokeNoNeuralClaim
+        );
+        assert_eq!(
+            PreflightPolicy::from_flags(false, true),
+            PreflightPolicy::ReleaseCorePlusNeuralDredGate
         );
     }
 }

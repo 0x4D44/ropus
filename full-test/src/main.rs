@@ -268,10 +268,14 @@ fn relpath(p: &Path) -> String {
 }
 
 fn stage2_profile(options: &cli::Options) -> tests::Stage2Profile {
-    if options.quick && options.release_preflight {
-        tests::Stage2Profile::QuickReleasePreflight
-    } else {
-        tests::Stage2Profile::FullWorkspace
+    match preflight::PreflightPolicy::from_flags(options.quick, options.release_preflight) {
+        preflight::PreflightPolicy::ReleaseCoreSmokeNoNeuralClaim => {
+            tests::Stage2Profile::QuickReleasePreflight
+        }
+        preflight::PreflightPolicy::DefaultReportOnly
+        | preflight::PreflightPolicy::ReleaseCorePlusNeuralDredGate => {
+            tests::Stage2Profile::FullWorkspace
+        }
     }
 }
 

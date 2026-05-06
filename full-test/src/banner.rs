@@ -275,7 +275,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         crate::preflight::capture(
             tmp.path(),
-            true,
+            crate::preflight::PreflightPolicy::ReleaseCoreSmokeNoNeuralClaim,
             &crate::ietf_vectors::IetfVectorProvision::present(),
         )
     }

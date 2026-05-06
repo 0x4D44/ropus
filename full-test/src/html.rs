@@ -178,7 +178,10 @@ fn render_header(out: &mut String, ctx: &ReportContext<'_>) {
         notes.push("Flag: <code>--skip-ambisonics</code>.".to_string());
     }
     if ctx.options.release_preflight {
-        notes.push("Flag: <code>--release-preflight</code> (core profile).".to_string());
+        notes.push(format!(
+            "Flag: <code>--release-preflight</code> ({}).",
+            html_escape(ctx.preflight.claim_note)
+        ));
     }
     if !notes.is_empty() {
         out.push_str("<p class=\"meta\">");
@@ -202,9 +205,10 @@ fn render_release_preflight(out: &mut String, preflight: &PreflightOutcome) {
         "report-only"
     };
     out.push_str(&format!(
-        "<p class=\"meta\">Profile: <code>{}</code> &bull; Mode: {}</p>\n",
+        "<p class=\"meta\">Profile: <code>{}</code> &bull; Mode: {} &bull; Claim: {}</p>\n",
         html_escape(preflight.profile),
         html_escape(mode),
+        html_escape(preflight.claim_note),
     ));
     out.push_str("<table>\n<tr><th>Asset</th><th>Key</th><th>Requirement</th><th>Status</th><th>Probe</th><th>Note</th></tr>\n");
     for asset in &preflight.assets {
@@ -1102,8 +1106,11 @@ mod tests {
         let a = ambisonics_ok();
         let b = bench_ok();
         let tmp = tempfile::tempdir().expect("tempdir");
-        let preflight =
-            crate::preflight::capture(tmp.path(), true, &IetfVectorProvision::present());
+        let preflight = crate::preflight::capture(
+            tmp.path(),
+            crate::preflight::PreflightPolicy::ReleaseCorePlusNeuralDredGate,
+            &IetfVectorProvision::present(),
+        );
         let c = ReportContext {
             commit_sha: "abc",
             branch: "main",
@@ -1123,9 +1130,10 @@ mod tests {
         };
         let html = render(&c);
 
-        assert!(html.contains("Profile: <code>core</code>"));
+        assert!(html.contains("Profile: <code>release-core-plus-neural-dred-gate</code>"));
         assert!(html.contains("Mode: active"));
-        assert!(html.contains("<code>--release-preflight</code> (core profile)"));
+        assert!(html.contains("Claim: core plus neural/DRED gate"));
+        assert!(html.contains("<code>--release-preflight</code> (core plus neural/DRED gate"));
         assert!(html.contains("<code>fixed_reference</code>"));
         assert!(html.contains("<code>conformance_sources</code>"));
         assert!(html.contains("<code>ietf_vectors</code>"));
@@ -1134,8 +1142,51 @@ mod tests {
         assert!(html.contains("<code>float_deep_plc_assets</code>"));
         assert!(html.contains("class=\"fail\">missing_required"));
         assert!(html.contains("class=\"pass\">present_required"));
-        assert!(html.contains("class=\"warn\">missing_optional"));
+        assert!(html.contains("required for non-quick release-preflight neural/DRED gate"));
         assert!(html.contains("failure accounting remains in Stage 2"));
+    }
+
+    #[test]
+    fn quick_release_preflight_html_states_no_neural_claim() {
+        let opts = Options {
+            quick: true,
+            release_preflight: true,
+            ..Options::default()
+        };
+        let q = quality_ok();
+        let t = populated_tests();
+        let a = ambisonics_ok();
+        let b = bench_ok();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let preflight = crate::preflight::capture(
+            tmp.path(),
+            crate::preflight::PreflightPolicy::ReleaseCoreSmokeNoNeuralClaim,
+            &IetfVectorProvision::present(),
+        );
+        let c = ReportContext {
+            commit_sha: "abc",
+            branch: "main",
+            version: "0.9.0",
+            commit_subject: "subj",
+            timestamp: now(),
+            banner: Banner::Fail,
+            ietf_vectors: IetfVectorProvision::present(),
+            ietf_vectors_present: true,
+            preflight,
+            options: &opts,
+            quality: &q,
+            tests: &t,
+            fuzz: Box::leak(Box::new(crate::fuzz::Outcome::not_requested())),
+            ambisonics: &a,
+            bench: &b,
+        };
+        let html = render(&c);
+
+        assert!(html.contains("Profile: <code>release-core-smoke-no-neural-claim</code>"));
+        assert!(html.contains("Claim: core smoke only; neural/DRED gates are not claimed"));
+        assert!(html.contains("<code>--release-preflight</code> (core smoke only"));
+        assert!(html.contains("report-only in quick release-preflight"));
+        assert!(html.contains("class=\"warn\">missing_optional"));
     }
 
     #[test]

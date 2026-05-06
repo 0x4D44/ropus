@@ -75,6 +75,8 @@ fn preflight_to_json(p: &PreflightOutcome) -> Value {
     json!({
         "release_preflight": p.release_preflight,
         "profile": p.profile,
+        "claim_note": p.claim_note,
+        "neural_dred_coverage_claimed": p.neural_dred_coverage_claimed,
         "banner_blocking_missing": p.banner_blocking_missing(),
         "assets": p.assets.iter().map(preflight_asset_to_json).collect::<Vec<_>>(),
     })
@@ -416,8 +418,16 @@ mod tests {
         assert_eq!(v["setup"]["ietf_vectors"]["status"], "present");
         assert_eq!(v["setup"]["ietf_vectors"]["available"], true);
         assert_eq!(v["setup"]["ietf_vectors"]["attempted_fetch"], false);
-        assert_eq!(v["setup"]["preflight"]["profile"], "core");
+        assert_eq!(v["setup"]["preflight"]["profile"], "default-report-only");
         assert_eq!(v["setup"]["preflight"]["release_preflight"], false);
+        assert_eq!(
+            v["setup"]["preflight"]["claim_note"],
+            "default full-test report-only; no release coverage claim"
+        );
+        assert_eq!(
+            v["setup"]["preflight"]["neural_dred_coverage_claimed"],
+            false
+        );
         assert_eq!(
             v["setup"]["preflight"]["assets"].as_array().unwrap().len(),
             6
@@ -442,8 +452,11 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut setup = dummy_setup();
         setup.options_snapshot.release_preflight = true;
-        setup.preflight =
-            crate::preflight::capture(tmp.path(), true, &IetfVectorProvision::present());
+        setup.preflight = crate::preflight::capture(
+            tmp.path(),
+            crate::preflight::PreflightPolicy::ReleaseCorePlusNeuralDredGate,
+            &IetfVectorProvision::present(),
+        );
         let quality = quality_ok();
         let tests = TestsStageOutcome::skipped("preflight contract");
         let amb = skipped_ambisonics();
@@ -462,8 +475,15 @@ mod tests {
         let preflight = &v["setup"]["preflight"];
         let assets = preflight["assets"].as_array().expect("preflight assets");
 
-        assert_eq!(preflight["profile"], "core");
+        assert_eq!(preflight["profile"], "release-core-plus-neural-dred-gate");
         assert_eq!(preflight["release_preflight"], true);
+        assert_eq!(preflight["neural_dred_coverage_claimed"], true);
+        assert!(
+            preflight["claim_note"]
+                .as_str()
+                .unwrap()
+                .contains("neural/DRED gate")
+        );
         assert_eq!(preflight["banner_blocking_missing"], true);
         assert_eq!(assets.len(), 6);
 
@@ -479,11 +499,57 @@ mod tests {
         assert_eq!(ietf["banner_blocking"], false);
 
         let dnn = asset_json(assets, "dnn_base_weights");
+        assert_eq!(dnn["requirement"], "required");
+        assert_eq!(dnn["status"], "missing_required");
+        assert_eq!(dnn["banner_blocking"], true);
+
+        assert_eq!(v["setup"]["flags"]["release_preflight"], true);
+    }
+
+    #[test]
+    fn serialises_quick_release_preflight_without_neural_claim() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut setup = dummy_setup();
+        setup.options_snapshot.quick = true;
+        setup.options_snapshot.release_preflight = true;
+        setup.preflight = crate::preflight::capture(
+            tmp.path(),
+            crate::preflight::PreflightPolicy::ReleaseCoreSmokeNoNeuralClaim,
+            &IetfVectorProvision::present(),
+        );
+        let quality = quality_ok();
+        let tests = TestsStageOutcome::skipped("preflight contract");
+        let amb = skipped_ambisonics();
+        let bench = skipped_bench();
+        let fuzz = fuzz_not_requested();
+        let env = Envelope {
+            setup: &setup,
+            quality: &quality,
+            tests: &tests,
+            fuzz: &fuzz,
+            ambisonics: &amb,
+            bench: &bench,
+            exit_code: 1,
+        };
+        let v = env.to_json();
+        let preflight = &v["setup"]["preflight"];
+        let assets = preflight["assets"].as_array().expect("preflight assets");
+
+        assert_eq!(preflight["profile"], "release-core-smoke-no-neural-claim");
+        assert_eq!(preflight["release_preflight"], true);
+        assert_eq!(preflight["neural_dred_coverage_claimed"], false);
+        assert!(
+            preflight["claim_note"]
+                .as_str()
+                .unwrap()
+                .contains("not claimed")
+        );
+
+        let dnn = asset_json(assets, "dnn_base_weights");
         assert_eq!(dnn["requirement"], "optional");
         assert_eq!(dnn["status"], "missing_optional");
         assert_eq!(dnn["banner_blocking"], false);
-
-        assert_eq!(v["setup"]["flags"]["release_preflight"], true);
+        assert!(dnn["note"].as_str().unwrap().contains("not claimed"));
     }
 
     #[test]
