@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::ambisonics::AmbisonicsResult;
 use crate::bench::BenchResult;
+use crate::fuzz::Outcome as FuzzOutcome;
 use crate::ietf_vectors::IetfVectorProvision;
 use crate::preflight::{AssetProbe, Outcome as PreflightOutcome};
 use crate::quality::{Check, Outcome as QualityOutcome};
@@ -18,6 +19,7 @@ pub struct Envelope<'a> {
     pub setup: &'a SetupInfo,
     pub quality: &'a QualityOutcome,
     pub tests: &'a TestsOutcome,
+    pub fuzz: &'a FuzzOutcome,
     pub ambisonics: &'a AmbisonicsResult,
     pub bench: &'a BenchResult,
     pub exit_code: u8,
@@ -30,6 +32,7 @@ impl Envelope<'_> {
             "stages": {
                 "quality": quality_to_json(self.quality),
                 "tests": tests_to_json(self.tests),
+                "fuzz": fuzz_to_json(self.fuzz),
                 "ambisonics": ambisonics_to_json(self.ambisonics),
                 "bench": bench_to_json(self.bench),
             },
@@ -114,6 +117,10 @@ fn ambisonics_to_json(o: &AmbisonicsResult) -> Value {
     serde_json::to_value(o).unwrap_or(Value::Null)
 }
 
+fn fuzz_to_json(o: &FuzzOutcome) -> Value {
+    serde_json::to_value(o).unwrap_or(Value::Null)
+}
+
 fn bench_to_json(o: &BenchResult) -> Value {
     // Same splice pattern as ambisonics/tests: derive-Serialize on the
     // outcome struct, then hand the `Value` to the envelope verbatim.
@@ -191,6 +198,10 @@ mod tests {
         BenchResult::skipped("phase 2 compat")
     }
 
+    fn fuzz_not_requested() -> crate::fuzz::Outcome {
+        crate::fuzz::Outcome::not_requested()
+    }
+
     fn quality_ok() -> QualityOutcome {
         QualityOutcome {
             skipped: false,
@@ -262,10 +273,12 @@ mod tests {
         let tests = tests_populated();
         let amb = skipped_ambisonics();
         let bench = skipped_bench();
+        let fuzz = fuzz_not_requested();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            fuzz: &fuzz,
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -279,6 +292,8 @@ mod tests {
         assert_eq!(v["stages"]["tests"]["build_failed"], false);
         assert_eq!(v["stages"]["tests"]["skipped"], false);
         assert_eq!(v["stages"]["tests"]["coverage_skipped"], false);
+        assert_eq!(v["stages"]["fuzz"]["mode"], "not_requested");
+        assert_eq!(v["stages"]["fuzz"]["status"], "not_requested");
 
         // Coverage sub-object shape.
         let cov = &v["stages"]["tests"]["coverage"];
@@ -303,10 +318,12 @@ mod tests {
         };
         let amb = skipped_ambisonics();
         let bench = skipped_bench();
+        let fuzz = fuzz_not_requested();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            fuzz: &fuzz,
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -323,10 +340,12 @@ mod tests {
         let tests = TestsStageOutcome::skipped("stage disabled via flag");
         let amb = skipped_ambisonics();
         let bench = skipped_bench();
+        let fuzz = fuzz_not_requested();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            fuzz: &fuzz,
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -354,10 +373,12 @@ mod tests {
         };
         let amb = skipped_ambisonics();
         let bench = skipped_bench();
+        let fuzz = fuzz_not_requested();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            fuzz: &fuzz,
             ambisonics: &amb,
             bench: &bench,
             exit_code: 1,
@@ -376,10 +397,12 @@ mod tests {
         let tests = TestsStageOutcome::skipped("phase 1 compat");
         let amb = skipped_ambisonics();
         let bench = skipped_bench();
+        let fuzz = fuzz_not_requested();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            fuzz: &fuzz,
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -425,10 +448,12 @@ mod tests {
         let tests = TestsStageOutcome::skipped("preflight contract");
         let amb = skipped_ambisonics();
         let bench = skipped_bench();
+        let fuzz = fuzz_not_requested();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            fuzz: &fuzz,
             ambisonics: &amb,
             bench: &bench,
             exit_code: 1,
@@ -468,10 +493,12 @@ mod tests {
         let tests = TestsStageOutcome::skipped("phase 1 compat");
         let amb = skipped_ambisonics();
         let bench = skipped_bench();
+        let fuzz = fuzz_not_requested();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            fuzz: &fuzz,
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -551,10 +578,12 @@ mod tests {
         let tests = tests_populated();
         let amb = ambisonics_populated();
         let bench = skipped_bench();
+        let fuzz = fuzz_not_requested();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            fuzz: &fuzz,
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -584,10 +613,12 @@ mod tests {
         let tests = tests_populated();
         let amb = skipped_ambisonics();
         let bench = bench_populated();
+        let fuzz = fuzz_not_requested();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            fuzz: &fuzz,
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -620,10 +651,12 @@ mod tests {
         let tests = tests_populated();
         let amb = AmbisonicsResult::skipped("--skip-ambisonics");
         let bench = skipped_bench();
+        let fuzz = fuzz_not_requested();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            fuzz: &fuzz,
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -643,10 +676,12 @@ mod tests {
         let tests = tests_populated();
         let amb = skipped_ambisonics();
         let bench = BenchResult::skipped("--quick");
+        let fuzz = fuzz_not_requested();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            fuzz: &fuzz,
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -675,10 +710,12 @@ mod tests {
         };
         let amb = AmbisonicsResult::skipped("upstream build failure");
         let bench = BenchResult::skipped("upstream build failure");
+        let fuzz = fuzz_not_requested();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            fuzz: &fuzz,
             ambisonics: &amb,
             bench: &bench,
             exit_code: 1,
@@ -710,10 +747,12 @@ mod tests {
         let tests = TestsStageOutcome::skipped("phase 1 compat");
         let amb = skipped_ambisonics();
         let bench = skipped_bench();
+        let fuzz = fuzz_not_requested();
         let env = Envelope {
             setup: &setup,
             quality: &quality,
             tests: &tests,
+            fuzz: &fuzz,
             ambisonics: &amb,
             bench: &bench,
             exit_code: 1,

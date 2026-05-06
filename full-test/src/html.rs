@@ -29,6 +29,7 @@ use crate::banner::{BENCH_WARN_RATIO, Banner};
 use crate::bench::{BenchResult, VectorBench};
 use crate::cargo_parse::{Outcome as TestOutcomeKind, TestOutcome};
 use crate::cli::Options;
+use crate::fuzz::{Outcome as FuzzOutcome, Status as FuzzStatus};
 use crate::ietf_vectors::{IetfVectorProvision, ProvisionStatus};
 use crate::llvm_cov_parse::CoverageMetrics;
 use crate::preflight::{AssetStatus, Outcome as PreflightOutcome};
@@ -50,6 +51,7 @@ pub struct ReportContext<'a> {
     pub options: &'a Options,
     pub quality: &'a QualityOutcome,
     pub tests: &'a TestsOutcome,
+    pub fuzz: &'a FuzzOutcome,
     pub ambisonics: &'a AmbisonicsResult,
     pub bench: &'a BenchResult,
 }
@@ -81,6 +83,7 @@ pub fn render(ctx: &ReportContext<'_>) -> String {
     render_category_summary(&mut out, &ctx.tests.tests.per_test);
     render_phase_summary(&mut out, ctx);
     render_release_preflight(&mut out, &ctx.preflight);
+    render_fuzz_sanity(&mut out, ctx.fuzz);
     render_module_breakdown(&mut out, &ctx.tests.tests.per_test);
     render_failed_tests(&mut out, &ctx.tests.tests.failed_test_names);
     render_coverage(&mut out, ctx);
@@ -502,7 +505,98 @@ fn render_phase_summary(out: &mut String, ctx: &ReportContext<'_>) {
         dur = html_escape(&b_dur_str),
     ));
 
+    // Fuzz sanity (policy-owned stage; default full-test leaves it not requested)
+    let f = ctx.fuzz;
+    let f_total = f.targets.len() as u32;
+    let f_failed = if f.status == FuzzStatus::Fail { 1 } else { 0 };
+    let f_passed = if f.status == FuzzStatus::Pass || f.status == FuzzStatus::Warn {
+        f_total.saturating_sub(f_failed)
+    } else {
+        0
+    };
+    let f_skipped = if f.status == FuzzStatus::NotRequested {
+        1
+    } else {
+        0
+    };
+    let f_fail_cls = match f.status {
+        FuzzStatus::Fail => " fail",
+        FuzzStatus::Warn => " warn",
+        _ => "",
+    };
+    let f_failed_disp = match f.status {
+        FuzzStatus::Fail => "failed".to_string(),
+        FuzzStatus::Warn => "warn".to_string(),
+        _ => f_failed.to_string(),
+    };
+    let f_dur = if f.status == FuzzStatus::NotRequested {
+        "not requested".to_string()
+    } else {
+        format_duration(f.duration_ms)
+    };
+    out.push_str(&format!(
+        "<tr><td>Fuzz sanity</td><td class=\"num\">{f_total}</td><td class=\"num\">{f_passed}</td><td class=\"num{f_fail_cls}\">{failed}</td><td class=\"num\">{f_skipped}</td><td class=\"num\">{dur}</td></tr>\n",
+        failed = html_escape(&f_failed_disp),
+        dur = html_escape(&f_dur),
+    ));
+
     out.push_str("</table>\n");
+}
+
+fn render_fuzz_sanity(out: &mut String, fuzz: &FuzzOutcome) {
+    out.push_str("<h2>Fuzz sanity</h2>\n");
+    out.push_str(&format!(
+        "<p class=\"meta\">Mode: <code>{}</code> &bull; Status: <span class=\"{}\">{}</span></p>\n",
+        html_escape(fuzz.mode.as_str()),
+        fuzz_status_class(fuzz.status),
+        html_escape(fuzz.status.as_str()),
+    ));
+    if !fuzz.command.is_empty() {
+        out.push_str(&format!(
+            "<p class=\"meta\">Command: <code>{}</code></p>\n",
+            html_escape(&fuzz.command.join(" ")),
+        ));
+    }
+    if !fuzz.issues.is_empty() {
+        out.push_str("<ul class=\"failed-tests\">\n");
+        for issue in &fuzz.issues {
+            out.push_str(&format!("  <li>{}</li>\n", html_escape(issue)));
+        }
+        out.push_str("</ul>\n");
+    }
+    if fuzz.targets.is_empty() {
+        out.push_str("<p class=\"empty\">(no fuzz target rows)</p>\n");
+        return;
+    }
+    out.push_str("<table>\n<tr><th>Target</th><th>Build</th><th class=\"num\">Crashes</th><th>Replay</th></tr>\n");
+    for target in &fuzz.targets {
+        let cls = if target.build == "fail" || target.replay == "fail" {
+            "fail"
+        } else if target.build == "not_checked" || target.replay == "not_checked" {
+            "warn"
+        } else {
+            "pass"
+        };
+        out.push_str(&format!(
+            "<tr><td><code>{}</code></td><td class=\"{}\">{}</td><td class=\"num\">{}</td><td class=\"{}\">{}</td></tr>\n",
+            html_escape(&target.name),
+            cls,
+            html_escape(&target.build),
+            target.crashes,
+            cls,
+            html_escape(&target.replay),
+        ));
+    }
+    out.push_str("</table>\n");
+}
+
+fn fuzz_status_class(status: FuzzStatus) -> &'static str {
+    match status {
+        FuzzStatus::Fail => "fail",
+        FuzzStatus::Warn => "warn",
+        FuzzStatus::Pass => "pass",
+        FuzzStatus::NotRequested => "empty",
+    }
 }
 
 fn render_module_breakdown(out: &mut String, per_test: &[TestOutcome]) {
@@ -947,6 +1041,7 @@ mod tests {
         amb: &'a AmbisonicsResult,
         bench: &'a BenchResult,
     ) -> ReportContext<'a> {
+        let fuzz = Box::leak(Box::new(crate::fuzz::Outcome::not_requested()));
         ReportContext {
             commit_sha: "dd3fb17",
             branch: "main",
@@ -960,6 +1055,7 @@ mod tests {
             options,
             quality,
             tests,
+            fuzz,
             ambisonics: amb,
             bench,
         }
@@ -982,6 +1078,7 @@ mod tests {
             "Category summary",
             "Phase summary",
             "Release preflight",
+            "Fuzz sanity",
             "Module breakdown",
             "Failed tests",
             "Coverage metrics",
@@ -1020,6 +1117,7 @@ mod tests {
             options: &opts,
             quality: &q,
             tests: &t,
+            fuzz: Box::leak(Box::new(crate::fuzz::Outcome::not_requested())),
             ambisonics: &a,
             bench: &b,
         };
@@ -1083,6 +1181,7 @@ mod tests {
             options: &opts,
             quality: &q,
             tests: &t,
+            fuzz: Box::leak(Box::new(crate::fuzz::Outcome::not_requested())),
             ambisonics: &a,
             bench: &b,
         };
@@ -1502,6 +1601,7 @@ mod tests {
             options: &opts,
             quality: &q,
             tests: &t,
+            fuzz: Box::leak(Box::new(crate::fuzz::Outcome::not_requested())),
             ambisonics: &a,
             bench: &b,
         };

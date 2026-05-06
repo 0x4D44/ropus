@@ -17,6 +17,7 @@ mod banner;
 mod bench;
 mod cargo_parse;
 mod cli;
+mod fuzz;
 mod html;
 mod ietf_vectors;
 mod issues;
@@ -72,6 +73,12 @@ fn main() -> ExitCode {
         stage2_profile(&options),
     );
 
+    // Phase 1.2 — bounded fuzz sanity gate. Default full-test does not ask
+    // for fuzz tooling. Release preflight either runs the bounded shell sanity
+    // path or, under --quick, only inventories declared targets and committed
+    // crash files.
+    let fuzz_outcome = fuzz::run(&options);
+
     // HLD § Stages: if stage 2 failed to *compile* (not fails a test — fails
     // to compile), stages 3 and 4 are marked "skipped (upstream build
     // failure)" rather than attempted. They depend on the same compiled
@@ -112,6 +119,7 @@ fn main() -> ExitCode {
         &tests_outcome,
         &ambisonics_outcome,
         &bench_outcome,
+        &fuzz_outcome,
         &setup_info.preflight,
     );
     let exit_code: u8 = banner_kind.exit_code();
@@ -132,6 +140,7 @@ fn main() -> ExitCode {
         options: &options,
         quality: &quality_outcome,
         tests: &tests_outcome,
+        fuzz: &fuzz_outcome,
         ambisonics: &ambisonics_outcome,
         bench: &bench_outcome,
     };
@@ -161,6 +170,7 @@ fn main() -> ExitCode {
             setup: &setup_info,
             quality: &quality_outcome,
             tests: &tests_outcome,
+            fuzz: &fuzz_outcome,
             ambisonics: &ambisonics_outcome,
             bench: &bench_outcome,
             exit_code,

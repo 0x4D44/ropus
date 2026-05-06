@@ -17,6 +17,7 @@
 
 use crate::ambisonics::AmbisonicsResult;
 use crate::bench::BenchResult;
+use crate::fuzz::Outcome as FuzzOutcome;
 use crate::preflight::Outcome as PreflightOutcome;
 use crate::quality::Outcome as QualityOutcome;
 use crate::tests::Outcome as TestsOutcome;
@@ -75,6 +76,7 @@ pub fn classify(
     tests: &TestsOutcome,
     ambisonics: &AmbisonicsResult,
     bench: &BenchResult,
+    fuzz: &FuzzOutcome,
     preflight: &PreflightOutcome,
 ) -> Banner {
     // FAIL predicates. Each stage's `all_passed()` is the canonical "green"
@@ -85,8 +87,9 @@ pub fn classify(
     let stage2_failed = tests.tests.build_failed || !tests.all_passed();
     let quality_failed = !quality.all_passed();
     let ambisonics_failed = ambisonics.build_failed || !ambisonics.all_passed();
+    let fuzz_failed = fuzz.banner_fail();
     let preflight_failed = preflight.banner_blocking_missing();
-    if stage2_failed || quality_failed || ambisonics_failed || preflight_failed {
+    if stage2_failed || quality_failed || ambisonics_failed || fuzz_failed || preflight_failed {
         return Banner::Fail;
     }
 
@@ -99,7 +102,7 @@ pub fn classify(
         .vectors
         .iter()
         .any(|v| ratio_exceeds_warn(v.enc_ratio) || ratio_exceeds_warn(v.dec_ratio));
-    if !bench.all_passed() || bench_ratio_warn {
+    if !bench.all_passed() || bench_ratio_warn || fuzz.banner_warn() {
         return Banner::Warn;
     }
 
@@ -277,6 +280,36 @@ mod tests {
         )
     }
 
+    fn fuzz_pass() -> crate::fuzz::Outcome {
+        crate::fuzz::Outcome {
+            mode: crate::fuzz::Mode::FullSanity,
+            status: crate::fuzz::Status::Pass,
+            duration_ms: 0,
+            command: Vec::new(),
+            targets: Vec::new(),
+            issues: Vec::new(),
+            stdout: String::new(),
+            stderr: String::new(),
+        }
+    }
+
+    fn fuzz_fail() -> crate::fuzz::Outcome {
+        crate::fuzz::Outcome {
+            status: crate::fuzz::Status::Fail,
+            issues: vec!["fuzz_decode build failed".to_string()],
+            ..fuzz_pass()
+        }
+    }
+
+    fn fuzz_warn() -> crate::fuzz::Outcome {
+        crate::fuzz::Outcome {
+            mode: crate::fuzz::Mode::InventoryOnly,
+            status: crate::fuzz::Status::Warn,
+            issues: vec!["cargo-fuzz not checked".to_string()],
+            ..fuzz_pass()
+        }
+    }
+
     #[test]
     fn all_green_is_pass() {
         let b = classify(
@@ -284,6 +317,7 @@ mod tests {
             &tests_pass(),
             &ambisonics_pass(),
             &bench_pass(),
+            &fuzz_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Pass);
@@ -306,7 +340,14 @@ mod tests {
         let amb = AmbisonicsResult::skipped("--skip-ambisonics");
         let bench = BenchResult::skipped("--skip-benchmarks");
         assert_eq!(
-            classify(&quality, &tests, &amb, &bench, &preflight_pass()),
+            classify(
+                &quality,
+                &tests,
+                &amb,
+                &bench,
+                &fuzz_pass(),
+                &preflight_pass()
+            ),
             Banner::Pass
         );
     }
@@ -318,6 +359,7 @@ mod tests {
             &tests_fail(),
             &ambisonics_pass(),
             &bench_pass(),
+            &fuzz_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);
@@ -330,6 +372,7 @@ mod tests {
             &tests_build_failed(),
             &ambisonics_pass(),
             &bench_pass(),
+            &fuzz_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);
@@ -342,6 +385,7 @@ mod tests {
             &tests_pass(),
             &ambisonics_pass(),
             &bench_pass(),
+            &fuzz_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);
@@ -354,6 +398,7 @@ mod tests {
             &tests_pass(),
             &ambisonics_fail(),
             &bench_pass(),
+            &fuzz_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);
@@ -374,6 +419,7 @@ mod tests {
             &tests_pass(),
             &amb,
             &bench_pass(),
+            &fuzz_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);
@@ -386,6 +432,7 @@ mod tests {
             &tests_pass(),
             &ambisonics_pass(),
             &bench_with_crash(),
+            &fuzz_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Warn);
@@ -398,6 +445,7 @@ mod tests {
             &tests_pass(),
             &ambisonics_pass(),
             &bench_with_regression(),
+            &fuzz_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Warn);
@@ -419,6 +467,7 @@ mod tests {
             &tests_pass(),
             &ambisonics_pass(),
             &bench,
+            &fuzz_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Warn);
@@ -440,6 +489,7 @@ mod tests {
             &tests_pass(),
             &ambisonics_pass(),
             &bench,
+            &fuzz_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Pass);
@@ -461,6 +511,7 @@ mod tests {
             &tests_pass(),
             &ambisonics_pass(),
             &bench,
+            &fuzz_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Pass);
@@ -474,6 +525,7 @@ mod tests {
             &tests_fail(),
             &ambisonics_pass(),
             &bench_with_crash(),
+            &fuzz_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);
@@ -486,9 +538,36 @@ mod tests {
             &tests_pass(),
             &ambisonics_pass(),
             &bench_pass(),
+            &fuzz_pass(),
             &preflight_fail(),
         );
         assert_eq!(b, Banner::Fail);
+    }
+
+    #[test]
+    fn fuzz_failure_is_fail() {
+        let b = classify(
+            &quality_pass(),
+            &tests_pass(),
+            &ambisonics_pass(),
+            &bench_pass(),
+            &fuzz_fail(),
+            &preflight_pass(),
+        );
+        assert_eq!(b, Banner::Fail);
+    }
+
+    #[test]
+    fn quick_fuzz_tool_absence_warns_without_fail() {
+        let b = classify(
+            &quality_pass(),
+            &tests_pass(),
+            &ambisonics_pass(),
+            &bench_pass(),
+            &fuzz_warn(),
+            &preflight_pass(),
+        );
+        assert_eq!(b, Banner::Warn);
     }
 
     #[test]

@@ -29,6 +29,10 @@ discover_fuzz_targets() {
             next
         }
 
+        /^[[:space:]]*\[\[bin\]\]/ {
+            fail("malformed [[bin]] header in " manifest ": " $0)
+        }
+
         /^\[/ {
             if (in_bin && !seen_name) {
                 fail("missing name in [[bin]] entry")

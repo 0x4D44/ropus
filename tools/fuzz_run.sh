@@ -13,7 +13,8 @@
 #   ./tools/fuzz_run.sh --jobs 4               # parallel libFuzzer jobs
 #   ./tools/fuzz_run.sh --no-diff              # skip differential mode (no C ref needed)
 #   ./tools/fuzz_run.sh --list                 # list available targets
-#   ./tools/fuzz_run.sh --check-crashes        # re-run crash corpus only (fast regression check)
+#   ./tools/fuzz_run.sh --sanity               # build targets + replay committed crashes only
+#   ./tools/fuzz_run.sh --check-crashes        # alias for --sanity
 #
 # Environment:
 #   FUZZ_DURATION   — seconds per target (default: 600)
@@ -105,6 +106,7 @@ JOBS="${FUZZ_JOBS:-1}"
 MAX_LEN="${FUZZ_MAX_LEN:-16384}"
 TARGETS=()
 CHECK_CRASHES_ONLY=false
+SANITY_ONLY=false
 LIST_ONLY=false
 NO_DIFF=false
 
@@ -134,12 +136,14 @@ while [[ $# -gt 0 ]]; do
         --list)
             LIST_ONLY=true; shift ;;
         --check-crashes)
-            CHECK_CRASHES_ONLY=true; shift ;;
+            CHECK_CRASHES_ONLY=true; SANITY_ONLY=true; shift ;;
+        --sanity)
+            CHECK_CRASHES_ONLY=true; SANITY_ONLY=true; shift ;;
         --max-len)
             require_value "$1" "${2:-}"
             MAX_LEN="$2"; shift 2 ;;
         -h|--help)
-            head -20 "$0" | tail -17; exit 0 ;;
+            head -21 "$0" | tail -18; exit 0 ;;
         *)
             die "unknown option: $1" ;;
     esac
@@ -155,6 +159,27 @@ target_is_declared() {
         fi
     done
     return 1
+}
+
+validate_crash_inventory() {
+    local failures=0
+    local crash_dir target first_bin
+
+    [[ -d "$CRASHES_DIR" ]] || return 0
+
+    while IFS= read -r crash_dir; do
+        target=$(basename "$crash_dir")
+        if target_is_declared "$target"; then
+            continue
+        fi
+        first_bin=$(find "$crash_dir" -type f -name '*.bin' -print -quit 2>/dev/null)
+        if [[ -n "$first_bin" ]]; then
+            echo "ERROR: undeclared fuzz crash corpus contains committed .bin files: $crash_dir" >&2
+            ((failures += 1))
+        fi
+    done < <(find "$CRASHES_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+
+    [[ $failures -eq 0 ]]
 }
 
 for target in "${TARGETS[@]}"; do
@@ -190,7 +215,12 @@ echo "  Duration per target: ${DURATION}s"
 echo "  Parallel jobs:       $JOBS"
 echo "  Max input length:    $MAX_LEN bytes"
 echo "  Targets:             ${TARGETS[*]}"
+if $SANITY_ONLY; then
+    echo "  Mode:                sanity (build + committed crash replay only)"
+fi
 echo ""
+
+validate_crash_inventory || exit 1
 
 # Ensure cargo-fuzz is installed
 if ! cargo fuzz --version &>/dev/null; then
@@ -198,16 +228,24 @@ if ! cargo fuzz --version &>/dev/null; then
     exit 1
 fi
 
+if ! cargo +nightly --version &>/dev/null; then
+    echo "ERROR: Rust nightly toolchain not found. Install with: rustup toolchain install nightly" >&2
+    exit 1
+fi
+
 # Windows-specific: wire up MSVC ASan runtime (no-op on Linux/macOS)
 setup_windows_asan
 
-# Create findings directory for this run
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-RUN_DIR="$FINDINGS_DIR/$TIMESTAMP"
-mkdir -p "$RUN_DIR"
+if ! $SANITY_ONLY; then
+    # Create findings directory for campaign runs only. Sanity mode is
+    # deliberately no-campaign and should not create run artefact directories.
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    RUN_DIR="$FINDINGS_DIR/$TIMESTAMP"
+    mkdir -p "$RUN_DIR"
 
-echo "Findings will be saved to: $RUN_DIR"
-echo ""
+    echo "Findings will be saved to: $RUN_DIR"
+    echo ""
+fi
 
 # --------------------------------------------------------------------------- #
 # Build fuzz targets
@@ -220,12 +258,39 @@ cd "$ROOT"
 CARGO_FUZZ=(cargo +nightly fuzz)
 FUZZ_DIR_ARG=(--fuzz-dir tests/fuzz)
 
+print_compact_output() {
+    local text="$1"
+    if [[ -z "$text" ]]; then
+        echo "      <no output>"
+    else
+        echo "$text" | tail -40 | sed 's/^/      /'
+    fi
+}
+
 # Verify targets build before starting long runs
+BUILD_FAILURES=0
 for target in "${TARGETS[@]}"; do
     echo "  Building $target..."
-    "${CARGO_FUZZ[@]}" build "${FUZZ_DIR_ARG[@]}" "$target" 2>&1 | tail -1
+    if $SANITY_ONLY; then
+        set +e
+        build_output=$("${CARGO_FUZZ[@]}" build "${FUZZ_DIR_ARG[@]}" "$target" 2>&1)
+        build_exit=$?
+        set -e
+        echo "$build_output" | tail -1
+        if [[ $build_exit -ne 0 ]]; then
+            echo "$target build=fail crashes=0 replay=not_run"
+            ((BUILD_FAILURES += 1))
+        fi
+    else
+        "${CARGO_FUZZ[@]}" build "${FUZZ_DIR_ARG[@]}" "$target" 2>&1 | tail -1
+    fi
 done
 echo ""
+
+if $SANITY_ONLY && [[ $BUILD_FAILURES -gt 0 ]]; then
+    echo "RESULT: $BUILD_FAILURES fuzz target build failures found!"
+    exit 1
+fi
 
 # --------------------------------------------------------------------------- #
 # Crash regression check mode
@@ -235,25 +300,37 @@ if $CHECK_CRASHES_ONLY; then
     FAILURES=0
     for target in "${TARGETS[@]}"; do
         crash_dir="$CRASHES_DIR/$target"
-        if [[ ! -d "$crash_dir" ]] || [[ -z "$(ls -A "$crash_dir" 2>/dev/null)" ]]; then
-            echo "  $target: no crashes to check (skip)"
+        crash_files=()
+        if [[ -d "$crash_dir" ]]; then
+            mapfile -t crash_files < <(find "$crash_dir" -type f -name '*.bin' 2>/dev/null | sort)
+        fi
+        if [[ ${#crash_files[@]} -eq 0 ]]; then
+            echo "  $target: no committed crash .bin files to check (skip)"
+            echo "$target build=pass crashes=0 replay=skip"
             continue
         fi
-        crash_files=$(find "$crash_dir" -type f -name '*.bin' | wc -l)
-        echo "  $target: checking $crash_files crash files..."
+        echo "  $target: checking ${#crash_files[@]} crash files..."
 
         fail_count=0
-        for crash_file in "$crash_dir"/*.bin; do
-            if ! "${CARGO_FUZZ[@]}" run "${FUZZ_DIR_ARG[@]}" "$target" -- -runs=0 "$crash_file" &>/dev/null; then
+        for crash_file in "${crash_files[@]}"; do
+            set +e
+            replay_output=$("${CARGO_FUZZ[@]}" run "${FUZZ_DIR_ARG[@]}" "$target" "$crash_file" -- -runs=0 2>&1)
+            replay_exit=$?
+            set -e
+            if [[ $replay_exit -ne 0 ]]; then
                 echo "    FAIL: $crash_file still crashes!"
-                ((fail_count++))
+                echo "    replay command exited with status $replay_exit; last output lines:"
+                print_compact_output "$replay_output"
+                ((fail_count += 1))
             fi
         done
 
         if [[ $fail_count -eq 0 ]]; then
-            echo "    OK: all $crash_files crash files handled without crash"
+            echo "    OK: all ${#crash_files[@]} crash files handled without crash"
+            echo "$target build=pass crashes=${#crash_files[@]} replay=pass"
         else
-            echo "    FAILED: $fail_count/$crash_files still crash"
+            echo "    FAILED: $fail_count/${#crash_files[@]} still crash"
+            echo "$target build=pass crashes=${#crash_files[@]} replay=fail"
             ((FAILURES += fail_count))
         fi
     done
