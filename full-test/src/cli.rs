@@ -61,13 +61,13 @@ pub fn help_text() -> &'static str {
         "    cargo run --release -p full-test -- [FLAGS]\n",
         "\n",
         "FLAGS:\n",
-        "    --quick             Skip stages 1 and 4; with --release-preflight, use a core smoke profile with no neural/DRED, corpus, or performance claim.\n",
+        "    --quick             Skip stages 1 and 4; with --release-preflight, use a core smoke profile with no neural/DRED, corpus, performance, platform, or sanitizer claim.\n",
         "    --skip-quality      Skip stage 1 (cargo fmt + clippy).\n",
         "    --skip-coverage     Downgrade stage 2 to plain `cargo test`.\n",
         "    --skip-benchmarks   Skip stage 4 (bench sweep); invalidates non-quick --release-preflight by disabling the claimed performance gate.\n",
         "    --skip-ambisonics   Skip stage 3 (projection roundtrip).\n",
         "    --emit-json         Also print the JSON envelope on stdout.\n",
-        "    --release-preflight Check release assets; non-quick claims core + neural/DRED + generated corpus + thresholded performance smoke gates.\n",
+        "    --release-preflight Check release assets; non-quick claims core + neural/DRED + generated corpus + thresholded performance + platform/sanitizer breadth gates.\n",
         "    -h, --help          Show this help and exit.\n",
         "\n",
         "Report lands at tests/results/full_test_<YYYYMMDD_HHMMSS>.html.\n",
@@ -150,10 +150,10 @@ mod tests {
     #[test]
     fn help_text_documents_release_preflight_claim_profiles() {
         assert!(help_text().contains(
-            "    --quick             Skip stages 1 and 4; with --release-preflight, use a core smoke profile with no neural/DRED, corpus, or performance claim."
+            "    --quick             Skip stages 1 and 4; with --release-preflight, use a core smoke profile with no neural/DRED, corpus, performance, platform, or sanitizer claim."
         ));
         assert!(help_text().contains(
-            "    --release-preflight Check release assets; non-quick claims core + neural/DRED + generated corpus + thresholded performance smoke gates."
+            "    --release-preflight Check release assets; non-quick claims core + neural/DRED + generated corpus + thresholded performance + platform/sanitizer breadth gates."
         ));
         assert!(help_text().contains(
             "    --skip-benchmarks   Skip stage 4 (bench sweep); invalidates non-quick --release-preflight by disabling the claimed performance gate."

@@ -33,6 +33,7 @@ use crate::corpus::{Outcome as CorpusOutcome, Status as CorpusStatus};
 use crate::fuzz::{Outcome as FuzzOutcome, Status as FuzzStatus};
 use crate::ietf_vectors::{IetfVectorProvision, ProvisionStatus};
 use crate::llvm_cov_parse::CoverageMetrics;
+use crate::platform::{LaneStatus as PlatformLaneStatus, Outcome as PlatformOutcome};
 use crate::preflight::{AssetStatus, Outcome as PreflightOutcome};
 use crate::quality::Outcome as QualityOutcome;
 use crate::tests::Outcome as TestsOutcome;
@@ -54,6 +55,7 @@ pub struct ReportContext<'a> {
     pub tests: &'a TestsOutcome,
     pub fuzz: &'a FuzzOutcome,
     pub corpus: &'a CorpusOutcome,
+    pub platform: &'a PlatformOutcome,
     pub ambisonics: &'a AmbisonicsResult,
     pub bench: &'a BenchResult,
 }
@@ -87,6 +89,7 @@ pub fn render(ctx: &ReportContext<'_>) -> String {
     render_release_preflight(&mut out, &ctx.preflight);
     render_corpus_gate(&mut out, ctx.corpus);
     render_fuzz_sanity(&mut out, ctx.fuzz);
+    render_platform_breadth(&mut out, ctx.platform);
     render_module_breakdown(&mut out, &ctx.tests.tests.per_test);
     render_failed_tests(&mut out, &ctx.tests.tests.failed_test_names);
     render_coverage(&mut out, ctx);
@@ -583,6 +586,48 @@ fn render_phase_summary(out: &mut String, ctx: &ReportContext<'_>) {
         dur = html_escape(&c_dur),
     ));
 
+    // Platform/sanitizer breadth (claimed only by non-quick release-preflight).
+    let p = ctx.platform;
+    let p_total = 2u32;
+    let p_failed = if p.banner_fail() { 1u32 } else { 0u32 };
+    let p_passed = [&p.generic_x86_64, &p.sanitizer]
+        .iter()
+        .filter(|lane| lane.status == PlatformLaneStatus::Pass)
+        .count() as u32;
+    let p_skipped = [&p.generic_x86_64, &p.sanitizer]
+        .iter()
+        .filter(|lane| {
+            matches!(
+                lane.status,
+                PlatformLaneStatus::NotClaimed | PlatformLaneStatus::NotApplicable
+            )
+        })
+        .count() as u32;
+    let p_fail_cls = if p_failed > 0 {
+        " fail"
+    } else if !p.claimed {
+        " warn"
+    } else {
+        ""
+    };
+    let p_failed_disp = if p_failed > 0 {
+        format!("{} release issue(s)", p.release_blocking_issues().len())
+    } else if !p.claimed {
+        "not claimed".to_string()
+    } else {
+        "0".to_string()
+    };
+    let p_dur = if !p.claimed {
+        "not claimed".to_string()
+    } else {
+        format_duration(p.duration_ms)
+    };
+    out.push_str(&format!(
+        "<tr><td>Platform breadth</td><td class=\"num\">{p_total}</td><td class=\"num\">{p_passed}</td><td class=\"num{p_fail_cls}\">{failed}</td><td class=\"num\">{p_skipped}</td><td class=\"num\">{dur}</td></tr>\n",
+        failed = html_escape(&p_failed_disp),
+        dur = html_escape(&p_dur),
+    ));
+
     out.push_str("</table>\n");
 }
 
@@ -639,6 +684,59 @@ fn fuzz_status_class(status: FuzzStatus) -> &'static str {
         FuzzStatus::Warn => "warn",
         FuzzStatus::Pass => "pass",
         FuzzStatus::NotRequested => "empty",
+    }
+}
+
+fn render_platform_breadth(out: &mut String, platform: &PlatformOutcome) {
+    out.push_str("<h2>Platform breadth</h2>\n");
+    out.push_str(&format!(
+        "<p class=\"meta\">Profile: <code>{}</code> &bull; Host arch: <code>{}</code> &bull; Claim: {}</p>\n",
+        html_escape(platform.profile_name),
+        html_escape(&platform.host_arch),
+        html_escape(platform.claim_note),
+    ));
+    if !platform.issues.is_empty() {
+        out.push_str("<ul class=\"failed-tests\">\n");
+        for issue in &platform.issues {
+            out.push_str(&format!("  <li>{}</li>\n", html_escape(issue)));
+        }
+        out.push_str("</ul>\n");
+    }
+    out.push_str("<table>\n<tr><th>Lane</th><th>Status</th><th>Claimed</th><th>Release-blocking</th><th>Duration</th><th>Command</th><th>Note</th></tr>\n");
+    for lane in [&platform.generic_x86_64, &platform.sanitizer] {
+        let command = if lane.command.is_empty() {
+            "n/a".to_string()
+        } else {
+            format!("<code>{}</code>", html_escape(&lane.command.join(" ")))
+        };
+        let duration = if lane.claimed {
+            format_duration(lane.duration_ms)
+        } else {
+            "n/a".to_string()
+        };
+        out.push_str(&format!(
+            "<tr><td><code>{}</code><br><span class=\"empty\">{}</span></td><td class=\"{}\">{}</td><td>{}</td><td>{}</td><td class=\"num\">{}</td><td>{}</td><td>{}</td></tr>\n",
+            html_escape(lane.id),
+            html_escape(lane.label),
+            platform_lane_status_class(lane.status, lane.release_blocking),
+            html_escape(lane.status.as_str()),
+            if lane.claimed { "yes" } else { "no" },
+            if lane.release_blocking { "yes" } else { "no" },
+            html_escape(&duration),
+            command,
+            html_escape(&lane.note),
+        ));
+    }
+    out.push_str("</table>\n");
+}
+
+fn platform_lane_status_class(status: PlatformLaneStatus, release_blocking: bool) -> &'static str {
+    match status {
+        PlatformLaneStatus::Pass => "pass",
+        PlatformLaneStatus::Fail | PlatformLaneStatus::Unsupported if release_blocking => "fail",
+        PlatformLaneStatus::Fail | PlatformLaneStatus::Unsupported => "warn",
+        PlatformLaneStatus::NotApplicable => "empty",
+        PlatformLaneStatus::NotClaimed => "empty",
     }
 }
 
@@ -1231,6 +1329,7 @@ mod tests {
     ) -> ReportContext<'a> {
         let fuzz = Box::leak(Box::new(crate::fuzz::Outcome::not_requested()));
         let corpus = Box::leak(Box::new(crate::corpus::Outcome::not_claimed_for_tests()));
+        let platform = Box::leak(Box::new(crate::platform::Outcome::not_claimed_for_tests()));
         ReportContext {
             commit_sha: "dd3fb17",
             branch: "main",
@@ -1246,6 +1345,7 @@ mod tests {
             tests,
             fuzz,
             corpus,
+            platform,
             ambisonics: amb,
             bench,
         }
@@ -1270,6 +1370,7 @@ mod tests {
             "Release preflight",
             "Real-world corpus",
             "Fuzz sanity",
+            "Platform breadth",
             "Module breakdown",
             "Failed tests",
             "Coverage metrics",
@@ -1313,6 +1414,7 @@ mod tests {
             tests: &t,
             fuzz: Box::leak(Box::new(crate::fuzz::Outcome::not_requested())),
             corpus: Box::leak(Box::new(crate::corpus::Outcome::not_claimed_for_tests())),
+            platform: Box::leak(Box::new(crate::platform::Outcome::not_claimed_for_tests())),
             ambisonics: &a,
             bench: &b,
         };
@@ -1321,9 +1423,9 @@ mod tests {
         assert!(html.contains("Profile: <code>release-core-plus-neural-dred-gate</code>"));
         assert!(html.contains("Mode: active"));
         assert!(html.contains(
-            "Claim: core plus neural/DRED and generated real-world corpus gates are claimed"
+            "Claim: core plus neural/DRED, generated real-world corpus, thresholded performance, and platform/sanitizer breadth gates are claimed"
         ));
-        assert!(html.contains("<code>--release-preflight</code> (core plus neural/DRED and generated real-world corpus gates are claimed"));
+        assert!(html.contains("<code>--release-preflight</code> (core plus neural/DRED, generated real-world corpus, thresholded performance, and platform/sanitizer breadth gates are claimed"));
         assert!(html.contains("<code>fixed_reference</code>"));
         assert!(html.contains("<code>conformance_sources</code>"));
         assert!(html.contains("<code>ietf_vectors</code>"));
@@ -1368,6 +1470,7 @@ mod tests {
             tests: &t,
             fuzz: Box::leak(Box::new(crate::fuzz::Outcome::not_requested())),
             corpus: Box::leak(Box::new(crate::corpus::Outcome::not_claimed_for_tests())),
+            platform: Box::leak(Box::new(crate::platform::Outcome::not_claimed_for_tests())),
             ambisonics: &a,
             bench: &b,
         };
@@ -1375,7 +1478,7 @@ mod tests {
 
         assert!(html.contains("Profile: <code>release-core-smoke-no-neural-claim</code>"));
         assert!(html.contains(
-            "Claim: core smoke only; neural/DRED and real-world corpus gates are not claimed"
+            "Claim: core smoke only; neural/DRED, real-world corpus, performance, platform, and sanitizer gates are not claimed"
         ));
         assert!(html.contains("<code>--release-preflight</code> (core smoke only"));
         assert!(html.contains("report-only in quick release-preflight"));
@@ -1394,6 +1497,20 @@ mod tests {
         assert!(html.contains("FFmpeg native opus generation unavailable"));
         assert!(html.contains("supported Ogg family-0 packet decode only"));
         assert!(html.contains("no WebM/player semantics"));
+    }
+
+    #[test]
+    fn platform_section_states_claim_lanes_and_profile_proof() {
+        let platform = crate::platform::Outcome::failing_for_tests("generic x86_64 smoke failed");
+        let mut html = String::new();
+        render_platform_breadth(&mut html, &platform);
+
+        assert!(html.contains("Platform breadth"));
+        assert!(html.contains("release-platform-sanitizer-breadth"));
+        assert!(html.contains("<code>generic-x86_64-smoke</code>"));
+        assert!(html.contains("generic x86_64 smoke failed"));
+        assert!(html.contains("RUSTFLAGS=-C target-cpu=x86-64"));
+        assert!(html.contains("only fxsr/sse/sse2"));
     }
 
     #[test]
@@ -1441,6 +1558,7 @@ mod tests {
             tests: &t,
             fuzz: Box::leak(Box::new(crate::fuzz::Outcome::not_requested())),
             corpus: Box::leak(Box::new(crate::corpus::Outcome::not_claimed_for_tests())),
+            platform: Box::leak(Box::new(crate::platform::Outcome::not_claimed_for_tests())),
             ambisonics: &a,
             bench: &b,
         };
@@ -1907,6 +2025,7 @@ mod tests {
             tests: &t,
             fuzz: Box::leak(Box::new(crate::fuzz::Outcome::not_requested())),
             corpus: Box::leak(Box::new(crate::corpus::Outcome::not_claimed_for_tests())),
+            platform: Box::leak(Box::new(crate::platform::Outcome::not_claimed_for_tests())),
             ambisonics: &a,
             bench: &b,
         };

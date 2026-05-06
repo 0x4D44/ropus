@@ -9,7 +9,8 @@
 //!
 //! - **PASS** — stages 1, 2, 3 all green. Stage 4 irrelevant.
 //! - **FAIL** — any test failure, any clippy/fmt error, ambisonics mismatch,
-//!   a Stage 2 build failure, or a release-thresholded benchmark gate failure.
+//!   a Stage 2 build failure, a release-thresholded benchmark gate failure, or
+//!   a claimed platform/sanitizer breadth failure.
 //! - **WARN** — stages 1-3 green but stage 4 has crashes or ratio > 1.15×.
 //!
 //! Exit code: PASS→0, WARN→0, FAIL→1. The WARN→0 behaviour is deliberate —
@@ -19,6 +20,7 @@ use crate::ambisonics::AmbisonicsResult;
 use crate::bench::{BenchProfile, BenchResult};
 use crate::corpus::Outcome as CorpusOutcome;
 use crate::fuzz::Outcome as FuzzOutcome;
+use crate::platform::Outcome as PlatformOutcome;
 use crate::preflight::Outcome as PreflightOutcome;
 use crate::quality::Outcome as QualityOutcome;
 use crate::tests::Outcome as TestsOutcome;
@@ -81,6 +83,22 @@ pub fn classify(
     corpus: &CorpusOutcome,
     preflight: &PreflightOutcome,
 ) -> Banner {
+    let platform = crate::platform::Outcome::not_claimed();
+    classify_with_platform(
+        quality, tests, ambisonics, bench, fuzz, corpus, &platform, preflight,
+    )
+}
+
+pub fn classify_with_platform(
+    quality: &QualityOutcome,
+    tests: &TestsOutcome,
+    ambisonics: &AmbisonicsResult,
+    bench: &BenchResult,
+    fuzz: &FuzzOutcome,
+    corpus: &CorpusOutcome,
+    platform: &PlatformOutcome,
+    preflight: &PreflightOutcome,
+) -> Banner {
     // FAIL predicates. Each stage's `all_passed()` is the canonical "green"
     // signal (skipped stages included). A stage-level build failure also
     // trips FAIL — it implies downstream stages skipped on upstream build
@@ -91,6 +109,7 @@ pub fn classify(
     let ambisonics_failed = ambisonics.build_failed || !ambisonics.all_passed();
     let fuzz_failed = fuzz.banner_fail();
     let corpus_failed = corpus.banner_fail();
+    let platform_failed = platform.banner_fail();
     let preflight_failed = preflight.banner_blocking_missing();
     let bench_failed = bench.banner_fail();
     if stage2_failed
@@ -99,6 +118,7 @@ pub fn classify(
         || bench_failed
         || fuzz_failed
         || corpus_failed
+        || platform_failed
         || preflight_failed
     {
         return Banner::Fail;
@@ -346,6 +366,10 @@ mod tests {
 
     fn corpus_fail() -> crate::corpus::Outcome {
         crate::corpus::Outcome::failing_for_tests("corpus_diff exited 1")
+    }
+
+    fn platform_fail() -> crate::platform::Outcome {
+        crate::platform::Outcome::failing_for_tests("generic x86_64 smoke failed")
     }
 
     #[test]
@@ -684,6 +708,21 @@ mod tests {
             &bench_pass(),
             &fuzz_pass(),
             &corpus_fail(),
+            &preflight_pass(),
+        );
+        assert_eq!(b, Banner::Fail);
+    }
+
+    #[test]
+    fn claimed_platform_breadth_failure_is_fail() {
+        let b = classify_with_platform(
+            &quality_pass(),
+            &tests_pass(),
+            &ambisonics_pass(),
+            &bench_pass(),
+            &fuzz_pass(),
+            &corpus_pass(),
+            &platform_fail(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);

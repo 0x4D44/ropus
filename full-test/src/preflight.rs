@@ -2,10 +2,11 @@
 //!
 //! `--release-preflight` has two claim profiles. The quick profile is a core
 //! smoke gate and does not claim neural/DRED or real-world corpus coverage; the
-//! non-quick profile includes the deep-PLC/DRED package lane plus the generated
-//! corpus gate. IETF vector absence is shown here, but the existing Stage 2
-//! synthetic conformance failure remains the only failure accounting path for
-//! vectors so totals are not double-counted.
+//! non-quick profile includes the deep-PLC/DRED package lane, the generated
+//! corpus gate, thresholded performance, and platform/sanitizer breadth. IETF
+//! vector absence is shown here, but the existing Stage 2 synthetic conformance
+//! failure remains the only failure accounting path for vectors so totals are
+//! not double-counted.
 
 use std::path::{Path, PathBuf};
 
@@ -60,10 +61,10 @@ impl PreflightPolicy {
         match self {
             Self::DefaultReportOnly => "default full-test report-only; no release coverage claim",
             Self::ReleaseCoreSmokeNoNeuralClaim => {
-                "core smoke only; neural/DRED and real-world corpus gates are not claimed"
+                "core smoke only; neural/DRED, real-world corpus, performance, platform, and sanitizer gates are not claimed"
             }
             Self::ReleaseCorePlusNeuralDredGate => {
-                "core plus neural/DRED and generated real-world corpus gates are claimed"
+                "core plus neural/DRED, generated real-world corpus, thresholded performance, and platform/sanitizer breadth gates are claimed"
             }
         }
     }

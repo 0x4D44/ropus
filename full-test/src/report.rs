@@ -11,6 +11,7 @@ use crate::bench::BenchResult;
 use crate::corpus::Outcome as CorpusOutcome;
 use crate::fuzz::Outcome as FuzzOutcome;
 use crate::ietf_vectors::IetfVectorProvision;
+use crate::platform::Outcome as PlatformOutcome;
 use crate::preflight::{AssetProbe, Outcome as PreflightOutcome};
 use crate::quality::{Check, Outcome as QualityOutcome};
 use crate::setup::SetupInfo;
@@ -22,6 +23,7 @@ pub struct Envelope<'a> {
     pub tests: &'a TestsOutcome,
     pub fuzz: &'a FuzzOutcome,
     pub corpus: &'a CorpusOutcome,
+    pub platform: &'a PlatformOutcome,
     pub ambisonics: &'a AmbisonicsResult,
     pub bench: &'a BenchResult,
     pub exit_code: u8,
@@ -36,6 +38,7 @@ impl Envelope<'_> {
                 "tests": tests_to_json(self.tests),
                 "fuzz": fuzz_to_json(self.fuzz),
                 "corpus": corpus_to_json(self.corpus),
+                "platform_breadth": platform_to_json(self.platform),
                 "ambisonics": ambisonics_to_json(self.ambisonics),
                 "bench": bench_to_json(self.bench),
             },
@@ -128,6 +131,10 @@ fn fuzz_to_json(o: &FuzzOutcome) -> Value {
 }
 
 fn corpus_to_json(o: &CorpusOutcome) -> Value {
+    serde_json::to_value(o).unwrap_or(Value::Null)
+}
+
+fn platform_to_json(o: &PlatformOutcome) -> Value {
     serde_json::to_value(o).unwrap_or(Value::Null)
 }
 
@@ -239,6 +246,10 @@ mod tests {
         crate::corpus::Outcome::not_claimed_for_tests()
     }
 
+    fn platform_not_claimed() -> crate::platform::Outcome {
+        crate::platform::Outcome::not_claimed_for_tests()
+    }
+
     fn quality_ok() -> QualityOutcome {
         QualityOutcome {
             skipped: false,
@@ -317,6 +328,7 @@ mod tests {
             tests: &tests,
             fuzz: &fuzz,
             corpus: &corpus_not_claimed(),
+            platform: &platform_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -335,6 +347,18 @@ mod tests {
         assert_eq!(v["stages"]["corpus"]["mode"], "report_only");
         assert_eq!(v["stages"]["corpus"]["status"], "not_claimed");
         assert_eq!(v["stages"]["corpus"]["claimed"], false);
+        assert_eq!(
+            v["stages"]["platform_breadth"]["profile_name"],
+            "default-no-platform-sanitizer-claim"
+        );
+        assert_eq!(
+            v["stages"]["platform_breadth"]["generic_x86_64"]["status"],
+            "not_claimed"
+        );
+        assert_eq!(
+            v["stages"]["platform_breadth"]["sanitizer"]["status"],
+            "not_claimed"
+        );
         assert!(
             v["stages"]["corpus"]["oracle_note"]
                 .as_str()
@@ -372,6 +396,7 @@ mod tests {
             tests: &tests,
             fuzz: &fuzz,
             corpus: &corpus_not_claimed(),
+            platform: &platform_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -395,6 +420,7 @@ mod tests {
             tests: &tests,
             fuzz: &fuzz,
             corpus: &corpus_not_claimed(),
+            platform: &platform_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -429,6 +455,7 @@ mod tests {
             tests: &tests,
             fuzz: &fuzz,
             corpus: &corpus_not_claimed(),
+            platform: &platform_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 1,
@@ -454,6 +481,7 @@ mod tests {
             tests: &tests,
             fuzz: &fuzz,
             corpus: &corpus_not_claimed(),
+            platform: &platform_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -518,6 +546,7 @@ mod tests {
             tests: &tests,
             fuzz: &fuzz,
             corpus: &corpus_not_claimed(),
+            platform: &platform_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 1,
@@ -580,6 +609,7 @@ mod tests {
             tests: &tests,
             fuzz: &fuzz,
             corpus: &corpus_not_claimed(),
+            platform: &platform_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 1,
@@ -620,6 +650,7 @@ mod tests {
             tests: &tests,
             fuzz: &fuzz,
             corpus: &corpus_not_claimed(),
+            platform: &platform_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -707,6 +738,7 @@ mod tests {
             tests: &tests,
             fuzz: &fuzz,
             corpus: &corpus_not_claimed(),
+            platform: &platform_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -743,6 +775,7 @@ mod tests {
             tests: &tests,
             fuzz: &fuzz,
             corpus: &corpus_not_claimed(),
+            platform: &platform_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -791,6 +824,7 @@ mod tests {
             tests: &tests,
             fuzz: &fuzz,
             corpus: &corpus_not_claimed(),
+            platform: &platform_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -817,6 +851,7 @@ mod tests {
             tests: &tests,
             fuzz: &fuzz,
             corpus: &corpus_not_claimed(),
+            platform: &platform_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -862,6 +897,7 @@ mod tests {
             tests: &tests,
             fuzz: &fuzz,
             corpus: &corpus_not_claimed(),
+            platform: &platform_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 1,
@@ -914,6 +950,7 @@ mod tests {
             tests: &tests,
             fuzz: &fuzz,
             corpus: &corpus_not_claimed(),
+            platform: &platform_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 1,
@@ -952,6 +989,7 @@ mod tests {
             tests: &tests,
             fuzz: &fuzz,
             corpus: &corpus_not_claimed(),
+            platform: &platform_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 1,

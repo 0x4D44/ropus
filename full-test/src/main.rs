@@ -23,6 +23,7 @@ mod html;
 mod ietf_vectors;
 mod issues;
 mod llvm_cov_parse;
+mod platform;
 mod preflight;
 mod quality;
 mod report;
@@ -80,6 +81,11 @@ fn main() -> ExitCode {
     // crash files.
     let fuzz_outcome = fuzz::run(&options);
 
+    // Phase 4.2 — platform/sanitizer breadth. Default and quick profiles make
+    // no breadth claim. Non-quick release preflight claims generic x86_64
+    // smoke where applicable plus the sanitizer-backed fuzz full-sanity lane.
+    let platform_outcome = platform::run(&options, &fuzz_outcome);
+
     // Phase 3.4 — generated real-world corpus gate. Default and quick runs
     // report the manifest/provisioning contract without claiming coverage;
     // non-quick release preflight generates a temporary FFmpeg-native Opus
@@ -131,13 +137,14 @@ fn main() -> ExitCode {
     // HLD § PASS / FAIL / WARN. The exit code is derived from the banner —
     // PASS and WARN both map to 0 so pre-commit `--quick` runs aren't
     // spuriously blocked on bench ratio noise.
-    let banner_kind = banner::classify(
+    let banner_kind = banner::classify_with_platform(
         &quality_outcome,
         &tests_outcome,
         &ambisonics_outcome,
         &bench_outcome,
         &fuzz_outcome,
         &corpus_outcome,
+        &platform_outcome,
         &setup_info.preflight,
     );
     let exit_code: u8 = banner_kind.exit_code();
@@ -160,6 +167,7 @@ fn main() -> ExitCode {
         tests: &tests_outcome,
         fuzz: &fuzz_outcome,
         corpus: &corpus_outcome,
+        platform: &platform_outcome,
         ambisonics: &ambisonics_outcome,
         bench: &bench_outcome,
     };
@@ -191,6 +199,7 @@ fn main() -> ExitCode {
             tests: &tests_outcome,
             fuzz: &fuzz_outcome,
             corpus: &corpus_outcome,
+            platform: &platform_outcome,
             ambisonics: &ambisonics_outcome,
             bench: &bench_outcome,
             exit_code,
