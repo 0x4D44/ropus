@@ -1628,12 +1628,223 @@ fn test_24bit_decode_left_shift_8_invariant() {
     }
 }
 
+const DECODE24_PLC_SR: i32 = 48000;
+const DECODE24_PLC_CH: i32 = 1;
+const DECODE24_PLC_FRAME_SIZE: i32 = 960;
+const DECODE24_PLC_MAX_FRAME: i32 = 5760;
+const DECODE24_PLC_SEED: i32 = 55;
+const DECODE24_PLC_EXACT_PREFIX_MIN: usize = 288;
+const DECODE24_PLC_MAX_DRIFT_16_LSB: i64 = 17;
+const DECODE24_PLC_MAX_POST_PREFIX_DRIFT_COUNT: usize = 615;
+
+#[derive(Debug, PartialEq, Eq)]
+struct Decode24PlcDriftReport {
+    rust_n: i32,
+    c_n: i32,
+    n_samples: usize,
+    exact_prefix_len: usize,
+    first_diff: Option<usize>,
+    max_abs_diff_raw_24: i64,
+    max_abs_diff_16_lsb_equiv: i64,
+    drift_count_after_prefix: usize,
+    first_mismatches_after_prefix: Vec<(usize, i32, i32, i64)>,
+}
+
+fn decode24_plc_drift_report(
+    rust_n: i32,
+    c_n: i32,
+    rust_pcm24: &[i32],
+    c_pcm24: &[i32],
+    exact_prefix_min: usize,
+) -> Decode24PlcDriftReport {
+    let n_samples = rust_pcm24.len().min(c_pcm24.len());
+    let mut exact_prefix_len = 0usize;
+    let mut first_diff = None;
+    let mut max_abs_diff_raw_24 = 0i64;
+    let mut drift_count_after_prefix = 0usize;
+    let mut first_mismatches_after_prefix = Vec::new();
+
+    for (i, (&rust, &c_ref)) in rust_pcm24[..n_samples]
+        .iter()
+        .zip(&c_pcm24[..n_samples])
+        .enumerate()
+    {
+        if rust == c_ref {
+            if first_diff.is_none() {
+                exact_prefix_len += 1;
+            }
+            continue;
+        }
+
+        let abs_diff = (rust as i64 - c_ref as i64).abs();
+        max_abs_diff_raw_24 = max_abs_diff_raw_24.max(abs_diff);
+        first_diff.get_or_insert(i);
+
+        if i >= exact_prefix_min {
+            drift_count_after_prefix += 1;
+            if first_mismatches_after_prefix.len() < 8 {
+                first_mismatches_after_prefix.push((i, rust, c_ref, abs_diff));
+            }
+        }
+    }
+
+    Decode24PlcDriftReport {
+        rust_n,
+        c_n,
+        n_samples,
+        exact_prefix_len,
+        first_diff,
+        max_abs_diff_raw_24,
+        max_abs_diff_16_lsb_equiv: (max_abs_diff_raw_24 + 255) >> 8,
+        drift_count_after_prefix,
+        first_mismatches_after_prefix,
+    }
+}
+
+fn decode24_plc_drift_failure_context(report: &Decode24PlcDriftReport) -> String {
+    format!(
+        "fixture sr={}, ch={}, frame_size={}, seed={}; \
+         rust_n={}, c_n={}, n_samples={}, exact_prefix_len={}, first_diff={:?}, \
+         max_abs_diff_raw_24={}, max_abs_diff_16_lsb_equiv={}, \
+         drift_count_after_prefix={}, first_mismatches_after_prefix={:?}",
+        DECODE24_PLC_SR,
+        DECODE24_PLC_CH,
+        DECODE24_PLC_FRAME_SIZE,
+        DECODE24_PLC_SEED,
+        report.rust_n,
+        report.c_n,
+        report.n_samples,
+        report.exact_prefix_len,
+        report.first_diff,
+        report.max_abs_diff_raw_24,
+        report.max_abs_diff_16_lsb_equiv,
+        report.drift_count_after_prefix,
+        report.first_mismatches_after_prefix
+    )
+}
+
+fn decode24_plc_fixture() -> (Vec<i32>, Vec<i32>, Decode24PlcDriftReport) {
+    let packet = encode_voip_packet(
+        DECODE24_PLC_SR,
+        DECODE24_PLC_CH,
+        DECODE24_PLC_FRAME_SIZE,
+        DECODE24_PLC_SEED,
+    );
+
+    let mut rust_dec = OpusDecoder::new(DECODE24_PLC_SR, DECODE24_PLC_CH).unwrap();
+    let mut prime_buf = vec![0i32; DECODE24_PLC_MAX_FRAME as usize * DECODE24_PLC_CH as usize];
+    rust_dec
+        .decode24(Some(&packet), &mut prime_buf, DECODE24_PLC_MAX_FRAME, false)
+        .expect("Rust decode24 prime failed");
+    let mut rust_pcm24 = vec![0i32; DECODE24_PLC_MAX_FRAME as usize * DECODE24_PLC_CH as usize];
+    let rust_n = rust_dec
+        .decode24(None, &mut rust_pcm24, DECODE24_PLC_FRAME_SIZE, false)
+        .expect("Rust decode24 PLC failed");
+
+    let (c_n, mut c_pcm24) = unsafe {
+        let mut err: c_int = 0;
+        let c_dec = opus_decoder_create(DECODE24_PLC_SR, DECODE24_PLC_CH, &mut err);
+        assert!(!c_dec.is_null() && err == 0);
+        let mut prime_c = vec![0i32; DECODE24_PLC_MAX_FRAME as usize * DECODE24_PLC_CH as usize];
+        let prime_n = opus_decode24(
+            c_dec,
+            packet.as_ptr(),
+            packet.len() as i32,
+            prime_c.as_mut_ptr(),
+            DECODE24_PLC_MAX_FRAME,
+            0,
+        );
+        assert!(prime_n > 0, "C opus_decode24 prime returned {prime_n}");
+
+        let mut c_pcm24 = vec![0i32; DECODE24_PLC_MAX_FRAME as usize * DECODE24_PLC_CH as usize];
+        let n = opus_decode24(
+            c_dec,
+            std::ptr::null(),
+            0,
+            c_pcm24.as_mut_ptr(),
+            DECODE24_PLC_FRAME_SIZE,
+            0,
+        );
+        opus_decoder_destroy(c_dec);
+        assert!(n > 0, "C opus_decode24 PLC returned {n}");
+        (n, c_pcm24)
+    };
+
+    rust_pcm24.truncate(rust_n as usize * DECODE24_PLC_CH as usize);
+    c_pcm24.truncate(c_n as usize * DECODE24_PLC_CH as usize);
+    let report = decode24_plc_drift_report(
+        rust_n,
+        c_n,
+        &rust_pcm24,
+        &c_pcm24,
+        DECODE24_PLC_EXACT_PREFIX_MIN,
+    );
+
+    (rust_pcm24, c_pcm24, report)
+}
+
 #[test]
-#[ignore = "ropus decode24 PLC has residual LSB-level rounding drift vs C \
-            reference after ~288 samples — bulk of the divergence was fixed \
-            (see test_silk_plc_first_subframes_match_c_reference). \
-            Remaining drift tracked in \
-            wrk_journals/2026.04.19 - JRN - ietf-projection-regressions.md"]
+fn test_decode24_plc_drift_report_all_samples_equal() {
+    let pcm = [1, -2, 3];
+    let report = decode24_plc_drift_report(3, 3, &pcm, &pcm, 2);
+
+    assert_eq!(
+        report,
+        Decode24PlcDriftReport {
+            rust_n: 3,
+            c_n: 3,
+            n_samples: 3,
+            exact_prefix_len: 3,
+            first_diff: None,
+            max_abs_diff_raw_24: 0,
+            max_abs_diff_16_lsb_equiv: 0,
+            drift_count_after_prefix: 0,
+            first_mismatches_after_prefix: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn test_decode24_plc_drift_report_tracks_first_diff_before_prefix() {
+    let rust = [0, 256, 0, 0];
+    let c_ref = [0, 0, 0, 0];
+    let report = decode24_plc_drift_report(4, 4, &rust, &c_ref, 2);
+
+    assert_eq!(report.exact_prefix_len, 1);
+    assert_eq!(report.first_diff, Some(1));
+    assert_eq!(report.max_abs_diff_raw_24, 256);
+    assert_eq!(report.max_abs_diff_16_lsb_equiv, 1);
+    assert_eq!(report.drift_count_after_prefix, 0);
+}
+
+#[test]
+fn test_decode24_plc_drift_report_tracks_diff_at_prefix_boundary() {
+    let mut rust = vec![0; DECODE24_PLC_EXACT_PREFIX_MIN + 1];
+    let c_ref = vec![0; DECODE24_PLC_EXACT_PREFIX_MIN + 1];
+    rust[DECODE24_PLC_EXACT_PREFIX_MIN] = -4352;
+    let report = decode24_plc_drift_report(
+        rust.len() as i32,
+        c_ref.len() as i32,
+        &rust,
+        &c_ref,
+        DECODE24_PLC_EXACT_PREFIX_MIN,
+    );
+
+    assert_eq!(report.exact_prefix_len, DECODE24_PLC_EXACT_PREFIX_MIN);
+    assert_eq!(report.first_diff, Some(DECODE24_PLC_EXACT_PREFIX_MIN));
+    assert_eq!(report.max_abs_diff_raw_24, 4352);
+    assert_eq!(report.max_abs_diff_16_lsb_equiv, 17);
+    assert_eq!(report.drift_count_after_prefix, 1);
+    assert_eq!(
+        report.first_mismatches_after_prefix,
+        vec![(DECODE24_PLC_EXACT_PREFIX_MIN, -4352, 0, 4352)]
+    );
+}
+
+#[test]
+#[ignore = "full-frame exact decode24 PLC parity is still explicit debt; \
+            test_24bit_decode_plc_has_bounded_recovery_drift actively gates \
+            sample count, exact prefix, and bounded post-prefix drift"]
 fn test_24bit_decode_plc_matches_c_reference() {
     // opus_demo invokes `opus_decode24(dec, NULL, 0, ...)` on every lost
     // packet; the PLC code path was previously uncovered. Drive one
@@ -1646,67 +1857,51 @@ fn test_24bit_decode_plc_matches_c_reference() {
     // fixed in ropus/src/silk/decoder.rs. The first ~288 samples of PLC
     // output now match the C reference bit-exactly
     // (test_silk_plc_first_subframes_match_c_reference enforces this).
-    // This full-frame test stays `#[ignore]`'d while a residual LSB-level
-    // rounding drift past sample ~288 is chased down; max abs diff is
-    // ~17 out of 32767 range (sub-millidB, not audible) and does not
-    // affect IETF conformance tests.
-    let sr = 48000;
-    let ch = 1;
-    let frame_size = 960;
-    let max_frame = 5760;
-    let packet = encode_voip_packet(sr, ch, frame_size, 55);
-
-    // Prime both decoders with a successful frame so PLC has state to
-    // extrapolate from.
-    let mut rust_dec = OpusDecoder::new(sr, ch).unwrap();
-    let mut prime_buf = vec![0i32; max_frame as usize * ch as usize];
-    rust_dec
-        .decode24(Some(&packet), &mut prime_buf, max_frame, false)
-        .expect("Rust decode24 prime failed");
-    let mut rust_pcm24 = vec![0i32; max_frame as usize * ch as usize];
-    let rust_n = rust_dec
-        .decode24(None, &mut rust_pcm24, frame_size, false)
-        .expect("Rust decode24 PLC failed");
-
-    let (c_sample_count, c_pcm24) = unsafe {
-        let mut err: c_int = 0;
-        let c_dec = opus_decoder_create(sr, ch, &mut err);
-        assert!(!c_dec.is_null() && err == 0);
-        // Prime with the same packet.
-        let mut prime_c = vec![0i32; max_frame as usize * ch as usize];
-        let prime_n = opus_decode24(
-            c_dec,
-            packet.as_ptr(),
-            packet.len() as i32,
-            prime_c.as_mut_ptr(),
-            max_frame,
-            0,
-        );
-        assert!(prime_n > 0, "C opus_decode24 prime returned {prime_n}");
-        // Now invoke PLC: data=NULL, len=0.
-        let mut c_pcm24 = vec![0i32; max_frame as usize * ch as usize];
-        let n = opus_decode24(
-            c_dec,
-            std::ptr::null(),
-            0,
-            c_pcm24.as_mut_ptr(),
-            frame_size,
-            0,
-        );
-        opus_decoder_destroy(c_dec);
-        assert!(n > 0, "C opus_decode24 PLC returned {n}");
-        (n, c_pcm24)
-    };
+    // This full-frame exact test stays `#[ignore]`'d as explicit debt while
+    // test_24bit_decode_plc_has_bounded_recovery_drift actively gates the
+    // measured recovery drift in normal test runs.
+    let (rust_pcm24, c_pcm24, report) = decode24_plc_fixture();
 
     assert_eq!(
-        rust_n, c_sample_count,
+        report.rust_n, report.c_n,
         "decode24 PLC: sample count mismatch"
     );
-    let n_samples = (rust_n as usize) * (ch as usize);
     assert_eq!(
-        &rust_pcm24[..n_samples],
-        &c_pcm24[..n_samples],
+        &rust_pcm24[..report.n_samples],
+        &c_pcm24[..report.n_samples],
         "decode24 PLC: PCM mismatch with C reference"
+    );
+}
+
+#[test]
+fn test_24bit_decode_plc_has_bounded_recovery_drift() {
+    let (_, _, report) = decode24_plc_fixture();
+    let context = decode24_plc_drift_failure_context(&report);
+
+    eprintln!("decode24 PLC drift report: {context}");
+
+    assert_eq!(report.rust_n, DECODE24_PLC_FRAME_SIZE, "{context}");
+    assert_eq!(report.c_n, DECODE24_PLC_FRAME_SIZE, "{context}");
+    assert_eq!(
+        report.n_samples, DECODE24_PLC_FRAME_SIZE as usize,
+        "{context}"
+    );
+    assert!(
+        report.exact_prefix_len >= DECODE24_PLC_EXACT_PREFIX_MIN,
+        "{context}"
+    );
+    assert!(
+        report.first_diff.is_none()
+            || report.first_diff.expect("checked Some above") >= DECODE24_PLC_EXACT_PREFIX_MIN,
+        "{context}"
+    );
+    assert!(
+        report.max_abs_diff_16_lsb_equiv <= DECODE24_PLC_MAX_DRIFT_16_LSB,
+        "{context}"
+    );
+    assert!(
+        report.drift_count_after_prefix <= DECODE24_PLC_MAX_POST_PREFIX_DRIFT_COUNT,
+        "{context}"
     );
 }
 
