@@ -1,8 +1,5 @@
-# cargo-mutants configuration for mdopus mutation testing pilot
+# cargo-mutants configuration for the ropus mutation testing audit
 # See: https://mutants.rs/config.html
 
 # Timeout multiplier — codec tests are fast but mutations might hit slow paths
 timeout_multiplier = 3.0
-
-# Skip failing tests that break the baseline (not authored by us)
-additional_cargo_test_args = ["--lib", "--", "--skip", "dnn::lpcnet::tests::test_compute_frame_features", "--skip", "dnn::lpcnet::tests::test_plc_load_model", "--skip", "opus::encoder::tests::test_encode_multiframe_silk_special"]
