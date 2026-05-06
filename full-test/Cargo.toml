@@ -1,6 +1,6 @@
 [package]
 name = "full-test"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2024"
 publish = false
 description = "Local validation runner for the ropus workspace."

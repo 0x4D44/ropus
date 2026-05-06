@@ -31,6 +31,7 @@ use crate::cargo_parse::{Outcome as TestOutcomeKind, TestOutcome};
 use crate::cli::Options;
 use crate::ietf_vectors::{IetfVectorProvision, ProvisionStatus};
 use crate::llvm_cov_parse::CoverageMetrics;
+use crate::preflight::{AssetStatus, Outcome as PreflightOutcome};
 use crate::quality::Outcome as QualityOutcome;
 use crate::tests::Outcome as TestsOutcome;
 
@@ -45,6 +46,7 @@ pub struct ReportContext<'a> {
     pub banner: Banner,
     pub ietf_vectors: IetfVectorProvision,
     pub ietf_vectors_present: bool,
+    pub preflight: PreflightOutcome,
     pub options: &'a Options,
     pub quality: &'a QualityOutcome,
     pub tests: &'a TestsOutcome,
@@ -78,6 +80,7 @@ pub fn render(ctx: &ReportContext<'_>) -> String {
     render_header(&mut out, ctx);
     render_category_summary(&mut out, &ctx.tests.tests.per_test);
     render_phase_summary(&mut out, ctx);
+    render_release_preflight(&mut out, &ctx.preflight);
     render_module_breakdown(&mut out, &ctx.tests.tests.per_test);
     render_failed_tests(&mut out, &ctx.tests.tests.failed_test_names);
     render_coverage(&mut out, ctx);
@@ -171,6 +174,9 @@ fn render_header(out: &mut String, ctx: &ReportContext<'_>) {
     if ctx.options.skip_ambisonics {
         notes.push("Flag: <code>--skip-ambisonics</code>.".to_string());
     }
+    if ctx.options.release_preflight {
+        notes.push("Flag: <code>--release-preflight</code> (core profile).".to_string());
+    }
     if !notes.is_empty() {
         out.push_str("<p class=\"meta\">");
         for (i, n) in notes.iter().enumerate() {
@@ -182,6 +188,59 @@ fn render_header(out: &mut String, ctx: &ReportContext<'_>) {
             out.push_str(n);
         }
         out.push_str("</p>\n");
+    }
+}
+
+fn render_release_preflight(out: &mut String, preflight: &PreflightOutcome) {
+    out.push_str("<h2>Release preflight</h2>\n");
+    let mode = if preflight.release_preflight {
+        "active"
+    } else {
+        "report-only"
+    };
+    out.push_str(&format!(
+        "<p class=\"meta\">Profile: <code>{}</code> &bull; Mode: {}</p>\n",
+        html_escape(preflight.profile),
+        html_escape(mode),
+    ));
+    out.push_str("<table>\n<tr><th>Asset</th><th>Key</th><th>Requirement</th><th>Status</th><th>Probe</th><th>Note</th></tr>\n");
+    for asset in &preflight.assets {
+        let cls = preflight_status_class(asset.status, asset.banner_blocking);
+        let probes = if asset.probes.is_empty() {
+            "derived".to_string()
+        } else {
+            asset
+                .probes
+                .iter()
+                .map(|probe| html_escape(probe))
+                .collect::<Vec<_>>()
+                .join("<br>")
+        };
+        let note = asset.note.as_deref().unwrap_or("");
+        out.push_str(&format!(
+            "<tr><td>{}</td><td><code>{}</code></td><td>{}</td><td class=\"{}\">{}</td><td>{}</td><td>{}</td></tr>\n",
+            html_escape(asset.label),
+            html_escape(asset.key),
+            html_escape(asset.requirement.as_str()),
+            cls,
+            html_escape(asset.status.as_str()),
+            probes,
+            html_escape(note),
+        ));
+    }
+    out.push_str("</table>\n");
+}
+
+fn preflight_status_class(status: AssetStatus, banner_blocking: bool) -> &'static str {
+    if banner_blocking {
+        return "fail";
+    }
+    match status {
+        AssetStatus::MissingRequired => "fail",
+        AssetStatus::MissingOptional => "warn",
+        AssetStatus::PresentRequired
+        | AssetStatus::ProvisionedRequired
+        | AssetStatus::PresentOptional => "pass",
     }
 }
 
@@ -897,6 +956,7 @@ mod tests {
             banner,
             ietf_vectors: IetfVectorProvision::present(),
             ietf_vectors_present: true,
+            preflight: crate::preflight::Outcome::inactive(&IetfVectorProvision::present()),
             options,
             quality,
             tests,
@@ -921,6 +981,7 @@ mod tests {
             "ropus Test Report",
             "Category summary",
             "Phase summary",
+            "Release preflight",
             "Module breakdown",
             "Failed tests",
             "Coverage metrics",
@@ -931,6 +992,52 @@ mod tests {
                 "missing heading {heading:?} in render output"
             );
         }
+    }
+
+    #[test]
+    fn release_preflight_table_renders_asset_contract() {
+        let opts = Options {
+            release_preflight: true,
+            ..Options::default()
+        };
+        let q = quality_ok();
+        let t = populated_tests();
+        let a = ambisonics_ok();
+        let b = bench_ok();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let preflight =
+            crate::preflight::capture(tmp.path(), true, &IetfVectorProvision::present());
+        let c = ReportContext {
+            commit_sha: "abc",
+            branch: "main",
+            version: "0.9.0",
+            commit_subject: "subj",
+            timestamp: now(),
+            banner: Banner::Fail,
+            ietf_vectors: IetfVectorProvision::present(),
+            ietf_vectors_present: true,
+            preflight,
+            options: &opts,
+            quality: &q,
+            tests: &t,
+            ambisonics: &a,
+            bench: &b,
+        };
+        let html = render(&c);
+
+        assert!(html.contains("Profile: <code>core</code>"));
+        assert!(html.contains("Mode: active"));
+        assert!(html.contains("<code>--release-preflight</code> (core profile)"));
+        assert!(html.contains("<code>fixed_reference</code>"));
+        assert!(html.contains("<code>conformance_sources</code>"));
+        assert!(html.contains("<code>ietf_vectors</code>"));
+        assert!(html.contains("<code>dnn_base_weights</code>"));
+        assert!(html.contains("<code>dred_rdovae_weights</code>"));
+        assert!(html.contains("<code>float_deep_plc_assets</code>"));
+        assert!(html.contains("class=\"fail\">missing_required"));
+        assert!(html.contains("class=\"pass\">present_required"));
+        assert!(html.contains("class=\"warn\">missing_optional"));
+        assert!(html.contains("failure accounting remains in Stage 2"));
     }
 
     #[test]
@@ -972,6 +1079,7 @@ mod tests {
             banner: Banner::Pass,
             ietf_vectors: IetfVectorProvision::present(),
             ietf_vectors_present: true,
+            preflight: crate::preflight::Outcome::inactive(&IetfVectorProvision::present()),
             options: &opts,
             quality: &q,
             tests: &t,
@@ -1384,6 +1492,13 @@ mod tests {
                 reason: Some("network unavailable".to_string()),
             },
             ietf_vectors_present: false,
+            preflight: crate::preflight::Outcome::inactive(&IetfVectorProvision {
+                status: ProvisionStatus::Unavailable,
+                attempted_fetch: true,
+                script: Some("tools/fetch_ietf_vectors.sh".into()),
+                exit_code: Some(7),
+                reason: Some("network unavailable".to_string()),
+            }),
             options: &opts,
             quality: &q,
             tests: &t,

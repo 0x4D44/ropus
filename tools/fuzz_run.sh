@@ -36,6 +36,7 @@ FUZZ_DIR="$ROOT/tests/fuzz"
 CORPUS_DIR="$FUZZ_DIR/corpus"
 CRASHES_DIR="$FUZZ_DIR/crashes"
 FINDINGS_DIR="$ROOT/logs/fuzz-findings"
+. "$SCRIPT_DIR/fuzz_targets.sh"
 
 # --------------------------------------------------------------------------- #
 # Windows ASan runtime setup
@@ -94,17 +95,9 @@ setup_windows_asan() {
     export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_odr_violation=0:detect_leaks=0}"
 }
 
-ALL_TARGETS=(
-    fuzz_decode
-    fuzz_encode
-    fuzz_roundtrip
-    fuzz_repacketizer
-    fuzz_packet_parse
-    fuzz_decode_safety
-    fuzz_encode_safety
-    fuzz_roundtrip_safety
-    fuzz_encode_multiframe
-)
+target_text=$(discover_fuzz_targets "$FUZZ_DIR/Cargo.toml") || die "failed to discover fuzz targets from $FUZZ_DIR/Cargo.toml"
+[[ -n "$target_text" ]] || die "no fuzz targets declared in $FUZZ_DIR/Cargo.toml"
+mapfile -t ALL_TARGETS <<<"$target_text"
 
 # Defaults
 DURATION="${FUZZ_DURATION:-600}"
@@ -118,13 +111,23 @@ NO_DIFF=false
 # --------------------------------------------------------------------------- #
 # Argument parsing
 # --------------------------------------------------------------------------- #
+require_value() {
+    local option="$1"
+    local value="${2:-}"
+
+    [[ -n "$value" ]] || die "$option requires a value"
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --duration)
+            require_value "$1" "${2:-}"
             DURATION="$2"; shift 2 ;;
         --target)
+            require_value "$1" "${2:-}"
             TARGETS+=("$2"); shift 2 ;;
         --jobs)
+            require_value "$1" "${2:-}"
             JOBS="$2"; shift 2 ;;
         --no-diff)
             NO_DIFF=true; shift ;;
@@ -133,12 +136,29 @@ while [[ $# -gt 0 ]]; do
         --check-crashes)
             CHECK_CRASHES_ONLY=true; shift ;;
         --max-len)
+            require_value "$1" "${2:-}"
             MAX_LEN="$2"; shift 2 ;;
         -h|--help)
             head -20 "$0" | tail -17; exit 0 ;;
         *)
-            echo "Unknown option: $1" >&2; exit 1 ;;
+            die "unknown option: $1" ;;
     esac
+done
+
+target_is_declared() {
+    local requested="$1"
+    local declared
+
+    for declared in "${ALL_TARGETS[@]}"; do
+        if [[ "$declared" == "$requested" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+for target in "${TARGETS[@]}"; do
+    target_is_declared "$target" || die "fuzz target is not declared in $FUZZ_DIR/Cargo.toml: $target"
 done
 
 # Use all targets if none specified

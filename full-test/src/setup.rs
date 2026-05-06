@@ -9,6 +9,7 @@ use std::process::Command;
 
 use crate::cli::Options;
 use crate::ietf_vectors::{self, IetfVectorProvision};
+use crate::preflight;
 
 #[derive(Debug, Clone)]
 pub struct SetupInfo {
@@ -17,6 +18,7 @@ pub struct SetupInfo {
     pub version: String,
     pub ietf_vectors: IetfVectorProvision,
     pub ietf_vectors_present: bool,
+    pub preflight: preflight::Outcome,
     // Mirror the CLI flags so the JSON envelope can round-trip them for
     // supervisor logs. Phase 2+ consumes these directly.
     pub options_snapshot: Options,
@@ -25,11 +27,17 @@ pub struct SetupInfo {
 /// Capture the runtime context: git commit + branch, workspace version, and
 /// the IETF-vectors provisioning status.
 pub fn capture(options: &Options) -> SetupInfo {
-    let ietf_vectors = ietf_vectors::provision(&workspace_root());
-    capture_with_ietf_vectors(options, ietf_vectors)
+    let root = workspace_root();
+    let ietf_vectors = ietf_vectors::provision(&root);
+    let preflight = preflight::capture(&root, options.release_preflight, &ietf_vectors);
+    capture_with_ietf_vectors(options, ietf_vectors, preflight)
 }
 
-fn capture_with_ietf_vectors(options: &Options, ietf_vectors: IetfVectorProvision) -> SetupInfo {
+fn capture_with_ietf_vectors(
+    options: &Options,
+    ietf_vectors: IetfVectorProvision,
+    preflight: preflight::Outcome,
+) -> SetupInfo {
     let commit = git_short_sha().unwrap_or_else(|| "unknown".to_string());
     let ietf_vectors_present = ietf_vectors.available();
     SetupInfo {
@@ -38,6 +46,7 @@ fn capture_with_ietf_vectors(options: &Options, ietf_vectors: IetfVectorProvisio
         version: workspace_version().unwrap_or_else(|| "unknown".to_string()),
         ietf_vectors,
         ietf_vectors_present,
+        preflight,
         options_snapshot: options.clone(),
     }
 }
@@ -152,7 +161,9 @@ mod tests {
         // We don't assert specific values — the repo's commit/branch/version
         // change under us — only that the capture path returns strings rather
         // than panicking. Inject IETF state so this unit test never fetches.
-        let info = capture_with_ietf_vectors(&Options::default(), IetfVectorProvision::present());
+        let ietf = IetfVectorProvision::present();
+        let preflight = preflight::Outcome::inactive(&ietf);
+        let info = capture_with_ietf_vectors(&Options::default(), ietf, preflight);
         assert!(!info.commit.is_empty());
         assert!(!info.branch.is_empty());
         assert!(!info.version.is_empty());
@@ -190,7 +201,9 @@ mod tests {
 
     #[test]
     fn injected_ietf_status_drives_present_flag() {
-        let info = capture_with_ietf_vectors(&Options::default(), IetfVectorProvision::present());
+        let ietf = IetfVectorProvision::present();
+        let preflight = preflight::Outcome::inactive(&ietf);
+        let info = capture_with_ietf_vectors(&Options::default(), ietf, preflight);
         assert!(info.ietf_vectors_present);
         assert!(info.ietf_vectors.available());
     }

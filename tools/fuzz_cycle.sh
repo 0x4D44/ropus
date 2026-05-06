@@ -39,21 +39,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FUZZ_DIR="$ROOT/tests/fuzz"
 CRASHES_DIR="$FUZZ_DIR/crashes"
+. "$SCRIPT_DIR/fuzz_targets.sh"
 
 # ---------------------------------------------------------------------------
-# Targets: keep in lock-step with tests/fuzz/Cargo.toml [[bin]] entries.
+# Targets: tests/fuzz/Cargo.toml [[bin]] entries are the source of truth.
 # ---------------------------------------------------------------------------
-TARGETS=(
-    fuzz_decode
-    fuzz_encode
-    fuzz_roundtrip
-    fuzz_repacketizer
-    fuzz_packet_parse
-    fuzz_decode_safety
-    fuzz_encode_safety
-    fuzz_roundtrip_safety
-    fuzz_encode_multiframe
-)
+target_text=$(discover_fuzz_targets "$FUZZ_DIR/Cargo.toml") || die "failed to discover fuzz targets from $FUZZ_DIR/Cargo.toml"
+[[ -n "$target_text" ]] || die "no fuzz targets declared in $FUZZ_DIR/Cargo.toml"
+mapfile -t TARGETS <<<"$target_text"
 
 # ---------------------------------------------------------------------------
 # Duration: positional arg 1, else default 600s.
@@ -61,8 +54,7 @@ TARGETS=(
 # ---------------------------------------------------------------------------
 DURATION="${1:-600}"
 if ! [[ "$DURATION" =~ ^[0-9]+$ ]]; then
-    echo "ERROR: duration must be a non-negative integer (got: $DURATION)" >&2
-    exit 2
+    die "duration must be a non-negative integer (got: $DURATION)"
 fi
 
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"

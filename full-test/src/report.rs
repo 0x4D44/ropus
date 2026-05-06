@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use crate::ambisonics::AmbisonicsResult;
 use crate::bench::BenchResult;
 use crate::ietf_vectors::IetfVectorProvision;
+use crate::preflight::{AssetProbe, Outcome as PreflightOutcome};
 use crate::quality::{Check, Outcome as QualityOutcome};
 use crate::setup::SetupInfo;
 use crate::tests::Outcome as TestsOutcome;
@@ -44,12 +45,14 @@ fn setup_to_json(s: &SetupInfo) -> Value {
         "version": s.version,
         "ietf_vectors_present": s.ietf_vectors_present,
         "ietf_vectors": ietf_vectors_to_json(&s.ietf_vectors),
+        "preflight": preflight_to_json(&s.preflight),
         "flags": {
             "quick": s.options_snapshot.quick,
             "skip_quality": s.options_snapshot.skip_quality,
             "skip_coverage": s.options_snapshot.skip_coverage,
             "skip_benchmarks": s.options_snapshot.skip_benchmarks,
             "skip_ambisonics": s.options_snapshot.skip_ambisonics,
+            "release_preflight": s.options_snapshot.release_preflight,
         },
     })
 }
@@ -62,6 +65,28 @@ fn ietf_vectors_to_json(v: &IetfVectorProvision) -> Value {
         "script": v.script.as_ref().map(|p| p.to_string_lossy().replace('\\', "/")),
         "exit_code": v.exit_code,
         "reason": v.reason,
+    })
+}
+
+fn preflight_to_json(p: &PreflightOutcome) -> Value {
+    json!({
+        "release_preflight": p.release_preflight,
+        "profile": p.profile,
+        "banner_blocking_missing": p.banner_blocking_missing(),
+        "assets": p.assets.iter().map(preflight_asset_to_json).collect::<Vec<_>>(),
+    })
+}
+
+fn preflight_asset_to_json(asset: &AssetProbe) -> Value {
+    json!({
+        "key": asset.key,
+        "label": asset.label,
+        "requirement": asset.requirement.as_str(),
+        "status": asset.status.as_str(),
+        "available": asset.status.available(),
+        "probes": asset.probes,
+        "note": asset.note,
+        "banner_blocking": asset.banner_blocking,
     })
 }
 
@@ -136,6 +161,13 @@ mod tests {
     use crate::llvm_cov_parse::{CoverageMetrics, CoverageResult};
     use crate::tests::Outcome as TestsStageOutcome;
 
+    fn asset_json<'a>(assets: &'a [Value], key: &str) -> &'a Value {
+        assets
+            .iter()
+            .find(|asset| asset["key"] == key)
+            .unwrap_or_else(|| panic!("asset {key} not found"))
+    }
+
     fn dummy_setup() -> SetupInfo {
         SetupInfo {
             commit: "dd3fb17".to_string(),
@@ -143,6 +175,7 @@ mod tests {
             version: "0.9.0".to_string(),
             ietf_vectors: IetfVectorProvision::present(),
             ietf_vectors_present: true,
+            preflight: crate::preflight::Outcome::inactive(&IetfVectorProvision::present()),
             options_snapshot: Options::default(),
         }
     }
@@ -360,7 +393,14 @@ mod tests {
         assert_eq!(v["setup"]["ietf_vectors"]["status"], "present");
         assert_eq!(v["setup"]["ietf_vectors"]["available"], true);
         assert_eq!(v["setup"]["ietf_vectors"]["attempted_fetch"], false);
+        assert_eq!(v["setup"]["preflight"]["profile"], "core");
+        assert_eq!(v["setup"]["preflight"]["release_preflight"], false);
+        assert_eq!(
+            v["setup"]["preflight"]["assets"].as_array().unwrap().len(),
+            6
+        );
         assert_eq!(v["setup"]["flags"]["quick"], false);
+        assert_eq!(v["setup"]["flags"]["release_preflight"], false);
 
         let checks = v["stages"]["quality"]["checks"].as_array().unwrap();
         assert_eq!(checks.len(), 2);
@@ -372,6 +412,53 @@ mod tests {
         assert_eq!(checks[1]["duration_ms"], 58_310);
 
         assert_eq!(v["exit_code"], 0);
+    }
+
+    #[test]
+    fn serialises_preflight_asset_contract() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut setup = dummy_setup();
+        setup.options_snapshot.release_preflight = true;
+        setup.preflight =
+            crate::preflight::capture(tmp.path(), true, &IetfVectorProvision::present());
+        let quality = quality_ok();
+        let tests = TestsStageOutcome::skipped("preflight contract");
+        let amb = skipped_ambisonics();
+        let bench = skipped_bench();
+        let env = Envelope {
+            setup: &setup,
+            quality: &quality,
+            tests: &tests,
+            ambisonics: &amb,
+            bench: &bench,
+            exit_code: 1,
+        };
+        let v = env.to_json();
+        let preflight = &v["setup"]["preflight"];
+        let assets = preflight["assets"].as_array().expect("preflight assets");
+
+        assert_eq!(preflight["profile"], "core");
+        assert_eq!(preflight["release_preflight"], true);
+        assert_eq!(preflight["banner_blocking_missing"], true);
+        assert_eq!(assets.len(), 6);
+
+        let fixed = asset_json(assets, "fixed_reference");
+        assert_eq!(fixed["requirement"], "required");
+        assert_eq!(fixed["status"], "missing_required");
+        assert_eq!(fixed["available"], false);
+        assert_eq!(fixed["banner_blocking"], true);
+
+        let ietf = asset_json(assets, "ietf_vectors");
+        assert_eq!(ietf["requirement"], "required");
+        assert_eq!(ietf["status"], "present_required");
+        assert_eq!(ietf["banner_blocking"], false);
+
+        let dnn = asset_json(assets, "dnn_base_weights");
+        assert_eq!(dnn["requirement"], "optional");
+        assert_eq!(dnn["status"], "missing_optional");
+        assert_eq!(dnn["banner_blocking"], false);
+
+        assert_eq!(v["setup"]["flags"]["release_preflight"], true);
     }
 
     #[test]

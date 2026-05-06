@@ -21,6 +21,7 @@ mod html;
 mod ietf_vectors;
 mod issues;
 mod llvm_cov_parse;
+mod preflight;
 mod quality;
 mod report;
 mod setup;
@@ -107,6 +108,7 @@ fn main() -> ExitCode {
         &tests_outcome,
         &ambisonics_outcome,
         &bench_outcome,
+        &setup_info.preflight,
     );
     let exit_code: u8 = banner_kind.exit_code();
 
@@ -122,6 +124,7 @@ fn main() -> ExitCode {
         banner: banner_kind,
         ietf_vectors: setup_info.ietf_vectors.clone(),
         ietf_vectors_present: setup_info.ietf_vectors_present,
+        preflight: setup_info.preflight.clone(),
         options: &options,
         quality: &quality_outcome,
         tests: &tests_outcome,

@@ -17,6 +17,7 @@
 
 use crate::ambisonics::AmbisonicsResult;
 use crate::bench::BenchResult;
+use crate::preflight::Outcome as PreflightOutcome;
 use crate::quality::Outcome as QualityOutcome;
 use crate::tests::Outcome as TestsOutcome;
 
@@ -74,6 +75,7 @@ pub fn classify(
     tests: &TestsOutcome,
     ambisonics: &AmbisonicsResult,
     bench: &BenchResult,
+    preflight: &PreflightOutcome,
 ) -> Banner {
     // FAIL predicates. Each stage's `all_passed()` is the canonical "green"
     // signal (skipped stages included). A stage-level build failure also
@@ -83,7 +85,8 @@ pub fn classify(
     let stage2_failed = tests.tests.build_failed || !tests.all_passed();
     let quality_failed = !quality.all_passed();
     let ambisonics_failed = ambisonics.build_failed || !ambisonics.all_passed();
-    if stage2_failed || quality_failed || ambisonics_failed {
+    let preflight_failed = preflight.banner_blocking_missing();
+    if stage2_failed || quality_failed || ambisonics_failed || preflight_failed {
         return Banner::Fail;
     }
 
@@ -261,6 +264,19 @@ mod tests {
         }
     }
 
+    fn preflight_pass() -> PreflightOutcome {
+        PreflightOutcome::inactive(&crate::ietf_vectors::IetfVectorProvision::present())
+    }
+
+    fn preflight_fail() -> PreflightOutcome {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        crate::preflight::capture(
+            tmp.path(),
+            true,
+            &crate::ietf_vectors::IetfVectorProvision::present(),
+        )
+    }
+
     #[test]
     fn all_green_is_pass() {
         let b = classify(
@@ -268,6 +284,7 @@ mod tests {
             &tests_pass(),
             &ambisonics_pass(),
             &bench_pass(),
+            &preflight_pass(),
         );
         assert_eq!(b, Banner::Pass);
     }
@@ -288,7 +305,10 @@ mod tests {
         };
         let amb = AmbisonicsResult::skipped("--skip-ambisonics");
         let bench = BenchResult::skipped("--skip-benchmarks");
-        assert_eq!(classify(&quality, &tests, &amb, &bench), Banner::Pass);
+        assert_eq!(
+            classify(&quality, &tests, &amb, &bench, &preflight_pass()),
+            Banner::Pass
+        );
     }
 
     #[test]
@@ -298,6 +318,7 @@ mod tests {
             &tests_fail(),
             &ambisonics_pass(),
             &bench_pass(),
+            &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);
     }
@@ -309,6 +330,7 @@ mod tests {
             &tests_build_failed(),
             &ambisonics_pass(),
             &bench_pass(),
+            &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);
     }
@@ -320,6 +342,7 @@ mod tests {
             &tests_pass(),
             &ambisonics_pass(),
             &bench_pass(),
+            &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);
     }
@@ -331,6 +354,7 @@ mod tests {
             &tests_pass(),
             &ambisonics_fail(),
             &bench_pass(),
+            &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);
     }
@@ -345,7 +369,13 @@ mod tests {
             overall_pass: false,
             per_order: Vec::new(),
         };
-        let b = classify(&quality_pass(), &tests_pass(), &amb, &bench_pass());
+        let b = classify(
+            &quality_pass(),
+            &tests_pass(),
+            &amb,
+            &bench_pass(),
+            &preflight_pass(),
+        );
         assert_eq!(b, Banner::Fail);
     }
 
@@ -356,6 +386,7 @@ mod tests {
             &tests_pass(),
             &ambisonics_pass(),
             &bench_with_crash(),
+            &preflight_pass(),
         );
         assert_eq!(b, Banner::Warn);
     }
@@ -367,6 +398,7 @@ mod tests {
             &tests_pass(),
             &ambisonics_pass(),
             &bench_with_regression(),
+            &preflight_pass(),
         );
         assert_eq!(b, Banner::Warn);
     }
@@ -382,7 +414,13 @@ mod tests {
             duration_ms: 0,
             vectors: Vec::new(),
         };
-        let b = classify(&quality_pass(), &tests_pass(), &ambisonics_pass(), &bench);
+        let b = classify(
+            &quality_pass(),
+            &tests_pass(),
+            &ambisonics_pass(),
+            &bench,
+            &preflight_pass(),
+        );
         assert_eq!(b, Banner::Warn);
     }
 
@@ -397,7 +435,13 @@ mod tests {
             duration_ms: 0,
             vectors: vec![bench_row(Some(BENCH_WARN_RATIO), Some(0.9), false)],
         };
-        let b = classify(&quality_pass(), &tests_pass(), &ambisonics_pass(), &bench);
+        let b = classify(
+            &quality_pass(),
+            &tests_pass(),
+            &ambisonics_pass(),
+            &bench,
+            &preflight_pass(),
+        );
         assert_eq!(b, Banner::Pass);
     }
 
@@ -412,7 +456,13 @@ mod tests {
             duration_ms: 0,
             vectors: vec![bench_row(Some(f64::NAN), Some(f64::INFINITY), false)],
         };
-        let b = classify(&quality_pass(), &tests_pass(), &ambisonics_pass(), &bench);
+        let b = classify(
+            &quality_pass(),
+            &tests_pass(),
+            &ambisonics_pass(),
+            &bench,
+            &preflight_pass(),
+        );
         assert_eq!(b, Banner::Pass);
     }
 
@@ -424,6 +474,19 @@ mod tests {
             &tests_fail(),
             &ambisonics_pass(),
             &bench_with_crash(),
+            &preflight_pass(),
+        );
+        assert_eq!(b, Banner::Fail);
+    }
+
+    #[test]
+    fn release_preflight_missing_core_asset_is_fail() {
+        let b = classify(
+            &quality_pass(),
+            &tests_pass(),
+            &ambisonics_pass(),
+            &bench_pass(),
+            &preflight_fail(),
         );
         assert_eq!(b, Banner::Fail);
     }

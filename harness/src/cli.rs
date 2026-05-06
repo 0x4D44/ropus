@@ -114,21 +114,34 @@ fn read_wav(path: &Path) -> WavData {
 // ---------------------------------------------------------------------------
 
 struct CompareStats {
+    left_len: usize,
+    right_len: usize,
     total: usize,
     matching: usize,
     first_diff_offset: Option<usize>,
     max_diff: i32,
 }
 
+impl CompareStats {
+    fn length_mismatch(&self) -> bool {
+        self.left_len != self.right_len
+    }
+
+    fn is_match(&self) -> bool {
+        !self.length_mismatch() && self.first_diff_offset.is_none()
+    }
+}
+
 fn compare_bytes(a: &[u8], b: &[u8]) -> CompareStats {
     let total = a.len().max(b.len());
+    let overlap = a.len().min(b.len());
     let mut matching = 0usize;
     let mut first_diff_offset = None;
     let mut max_diff: i32 = 0;
 
-    for i in 0..total {
-        let va = a.get(i).copied().unwrap_or(0);
-        let vb = b.get(i).copied().unwrap_or(0);
+    for i in 0..overlap {
+        let va = a[i];
+        let vb = b[i];
         let diff = (va as i32 - vb as i32).abs();
         if diff == 0 {
             matching += 1;
@@ -139,7 +152,22 @@ fn compare_bytes(a: &[u8], b: &[u8]) -> CompareStats {
             max_diff = max_diff.max(diff);
         }
     }
+
+    if a.len() != b.len() {
+        if first_diff_offset.is_none() {
+            first_diff_offset = Some(overlap);
+        }
+        for &extra in &a[overlap..] {
+            max_diff = max_diff.max((extra as i32).abs());
+        }
+        for &extra in &b[overlap..] {
+            max_diff = max_diff.max((extra as i32).abs());
+        }
+    }
+
     CompareStats {
+        left_len: a.len(),
+        right_len: b.len(),
         total,
         matching,
         first_diff_offset,
@@ -149,13 +177,14 @@ fn compare_bytes(a: &[u8], b: &[u8]) -> CompareStats {
 
 fn compare_samples(a: &[i16], b: &[i16]) -> CompareStats {
     let total = a.len().max(b.len());
+    let overlap = a.len().min(b.len());
     let mut matching = 0usize;
     let mut first_diff_offset = None;
     let mut max_diff: i32 = 0;
 
-    for i in 0..total {
-        let va = a.get(i).copied().unwrap_or(0) as i32;
-        let vb = b.get(i).copied().unwrap_or(0) as i32;
+    for i in 0..overlap {
+        let va = a[i] as i32;
+        let vb = b[i] as i32;
         let diff = (va - vb).abs();
         if diff == 0 {
             matching += 1;
@@ -166,7 +195,22 @@ fn compare_samples(a: &[i16], b: &[i16]) -> CompareStats {
             max_diff = max_diff.max(diff);
         }
     }
+
+    if a.len() != b.len() {
+        if first_diff_offset.is_none() {
+            first_diff_offset = Some(overlap);
+        }
+        for &extra in &a[overlap..] {
+            max_diff = max_diff.max((extra as i32).abs());
+        }
+        for &extra in &b[overlap..] {
+            max_diff = max_diff.max((extra as i32).abs());
+        }
+    }
+
     CompareStats {
+        left_len: a.len(),
+        right_len: b.len(),
         total,
         matching,
         first_diff_offset,
@@ -175,26 +219,37 @@ fn compare_samples(a: &[i16], b: &[i16]) -> CompareStats {
 }
 
 fn print_result(label: &str, stats: &CompareStats, a: &[u8], b: &[u8]) {
-    match stats.first_diff_offset {
-        None => {
-            println!("{}: PASS ({} items, all match)", label, stats.total);
-        }
-        Some(offset) => {
+    if stats.is_match() {
+        println!("{}: PASS ({} items, all match)", label, stats.total);
+    } else {
+        let offset = stats.first_diff_offset.unwrap_or(stats.total);
+        if stats.length_mismatch() {
+            println!(
+                "{}: FAIL at offset {} (C len: {}, Rust len: {}, total: {}, matching: {}, max_diff: {})",
+                label,
+                offset,
+                stats.left_len,
+                stats.right_len,
+                stats.total,
+                stats.matching,
+                stats.max_diff
+            );
+        } else {
             println!(
                 "{}: FAIL at offset {} (total: {}, matching: {}, max_diff: {})",
                 label, offset, stats.total, stats.matching, stats.max_diff
             );
-            // Hex dump around first difference
-            let start = offset.saturating_sub(16);
-            let end = (offset + 48).min(a.len().max(b.len()));
-            println!("  C ref:  {}", hex_line(a, start, end));
-            println!("  Rust:   {}", hex_line(b, start, end));
-            println!(
-                "  {}^ offset {}",
-                " ".repeat(10 + (offset - start) * 3),
-                offset
-            );
         }
+        // Hex dump around first difference
+        let start = offset.saturating_sub(16);
+        let end = (offset + 48).min(a.len().max(b.len()));
+        println!("  C ref:  {}", hex_line(a, start, end));
+        println!("  Rust:   {}", hex_line(b, start, end));
+        println!(
+            "  {}^ offset {}",
+            " ".repeat(10 + (offset - start) * 3),
+            offset
+        );
     }
 }
 
@@ -212,38 +267,49 @@ fn hex_line(data: &[u8], start: usize, end: usize) -> String {
 }
 
 fn print_sample_result(label: &str, stats: &CompareStats, a: &[i16], b: &[i16]) {
-    match stats.first_diff_offset {
-        None => {
-            println!("{}: PASS ({} samples, all match)", label, stats.total);
-        }
-        Some(offset) => {
+    if stats.is_match() {
+        println!("{}: PASS ({} samples, all match)", label, stats.total);
+    } else {
+        let offset = stats.first_diff_offset.unwrap_or(stats.total);
+        if stats.length_mismatch() {
+            println!(
+                "{}: FAIL at sample {} (C len: {}, Rust len: {}, total: {}, matching: {}, max_diff: {})",
+                label,
+                offset,
+                stats.left_len,
+                stats.right_len,
+                stats.total,
+                stats.matching,
+                stats.max_diff
+            );
+        } else {
             println!(
                 "{}: FAIL at sample {} (total: {}, matching: {}, max_diff: {})",
                 label, offset, stats.total, stats.matching, stats.max_diff
             );
-            let start = offset.saturating_sub(4);
-            let end = (offset + 12).min(a.len().max(b.len()));
-            print!("  C ref: ");
-            for i in start..end {
-                let v = a.get(i).copied().unwrap_or(0);
-                if i == offset {
-                    print!("[{:6}]", v);
-                } else {
-                    print!(" {:6} ", v);
-                }
-            }
-            println!();
-            print!("  Rust:  ");
-            for i in start..end {
-                let v = b.get(i).copied().unwrap_or(0);
-                if i == offset {
-                    print!("[{:6}]", v);
-                } else {
-                    print!(" {:6} ", v);
-                }
-            }
-            println!();
         }
+        let start = offset.saturating_sub(4);
+        let end = (offset + 12).min(a.len().max(b.len()));
+        print!("  C ref: ");
+        for i in start..end {
+            let v = a.get(i).copied().unwrap_or(0);
+            if i == offset {
+                print!("[{:6}]", v);
+            } else {
+                print!(" {:6} ", v);
+            }
+        }
+        println!();
+        print!("  Rust:  ");
+        for i in start..end {
+            let v = b.get(i).copied().unwrap_or(0);
+            if i == offset {
+                print!("[{:6}]", v);
+            } else {
+                print!(" {:6} ", v);
+            }
+        }
+        println!();
     }
 }
 
@@ -793,7 +859,21 @@ fn cmd_unit(module: &str) -> bool {
 // CLI commands
 // ---------------------------------------------------------------------------
 
-fn cmd_encode(wav_path: &str, bitrate: i32, complexity: i32) {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CompareCommandOutcome {
+    Pass,
+    Fail,
+    Skip,
+}
+
+fn exit_code_for_compare_outcome(outcome: CompareCommandOutcome) -> i32 {
+    match outcome {
+        CompareCommandOutcome::Pass | CompareCommandOutcome::Skip => 0,
+        CompareCommandOutcome::Fail => 1,
+    }
+}
+
+fn cmd_encode(wav_path: &str, bitrate: i32, complexity: i32) -> CompareCommandOutcome {
     let wav = read_wav(Path::new(wav_path));
     println!(
         "Input: {} ({} Hz, {} ch, {} samples)",
@@ -819,10 +899,15 @@ fn cmd_encode(wav_path: &str, bitrate: i32, complexity: i32) {
 
     if rust_encoded.is_empty() {
         println!("\nencode: SKIP (Rust encoder not yet implemented)");
-        return;
+        return CompareCommandOutcome::Skip;
     }
 
     let stats = compare_bytes(&c_encoded, &rust_encoded);
+    let outcome = if stats.is_match() {
+        CompareCommandOutcome::Pass
+    } else {
+        CompareCommandOutcome::Fail
+    };
     println!();
     print_result("encode", &stats, &c_encoded, &rust_encoded);
 
@@ -883,6 +968,8 @@ fn cmd_encode(wav_path: &str, bitrate: i32, complexity: i32) {
             }
         }
     }
+
+    outcome
 }
 
 fn cmd_encode_framecompare(
@@ -1029,7 +1116,7 @@ fn parse_packets(data: &[u8]) -> Vec<Vec<u8>> {
     packets
 }
 
-fn cmd_decode(opus_path: &str) {
+fn cmd_decode(opus_path: &str) -> CompareCommandOutcome {
     let data = fs::read(opus_path).unwrap_or_else(|e| {
         eprintln!("ERROR: cannot read {}: {}", opus_path, e);
         process::exit(1);
@@ -1049,15 +1136,22 @@ fn cmd_decode(opus_path: &str) {
 
     if rust_pcm.is_empty() {
         println!("\ndecode: SKIP (Rust decoder not yet implemented)");
-        return;
+        return CompareCommandOutcome::Skip;
     }
 
     let stats = compare_samples(&c_pcm, &rust_pcm);
+    let outcome = if stats.is_match() {
+        CompareCommandOutcome::Pass
+    } else {
+        CompareCommandOutcome::Fail
+    };
     println!();
     print_sample_result("decode", &stats, &c_pcm, &rust_pcm);
+
+    outcome
 }
 
-fn cmd_roundtrip(wav_path: &str, bitrate: i32) {
+fn cmd_roundtrip(wav_path: &str, bitrate: i32) -> CompareCommandOutcome {
     let wav = read_wav(Path::new(wav_path));
     println!(
         "Input: {} ({} Hz, {} ch, {} samples)",
@@ -1087,7 +1181,7 @@ fn cmd_roundtrip(wav_path: &str, bitrate: i32) {
 
     if rust_encoded.is_empty() {
         println!("\nroundtrip: SKIP (Rust encoder not yet implemented)");
-        return;
+        return CompareCommandOutcome::Skip;
     }
 
     let rust_decoded = rust_decode(&rust_encoded, sr, ch);
@@ -1099,6 +1193,11 @@ fn cmd_roundtrip(wav_path: &str, bitrate: i32) {
 
     // Compare final PCM
     let stats = compare_samples(&c_decoded, &rust_decoded);
+    let outcome = if stats.is_match() {
+        CompareCommandOutcome::Pass
+    } else {
+        CompareCommandOutcome::Fail
+    };
     println!();
     print_sample_result("roundtrip", &stats, &c_decoded, &rust_decoded);
 
@@ -1112,6 +1211,8 @@ fn cmd_roundtrip(wav_path: &str, bitrate: i32) {
     );
     let dec_stats = compare_samples(&c_decoded, &rust_decoded_c_data);
     print_sample_result("decode-only", &dec_stats, &c_decoded, &rust_decoded_c_data);
+
+    outcome
 }
 
 // ---------------------------------------------------------------------------
@@ -8923,6 +9024,109 @@ mod coverage_smoke_tests {
     }
 
     #[test]
+    fn compare_stats_equal_slices_match() {
+        let byte_stats = compare_bytes(&[1, 2, 3], &[1, 2, 3]);
+        assert!(byte_stats.is_match());
+        assert!(!byte_stats.length_mismatch());
+        assert_eq!(byte_stats.left_len, 3);
+        assert_eq!(byte_stats.right_len, 3);
+        assert_eq!(byte_stats.total, 3);
+        assert_eq!(byte_stats.matching, byte_stats.total);
+        assert_eq!(byte_stats.first_diff_offset, None);
+
+        let sample_stats = compare_samples(&[-10, 0, 10], &[-10, 0, 10]);
+        assert!(sample_stats.is_match());
+        assert!(!sample_stats.length_mismatch());
+        assert_eq!(sample_stats.left_len, 3);
+        assert_eq!(sample_stats.right_len, 3);
+        assert_eq!(sample_stats.total, 3);
+        assert_eq!(sample_stats.matching, sample_stats.total);
+        assert_eq!(sample_stats.first_diff_offset, None);
+    }
+
+    #[test]
+    fn compare_stats_same_length_value_mismatch_fails() {
+        let byte_stats = compare_bytes(&[1, 2, 3], &[1, 9, 3]);
+        assert!(!byte_stats.is_match());
+        assert!(!byte_stats.length_mismatch());
+        assert_eq!(byte_stats.first_diff_offset, Some(1));
+        assert_eq!(byte_stats.matching, 2);
+        assert!(byte_stats.matching < byte_stats.total);
+        assert_eq!(byte_stats.max_diff, 7);
+
+        let sample_stats = compare_samples(&[1, 2, 3], &[1, -2, 3]);
+        assert!(!sample_stats.is_match());
+        assert!(!sample_stats.length_mismatch());
+        assert_eq!(sample_stats.first_diff_offset, Some(1));
+        assert_eq!(sample_stats.matching, 2);
+        assert!(sample_stats.matching < sample_stats.total);
+        assert_eq!(sample_stats.max_diff, 4);
+    }
+
+    #[test]
+    fn compare_stats_left_trailing_zero_fails() {
+        let stats = compare_bytes(&[1, 0], &[1]);
+        assert!(!stats.is_match());
+        assert!(stats.length_mismatch());
+        assert_eq!(stats.left_len, 2);
+        assert_eq!(stats.right_len, 1);
+        assert_eq!(stats.total, 2);
+        assert_eq!(stats.matching, 1);
+        assert_eq!(stats.first_diff_offset, Some(1));
+        assert_eq!(stats.max_diff, 0);
+        assert_ne!(stats.matching, stats.total);
+    }
+
+    #[test]
+    fn compare_stats_right_trailing_zero_fails() {
+        let stats = compare_samples(&[1], &[1, 0]);
+        assert!(!stats.is_match());
+        assert!(stats.length_mismatch());
+        assert_eq!(stats.left_len, 1);
+        assert_eq!(stats.right_len, 2);
+        assert_eq!(stats.total, 2);
+        assert_eq!(stats.matching, 1);
+        assert_eq!(stats.first_diff_offset, Some(1));
+        assert_eq!(stats.max_diff, 0);
+        assert_ne!(stats.matching, stats.total);
+    }
+
+    #[test]
+    fn compare_stats_empty_asymmetry_fails() {
+        let right_extra = compare_bytes(&[], &[0]);
+        assert!(!right_extra.is_match());
+        assert!(right_extra.length_mismatch());
+        assert_eq!(right_extra.first_diff_offset, Some(0));
+        assert_eq!(right_extra.matching, 0);
+        assert_eq!(right_extra.total, 1);
+        assert_ne!(right_extra.matching, right_extra.total);
+
+        let left_extra = compare_samples(&[0], &[]);
+        assert!(!left_extra.is_match());
+        assert!(left_extra.length_mismatch());
+        assert_eq!(left_extra.first_diff_offset, Some(0));
+        assert_eq!(left_extra.matching, 0);
+        assert_eq!(left_extra.total, 1);
+        assert_ne!(left_extra.matching, left_extra.total);
+    }
+
+    #[test]
+    fn exit_code_for_compare_outcome_maps_fail_only_to_error() {
+        assert_eq!(
+            exit_code_for_compare_outcome(CompareCommandOutcome::Pass),
+            0
+        );
+        assert_eq!(
+            exit_code_for_compare_outcome(CompareCommandOutcome::Skip),
+            0
+        );
+        assert_eq!(
+            exit_code_for_compare_outcome(CompareCommandOutcome::Fail),
+            1
+        );
+    }
+
+    #[test]
     fn smoke_core_harness_commands() {
         let _guard = harness_lock().lock().unwrap();
 
@@ -10319,14 +10523,20 @@ pub fn run() {
             }
             let bitrate = parse_option(&args, "--bitrate", 64000);
             let complexity = parse_option(&args, "--complexity", 10);
-            cmd_encode(&args[2], bitrate, complexity);
+            let outcome = cmd_encode(&args[2], bitrate, complexity);
+            if exit_code_for_compare_outcome(outcome) != 0 {
+                process::exit(1);
+            }
         }
         "decode" => {
             if args.len() < 3 {
                 eprintln!("ERROR: decode requires an input file");
                 process::exit(1);
             }
-            cmd_decode(&args[2]);
+            let outcome = cmd_decode(&args[2]);
+            if exit_code_for_compare_outcome(outcome) != 0 {
+                process::exit(1);
+            }
         }
         "roundtrip" => {
             if args.len() < 3 {
@@ -10334,7 +10544,10 @@ pub fn run() {
                 process::exit(1);
             }
             let bitrate = parse_option(&args, "--bitrate", 64000);
-            cmd_roundtrip(&args[2], bitrate);
+            let outcome = cmd_roundtrip(&args[2], bitrate);
+            if exit_code_for_compare_outcome(outcome) != 0 {
+                process::exit(1);
+            }
         }
         "framecompare" => {
             if args.len() < 3 {

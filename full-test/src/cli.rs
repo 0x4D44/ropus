@@ -1,6 +1,6 @@
 //! CLI parsing for `full-test`.
 //!
-//! The five HLD flags plus a Phase 4 addition:
+//! The five HLD flags plus Phase 4/C1 additions:
 //! - `--quick`
 //! - `--skip-quality`
 //! - `--skip-coverage`
@@ -9,6 +9,7 @@
 //! - `--emit-json` (Phase 4: keep the old JSON envelope on stdout in addition
 //!   to the HTML report — opt-in so the default shell output is the one-line
 //!   summary plus report path, not a 200 KiB JSON dump).
+//! - `--release-preflight` (C1: fixed core profile, no selectable profiles).
 //!
 //! `--help` / `-h` prints usage and exits 0. Any other argument is an error
 //! (exit 2). The surface here is tiny enough that a hand parser keeps the
@@ -23,6 +24,7 @@ pub struct Options {
     pub skip_benchmarks: bool,
     pub skip_ambisonics: bool,
     pub emit_json: bool,
+    pub release_preflight: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -44,6 +46,7 @@ pub fn parse(args: &[String]) -> ParseOutcome {
             "--skip-benchmarks" => opts.skip_benchmarks = true,
             "--skip-ambisonics" => opts.skip_ambisonics = true,
             "--emit-json" => opts.emit_json = true,
+            "--release-preflight" => opts.release_preflight = true,
             other => return ParseOutcome::Error(format!("unknown argument: {other}")),
         }
     }
@@ -63,6 +66,7 @@ pub fn print_help() {
     println!("    --skip-benchmarks   Skip stage 4 (bench sweep).");
     println!("    --skip-ambisonics   Skip stage 3 (projection roundtrip).");
     println!("    --emit-json         Also print the JSON envelope on stdout.");
+    println!("    --release-preflight Check the fixed core release asset profile.");
     println!("    -h, --help          Show this help and exit.");
     println!();
     println!("Report lands at tests/results/full_test_<YYYYMMDD_HHMMSS>.html.");
@@ -92,6 +96,7 @@ mod tests {
             ("--skip-benchmarks", |o| o.skip_benchmarks),
             ("--skip-ambisonics", |o| o.skip_ambisonics),
             ("--emit-json", |o| o.emit_json),
+            ("--release-preflight", |o| o.release_preflight),
         ];
         for (flag, getter) in cases {
             let parsed = parse(&args(&[flag]));
@@ -111,6 +116,7 @@ mod tests {
             "--skip-benchmarks",
             "--skip-ambisonics",
             "--emit-json",
+            "--release-preflight",
         ]));
         let expected = Options {
             quick: true,
@@ -119,6 +125,7 @@ mod tests {
             skip_benchmarks: true,
             skip_ambisonics: true,
             emit_json: true,
+            release_preflight: true,
         };
         assert_eq!(parsed, ParseOutcome::Options(expected));
     }
