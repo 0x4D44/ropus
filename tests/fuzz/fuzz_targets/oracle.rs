@@ -44,6 +44,195 @@ pub enum DecodeOracleClass {
     ErrorAgreementOnly,
 }
 
+pub const DECODE_ORACLE_CLASSES: [DecodeOracleClass; 5] = [
+    DecodeOracleClass::CeltCodedComparable,
+    DecodeOracleClass::SilkHybridCodedComparable,
+    DecodeOracleClass::SampleCountOnly,
+    DecodeOracleClass::RecoveryOrDtxOnly,
+    DecodeOracleClass::ErrorAgreementOnly,
+];
+
+impl DecodeOracleClass {
+    pub fn stable_name(self) -> &'static str {
+        match self {
+            DecodeOracleClass::CeltCodedComparable => "celt-coded-comparable",
+            DecodeOracleClass::SilkHybridCodedComparable => "silk-hybrid-snr-comparable",
+            DecodeOracleClass::SampleCountOnly => "sample-count-only",
+            DecodeOracleClass::RecoveryOrDtxOnly => "recovery-or-dtx-only",
+            DecodeOracleClass::ErrorAgreementOnly => "error-agreement-only",
+        }
+    }
+
+    pub fn is_weakened(self) -> bool {
+        matches!(
+            self,
+            DecodeOracleClass::SampleCountOnly
+                | DecodeOracleClass::RecoveryOrDtxOnly
+                | DecodeOracleClass::ErrorAgreementOnly
+        )
+    }
+
+    pub fn asserted_property(self) -> &'static str {
+        match self {
+            DecodeOracleClass::CeltCodedComparable => {
+                "Exact PCM/float-bit parity where the target path supports it."
+            }
+            DecodeOracleClass::SilkHybridCodedComparable => {
+                "SNR-gated parity when the reference energy floor is met."
+            }
+            DecodeOracleClass::SampleCountOnly => {
+                "Decode result symmetry and sample-count/shape parity only."
+            }
+            DecodeOracleClass::RecoveryOrDtxOnly => {
+                "Decode result symmetry and sample-count/shape parity only."
+            }
+            DecodeOracleClass::ErrorAgreementOnly => {
+                "Decode success/error symmetry only; sample count only when both sides decode."
+            }
+        }
+    }
+
+    pub fn unasserted_property(self) -> Option<&'static str> {
+        match self {
+            DecodeOracleClass::CeltCodedComparable
+            | DecodeOracleClass::SilkHybridCodedComparable => None,
+            DecodeOracleClass::SampleCountOnly => Some(
+                "PCM sample values, exact PCM parity, and SNR threshold are not asserted for attacker-controlled high-band Hybrid decode inputs.",
+            ),
+            DecodeOracleClass::RecoveryOrDtxOnly => Some(
+                "PCM sample values, exact PCM parity, and SNR threshold are not asserted when at least one SILK/Hybrid sub-frame routes through PLC/DTX-style recovery.",
+            ),
+            DecodeOracleClass::ErrorAgreementOnly => Some(
+                "PCM sample values, exact PCM parity, SNR threshold, and in some cases sample-count expectations are not asserted because packet structure is not usable for PCM comparison.",
+            ),
+        }
+    }
+
+    pub fn matrix_class(self) -> &'static str {
+        match self {
+            DecodeOracleClass::CeltCodedComparable => "exact-pcm-parity",
+            DecodeOracleClass::SilkHybridCodedComparable => "snr-gated-parity",
+            DecodeOracleClass::SampleCountOnly => "sample-count-only",
+            DecodeOracleClass::RecoveryOrDtxOnly => "recovery-or-dtx-only",
+            DecodeOracleClass::ErrorAgreementOnly => "error-agreement-only",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DecodeOracleClassCountRow {
+    pub class: DecodeOracleClass,
+    pub count: usize,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DecodeOracleClassCounts {
+    pub celt_coded_comparable: usize,
+    pub silk_hybrid_snr_comparable: usize,
+    pub sample_count_only: usize,
+    pub recovery_or_dtx_only: usize,
+    pub error_agreement_only: usize,
+}
+
+impl DecodeOracleClassCounts {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn record(&mut self, class: DecodeOracleClass) {
+        match class {
+            DecodeOracleClass::CeltCodedComparable => self.celt_coded_comparable += 1,
+            DecodeOracleClass::SilkHybridCodedComparable => self.silk_hybrid_snr_comparable += 1,
+            DecodeOracleClass::SampleCountOnly => self.sample_count_only += 1,
+            DecodeOracleClass::RecoveryOrDtxOnly => self.recovery_or_dtx_only += 1,
+            DecodeOracleClass::ErrorAgreementOnly => self.error_agreement_only += 1,
+        }
+    }
+
+    pub fn total(&self) -> usize {
+        self.celt_coded_comparable
+            + self.silk_hybrid_snr_comparable
+            + self.sample_count_only
+            + self.recovery_or_dtx_only
+            + self.error_agreement_only
+    }
+
+    pub fn weakened_total(&self) -> usize {
+        self.sample_count_only + self.recovery_or_dtx_only + self.error_agreement_only
+    }
+
+    pub fn strong_total(&self) -> usize {
+        self.celt_coded_comparable + self.silk_hybrid_snr_comparable
+    }
+
+    pub fn count_for(&self, class: DecodeOracleClass) -> usize {
+        match class {
+            DecodeOracleClass::CeltCodedComparable => self.celt_coded_comparable,
+            DecodeOracleClass::SilkHybridCodedComparable => self.silk_hybrid_snr_comparable,
+            DecodeOracleClass::SampleCountOnly => self.sample_count_only,
+            DecodeOracleClass::RecoveryOrDtxOnly => self.recovery_or_dtx_only,
+            DecodeOracleClass::ErrorAgreementOnly => self.error_agreement_only,
+        }
+    }
+
+    pub fn rows(&self) -> [DecodeOracleClassCountRow; 5] {
+        DECODE_ORACLE_CLASSES.map(|class| DecodeOracleClassCountRow {
+            class,
+            count: self.count_for(class),
+        })
+    }
+
+    pub fn format_report(&self, label: &str) -> String {
+        let mut report = format!(
+            "decode oracle class report: {label}\n\
+             total: {}\n\
+             strong: {}\n\
+             weakened: {}\n\
+             classes:\n",
+            self.total(),
+            self.strong_total(),
+            self.weakened_total()
+        );
+        for row in self.rows() {
+            let class = row.class;
+            let debt = if class.is_weakened() { "yes" } else { "no" };
+            report.push_str(&format!(
+                "- class: {}\n  count: {}\n  debt: {}\n  asserts: {}\n  does_not_assert: {}\n",
+                class.stable_name(),
+                row.count,
+                debt,
+                class.asserted_property(),
+                class.unasserted_property().unwrap_or("none")
+            ));
+        }
+        report
+    }
+}
+
+pub fn summarize_decode_packets<'a>(
+    packets: impl IntoIterator<Item = (&'a [u8], i32)>,
+) -> DecodeOracleClassCounts {
+    let mut counts = DecodeOracleClassCounts::new();
+    for (packet, sample_rate) in packets {
+        counts.record(classify_decode_packet(packet, sample_rate));
+    }
+    counts
+}
+
+pub fn summarize_multistream_decode_packets<'a>(
+    items: impl IntoIterator<Item = (&'a [u8], i32, i32)>,
+) -> DecodeOracleClassCounts {
+    let mut counts = DecodeOracleClassCounts::new();
+    for (packet, streams, sample_rate) in items {
+        counts.record(classify_multistream_decode_packet(
+            packet,
+            streams,
+            sample_rate,
+        ));
+    }
+    counts
+}
+
 /// Sum-of-squares energy of a reference signal.
 pub fn signal_energy(samples: &[i16]) -> f64 {
     samples.iter().map(|&s| (s as f64).powi(2)).sum()
