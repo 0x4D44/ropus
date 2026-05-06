@@ -1,4 +1,4 @@
-#![no_main]
+#![cfg_attr(not(test), no_main)]
 //! Multi-packet differential decode with random packet drops (PLC).
 //!
 //! Coverage gap this target attacks: every existing decode target operates
@@ -23,18 +23,26 @@
 //!      here — this target's job is to surface decoder state-divergence,
 //!      not relitigate the recovery-divergence class.
 
+#[cfg(not(test))]
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
+#[cfg(not(test))]
 use libfuzzer_sys::fuzz_target;
+#[cfg(not(test))]
 use ropus::opus::decoder::OpusDecoder;
+#[cfg(not(test))]
 use ropus::opus::encoder::{
     OpusEncoder, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
     OPUS_APPLICATION_VOIP,
 };
+#[cfg(not(test))]
 use std::cell::RefCell;
+#[cfg(not(test))]
 use std::sync::Once;
 
+#[cfg(not(test))]
 #[path = "c_reference.rs"]
 mod c_reference;
+#[allow(dead_code)]
 #[path = "frame_duration.rs"]
 mod frame_duration;
 
@@ -42,9 +50,11 @@ mod frame_duration;
 // Panic-capture (fingerprint-only — same pattern as fuzz_encode_multiframe).
 // --------------------------------------------------------------------------- //
 thread_local! {
+    #[cfg(not(test))]
     static CURRENT_INPUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
+#[cfg(not(test))]
 fn init_panic_capture() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
@@ -70,17 +80,34 @@ fn init_panic_capture() {
     });
 }
 
+#[cfg(not(test))]
 const SAMPLE_RATES: [i32; 5] = [8000, 12000, 16000, 24000, 48000];
+#[cfg(not(test))]
 const APPLICATIONS: [i32; 3] = [
     OPUS_APPLICATION_VOIP,
     OPUS_APPLICATION_AUDIO,
     OPUS_APPLICATION_RESTRICTED_LOWDELAY,
 ];
 
+pub(crate) fn plc_decode_frame_size_samples_per_channel(sample_rate: i32, drop_mask: u32) -> i32 {
+    let frame_duration_selector = frame_duration::plc_seq_frame_duration_selector(drop_mask);
+    frame_duration::legal_frame_size_samples_per_channel(sample_rate, frame_duration_selector)
+}
+
+pub(crate) fn plc_decode_capacity_samples(
+    sample_rate: i32,
+    channels: i32,
+    drop_mask: u32,
+) -> usize {
+    plc_decode_frame_size_samples_per_channel(sample_rate, drop_mask) as usize * channels as usize
+}
+
+#[cfg(not(test))]
 fn raw_to_bitrate(raw: u16) -> i32 {
     6000 + (raw as i32 % 504_001)
 }
 
+#[cfg(not(test))]
 #[derive(Debug)]
 struct PlcSeqInput {
     sample_rate_idx: u8,
@@ -98,6 +125,7 @@ struct PlcSeqInput {
     frames: Vec<Vec<u8>>,
 }
 
+#[cfg(not(test))]
 impl<'a> Arbitrary<'a> for PlcSeqInput {
     fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
         let sample_rate_idx = u.int_in_range(0..=4)?;
@@ -112,11 +140,7 @@ impl<'a> Arbitrary<'a> for PlcSeqInput {
 
         let sample_rate = SAMPLE_RATES[sample_rate_idx as usize];
         let channels = channels_minus_one as i32 + 1;
-        let frame_duration_selector = frame_duration::plc_seq_frame_duration_selector(drop_mask);
-        let frame_size = frame_duration::legal_frame_size_samples_per_channel(
-            sample_rate,
-            frame_duration_selector,
-        ) as usize;
+        let frame_size = plc_decode_frame_size_samples_per_channel(sample_rate, drop_mask) as usize;
         let pcm_bytes_per_frame = frame_size * channels as usize * 2;
 
         // Budget the frame count to whatever fits in remaining input. PCM
@@ -151,6 +175,7 @@ impl<'a> Arbitrary<'a> for PlcSeqInput {
     }
 }
 
+#[cfg(not(test))]
 fuzz_target!(|input: PlcSeqInput| {
     init_panic_capture();
 
@@ -178,9 +203,8 @@ fuzz_target!(|input: PlcSeqInput| {
     let application = APPLICATIONS[input.application_idx as usize];
     let frame_duration_selector = frame_duration::plc_seq_frame_duration_selector(input.drop_mask);
     let frame_duration_label = frame_duration::legal_frame_duration_label(frame_duration_selector);
-    let frame_size =
-        frame_duration::legal_frame_size_samples_per_channel(sample_rate, frame_duration_selector);
-    let samples_per_frame = frame_size as usize * channels as usize;
+    let frame_size = plc_decode_frame_size_samples_per_channel(sample_rate, input.drop_mask);
+    let samples_per_frame = plc_decode_capacity_samples(sample_rate, channels, input.drop_mask);
 
     // --- Encode N packets through ONE Rust encoder ---
     let mut enc = match OpusEncoder::new(sample_rate, channels, application) {
@@ -231,7 +255,7 @@ fuzz_target!(|input: PlcSeqInput| {
         Err(_) => return,
     };
     let mut rust_per_frame: Vec<Result<Vec<i16>, String>> = Vec::with_capacity(packets.len());
-    let max_pcm = 5760usize * channels as usize;
+    let max_pcm = samples_per_frame;
     for (pkt, &drop) in packets.iter().zip(dropped.iter()) {
         let mut pcm = vec![0i16; max_pcm];
         let arg = if drop { None } else { Some(pkt.as_slice()) };

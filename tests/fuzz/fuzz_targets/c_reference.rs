@@ -531,8 +531,8 @@ pub fn c_decode_multiframe(
 /// Decode a sequence of packets through one stateful C decoder, applying a
 /// per-frame drop schedule. `dropped[i] == true` calls `opus_decode(NULL, 0, ...)`
 /// (PLC) instead of decoding `packets[i]`. `frame_size` is passed unchanged
-/// per frame — caller picks the longest plausible frame for the configured
-/// sample rate (e.g. 5760 = 120 ms at 48 kHz).
+/// per frame; callers choose the request/capacity policy that matches their
+/// sequence shape.
 ///
 /// Returns one Vec<i16> per scheduled frame (PCM, length = decoded_samples *
 /// channels) so callers can do per-frame parity against the Rust mirror. On

@@ -1,5 +1,7 @@
 #[path = "../fuzz_targets/frame_duration.rs"]
 mod frame_duration;
+#[path = "../fuzz_targets/fuzz_decode_plc_seq.rs"]
+mod fuzz_decode_plc_seq;
 
 use frame_duration::{
     legal_frame_duration_index, legal_frame_duration_label, legal_frame_size_samples_per_channel,
@@ -113,5 +115,23 @@ fn plc_seq_uses_drop_mask_high_bits_as_selector() {
     assert_eq!(
         legal_frame_duration_label(plc_seq_frame_duration_selector(7 << 29)),
         "5ms"
+    );
+}
+
+#[test]
+fn plc_seq_decode_capacity_uses_selected_legal_duration() {
+    let drop_mask_60ms = 5 << 29;
+
+    assert_eq!(
+        fuzz_decode_plc_seq::plc_decode_frame_size_samples_per_channel(48_000, drop_mask_60ms),
+        2_880
+    );
+    assert_eq!(
+        fuzz_decode_plc_seq::plc_decode_capacity_samples(48_000, 2, drop_mask_60ms),
+        2_880 * 2
+    );
+    assert_ne!(
+        fuzz_decode_plc_seq::plc_decode_capacity_samples(48_000, 2, drop_mask_60ms),
+        5_760 * 2
     );
 }
