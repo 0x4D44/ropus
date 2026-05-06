@@ -1,11 +1,11 @@
 //! Release preflight asset probes.
 //!
 //! `--release-preflight` has two claim profiles. The quick profile is a core
-//! smoke gate and does not claim neural/DRED coverage; the non-quick profile
-//! includes the deep-PLC/DRED package lane and requires its assets. IETF vector
-//! absence is shown here, but the existing Stage 2 synthetic conformance failure
-//! remains the only failure accounting path for vectors so totals are not
-//! double-counted.
+//! smoke gate and does not claim neural/DRED or real-world corpus coverage; the
+//! non-quick profile includes the deep-PLC/DRED package lane plus the generated
+//! corpus gate. IETF vector absence is shown here, but the existing Stage 2
+//! synthetic conformance failure remains the only failure accounting path for
+//! vectors so totals are not double-counted.
 
 use std::path::{Path, PathBuf};
 
@@ -60,15 +60,19 @@ impl PreflightPolicy {
         match self {
             Self::DefaultReportOnly => "default full-test report-only; no release coverage claim",
             Self::ReleaseCoreSmokeNoNeuralClaim => {
-                "core smoke only; neural/DRED gates are not claimed"
+                "core smoke only; neural/DRED and real-world corpus gates are not claimed"
             }
             Self::ReleaseCorePlusNeuralDredGate => {
-                "core plus neural/DRED gate; DNN PLC and DRED format gates are claimed"
+                "core plus neural/DRED and generated real-world corpus gates are claimed"
             }
         }
     }
 
     pub fn neural_dred_coverage_claimed(self) -> bool {
+        matches!(self, Self::ReleaseCorePlusNeuralDredGate)
+    }
+
+    pub fn corpus_coverage_claimed(self) -> bool {
         matches!(self, Self::ReleaseCorePlusNeuralDredGate)
     }
 
@@ -143,6 +147,7 @@ pub struct Outcome {
     pub profile: &'static str,
     pub claim_note: &'static str,
     pub neural_dred_coverage_claimed: bool,
+    pub corpus_coverage_claimed: bool,
     pub assets: Vec<AssetProbe>,
 }
 
@@ -262,6 +267,7 @@ fn capture_with_root(
         profile: policy.profile(),
         claim_note: policy.claim_note(),
         neural_dred_coverage_claimed: policy.neural_dred_coverage_claimed(),
+        corpus_coverage_claimed: policy.corpus_coverage_claimed(),
         assets,
     }
 }
@@ -505,6 +511,7 @@ mod tests {
         assert_eq!(outcome.profile, "default-report-only");
         assert!(!outcome.release_preflight);
         assert!(!outcome.neural_dred_coverage_claimed);
+        assert!(!outcome.corpus_coverage_claimed);
         assert!(!outcome.banner_blocking_missing());
     }
 
@@ -522,7 +529,9 @@ mod tests {
         assert_eq!(outcome.profile, "release-core-smoke-no-neural-claim");
         assert!(outcome.release_preflight);
         assert!(!outcome.neural_dred_coverage_claimed);
+        assert!(!outcome.corpus_coverage_claimed);
         assert!(outcome.claim_note.contains("not claimed"));
+        assert!(outcome.claim_note.contains("real-world corpus"));
         assert!(!outcome.banner_blocking_missing());
 
         for key in [
@@ -552,6 +561,7 @@ mod tests {
         assert_eq!(outcome.profile, "release-core-plus-neural-dred-gate");
         assert!(outcome.release_preflight);
         assert!(outcome.neural_dred_coverage_claimed);
+        assert!(outcome.corpus_coverage_claimed);
         assert!(outcome.banner_blocking_missing());
         let keys: Vec<&str> = outcome
             .missing_required_for_banner()

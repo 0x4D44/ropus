@@ -17,6 +17,7 @@ mod banner;
 mod bench;
 mod cargo_parse;
 mod cli;
+mod corpus;
 mod fuzz;
 mod html;
 mod ietf_vectors;
@@ -79,6 +80,12 @@ fn main() -> ExitCode {
     // crash files.
     let fuzz_outcome = fuzz::run(&options);
 
+    // Phase 3.4 — generated real-world corpus gate. Default and quick runs
+    // report the manifest/provisioning contract without claiming coverage;
+    // non-quick release preflight generates a temporary FFmpeg-native Opus
+    // file and requires exact PCM parity via corpus_diff.
+    let corpus_outcome = corpus::run(&options);
+
     // HLD § Stages: if stage 2 failed to *compile* (not fails a test — fails
     // to compile), stages 3 and 4 are marked "skipped (upstream build
     // failure)" rather than attempted. They depend on the same compiled
@@ -120,6 +127,7 @@ fn main() -> ExitCode {
         &ambisonics_outcome,
         &bench_outcome,
         &fuzz_outcome,
+        &corpus_outcome,
         &setup_info.preflight,
     );
     let exit_code: u8 = banner_kind.exit_code();
@@ -141,6 +149,7 @@ fn main() -> ExitCode {
         quality: &quality_outcome,
         tests: &tests_outcome,
         fuzz: &fuzz_outcome,
+        corpus: &corpus_outcome,
         ambisonics: &ambisonics_outcome,
         bench: &bench_outcome,
     };
@@ -171,6 +180,7 @@ fn main() -> ExitCode {
             quality: &quality_outcome,
             tests: &tests_outcome,
             fuzz: &fuzz_outcome,
+            corpus: &corpus_outcome,
             ambisonics: &ambisonics_outcome,
             bench: &bench_outcome,
             exit_code,

@@ -18,8 +18,33 @@ catch encoder-specific bitstream quirks produced by encoders OTHER than
 libopus.
 
 Stage 3 of the deferred-work closeout intentionally shipped the baseline +
-scaffolding. **Populating the corpus with genuine non-reference samples is
-still open work.** This README calls out how to do it.
+scaffolding. The first release gate is now a **generated non-reference smoke**
+defined by `corpus_manifest.toml`: `full-test --release-preflight` generates a
+temporary FFmpeg-native Opus file from an existing checked-in WAV fixture and
+requires exact PCM parity against the C reference. Broader curated
+non-reference samples are still open work.
+
+## Release gate manifest
+
+`corpus_manifest.toml` is the source of truth for entries that may satisfy a
+release corpus claim. Arbitrary local `.opus` / `.ogg` / `.webm` files are still
+useful for exploration through `corpus_diff <dir>`, but they do not satisfy the
+release gate unless the manifest marks them required and supported.
+
+The current required entry is generated locally:
+
+```bash
+ffmpeg -y -hide_banner -loglevel error \
+  -i tests/vectors/48k_sine1k_loud.wav \
+  -c:a opus -strict -2 -b:a 32k \
+  tests/vectors/real_world/ffmpeg-native-sine-32k.opus
+```
+
+The generated `.opus` file stays ignored/local by default. Non-quick
+`full-test --release-preflight` uses a temporary directory for this generation,
+runs `corpus_diff`, and fails the corpus claim if FFmpeg or the native `opus`
+encoder is unavailable. Quick release-preflight explicitly makes no
+real-world/generated corpus claim.
 
 ## How to populate (baseline)
 
@@ -111,8 +136,8 @@ For each file it:
 
 | Exit | Meaning                                                           |
 |------|-------------------------------------------------------------------|
-| `0`  | Directory had files and every valid file matched sample-for-sample. |
-| `1`  | One or more mismatches or panics, OR the directory argument was missing / unreadable. |
+| `0`  | Directory had at least one supported file that decoded nonzero audio, and every decoded file matched sample-for-sample. |
+| `1`  | One or more mismatches or panics, the directory argument was missing / unreadable, or candidate files existed but none decoded nonzero audio for comparison. |
 | `2`  | Directory exists but contains no candidate files (not populated). Distinct from `0` so CI cannot silently pass against an unpopulated corpus. Gate the CI step on `fetch_corpus.sh` or a populate-step having completed first. |
 
 ### Limitations (intentional for the P2 scope)
@@ -121,4 +146,7 @@ For each file it:
   and skipped — `projection_roundtrip` covers family 3.
 - `.webm` files are logged and skipped (Matroska container parsing is not
   in scope for this harness; transcode to `.opus` first if you care).
-- No seek, no FEC, no PLC — straight linear decode.
+- The oracle is exact PCM parity versus the C reference for supported Ogg
+  family-0 packet decode only.
+- No WebM/player semantics, seek, output gain, pre-skip trimming, granule
+  position behavior, FEC, or PLC — straight linear packet decode.

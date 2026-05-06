@@ -29,6 +29,7 @@ use crate::banner::{BENCH_WARN_RATIO, Banner};
 use crate::bench::{BenchResult, VectorBench};
 use crate::cargo_parse::{Outcome as TestOutcomeKind, TestOutcome};
 use crate::cli::Options;
+use crate::corpus::{Outcome as CorpusOutcome, Status as CorpusStatus};
 use crate::fuzz::{Outcome as FuzzOutcome, Status as FuzzStatus};
 use crate::ietf_vectors::{IetfVectorProvision, ProvisionStatus};
 use crate::llvm_cov_parse::CoverageMetrics;
@@ -52,6 +53,7 @@ pub struct ReportContext<'a> {
     pub quality: &'a QualityOutcome,
     pub tests: &'a TestsOutcome,
     pub fuzz: &'a FuzzOutcome,
+    pub corpus: &'a CorpusOutcome,
     pub ambisonics: &'a AmbisonicsResult,
     pub bench: &'a BenchResult,
 }
@@ -83,6 +85,7 @@ pub fn render(ctx: &ReportContext<'_>) -> String {
     render_category_summary(&mut out, &ctx.tests.tests.per_test);
     render_phase_summary(&mut out, ctx);
     render_release_preflight(&mut out, &ctx.preflight);
+    render_corpus_gate(&mut out, ctx.corpus);
     render_fuzz_sanity(&mut out, ctx.fuzz);
     render_module_breakdown(&mut out, &ctx.tests.tests.per_test);
     render_failed_tests(&mut out, &ctx.tests.tests.failed_test_names);
@@ -544,6 +547,37 @@ fn render_phase_summary(out: &mut String, ctx: &ReportContext<'_>) {
         dur = html_escape(&f_dur),
     ));
 
+    // Real-world corpus (claimed only by non-quick release-preflight).
+    let c = ctx.corpus;
+    let c_total = c.required_entries as u32;
+    let c_passed = c.compared_required_entries as u32;
+    let c_failed = if c.status == CorpusStatus::Fail { 1 } else { 0 };
+    let c_skipped = if c.status == CorpusStatus::NotClaimed {
+        1
+    } else {
+        0
+    };
+    let c_fail_cls = match c.status {
+        CorpusStatus::Fail => " fail",
+        CorpusStatus::Pass => "",
+        CorpusStatus::NotClaimed => " warn",
+    };
+    let c_failed_disp = match c.status {
+        CorpusStatus::Fail => "failed".to_string(),
+        CorpusStatus::NotClaimed => "not claimed".to_string(),
+        CorpusStatus::Pass => c_failed.to_string(),
+    };
+    let c_dur = if c.status == CorpusStatus::NotClaimed {
+        "not claimed".to_string()
+    } else {
+        format_duration(c.duration_ms)
+    };
+    out.push_str(&format!(
+        "<tr><td>Real-world corpus</td><td class=\"num\">{c_total}</td><td class=\"num\">{c_passed}</td><td class=\"num{c_fail_cls}\">{failed}</td><td class=\"num\">{c_skipped}</td><td class=\"num\">{dur}</td></tr>\n",
+        failed = html_escape(&c_failed_disp),
+        dur = html_escape(&c_dur),
+    ));
+
     out.push_str("</table>\n");
 }
 
@@ -600,6 +634,90 @@ fn fuzz_status_class(status: FuzzStatus) -> &'static str {
         FuzzStatus::Warn => "warn",
         FuzzStatus::Pass => "pass",
         FuzzStatus::NotRequested => "empty",
+    }
+}
+
+fn render_corpus_gate(out: &mut String, corpus: &CorpusOutcome) {
+    out.push_str("<h2>Real-world corpus</h2>\n");
+    out.push_str(&format!(
+        "<p class=\"meta\">Mode: <code>{}</code> &bull; Status: <span class=\"{}\">{}</span> &bull; Claim: {}</p>\n",
+        html_escape(corpus.mode.as_str()),
+        corpus_status_class(corpus.status),
+        html_escape(corpus.status.as_str()),
+        html_escape(&corpus.claim_note),
+    ));
+    out.push_str(&format!(
+        "<p class=\"meta\">Oracle: {}</p>\n",
+        html_escape(corpus.oracle_note),
+    ));
+    out.push_str(&format!(
+        "<p class=\"meta\">Manifest: <code>{}</code></p>\n",
+        html_escape(&corpus.manifest_path),
+    ));
+    if let Some(version) = &corpus.ffmpeg_version {
+        out.push_str(&format!(
+            "<p class=\"meta\">FFmpeg: <code>{}</code></p>\n",
+            html_escape(version),
+        ));
+    }
+    if !corpus.command.is_empty() {
+        out.push_str(&format!(
+            "<p class=\"meta\">Command: <code>{}</code></p>\n",
+            html_escape(&corpus.command.join(" ")),
+        ));
+    }
+    if let Some(summary) = &corpus.corpus_diff_summary {
+        out.push_str(&format!(
+            "<p class=\"meta\">corpus_diff: {} candidate(s), {} decoded-and-compared, {} zero-audio, {} skipped, {} mismatched, {} panicked.</p>\n",
+            summary.candidates,
+            summary.decoded_and_compared,
+            summary.zero_audio,
+            summary.skipped,
+            summary.mismatched,
+            summary.panicked,
+        ));
+    }
+    if !corpus.issues.is_empty() {
+        out.push_str("<ul class=\"failed-tests\">\n");
+        for issue in &corpus.issues {
+            out.push_str(&format!("  <li>{}</li>\n", html_escape(issue)));
+        }
+        out.push_str("</ul>\n");
+    }
+    if corpus.entries.is_empty() {
+        out.push_str("<p class=\"empty\">(no corpus manifest entries)</p>\n");
+        return;
+    }
+    out.push_str("<table>\n<tr><th>Entry</th><th>Class</th><th>Required</th><th>Status</th><th>SHA-256</th><th>Note</th></tr>\n");
+    for entry in &corpus.entries {
+        let cls = if entry.compared {
+            "pass"
+        } else if corpus.status == CorpusStatus::Fail && entry.required {
+            "fail"
+        } else {
+            "warn"
+        };
+        let sha = entry.sha256.as_deref().unwrap_or("n/a");
+        out.push_str(&format!(
+            "<tr><td><code>{}</code><br><span class=\"empty\">{}</span></td><td>{}</td><td>{}</td><td class=\"{}\">{}</td><td><code>{}</code></td><td>{}</td></tr>\n",
+            html_escape(&entry.id),
+            html_escape(&entry.path),
+            html_escape(&entry.corpus_class),
+            if entry.required { "yes" } else { "no" },
+            cls,
+            html_escape(&entry.status),
+            html_escape(sha),
+            html_escape(&entry.note),
+        ));
+    }
+    out.push_str("</table>\n");
+}
+
+fn corpus_status_class(status: CorpusStatus) -> &'static str {
+    match status {
+        CorpusStatus::Fail => "fail",
+        CorpusStatus::Pass => "pass",
+        CorpusStatus::NotClaimed => "empty",
     }
 }
 
@@ -1046,6 +1164,7 @@ mod tests {
         bench: &'a BenchResult,
     ) -> ReportContext<'a> {
         let fuzz = Box::leak(Box::new(crate::fuzz::Outcome::not_requested()));
+        let corpus = Box::leak(Box::new(crate::corpus::Outcome::not_claimed_for_tests()));
         ReportContext {
             commit_sha: "dd3fb17",
             branch: "main",
@@ -1060,6 +1179,7 @@ mod tests {
             quality,
             tests,
             fuzz,
+            corpus,
             ambisonics: amb,
             bench,
         }
@@ -1082,6 +1202,7 @@ mod tests {
             "Category summary",
             "Phase summary",
             "Release preflight",
+            "Real-world corpus",
             "Fuzz sanity",
             "Module breakdown",
             "Failed tests",
@@ -1125,6 +1246,7 @@ mod tests {
             quality: &q,
             tests: &t,
             fuzz: Box::leak(Box::new(crate::fuzz::Outcome::not_requested())),
+            corpus: Box::leak(Box::new(crate::corpus::Outcome::not_claimed_for_tests())),
             ambisonics: &a,
             bench: &b,
         };
@@ -1132,8 +1254,10 @@ mod tests {
 
         assert!(html.contains("Profile: <code>release-core-plus-neural-dred-gate</code>"));
         assert!(html.contains("Mode: active"));
-        assert!(html.contains("Claim: core plus neural/DRED gate"));
-        assert!(html.contains("<code>--release-preflight</code> (core plus neural/DRED gate"));
+        assert!(html.contains(
+            "Claim: core plus neural/DRED and generated real-world corpus gates are claimed"
+        ));
+        assert!(html.contains("<code>--release-preflight</code> (core plus neural/DRED and generated real-world corpus gates are claimed"));
         assert!(html.contains("<code>fixed_reference</code>"));
         assert!(html.contains("<code>conformance_sources</code>"));
         assert!(html.contains("<code>ietf_vectors</code>"));
@@ -1177,16 +1301,33 @@ mod tests {
             quality: &q,
             tests: &t,
             fuzz: Box::leak(Box::new(crate::fuzz::Outcome::not_requested())),
+            corpus: Box::leak(Box::new(crate::corpus::Outcome::not_claimed_for_tests())),
             ambisonics: &a,
             bench: &b,
         };
         let html = render(&c);
 
         assert!(html.contains("Profile: <code>release-core-smoke-no-neural-claim</code>"));
-        assert!(html.contains("Claim: core smoke only; neural/DRED gates are not claimed"));
+        assert!(html.contains(
+            "Claim: core smoke only; neural/DRED and real-world corpus gates are not claimed"
+        ));
         assert!(html.contains("<code>--release-preflight</code> (core smoke only"));
         assert!(html.contains("report-only in quick release-preflight"));
         assert!(html.contains("class=\"warn\">missing_optional"));
+    }
+
+    #[test]
+    fn corpus_section_states_limited_oracle_and_missing_tooling() {
+        let corpus =
+            crate::corpus::Outcome::failing_for_tests("FFmpeg native opus generation unavailable");
+        let mut html = String::new();
+        render_corpus_gate(&mut html, &corpus);
+
+        assert!(html.contains("Real-world corpus"));
+        assert!(html.contains("Mode: <code>generated_smoke</code>"));
+        assert!(html.contains("FFmpeg native opus generation unavailable"));
+        assert!(html.contains("supported Ogg family-0 packet decode only"));
+        assert!(html.contains("no WebM/player semantics"));
     }
 
     #[test]
@@ -1233,6 +1374,7 @@ mod tests {
             quality: &q,
             tests: &t,
             fuzz: Box::leak(Box::new(crate::fuzz::Outcome::not_requested())),
+            corpus: Box::leak(Box::new(crate::corpus::Outcome::not_claimed_for_tests())),
             ambisonics: &a,
             bench: &b,
         };
@@ -1653,6 +1795,7 @@ mod tests {
             quality: &q,
             tests: &t,
             fuzz: Box::leak(Box::new(crate::fuzz::Outcome::not_requested())),
+            corpus: Box::leak(Box::new(crate::corpus::Outcome::not_claimed_for_tests())),
             ambisonics: &a,
             bench: &b,
         };

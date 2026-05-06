@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::ambisonics::AmbisonicsResult;
 use crate::bench::BenchResult;
+use crate::corpus::Outcome as CorpusOutcome;
 use crate::fuzz::Outcome as FuzzOutcome;
 use crate::ietf_vectors::IetfVectorProvision;
 use crate::preflight::{AssetProbe, Outcome as PreflightOutcome};
@@ -20,6 +21,7 @@ pub struct Envelope<'a> {
     pub quality: &'a QualityOutcome,
     pub tests: &'a TestsOutcome,
     pub fuzz: &'a FuzzOutcome,
+    pub corpus: &'a CorpusOutcome,
     pub ambisonics: &'a AmbisonicsResult,
     pub bench: &'a BenchResult,
     pub exit_code: u8,
@@ -33,6 +35,7 @@ impl Envelope<'_> {
                 "quality": quality_to_json(self.quality),
                 "tests": tests_to_json(self.tests),
                 "fuzz": fuzz_to_json(self.fuzz),
+                "corpus": corpus_to_json(self.corpus),
                 "ambisonics": ambisonics_to_json(self.ambisonics),
                 "bench": bench_to_json(self.bench),
             },
@@ -77,6 +80,7 @@ fn preflight_to_json(p: &PreflightOutcome) -> Value {
         "profile": p.profile,
         "claim_note": p.claim_note,
         "neural_dred_coverage_claimed": p.neural_dred_coverage_claimed,
+        "corpus_coverage_claimed": p.corpus_coverage_claimed,
         "banner_blocking_missing": p.banner_blocking_missing(),
         "assets": p.assets.iter().map(preflight_asset_to_json).collect::<Vec<_>>(),
     })
@@ -120,6 +124,10 @@ fn ambisonics_to_json(o: &AmbisonicsResult) -> Value {
 }
 
 fn fuzz_to_json(o: &FuzzOutcome) -> Value {
+    serde_json::to_value(o).unwrap_or(Value::Null)
+}
+
+fn corpus_to_json(o: &CorpusOutcome) -> Value {
     serde_json::to_value(o).unwrap_or(Value::Null)
 }
 
@@ -204,6 +212,10 @@ mod tests {
         crate::fuzz::Outcome::not_requested()
     }
 
+    fn corpus_not_claimed() -> crate::corpus::Outcome {
+        crate::corpus::Outcome::not_claimed_for_tests()
+    }
+
     fn quality_ok() -> QualityOutcome {
         QualityOutcome {
             skipped: false,
@@ -281,6 +293,7 @@ mod tests {
             quality: &quality,
             tests: &tests,
             fuzz: &fuzz,
+            corpus: &corpus_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -296,6 +309,15 @@ mod tests {
         assert_eq!(v["stages"]["tests"]["coverage_skipped"], false);
         assert_eq!(v["stages"]["fuzz"]["mode"], "not_requested");
         assert_eq!(v["stages"]["fuzz"]["status"], "not_requested");
+        assert_eq!(v["stages"]["corpus"]["mode"], "report_only");
+        assert_eq!(v["stages"]["corpus"]["status"], "not_claimed");
+        assert_eq!(v["stages"]["corpus"]["claimed"], false);
+        assert!(
+            v["stages"]["corpus"]["oracle_note"]
+                .as_str()
+                .unwrap()
+                .contains("supported Ogg family-0 packet decode only")
+        );
 
         // Coverage sub-object shape.
         let cov = &v["stages"]["tests"]["coverage"];
@@ -326,6 +348,7 @@ mod tests {
             quality: &quality,
             tests: &tests,
             fuzz: &fuzz,
+            corpus: &corpus_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -348,6 +371,7 @@ mod tests {
             quality: &quality,
             tests: &tests,
             fuzz: &fuzz,
+            corpus: &corpus_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -381,6 +405,7 @@ mod tests {
             quality: &quality,
             tests: &tests,
             fuzz: &fuzz,
+            corpus: &corpus_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 1,
@@ -405,6 +430,7 @@ mod tests {
             quality: &quality,
             tests: &tests,
             fuzz: &fuzz,
+            corpus: &corpus_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -428,6 +454,7 @@ mod tests {
             v["setup"]["preflight"]["neural_dred_coverage_claimed"],
             false
         );
+        assert_eq!(v["setup"]["preflight"]["corpus_coverage_claimed"], false);
         assert_eq!(
             v["setup"]["preflight"]["assets"].as_array().unwrap().len(),
             6
@@ -467,6 +494,7 @@ mod tests {
             quality: &quality,
             tests: &tests,
             fuzz: &fuzz,
+            corpus: &corpus_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 1,
@@ -478,11 +506,12 @@ mod tests {
         assert_eq!(preflight["profile"], "release-core-plus-neural-dred-gate");
         assert_eq!(preflight["release_preflight"], true);
         assert_eq!(preflight["neural_dred_coverage_claimed"], true);
+        assert_eq!(preflight["corpus_coverage_claimed"], true);
         assert!(
             preflight["claim_note"]
                 .as_str()
                 .unwrap()
-                .contains("neural/DRED gate")
+                .contains("generated real-world corpus")
         );
         assert_eq!(preflight["banner_blocking_missing"], true);
         assert_eq!(assets.len(), 6);
@@ -527,6 +556,7 @@ mod tests {
             quality: &quality,
             tests: &tests,
             fuzz: &fuzz,
+            corpus: &corpus_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 1,
@@ -538,6 +568,7 @@ mod tests {
         assert_eq!(preflight["profile"], "release-core-smoke-no-neural-claim");
         assert_eq!(preflight["release_preflight"], true);
         assert_eq!(preflight["neural_dred_coverage_claimed"], false);
+        assert_eq!(preflight["corpus_coverage_claimed"], false);
         assert!(
             preflight["claim_note"]
                 .as_str()
@@ -565,6 +596,7 @@ mod tests {
             quality: &quality,
             tests: &tests,
             fuzz: &fuzz,
+            corpus: &corpus_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -650,6 +682,7 @@ mod tests {
             quality: &quality,
             tests: &tests,
             fuzz: &fuzz,
+            corpus: &corpus_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -685,6 +718,7 @@ mod tests {
             quality: &quality,
             tests: &tests,
             fuzz: &fuzz,
+            corpus: &corpus_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -723,6 +757,7 @@ mod tests {
             quality: &quality,
             tests: &tests,
             fuzz: &fuzz,
+            corpus: &corpus_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -748,6 +783,7 @@ mod tests {
             quality: &quality,
             tests: &tests,
             fuzz: &fuzz,
+            corpus: &corpus_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 0,
@@ -782,6 +818,7 @@ mod tests {
             quality: &quality,
             tests: &tests,
             fuzz: &fuzz,
+            corpus: &corpus_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 1,
@@ -819,6 +856,7 @@ mod tests {
             quality: &quality,
             tests: &tests,
             fuzz: &fuzz,
+            corpus: &corpus_not_claimed(),
             ambisonics: &amb,
             bench: &bench,
             exit_code: 1,

@@ -1,0 +1,18 @@
+# Gateable real-world corpus metadata.
+#
+# Generated media remains local/ignored by default. The release corpus smoke
+# uses this manifest to decide which entries may satisfy a corpus coverage
+# claim; arbitrary files in this directory remain exploratory only.
+
+[[entries]]
+id = "ffmpeg-native-sine-32k"
+path = "ffmpeg-native-sine-32k.opus"
+class = "generated-non-reference"
+encoder = "FFmpeg native opus"
+source_fixture = "tests/vectors/48k_sine1k_loud.wav"
+generation_command = "ffmpeg -y -hide_banner -loglevel error -i tests/vectors/48k_sine1k_loud.wav -c:a opus -strict -2 -b:a 32k tests/vectors/real_world/ffmpeg-native-sine-32k.opus"
+license = "Generated locally from checked-in synthetic WAV fixture; generated media remains untracked."
+container_support = "supported-ogg-family0"
+required = true
+max_size_bytes = 100000
+oracle = "exact-pcm-parity-vs-c-reference"

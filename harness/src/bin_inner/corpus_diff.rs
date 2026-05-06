@@ -31,9 +31,11 @@
 //!     rather than aborting the whole run.
 //!
 //! Exit codes (stable contract — CI should gate on these).
-//!   0 — every valid file matched sample-for-sample.
-//!   1 — one or more files mismatched, OR the directory argument was missing
-//!       / unreadable.
+//!   0 — at least one supported file decoded nonzero audio and every decoded
+//!       file matched sample-for-sample.
+//!   1 — one or more files mismatched or panicked, the directory argument was
+//!       missing / unreadable, OR candidate files existed but none decoded
+//!       nonzero audio for comparison.
 //!   2 — directory exists but contains no candidate files. Distinct from 0
 //!       so a CI pipeline cannot silently pass against an unpopulated
 //!       corpus; gate the step on `fetch_corpus.sh` or a manual populate
@@ -353,6 +355,48 @@ impl Drop for CrefDecoder {
 // Directory walk + driver
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RunStats {
+    candidates: usize,
+    decoded_and_compared: usize,
+    zero_audio: usize,
+    skipped: usize,
+    mismatched: usize,
+    panicked: usize,
+}
+
+impl RunStats {
+    fn exit_code(&self) -> i32 {
+        if self.candidates == 0 {
+            return 2;
+        }
+        if self.mismatched > 0 || self.panicked > 0 || self.decoded_and_compared == 0 {
+            return 1;
+        }
+        0
+    }
+
+    fn record_match(&mut self, samples_per_ch: usize) {
+        if samples_per_ch == 0 {
+            self.zero_audio += 1;
+        } else {
+            self.decoded_and_compared += 1;
+        }
+    }
+
+    fn summary_line(&self) -> String {
+        format!(
+            "CORPUS_DIFF_SUMMARY candidates={} decoded_and_compared={} zero_audio={} skipped={} mismatched={} panicked={}",
+            self.candidates,
+            self.decoded_and_compared,
+            self.zero_audio,
+            self.skipped,
+            self.mismatched,
+            self.panicked
+        )
+    }
+}
+
 fn gather_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
     let entries = fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut files = Vec::new();
@@ -416,10 +460,10 @@ pub fn main() {
         dir.display()
     );
 
-    let mut matches = 0usize;
-    let mut skipped = 0usize;
-    let mut mismatches = 0usize;
-    let mut panicked = 0usize;
+    let mut stats = RunStats {
+        candidates: files.len(),
+        ..RunStats::default()
+    };
 
     for path in &files {
         let display = path
@@ -430,7 +474,7 @@ pub fn main() {
         let kind = classify(path).expect("classifier admitted only known kinds");
         if kind == CorpusKind::Webm {
             println!("  SKIP {display} (WebM/Matroska container not parsed here)");
-            skipped += 1;
+            stats.skipped += 1;
             continue;
         }
 
@@ -445,26 +489,30 @@ pub fn main() {
                 packets,
                 samples_per_ch,
             }) => {
-                println!("  OK   {display} ({packets} packets, {samples_per_ch} samples/ch)");
-                matches += 1;
+                if samples_per_ch == 0 {
+                    println!("  ZERO {display} ({packets} packets, 0 samples/ch)");
+                } else {
+                    println!("  OK   {display} ({packets} packets, {samples_per_ch} samples/ch)");
+                }
+                stats.record_match(samples_per_ch);
             }
             Ok(FileOutcome::Skipped(reason)) => {
                 println!("  SKIP {display} ({reason})");
-                skipped += 1;
+                stats.skipped += 1;
             }
             Ok(FileOutcome::Mismatch(m)) => {
                 println!(
                     "  FAIL {display} — packet {} sample {} ch {}: ropus={} cref={} ({})",
                     m.packet_index, m.sample_index, m.channel, m.ropus_value, m.cref_value, m.note
                 );
-                mismatches += 1;
+                stats.mismatched += 1;
             }
             Ok(FileOutcome::DecoderError(m)) => {
                 println!(
                     "  FAIL {display} — packet {}: ropus={} cref={} ({})",
                     m.packet_index, m.ropus_value, m.cref_value, m.note
                 );
-                mismatches += 1;
+                stats.mismatched += 1;
             }
             Err(payload) => {
                 let msg = if let Some(s) = payload.downcast_ref::<&str>() {
@@ -475,21 +523,88 @@ pub fn main() {
                     "<non-string panic>".to_string()
                 };
                 println!("  PANIC {display} — {msg}");
-                panicked += 1;
+                stats.panicked += 1;
             }
         }
     }
 
     println!(
-        "---\n{} matched, {} skipped, {} mismatched, {} panicked (of {} total)",
-        matches,
-        skipped,
-        mismatches,
-        panicked,
-        files.len()
+        "---\n{} decoded-and-compared, {} zero-audio, {} skipped, {} mismatched, {} panicked (of {} total)",
+        stats.decoded_and_compared,
+        stats.zero_audio,
+        stats.skipped,
+        stats.mismatched,
+        stats.panicked,
+        stats.candidates
     );
+    println!("{}", stats.summary_line());
 
-    if mismatches > 0 || panicked > 0 {
-        process::exit(1);
+    process::exit(stats.exit_code());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corpus_skipped_only_candidate_set_is_non_green() {
+        let stats = RunStats {
+            candidates: 2,
+            skipped: 2,
+            ..RunStats::default()
+        };
+
+        assert_eq!(stats.exit_code(), 1);
+        assert!(stats.summary_line().contains("decoded_and_compared=0"));
+    }
+
+    #[test]
+    fn corpus_zero_audio_only_candidate_set_is_non_green() {
+        let mut stats = RunStats {
+            candidates: 1,
+            ..RunStats::default()
+        };
+        stats.record_match(0);
+
+        assert_eq!(stats.zero_audio, 1);
+        assert_eq!(stats.decoded_and_compared, 0);
+        assert_eq!(stats.exit_code(), 1);
+    }
+
+    #[test]
+    fn corpus_supported_nonzero_match_is_green_even_with_exploratory_skips() {
+        let mut stats = RunStats {
+            candidates: 2,
+            skipped: 1,
+            ..RunStats::default()
+        };
+        stats.record_match(960);
+
+        assert_eq!(stats.decoded_and_compared, 1);
+        assert_eq!(stats.exit_code(), 0);
+    }
+
+    #[test]
+    fn corpus_mismatch_or_panic_is_non_green() {
+        let mut mismatch = RunStats {
+            candidates: 1,
+            mismatched: 1,
+            ..RunStats::default()
+        };
+        mismatch.record_match(960);
+        assert_eq!(mismatch.exit_code(), 1);
+
+        let mut panic = RunStats {
+            candidates: 1,
+            panicked: 1,
+            ..RunStats::default()
+        };
+        panic.record_match(960);
+        assert_eq!(panic.exit_code(), 1);
+    }
+
+    #[test]
+    fn corpus_empty_candidate_set_preserves_exit_two() {
+        assert_eq!(RunStats::default().exit_code(), 2);
     }
 }

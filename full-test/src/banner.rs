@@ -17,6 +17,7 @@
 
 use crate::ambisonics::AmbisonicsResult;
 use crate::bench::BenchResult;
+use crate::corpus::Outcome as CorpusOutcome;
 use crate::fuzz::Outcome as FuzzOutcome;
 use crate::preflight::Outcome as PreflightOutcome;
 use crate::quality::Outcome as QualityOutcome;
@@ -77,6 +78,7 @@ pub fn classify(
     ambisonics: &AmbisonicsResult,
     bench: &BenchResult,
     fuzz: &FuzzOutcome,
+    corpus: &CorpusOutcome,
     preflight: &PreflightOutcome,
 ) -> Banner {
     // FAIL predicates. Each stage's `all_passed()` is the canonical "green"
@@ -88,8 +90,15 @@ pub fn classify(
     let quality_failed = !quality.all_passed();
     let ambisonics_failed = ambisonics.build_failed || !ambisonics.all_passed();
     let fuzz_failed = fuzz.banner_fail();
+    let corpus_failed = corpus.banner_fail();
     let preflight_failed = preflight.banner_blocking_missing();
-    if stage2_failed || quality_failed || ambisonics_failed || fuzz_failed || preflight_failed {
+    if stage2_failed
+        || quality_failed
+        || ambisonics_failed
+        || fuzz_failed
+        || corpus_failed
+        || preflight_failed
+    {
         return Banner::Fail;
     }
 
@@ -310,6 +319,14 @@ mod tests {
         }
     }
 
+    fn corpus_pass() -> crate::corpus::Outcome {
+        crate::corpus::Outcome::not_claimed_for_tests()
+    }
+
+    fn corpus_fail() -> crate::corpus::Outcome {
+        crate::corpus::Outcome::failing_for_tests("corpus_diff exited 1")
+    }
+
     #[test]
     fn all_green_is_pass() {
         let b = classify(
@@ -318,6 +335,7 @@ mod tests {
             &ambisonics_pass(),
             &bench_pass(),
             &fuzz_pass(),
+            &corpus_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Pass);
@@ -346,6 +364,7 @@ mod tests {
                 &amb,
                 &bench,
                 &fuzz_pass(),
+                &corpus_pass(),
                 &preflight_pass()
             ),
             Banner::Pass
@@ -360,6 +379,7 @@ mod tests {
             &ambisonics_pass(),
             &bench_pass(),
             &fuzz_pass(),
+            &corpus_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);
@@ -373,6 +393,7 @@ mod tests {
             &ambisonics_pass(),
             &bench_pass(),
             &fuzz_pass(),
+            &corpus_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);
@@ -386,6 +407,7 @@ mod tests {
             &ambisonics_pass(),
             &bench_pass(),
             &fuzz_pass(),
+            &corpus_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);
@@ -399,6 +421,7 @@ mod tests {
             &ambisonics_fail(),
             &bench_pass(),
             &fuzz_pass(),
+            &corpus_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);
@@ -420,6 +443,7 @@ mod tests {
             &amb,
             &bench_pass(),
             &fuzz_pass(),
+            &corpus_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);
@@ -433,6 +457,7 @@ mod tests {
             &ambisonics_pass(),
             &bench_with_crash(),
             &fuzz_pass(),
+            &corpus_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Warn);
@@ -446,6 +471,7 @@ mod tests {
             &ambisonics_pass(),
             &bench_with_regression(),
             &fuzz_pass(),
+            &corpus_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Warn);
@@ -468,6 +494,7 @@ mod tests {
             &ambisonics_pass(),
             &bench,
             &fuzz_pass(),
+            &corpus_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Warn);
@@ -490,6 +517,7 @@ mod tests {
             &ambisonics_pass(),
             &bench,
             &fuzz_pass(),
+            &corpus_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Pass);
@@ -512,6 +540,7 @@ mod tests {
             &ambisonics_pass(),
             &bench,
             &fuzz_pass(),
+            &corpus_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Pass);
@@ -526,6 +555,7 @@ mod tests {
             &ambisonics_pass(),
             &bench_with_crash(),
             &fuzz_pass(),
+            &corpus_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);
@@ -539,6 +569,7 @@ mod tests {
             &ambisonics_pass(),
             &bench_pass(),
             &fuzz_pass(),
+            &corpus_pass(),
             &preflight_fail(),
         );
         assert_eq!(b, Banner::Fail);
@@ -552,6 +583,21 @@ mod tests {
             &ambisonics_pass(),
             &bench_pass(),
             &fuzz_fail(),
+            &corpus_pass(),
+            &preflight_pass(),
+        );
+        assert_eq!(b, Banner::Fail);
+    }
+
+    #[test]
+    fn claimed_corpus_failure_is_fail() {
+        let b = classify(
+            &quality_pass(),
+            &tests_pass(),
+            &ambisonics_pass(),
+            &bench_pass(),
+            &fuzz_pass(),
+            &corpus_fail(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Fail);
@@ -565,6 +611,7 @@ mod tests {
             &ambisonics_pass(),
             &bench_pass(),
             &fuzz_warn(),
+            &corpus_pass(),
             &preflight_pass(),
         );
         assert_eq!(b, Banner::Warn);
