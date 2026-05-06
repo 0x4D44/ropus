@@ -66,7 +66,11 @@ fn main() -> ExitCode {
     // When `--quick` is combined with `--skip-coverage`, stage 2 downgrades
     // to plain `cargo test` — which is already what happens here, since the
     // `run()` call sees `skip_coverage=true`.
-    let tests_outcome = tests::run(options.skip_coverage, &setup_info.ietf_vectors);
+    let tests_outcome = tests::run(
+        options.skip_coverage,
+        &setup_info.ietf_vectors,
+        stage2_profile(&options),
+    );
 
     // HLD § Stages: if stage 2 failed to *compile* (not fails a test — fails
     // to compile), stages 3 and 4 are marked "skipped (upstream build
@@ -250,5 +254,46 @@ fn relpath(p: &Path) -> String {
     match p.strip_prefix(&root) {
         Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
         Err(_) => p.to_string_lossy().into_owned(),
+    }
+}
+
+fn stage2_profile(options: &cli::Options) -> tests::Stage2Profile {
+    if options.quick && options.release_preflight {
+        tests::Stage2Profile::QuickReleasePreflight
+    } else {
+        tests::Stage2Profile::FullWorkspace
+    }
+}
+
+#[cfg(test)]
+mod tests_unit {
+    use super::*;
+
+    fn options(quick: bool, release_preflight: bool) -> cli::Options {
+        cli::Options {
+            quick,
+            release_preflight,
+            ..cli::Options::default()
+        }
+    }
+
+    #[test]
+    fn quick_release_preflight_stage2_profile_requires_both_flags() {
+        assert_eq!(
+            stage2_profile(&options(true, true)),
+            tests::Stage2Profile::QuickReleasePreflight
+        );
+        assert_eq!(
+            stage2_profile(&options(true, false)),
+            tests::Stage2Profile::FullWorkspace
+        );
+        assert_eq!(
+            stage2_profile(&options(false, true)),
+            tests::Stage2Profile::FullWorkspace
+        );
+        assert_eq!(
+            stage2_profile(&options(false, false)),
+            tests::Stage2Profile::FullWorkspace
+        );
     }
 }

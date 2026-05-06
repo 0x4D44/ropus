@@ -53,24 +53,30 @@ pub fn parse(args: &[String]) -> ParseOutcome {
     ParseOutcome::Options(opts)
 }
 
+pub fn help_text() -> &'static str {
+    concat!(
+        "full-test — ropus validation runner (Phase 4)\n",
+        "\n",
+        "USAGE:\n",
+        "    cargo run --release -p full-test -- [FLAGS]\n",
+        "\n",
+        "FLAGS:\n",
+        "    --quick             Skip stages 1 and 4; with --release-preflight, use a narrower Stage 2 smoke profile.\n",
+        "    --skip-quality      Skip stage 1 (cargo fmt + clippy).\n",
+        "    --skip-coverage     Downgrade stage 2 to plain `cargo test`.\n",
+        "    --skip-benchmarks   Skip stage 4 (bench sweep).\n",
+        "    --skip-ambisonics   Skip stage 3 (projection roundtrip).\n",
+        "    --emit-json         Also print the JSON envelope on stdout.\n",
+        "    --release-preflight Check the fixed core release asset profile.\n",
+        "    -h, --help          Show this help and exit.\n",
+        "\n",
+        "Report lands at tests/results/full_test_<YYYYMMDD_HHMMSS>.html.\n",
+        "Exit code: 0 on PASS/WARN, 1 on FAIL (see HLD § PASS / FAIL / WARN).\n",
+    )
+}
+
 pub fn print_help() {
-    println!("full-test — ropus validation runner (Phase 4)");
-    println!();
-    println!("USAGE:");
-    println!("    cargo run --release -p full-test -- [FLAGS]");
-    println!();
-    println!("FLAGS:");
-    println!("    --quick             Skip stages 1 (quality) and 4 (benchmarks).");
-    println!("    --skip-quality      Skip stage 1 (cargo fmt + clippy).");
-    println!("    --skip-coverage     Downgrade stage 2 to plain `cargo test`.");
-    println!("    --skip-benchmarks   Skip stage 4 (bench sweep).");
-    println!("    --skip-ambisonics   Skip stage 3 (projection roundtrip).");
-    println!("    --emit-json         Also print the JSON envelope on stdout.");
-    println!("    --release-preflight Check the fixed core release asset profile.");
-    println!("    -h, --help          Show this help and exit.");
-    println!();
-    println!("Report lands at tests/results/full_test_<YYYYMMDD_HHMMSS>.html.");
-    println!("Exit code: 0 on PASS/WARN, 1 on FAIL (see HLD § PASS / FAIL / WARN).");
+    print!("{}", help_text());
 }
 
 #[cfg(test)]
@@ -139,6 +145,13 @@ mod tests {
             parse(&args(&["--quick", "--help"])),
             ParseOutcome::HelpRequested
         );
+    }
+
+    #[test]
+    fn help_text_documents_quick_release_preflight_stage2_profile() {
+        assert!(help_text().contains(
+            "    --quick             Skip stages 1 and 4; with --release-preflight, use a narrower Stage 2 smoke profile."
+        ));
     }
 
     #[test]

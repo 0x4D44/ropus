@@ -4,12 +4,13 @@
 //!
 //! - **Coverage OFF** (the default):
 //!   `cargo llvm-cov --json --ignore-run-fail --output-path <tmp>.json test
-//!   --workspace --lib --tests -- --test-threads=1 [--skip testvector]`.
+//!   --workspace [profile package selection] --lib --tests -- --test-threads=1
+//!   [--skip testvector]`.
 //!   (`--ignore-run-fail` keeps the report written even when a test fails;
 //!   it implies `--no-fail-fast` and the two are mutually exclusive.)
 //! - **Coverage ON** (`--skip-coverage`):
-//!   `cargo test --workspace --lib --tests --no-fail-fast -- --test-threads=1
-//!   [--skip testvector]`.
+//!   `cargo test --workspace [profile package selection] --lib --tests
+//!   --no-fail-fast -- --test-threads=1 [--skip testvector]`.
 //!
 //! The trailing `--skip testvector` is injected only when Stage 0 could not
 //! provision the IETF vectors. We still run the rest of Stage 2 for signal, but
@@ -76,6 +77,28 @@ impl Outcome {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage2Profile {
+    FullWorkspace,
+    QuickReleasePreflight,
+}
+
+impl Stage2Profile {
+    fn package_args(self) -> &'static [&'static str] {
+        match self {
+            Self::FullWorkspace => &[],
+            Self::QuickReleasePreflight => &[
+                "--exclude",
+                "conformance",
+                "--exclude",
+                "ropus-harness-control",
+                "--exclude",
+                "ropus-harness-deep-plc",
+            ],
+        }
+    }
+}
+
 /// Build the cargo argument vector for Stage 2. Factored out so the
 /// command-shape contract can be unit-tested without spawning cargo.
 ///
@@ -85,12 +108,17 @@ impl Outcome {
 fn build_cargo_args(
     skip_coverage: bool,
     skip_ietf_vectors: bool,
+    profile: Stage2Profile,
     cov_path: Option<&std::path::Path>,
 ) -> Vec<std::ffi::OsString> {
     use std::ffi::OsString;
-    let mut args: Vec<OsString> = Vec::with_capacity(16);
+    let mut args: Vec<OsString> = Vec::with_capacity(24);
     if skip_coverage {
-        for s in ["test", "--workspace", "--lib", "--tests", "--no-fail-fast"] {
+        for s in ["test", "--workspace"] {
+            args.push(OsString::from(s));
+        }
+        args.extend(profile.package_args().iter().map(OsString::from));
+        for s in ["--lib", "--tests", "--no-fail-fast"] {
             args.push(OsString::from(s));
         }
     } else {
@@ -107,7 +135,11 @@ fn build_cargo_args(
         args.push(OsString::from(
             cov_path.expect("tempfile present when !skip_coverage"),
         ));
-        for s in ["test", "--workspace", "--lib", "--tests"] {
+        for s in ["test", "--workspace"] {
+            args.push(OsString::from(s));
+        }
+        args.extend(profile.package_args().iter().map(OsString::from));
+        for s in ["--lib", "--tests"] {
             args.push(OsString::from(s));
         }
     }
@@ -118,6 +150,28 @@ fn build_cargo_args(
         args.push(OsString::from("testvector"));
     }
     args
+}
+
+fn stage_header(skip_coverage: bool, skip_ietf_vectors: bool, profile: Stage2Profile) -> String {
+    let mut header = if skip_coverage {
+        "cargo test --workspace".to_string()
+    } else {
+        "cargo llvm-cov --json --ignore-run-fail --output-path <tmp>.json test --workspace"
+            .to_string()
+    };
+    for arg in profile.package_args() {
+        header.push(' ');
+        header.push_str(arg);
+    }
+    if skip_coverage {
+        header.push_str(" --lib --tests --no-fail-fast -- --test-threads=1");
+    } else {
+        header.push_str(" --lib --tests -- --test-threads=1");
+    }
+    if skip_ietf_vectors {
+        header.push_str(" --skip testvector");
+    }
+    header
 }
 
 /// Canonical failure text for an unavailable IETF vector set. Matched by unit
@@ -136,21 +190,19 @@ fn unavailable_reason_text(ietf_vectors: &IetfVectorProvision) -> String {
 
 /// Run Stage 2. If Stage 0 could not provision IETF vectors, filter the 24
 /// vector probes but add a synthetic failure so the gate stays honest.
-pub fn run(skip_coverage: bool, ietf_vectors: &IetfVectorProvision) -> Outcome {
+pub fn run(
+    skip_coverage: bool,
+    ietf_vectors: &IetfVectorProvision,
+    profile: Stage2Profile,
+) -> Outcome {
     let start = Instant::now();
-    let (label, header) = if skip_coverage {
-        (
-            "tests",
-            "cargo test --workspace --lib --tests --no-fail-fast -- --test-threads=1".to_string(),
-        )
+    let skip_ietf_vectors = !ietf_vectors.available();
+    let label = if skip_coverage {
+        "tests"
     } else {
-        (
-            "tests+coverage",
-            "cargo llvm-cov --json --ignore-run-fail --output-path <tmp>.json test \
-             --workspace --lib --tests -- --test-threads=1"
-                .to_string(),
-        )
+        "tests+coverage"
     };
+    let header = stage_header(skip_coverage, skip_ietf_vectors, profile);
     eprintln!("{} {}", format!("[{label}]").cyan().bold(), header);
 
     // Prepare the coverage output path (only used when coverage is enabled).
@@ -186,8 +238,12 @@ pub fn run(skip_coverage: bool, ietf_vectors: &IetfVectorProvision) -> Outcome {
 
     let cov_path = cov_tmp.as_ref().map(|f| f.path().to_path_buf());
 
-    let skip_ietf_vectors = !ietf_vectors.available();
-    let args = build_cargo_args(skip_coverage, skip_ietf_vectors, cov_path.as_deref());
+    let args = build_cargo_args(
+        skip_coverage,
+        skip_ietf_vectors,
+        profile,
+        cov_path.as_deref(),
+    );
     let skip_reason: Option<String> = if skip_ietf_vectors {
         Some(unavailable_reason_text(ietf_vectors))
     } else {
@@ -342,7 +398,7 @@ mod unit_tests {
 
     #[test]
     fn skip_coverage_builds_plain_test_command() {
-        let args = build_cargo_args(true, false, None);
+        let args = build_cargo_args(true, false, Stage2Profile::FullWorkspace, None);
         let s = args_as_strings(&args);
         assert_eq!(
             s,
@@ -361,7 +417,7 @@ mod unit_tests {
     #[test]
     fn coverage_on_builds_llvm_cov_command_with_path() {
         let p = Path::new("/tmp/sample.json");
-        let args = build_cargo_args(false, false, Some(p));
+        let args = build_cargo_args(false, false, Stage2Profile::FullWorkspace, Some(p));
         let s = args_as_strings(&args);
         // Leading chunk is the llvm-cov wrapper. `--ignore-run-fail` keeps
         // report generation running when a test fails — without it cargo
@@ -386,7 +442,7 @@ mod unit_tests {
         // exclusive on cargo-llvm-cov's CLI. Putting both back would cause a
         // hard error at invocation time. See Phase 5 smoke-run findings.
         let p = Path::new("/tmp/sample.json");
-        let args = build_cargo_args(false, false, Some(p));
+        let args = build_cargo_args(false, false, Stage2Profile::FullWorkspace, Some(p));
         let s = args_as_strings(&args);
         assert!(s.contains(&"--ignore-run-fail".to_string()));
         assert!(!s.contains(&"--no-fail-fast".to_string()));
@@ -394,7 +450,7 @@ mod unit_tests {
 
     #[test]
     fn missing_ietf_vectors_appends_skip_filter() {
-        let args = build_cargo_args(true, true, None);
+        let args = build_cargo_args(true, true, Stage2Profile::FullWorkspace, None);
         let s = args_as_strings(&args);
         // The tail after `--test-threads=1` is `--skip testvector`, matching
         // the flat IETF integration-test names (`testvectorNN_mono/stereo`).
@@ -404,10 +460,96 @@ mod unit_tests {
 
     #[test]
     fn present_ietf_vectors_does_not_append_skip_filter() {
-        let args = build_cargo_args(true, false, None);
+        let args = build_cargo_args(true, false, Stage2Profile::FullWorkspace, None);
         let s = args_as_strings(&args);
         assert!(!s.iter().any(|a| a == "--skip"));
         assert!(!s.iter().any(|a| a == "testvector"));
+    }
+
+    #[test]
+    fn quick_release_preflight_skip_coverage_uses_package_profile() {
+        let args = build_cargo_args(true, false, Stage2Profile::QuickReleasePreflight, None);
+        let s = args_as_strings(&args);
+        assert_eq!(
+            s,
+            vec![
+                "test",
+                "--workspace",
+                "--exclude",
+                "conformance",
+                "--exclude",
+                "ropus-harness-control",
+                "--exclude",
+                "ropus-harness-deep-plc",
+                "--lib",
+                "--tests",
+                "--no-fail-fast",
+                "--",
+                "--test-threads=1",
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_ietf_vectors_and_quick_release_preflight_append_only_vector_skip() {
+        let args = build_cargo_args(true, true, Stage2Profile::QuickReleasePreflight, None);
+        let s = args_as_strings(&args);
+        let tail: &[String] = &s[s.len() - 2..];
+        assert_eq!(tail, &["--skip".to_string(), "testvector".to_string()]);
+        assert!(!s.iter().any(|a| a == "extensions"));
+    }
+
+    #[test]
+    fn quick_release_preflight_coverage_uses_package_profile() {
+        let p = Path::new("/tmp/sample.json");
+        let args = build_cargo_args(false, false, Stage2Profile::QuickReleasePreflight, Some(p));
+        let s = args_as_strings(&args);
+        assert_eq!(
+            s,
+            vec![
+                "llvm-cov",
+                "--json",
+                "--ignore-run-fail",
+                "--output-path",
+                "/tmp/sample.json",
+                "test",
+                "--workspace",
+                "--exclude",
+                "conformance",
+                "--exclude",
+                "ropus-harness-control",
+                "--exclude",
+                "ropus-harness-deep-plc",
+                "--lib",
+                "--tests",
+                "--",
+                "--test-threads=1",
+            ]
+        );
+    }
+
+    #[test]
+    fn normal_stage_2_does_not_use_quick_package_profile() {
+        let args = build_cargo_args(true, false, Stage2Profile::FullWorkspace, None);
+        let s = args_as_strings(&args);
+        assert!(!s.iter().any(|a| a == "--exclude"));
+        assert!(!s.iter().any(|a| a == "conformance"));
+    }
+
+    #[test]
+    fn stage_header_matches_quick_release_preflight_command_shape() {
+        assert_eq!(
+            stage_header(true, true, Stage2Profile::QuickReleasePreflight),
+            "cargo test --workspace --exclude conformance --exclude ropus-harness-control --exclude ropus-harness-deep-plc --lib --tests --no-fail-fast -- --test-threads=1 --skip testvector"
+        );
+    }
+
+    #[test]
+    fn stage_header_keeps_normal_stage_2_unchanged() {
+        assert_eq!(
+            stage_header(true, false, Stage2Profile::FullWorkspace),
+            "cargo test --workspace --lib --tests --no-fail-fast -- --test-threads=1"
+        );
     }
 
     #[test]
