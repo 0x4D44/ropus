@@ -11,6 +11,8 @@ use std::sync::Once;
 
 #[path = "c_reference.rs"]
 mod c_reference;
+#[path = "frame_duration.rs"]
+mod frame_duration;
 
 // --------------------------------------------------------------------------- //
 // Panic-capture: on Windows, Rust assertions in libfuzzer-sys trigger __fastfail
@@ -90,6 +92,7 @@ fn input_fingerprint(input: &MultiframeInput) -> [u8; 16] {
         fp[12] = first.loss_perc;
         fp[13] = first.vbr as u8 | ((first.dtx as u8) << 1);
     }
+    fp[14] = input.frame_duration_selector;
     fp
 }
 
@@ -104,6 +107,7 @@ struct MultiframeInput {
     sample_rate_idx: u8,
     channels_minus_one: u8,
     application_idx: u8,
+    frame_duration_selector: u8,
     frames: Vec<FrameConfig>,
 }
 
@@ -123,11 +127,16 @@ impl<'a> Arbitrary<'a> for MultiframeInput {
         let sample_rate_idx = u.int_in_range(0..=4)?;
         let channels_minus_one = u.int_in_range(0..=1)?;
         let application_idx = u.int_in_range(0..=2)?;
-        let n_frames = u.int_in_range(2..=16)?;
+        let sequence_shape: u8 = u.arbitrary()?;
+        let (frame_duration_selector, n_frames) =
+            frame_duration::multiframe_shape_from_byte(sequence_shape);
 
         let sample_rate = SAMPLE_RATES[sample_rate_idx as usize];
         let channels = channels_minus_one as i32 + 1;
-        let frame_size = (sample_rate / 50) as usize;
+        let frame_size = frame_duration::legal_frame_size_samples_per_channel(
+            sample_rate,
+            frame_duration_selector,
+        ) as usize;
         let pcm_bytes_needed = frame_size * channels as usize * 2;
 
         let mut frames = Vec::with_capacity(n_frames);
@@ -138,6 +147,7 @@ impl<'a> Arbitrary<'a> for MultiframeInput {
             sample_rate_idx,
             channels_minus_one,
             application_idx,
+            frame_duration_selector,
             frames,
         })
     }
@@ -188,7 +198,12 @@ fuzz_target!(|input: MultiframeInput| {
     let sample_rate = SAMPLE_RATES[input.sample_rate_idx as usize];
     let channels = input.channels_minus_one as i32 + 1;
     let application = APPLICATIONS[input.application_idx as usize];
-    let frame_size = sample_rate / 50; // 20 ms
+    let frame_duration_label =
+        frame_duration::legal_frame_duration_label(input.frame_duration_selector);
+    let frame_size = frame_duration::legal_frame_size_samples_per_channel(
+        sample_rate,
+        input.frame_duration_selector,
+    );
     let samples_per_frame = frame_size as usize * channels as usize;
 
     // Decode each frame's PCM bytes to i16 samples. The Arbitrary impl
@@ -263,7 +278,7 @@ fuzz_target!(|input: MultiframeInput| {
     assert_eq!(
         rust_packets.len(),
         c_packets.len(),
-        "Frame count mismatch: Rust={}, C={}, sr={sample_rate}, ch={channels}, frames={}",
+        "Frame count mismatch: Rust={}, C={}, sr={sample_rate}, ch={channels}, frame_duration={frame_duration_label}, frame_size={frame_size}, frames={}",
         rust_packets.len(),
         c_packets.len(),
         input.frames.len(),
@@ -275,7 +290,7 @@ fuzz_target!(|input: MultiframeInput| {
             && (rust_pkt.len() != c_pkt.len() || rust_pkt != c_pkt)
         {
             eprintln!(
-                "[ROPUS_FUZZ_DUMP] shape sr={sample_rate} ch={channels} app={application} frames={}",
+                "[ROPUS_FUZZ_DUMP] shape sr={sample_rate} ch={channels} app={application} frame_duration={frame_duration_label} frame_size={frame_size} frames={}",
                 input.frames.len()
             );
             for (j, cfg) in frame_cfgs.iter().enumerate() {
@@ -301,6 +316,7 @@ fuzz_target!(|input: MultiframeInput| {
             c_pkt.len(),
             "Frame {i}/{} length mismatch: Rust={}, C={}, \
              sr={sample_rate}, ch={channels}, app={application}, \
+             frame_duration={frame_duration_label}, frame_size={frame_size}, \
              br={}, cx={}, vbr={}, fec={}, dtx={}, loss={}",
             input.frames.len(),
             rust_pkt.len(),
@@ -318,6 +334,7 @@ fuzz_target!(|input: MultiframeInput| {
             c_pkt,
             "Frame {i}/{} byte mismatch: \
              sr={sample_rate}, ch={channels}, app={application}, \
+             frame_duration={frame_duration_label}, frame_size={frame_size}, \
              br={}, cx={}, vbr={}, fec={}, dtx={}, loss={}, len={}",
             input.frames.len(),
             cfg.bitrate,
@@ -336,11 +353,11 @@ fuzz_target!(|input: MultiframeInput| {
             match ropus::opus::decoder::opus_packet_get_nb_frames(pkt) {
                 Ok(n) if n > 0 => {}
                 Ok(n) => panic!(
-                    "Frame {i}: encoded packet reports {n} frames, len={}",
+                    "Frame {i}: encoded packet reports {n} frames, frame_duration={frame_duration_label}, frame_size={frame_size}, len={}",
                     pkt.len()
                 ),
                 Err(e) => panic!(
-                    "Frame {i}: encoded packet not parseable, len={}, err={e}",
+                    "Frame {i}: encoded packet not parseable, frame_duration={frame_duration_label}, frame_size={frame_size}, len={}, err={e}",
                     pkt.len()
                 ),
             }
@@ -358,11 +375,13 @@ fuzz_target!(|input: MultiframeInput| {
             Ok(samples) => {
                 assert_eq!(
                     samples as usize, frame_size as usize,
-                    "Frame {i}: decoded sample count {samples} != frame_size {frame_size}"
+                    "Frame {i}: decoded sample count {samples} != frame_size {frame_size}, frame_duration={frame_duration_label}"
                 );
             }
             Err(e) => {
-                panic!("Frame {i}: Rust failed to decode its own encoded packet: {e}");
+                panic!(
+                    "Frame {i}: Rust failed to decode its own encoded packet, frame_duration={frame_duration_label}, frame_size={frame_size}: {e}"
+                );
             }
         }
     }

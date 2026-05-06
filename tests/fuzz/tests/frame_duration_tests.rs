@@ -3,7 +3,7 @@ mod frame_duration;
 
 use frame_duration::{
     legal_frame_duration_index, legal_frame_duration_label, legal_frame_size_samples_per_channel,
-    LEGAL_FRAME_DURATION_MS_X2,
+    multiframe_shape_from_byte, plc_seq_frame_duration_selector, LEGAL_FRAME_DURATION_MS_X2,
 };
 
 const SAMPLE_RATES: [i32; 5] = [8000, 12000, 16000, 24000, 48000];
@@ -61,5 +61,57 @@ fn roundtrip_uses_existing_data7_high_bits_as_selector() {
     assert_eq!(
         selected_labels,
         ["2.5ms", "5ms", "10ms", "20ms", "40ms", "60ms", "2.5ms", "5ms"]
+    );
+}
+
+#[test]
+fn multiframe_shape_byte_selects_legal_duration_and_frame_count() {
+    let mut seen = [false; 6];
+
+    for byte in 0u8..=u8::MAX {
+        let (selector, n_frames) = multiframe_shape_from_byte(byte);
+        assert!(selector < 6, "byte={byte}, selector={selector}");
+        assert!(
+            (2..=16).contains(&n_frames),
+            "byte={byte}, n_frames={n_frames}"
+        );
+        seen[selector as usize] = true;
+    }
+
+    assert_eq!(seen, [true; 6]);
+}
+
+#[test]
+fn multiframe_shape_reaches_all_selectors_compactly() {
+    let selected_labels: Vec<_> = (0u8..=35)
+        .map(|byte| {
+            let (selector, _) = multiframe_shape_from_byte(byte);
+            legal_frame_duration_label(selector)
+        })
+        .collect();
+
+    assert!(selected_labels.contains(&"2.5ms"));
+    assert!(selected_labels.contains(&"5ms"));
+    assert!(selected_labels.contains(&"10ms"));
+    assert!(selected_labels.contains(&"20ms"));
+    assert!(selected_labels.contains(&"40ms"));
+    assert!(selected_labels.contains(&"60ms"));
+}
+
+#[test]
+fn plc_seq_uses_drop_mask_high_bits_as_selector() {
+    assert_eq!(plc_seq_frame_duration_selector(0), 0);
+    assert_eq!(plc_seq_frame_duration_selector(1 << 29), 1);
+    assert_eq!(plc_seq_frame_duration_selector(1 << 30), 2);
+    assert_eq!(plc_seq_frame_duration_selector(1 << 31), 4);
+    assert_eq!(plc_seq_frame_duration_selector(0x0000_0fff), 0);
+
+    assert_eq!(
+        legal_frame_duration_label(plc_seq_frame_duration_selector(6 << 29)),
+        "2.5ms"
+    );
+    assert_eq!(
+        legal_frame_duration_label(plc_seq_frame_duration_selector(7 << 29)),
+        "5ms"
     );
 }

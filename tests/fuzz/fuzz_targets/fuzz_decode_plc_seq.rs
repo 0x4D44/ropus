@@ -12,7 +12,7 @@
 //! natural shape to surface this differential at scale.
 //!
 //! Approach:
-//!   1. Encode N (3..=12) frames of arbitrary PCM through ONE Rust encoder.
+//!   1. Encode N (2..=12) frames of arbitrary PCM through ONE Rust encoder.
 //!      No C-side encode — sidesteps the encoder state-divergence classes.
 //!   2. Apply a per-frame drop schedule (one bit per frame).
 //!   3. Replay through ONE Rust decoder + ONE C decoder; PLC on dropped
@@ -35,6 +35,8 @@ use std::sync::Once;
 
 #[path = "c_reference.rs"]
 mod c_reference;
+#[path = "frame_duration.rs"]
+mod frame_duration;
 
 // --------------------------------------------------------------------------- //
 // Panic-capture (fingerprint-only — same pattern as fuzz_encode_multiframe).
@@ -92,7 +94,7 @@ struct PlcSeqInput {
     /// One bit per frame — drop schedule. Bits are consumed lo→hi,
     /// frame[i] dropped when bit i is set.
     drop_mask: u32,
-    /// 3..=12 frames; per-frame PCM length is derived from sr/ch.
+    /// 2..=12 frames; per-frame PCM length is derived from sr/ch/duration.
     frames: Vec<Vec<u8>>,
 }
 
@@ -110,13 +112,18 @@ impl<'a> Arbitrary<'a> for PlcSeqInput {
 
         let sample_rate = SAMPLE_RATES[sample_rate_idx as usize];
         let channels = channels_minus_one as i32 + 1;
-        let pcm_bytes_per_frame = (sample_rate / 50) as usize * channels as usize * 2;
+        let frame_duration_selector = frame_duration::plc_seq_frame_duration_selector(drop_mask);
+        let frame_size = frame_duration::legal_frame_size_samples_per_channel(
+            sample_rate,
+            frame_duration_selector,
+        ) as usize;
+        let pcm_bytes_per_frame = frame_size * channels as usize * 2;
 
         // Budget the frame count to whatever fits in remaining input. PCM
-        // bytes are the dominant cost; sr=48000 stereo eats 3840 bytes/frame
-        // and the launcher caps -max_len at 32 KB. Without this the arbitrary
-        // parse would NotEnoughData on every iteration and the body would
-        // never run.
+        // bytes are the dominant cost; 60 ms at sr=48000 stereo eats
+        // 11520 bytes/frame and the launcher caps -max_len at 32 KB. Without
+        // this the arbitrary parse would NotEnoughData on every iteration and
+        // the body would never run.
         let avail = u.len();
         let max_fit = (avail / pcm_bytes_per_frame.max(1)).min(12);
         if max_fit < 2 {
@@ -160,13 +167,19 @@ fuzz_target!(|input: PlcSeqInput| {
         buf.push(input.inband_fec);
         buf.push(input.loss_perc);
         buf.extend_from_slice(&input.drop_mask.to_le_bytes());
+        buf.push(frame_duration::plc_seq_frame_duration_selector(
+            input.drop_mask,
+        ));
         buf.push(input.frames.len() as u8);
     });
 
     let sample_rate = SAMPLE_RATES[input.sample_rate_idx as usize];
     let channels = input.channels_minus_one as i32 + 1;
     let application = APPLICATIONS[input.application_idx as usize];
-    let frame_size = sample_rate / 50; // 20 ms
+    let frame_duration_selector = frame_duration::plc_seq_frame_duration_selector(input.drop_mask);
+    let frame_duration_label = frame_duration::legal_frame_duration_label(frame_duration_selector);
+    let frame_size =
+        frame_duration::legal_frame_size_samples_per_channel(sample_rate, frame_duration_selector);
     let samples_per_frame = frame_size as usize * channels as usize;
 
     // --- Encode N packets through ONE Rust encoder ---
@@ -222,7 +235,7 @@ fuzz_target!(|input: PlcSeqInput| {
     for (pkt, &drop) in packets.iter().zip(dropped.iter()) {
         let mut pcm = vec![0i16; max_pcm];
         let arg = if drop { None } else { Some(pkt.as_slice()) };
-        match rust_dec.decode(arg, &mut pcm, 5760, false) {
+        match rust_dec.decode(arg, &mut pcm, frame_size, false) {
             Ok(samples) => {
                 pcm.truncate(samples as usize * channels as usize);
                 rust_per_frame.push(Ok(pcm));
@@ -238,7 +251,7 @@ fuzz_target!(|input: PlcSeqInput| {
         &dropped,
         sample_rate,
         channels,
-        5760,
+        frame_size,
     ) {
         Ok(r) => r,
         Err(_) => return,
@@ -248,7 +261,7 @@ fuzz_target!(|input: PlcSeqInput| {
     assert_eq!(
         rust_per_frame.len(),
         c_results.len(),
-        "Frame count mismatch in PLC seq: Rust={} C={}",
+        "Frame count mismatch in PLC seq: Rust={} C={}, frame_duration={frame_duration_label}, frame_size={frame_size}",
         rust_per_frame.len(),
         c_results.len()
     );
@@ -265,7 +278,8 @@ fuzz_target!(|input: PlcSeqInput| {
                     r_pcm.len(),
                     c_pcm.len(),
                     "Frame {i} PCM length mismatch: Rust={} C={}, dropped={drop}, \
-                     sr={sample_rate}, ch={channels}, app={application}",
+                     sr={sample_rate}, ch={channels}, app={application}, \
+                     frame_duration={frame_duration_label}, frame_size={frame_size}",
                     r_pcm.len(),
                     c_pcm.len()
                 );
@@ -279,6 +293,7 @@ fuzz_target!(|input: PlcSeqInput| {
                         r_pcm, c_pcm,
                         "Frame {i} CELT PCM mismatch in PLC seq: \
                          sr={sample_rate}, ch={channels}, app={application}, \
+                         frame_duration={frame_duration_label}, frame_size={frame_size}, \
                          drop_mask=0x{:08x}",
                         input.drop_mask
                     );
@@ -292,6 +307,7 @@ fuzz_target!(|input: PlcSeqInput| {
                 panic!(
                     "Frame {i} PLC seq: Rust ok ({} samples) but C errored ({c_err}), \
                      dropped={drop}, sr={sample_rate}, ch={channels}, app={application}, \
+                     frame_duration={frame_duration_label}, frame_size={frame_size}, \
                      drop_mask=0x{:08x}",
                     r_pcm.len() / channels as usize,
                     input.drop_mask
@@ -301,6 +317,7 @@ fuzz_target!(|input: PlcSeqInput| {
                 panic!(
                     "Frame {i} PLC seq: C ok ({} samples) but Rust errored ({r_err}), \
                      dropped={drop}, sr={sample_rate}, ch={channels}, app={application}, \
+                     frame_duration={frame_duration_label}, frame_size={frame_size}, \
                      drop_mask=0x{:08x}",
                     c_pcm.len() / channels as usize,
                     input.drop_mask

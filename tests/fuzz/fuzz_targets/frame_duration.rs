@@ -27,3 +27,13 @@ pub fn legal_frame_duration_label(selector: u8) -> &'static str {
         _ => unreachable!(),
     }
 }
+
+#[allow(dead_code)]
+pub fn multiframe_shape_from_byte(byte: u8) -> (u8, usize) {
+    (byte % 6, 2 + ((byte / 6) as usize % 15))
+}
+
+#[allow(dead_code)]
+pub fn plc_seq_frame_duration_selector(drop_mask: u32) -> u8 {
+    (drop_mask >> 29) as u8
+}
