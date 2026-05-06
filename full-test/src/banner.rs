@@ -9,14 +9,14 @@
 //!
 //! - **PASS** — stages 1, 2, 3 all green. Stage 4 irrelevant.
 //! - **FAIL** — any test failure, any clippy/fmt error, ambisonics mismatch,
-//!   or a Stage 2 build failure.
+//!   a Stage 2 build failure, or a release-thresholded benchmark gate failure.
 //! - **WARN** — stages 1-3 green but stage 4 has crashes or ratio > 1.15×.
 //!
 //! Exit code: PASS→0, WARN→0, FAIL→1. The WARN→0 behaviour is deliberate —
 //! pre-commit runs shouldn't spuriously block developers on bench noise.
 
 use crate::ambisonics::AmbisonicsResult;
-use crate::bench::BenchResult;
+use crate::bench::{BenchProfile, BenchResult};
 use crate::corpus::Outcome as CorpusOutcome;
 use crate::fuzz::Outcome as FuzzOutcome;
 use crate::preflight::Outcome as PreflightOutcome;
@@ -92,9 +92,11 @@ pub fn classify(
     let fuzz_failed = fuzz.banner_fail();
     let corpus_failed = corpus.banner_fail();
     let preflight_failed = preflight.banner_blocking_missing();
+    let bench_failed = bench.banner_fail();
     if stage2_failed
         || quality_failed
         || ambisonics_failed
+        || bench_failed
         || fuzz_failed
         || corpus_failed
         || preflight_failed
@@ -102,11 +104,10 @@ pub fn classify(
         return Banner::Fail;
     }
 
-    // WARN predicates. Stages 1-3 are green; stage 4 is the only source of
-    // yellow. `BenchResult::all_passed()` returns false on both build-failure
-    // and crashed vectors — either elevates the banner to WARN. A ratio above
-    // the WARN threshold counts too (a regression a human should eyeball
-    // before merging).
+    // WARN predicates. Stages 1-3 are green; stage 4 remains yellow for
+    // local/default benchmark anomalies. In release-thresholded runs, severe
+    // benchmark failures were handled above; ratios above the local WARN
+    // threshold still render yellow without becoming a hard release failure.
     let bench_ratio_warn = bench
         .vectors
         .iter()
@@ -227,6 +228,7 @@ mod tests {
 
     fn bench_pass() -> BenchResult {
         BenchResult {
+            profile: BenchProfile::ObservedWarnOnly,
             skipped: false,
             skip_reason: None,
             build_failed: false,
@@ -237,6 +239,7 @@ mod tests {
 
     fn bench_with_crash() -> BenchResult {
         BenchResult {
+            profile: BenchProfile::ObservedWarnOnly,
             skipped: false,
             skip_reason: None,
             build_failed: false,
@@ -247,6 +250,7 @@ mod tests {
 
     fn bench_with_regression() -> BenchResult {
         BenchResult {
+            profile: BenchProfile::ObservedWarnOnly,
             skipped: false,
             skip_reason: None,
             build_failed: false,
@@ -272,6 +276,23 @@ mod tests {
             enc_ratio: enc,
             c_decode_ms: Some(50.0),
             rust_decode_ms: dec.map(|r| 50.0 * r),
+            dec_ratio: dec,
+        }
+    }
+
+    fn release_bench_row(enc: Option<f64>, dec: Option<f64>) -> VectorBench {
+        VectorBench {
+            label: "SILK NB 8k mono noise".to_string(),
+            bitrate: 16_000,
+            skipped: false,
+            skip_reason: None,
+            crashed: false,
+            crash_reason: None,
+            c_encode_ms: Some(100.0),
+            rust_encode_ms: enc.map(|r| 100.0 * r),
+            enc_ratio: enc,
+            c_decode_ms: Some(100.0),
+            rust_decode_ms: dec.map(|r| 100.0 * r),
             dec_ratio: dec,
         }
     }
@@ -482,6 +503,7 @@ mod tests {
         // Even when the prebuild blew up, stages 1-3 are still valid — we
         // treat the bench stage as WARN-only per HLD § PASS/FAIL/WARN.
         let bench = BenchResult {
+            profile: BenchProfile::ObservedWarnOnly,
             skipped: false,
             skip_reason: Some("ropus-compare build failed".to_string()),
             build_failed: true,
@@ -501,10 +523,73 @@ mod tests {
     }
 
     #[test]
+    fn release_thresholded_bench_build_fail_is_fail() {
+        let bench = BenchResult {
+            profile: BenchProfile::ReleaseThresholded,
+            skipped: false,
+            skip_reason: Some("ropus-compare build failed".to_string()),
+            build_failed: true,
+            duration_ms: 0,
+            vectors: Vec::new(),
+        };
+        let b = classify(
+            &quality_pass(),
+            &tests_pass(),
+            &ambisonics_pass(),
+            &bench,
+            &fuzz_pass(),
+            &corpus_pass(),
+            &preflight_pass(),
+        );
+        assert_eq!(b, Banner::Fail);
+    }
+
+    #[test]
+    fn release_thresholded_skip_benchmarks_is_fail() {
+        let bench = BenchResult::skipped_with_profile(
+            BenchProfile::ReleaseThresholded,
+            "--skip-benchmarks disables release benchmark gate",
+        );
+        let b = classify(
+            &quality_pass(),
+            &tests_pass(),
+            &ambisonics_pass(),
+            &bench,
+            &fuzz_pass(),
+            &corpus_pass(),
+            &preflight_pass(),
+        );
+        assert_eq!(b, Banner::Fail);
+    }
+
+    #[test]
+    fn release_thresholded_ratio_breach_is_fail() {
+        let bench = BenchResult {
+            profile: BenchProfile::ReleaseThresholded,
+            skipped: false,
+            skip_reason: None,
+            build_failed: false,
+            duration_ms: 0,
+            vectors: vec![release_bench_row(Some(2.0), Some(0.9))],
+        };
+        let b = classify(
+            &quality_pass(),
+            &tests_pass(),
+            &ambisonics_pass(),
+            &bench,
+            &fuzz_pass(),
+            &corpus_pass(),
+            &preflight_pass(),
+        );
+        assert_eq!(b, Banner::Fail);
+    }
+
+    #[test]
     fn bench_at_threshold_is_not_warn() {
         // `BENCH_WARN_RATIO` is strict-greater; a row exactly at the
         // threshold stays green.
         let bench = BenchResult {
+            profile: BenchProfile::ObservedWarnOnly,
             skipped: false,
             skip_reason: None,
             build_failed: false,
@@ -528,6 +613,7 @@ mod tests {
         // A NaN / inf ratio is never treated as a regression; it's surfaced
         // elsewhere as a missing-data row.
         let bench = BenchResult {
+            profile: BenchProfile::ObservedWarnOnly,
             skipped: false,
             skip_reason: None,
             build_failed: false,

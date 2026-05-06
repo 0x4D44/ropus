@@ -104,17 +104,27 @@ fn main() -> ExitCode {
     // Stage 4 — native benchmark sweep.
     //
     // HLD § Flags: `--quick` skips stages 1 and 4.
-    let bench_outcome = if options.skip_benchmarks || options.quick {
+    let bench_profile = bench::BenchProfile::from_flags(
+        options.quick,
+        options.release_preflight,
+        options.skip_benchmarks,
+    );
+    let bench_outcome = if bench_profile == bench::BenchProfile::NotClaimed {
         let reason = if options.quick {
             "--quick"
         } else {
             "--skip-benchmarks"
         };
-        bench::BenchResult::skipped(reason)
+        bench::BenchResult::skipped_with_profile(bench_profile, reason)
+    } else if options.skip_benchmarks {
+        bench::BenchResult::skipped_with_profile(
+            bench_profile,
+            "--skip-benchmarks disables the release-thresholded benchmark gate",
+        )
     } else if upstream_build_failed {
-        bench::BenchResult::skipped("upstream build failure")
+        bench::BenchResult::skipped_with_profile(bench_profile, "upstream build failure")
     } else {
-        bench::run()
+        bench::run(bench_profile)
     };
 
     // Banner classification centralises the PASS/FAIL/WARN rules per

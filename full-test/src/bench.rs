@@ -26,6 +26,123 @@ use std::time::Instant;
 
 use colored::Colorize;
 use serde::Serialize;
+use serde::ser::Serializer;
+
+/// Benchmark coverage profile selected from CLI flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BenchProfile {
+    /// No performance coverage is claimed. Used by `--quick` and local
+    /// `--skip-benchmarks` runs.
+    NotClaimed,
+    /// Local/default benchmark visibility. Ratios above `BENCH_WARN_RATIO`
+    /// remain WARN-only and exit 0.
+    ObservedWarnOnly,
+    /// Release-preflight benchmark gate. Required rows must produce complete
+    /// timings and stay within per-vector severe-regression thresholds.
+    ReleaseThresholded,
+}
+
+impl BenchProfile {
+    pub fn from_flags(quick: bool, release_preflight: bool, skip_benchmarks: bool) -> Self {
+        if release_preflight && !quick {
+            Self::ReleaseThresholded
+        } else if quick || skip_benchmarks {
+            Self::NotClaimed
+        } else {
+            Self::ObservedWarnOnly
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotClaimed => "not-claimed",
+            Self::ObservedWarnOnly => "observed-warn-only",
+            Self::ReleaseThresholded => "release-thresholded",
+        }
+    }
+
+    pub fn claimed(self) -> bool {
+        !matches!(self, Self::NotClaimed)
+    }
+
+    pub fn claim_note(self) -> &'static str {
+        match self {
+            Self::NotClaimed => "performance coverage is not claimed by this profile",
+            Self::ObservedWarnOnly => {
+                "benchmark ratios are observed and reported; regressions are WARN-only"
+            }
+            Self::ReleaseThresholded => {
+                "thresholded smoke over the canonical 10 benchmark vectors is release-blocking"
+            }
+        }
+    }
+
+    pub fn threshold_source(self) -> Option<&'static str> {
+        match self {
+            Self::ReleaseThresholded => Some(THRESHOLD_SOURCE),
+            _ => None,
+        }
+    }
+
+    fn release_thresholded(self) -> bool {
+        matches!(self, Self::ReleaseThresholded)
+    }
+}
+
+impl Serialize for BenchProfile {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+/// Row-level release threshold classification for JSON/HTML reporting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BenchThresholdStatus {
+    Pass,
+    Fail,
+    MissingRequiredFixture,
+    Crashed,
+    MissingTiming,
+    MissingThreshold,
+}
+
+impl BenchThresholdStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::MissingRequiredFixture => "missing_required_fixture",
+            Self::Crashed => "crashed",
+            Self::MissingTiming => "missing_timing",
+            Self::MissingThreshold => "missing_threshold",
+        }
+    }
+}
+
+impl Serialize for BenchThresholdStatus {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct BenchThresholdRow {
+    pub label: String,
+    pub relative_path: Option<String>,
+    pub enc_baseline_ratio: Option<f64>,
+    pub dec_baseline_ratio: Option<f64>,
+    pub enc_release_fail_ratio: Option<f64>,
+    pub dec_release_fail_ratio: Option<f64>,
+    pub enc_status: BenchThresholdStatus,
+    pub dec_status: BenchThresholdStatus,
+    pub issue: Option<String>,
+}
 
 /// One vector in the sweep. Mirrors `tools/bench_sweep.sh` lines 21-30.
 #[derive(Debug, Clone, Copy)]
@@ -90,6 +207,105 @@ const VECTORS: &[VectorSpec] = &[
     },
 ];
 
+#[derive(Debug, Clone, Copy)]
+struct ThresholdSpec {
+    label: &'static str,
+    relative_path: &'static str,
+    enc_baseline_ratio: f64,
+    dec_baseline_ratio: f64,
+    enc_release_fail_ratio: f64,
+    dec_release_fail_ratio: f64,
+}
+
+/// Initial threshold source. Values are deliberately conservative and
+/// release-only: each row starts from the published README performance table,
+/// applies the signed HLD's same-run ratio policy, and adds a small floor so
+/// rows currently faster than C are not required to stay faster than C.
+pub const THRESHOLD_SOURCE: &str = "initial calibration from README 2026-04-19 ratios; release_fail=max(published_ratio+0.05, published_ratio*1.20, 1.05), rounded up";
+
+const THRESHOLDS: &[ThresholdSpec] = &[
+    ThresholdSpec {
+        label: "SILK NB 8k mono noise",
+        relative_path: "tests/vectors/8000hz_mono_noise.wav",
+        enc_baseline_ratio: 1.05,
+        dec_baseline_ratio: 0.69,
+        enc_release_fail_ratio: 1.26,
+        dec_release_fail_ratio: 1.05,
+    },
+    ThresholdSpec {
+        label: "SILK WB 16k mono noise",
+        relative_path: "tests/vectors/16000hz_mono_noise.wav",
+        enc_baseline_ratio: 1.14,
+        dec_baseline_ratio: 0.89,
+        enc_release_fail_ratio: 1.37,
+        dec_release_fail_ratio: 1.07,
+    },
+    ThresholdSpec {
+        label: "Hybrid 24k mono noise",
+        relative_path: "tests/vectors/24000hz_mono_noise.wav",
+        enc_baseline_ratio: 1.11,
+        dec_baseline_ratio: 0.90,
+        enc_release_fail_ratio: 1.34,
+        dec_release_fail_ratio: 1.08,
+    },
+    ThresholdSpec {
+        label: "CELT FB 48k mono noise",
+        relative_path: "tests/vectors/48000hz_mono_noise.wav",
+        enc_baseline_ratio: 1.08,
+        dec_baseline_ratio: 0.92,
+        enc_release_fail_ratio: 1.30,
+        dec_release_fail_ratio: 1.11,
+    },
+    ThresholdSpec {
+        label: "CELT FB 48k stereo noise",
+        relative_path: "tests/vectors/48000hz_stereo_noise.wav",
+        enc_baseline_ratio: 1.04,
+        dec_baseline_ratio: 0.94,
+        enc_release_fail_ratio: 1.25,
+        dec_release_fail_ratio: 1.13,
+    },
+    ThresholdSpec {
+        label: "CELT 48k mono sine 1k loud",
+        relative_path: "tests/vectors/48k_sine1k_loud.wav",
+        enc_baseline_ratio: 0.94,
+        dec_baseline_ratio: 1.05,
+        enc_release_fail_ratio: 1.13,
+        dec_release_fail_ratio: 1.26,
+    },
+    ThresholdSpec {
+        label: "CELT 48k mono sweep",
+        relative_path: "tests/vectors/48k_sweep.wav",
+        enc_baseline_ratio: 0.96,
+        dec_baseline_ratio: 0.99,
+        enc_release_fail_ratio: 1.16,
+        dec_release_fail_ratio: 1.19,
+    },
+    ThresholdSpec {
+        label: "CELT 48k mono square 1k",
+        relative_path: "tests/vectors/48k_square1k.wav",
+        enc_baseline_ratio: 1.03,
+        dec_baseline_ratio: 1.03,
+        enc_release_fail_ratio: 1.24,
+        dec_release_fail_ratio: 1.24,
+    },
+    ThresholdSpec {
+        label: "SPEECH 48k mono (SAPI TTS)",
+        relative_path: "tests/vectors/speech_48k_mono.wav",
+        enc_baseline_ratio: 0.84,
+        dec_baseline_ratio: 0.98,
+        enc_release_fail_ratio: 1.05,
+        dec_release_fail_ratio: 1.18,
+    },
+    ThresholdSpec {
+        label: "MUSIC 48k stereo",
+        relative_path: "tests/vectors/music_48k_stereo.wav",
+        enc_baseline_ratio: 1.01,
+        dec_baseline_ratio: 0.98,
+        enc_release_fail_ratio: 1.22,
+        dec_release_fail_ratio: 1.18,
+    },
+];
+
 /// The four timings we pull out of a single `ropus-compare bench` run.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BenchTimings {
@@ -132,6 +348,7 @@ pub struct VectorBench {
 /// disk after a nominally-successful build).
 #[derive(Debug, Clone, Serialize)]
 pub struct BenchResult {
+    pub profile: BenchProfile,
     pub skipped: bool,
     pub skip_reason: Option<String>,
     pub build_failed: bool,
@@ -143,7 +360,12 @@ impl BenchResult {
     /// Construct a "stage disabled" outcome. Used by `--skip-benchmarks`,
     /// `--quick`, and the upstream-build-failure chaining rule from the HLD.
     pub fn skipped(reason: impl Into<String>) -> Self {
+        Self::skipped_with_profile(BenchProfile::NotClaimed, reason)
+    }
+
+    pub fn skipped_with_profile(profile: BenchProfile, reason: impl Into<String>) -> Self {
         Self {
+            profile,
             skipped: true,
             skip_reason: Some(reason.into()),
             build_failed: false,
@@ -152,16 +374,127 @@ impl BenchResult {
         }
     }
 
-    /// Per HLD § PASS/FAIL/WARN: bench is WARN-only on regressions; only
-    /// crashes elevate. Slow ratios, missing fixtures, and a clean skip all
-    /// keep `all_passed()` true; a `crashed` vector is the one signal that
-    /// flips the stage non-green. Stage-level build failure also fails the
-    /// stage since no vector ever ran.
+    /// Per default/local HLD semantics, bench anomalies are WARN-only. In the
+    /// release-thresholded profile, `all_passed` also reflects threshold-gate
+    /// failures so callers cannot mistake a disabled or incomplete release
+    /// performance lane for green evidence.
     pub fn all_passed(&self) -> bool {
-        if self.build_failed {
+        if self.banner_fail() || self.build_failed {
             return false;
         }
         !self.vectors.iter().any(|v| v.crashed)
+    }
+
+    pub fn banner_fail(&self) -> bool {
+        self.profile.release_thresholded() && !self.release_blocking_issues().is_empty()
+    }
+
+    pub fn release_blocking_issues(&self) -> Vec<String> {
+        if !self.profile.release_thresholded() {
+            return Vec::new();
+        }
+
+        let mut issues = Vec::new();
+        if self.skipped {
+            let reason = self.skip_reason.as_deref().unwrap_or("benchmarks skipped");
+            issues.push(format!(
+                "release-thresholded benchmark gate did not run: {reason}"
+            ));
+        }
+        if self.build_failed {
+            let reason = self
+                .skip_reason
+                .as_deref()
+                .unwrap_or("ropus-compare build failed");
+            issues.push(format!("benchmark build failed: {reason}"));
+        }
+
+        let mut gateable_rows = 0usize;
+        for row in &self.vectors {
+            let Some(threshold) = threshold_for_label(&row.label) else {
+                issues.push(format!("missing threshold spec for {}", row.label));
+                continue;
+            };
+            if row.skipped {
+                let reason = row.skip_reason.as_deref().unwrap_or("fixture missing");
+                issues.push(format!(
+                    "required benchmark fixture missing for {}: {reason}",
+                    row.label
+                ));
+                continue;
+            }
+            if row.crashed {
+                let reason = row.crash_reason.as_deref().unwrap_or("no reason captured");
+                issues.push(format!("benchmark row crashed for {}: {reason}", row.label));
+                continue;
+            }
+            if !has_complete_timings(row) {
+                issues.push(format!(
+                    "benchmark row has incomplete timings for {}",
+                    row.label
+                ));
+                continue;
+            }
+            let enc = row.enc_ratio.filter(|r| r.is_finite());
+            let dec = row.dec_ratio.filter(|r| r.is_finite());
+            match enc {
+                Some(r) if r > threshold.enc_release_fail_ratio => issues.push(format!(
+                    "{} encode ratio {r:.3}x exceeds release threshold {:.3}x",
+                    row.label, threshold.enc_release_fail_ratio
+                )),
+                Some(_) => {}
+                None => issues.push(format!(
+                    "benchmark row has missing encode ratio for {}",
+                    row.label
+                )),
+            }
+            match dec {
+                Some(r) if r > threshold.dec_release_fail_ratio => issues.push(format!(
+                    "{} decode ratio {r:.3}x exceeds release threshold {:.3}x",
+                    row.label, threshold.dec_release_fail_ratio
+                )),
+                Some(_) => {}
+                None => issues.push(format!(
+                    "benchmark row has missing decode ratio for {}",
+                    row.label
+                )),
+            }
+            if enc.is_some() && dec.is_some() {
+                gateable_rows += 1;
+            }
+        }
+
+        if gateable_rows == 0 {
+            issues.push("zero gateable benchmark rows produced complete timings".to_string());
+        }
+
+        issues
+    }
+
+    pub fn threshold_rows(&self) -> Vec<BenchThresholdRow> {
+        if !self.profile.release_thresholded() {
+            return Vec::new();
+        }
+        self.vectors
+            .iter()
+            .map(|row| {
+                let threshold = threshold_for_label(&row.label);
+                let enc_status = threshold_status(row, threshold, Operation::Encode, row.enc_ratio);
+                let dec_status = threshold_status(row, threshold, Operation::Decode, row.dec_ratio);
+                let issue = release_row_issue(row, threshold);
+                BenchThresholdRow {
+                    label: row.label.clone(),
+                    relative_path: threshold.map(|t| t.relative_path.to_string()),
+                    enc_baseline_ratio: threshold.map(|t| t.enc_baseline_ratio),
+                    dec_baseline_ratio: threshold.map(|t| t.dec_baseline_ratio),
+                    enc_release_fail_ratio: threshold.map(|t| t.enc_release_fail_ratio),
+                    dec_release_fail_ratio: threshold.map(|t| t.dec_release_fail_ratio),
+                    enc_status,
+                    dec_status,
+                    issue,
+                }
+            })
+            .collect()
     }
 }
 
@@ -172,7 +505,7 @@ fn workspace_root() -> PathBuf {
 }
 
 /// Dispatch the whole stage. Always returns a populated result; never panics.
-pub fn run() -> BenchResult {
+pub fn run(profile: BenchProfile) -> BenchResult {
     let start = Instant::now();
     let root = workspace_root();
 
@@ -189,6 +522,7 @@ pub fn run() -> BenchResult {
         let duration_ms = start.elapsed().as_millis() as u64;
         eprintln!("  {} ropus-compare build failed: {err}", "BUILD-FAIL".red());
         return BenchResult {
+            profile,
             skipped: false,
             skip_reason: Some(format!("ropus-compare build failed: {err}")),
             build_failed: true,
@@ -209,6 +543,7 @@ pub fn run() -> BenchResult {
             "BUILD-FAIL".red()
         );
         return BenchResult {
+            profile,
             skipped: false,
             skip_reason: Some("ropus-compare binary not on disk after build".to_string()),
             build_failed: true,
@@ -257,12 +592,100 @@ pub fn run() -> BenchResult {
     );
 
     BenchResult {
+        profile,
         skipped: false,
         skip_reason: None,
         build_failed: false,
         duration_ms,
         vectors,
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Operation {
+    Encode,
+    Decode,
+}
+
+fn threshold_for_label(label: &str) -> Option<&'static ThresholdSpec> {
+    THRESHOLDS.iter().find(|t| t.label == label)
+}
+
+fn has_complete_timings(row: &VectorBench) -> bool {
+    row.c_encode_ms.is_some()
+        && row.rust_encode_ms.is_some()
+        && row.c_decode_ms.is_some()
+        && row.rust_decode_ms.is_some()
+}
+
+fn threshold_status(
+    row: &VectorBench,
+    threshold: Option<&ThresholdSpec>,
+    operation: Operation,
+    ratio: Option<f64>,
+) -> BenchThresholdStatus {
+    if row.skipped {
+        return BenchThresholdStatus::MissingRequiredFixture;
+    }
+    if row.crashed {
+        return BenchThresholdStatus::Crashed;
+    }
+    let Some(threshold) = threshold else {
+        return BenchThresholdStatus::MissingThreshold;
+    };
+    if !has_complete_timings(row) {
+        return BenchThresholdStatus::MissingTiming;
+    }
+    let Some(ratio) = ratio.filter(|r| r.is_finite()) else {
+        return BenchThresholdStatus::MissingTiming;
+    };
+    let limit = match operation {
+        Operation::Encode => threshold.enc_release_fail_ratio,
+        Operation::Decode => threshold.dec_release_fail_ratio,
+    };
+    if ratio > limit {
+        BenchThresholdStatus::Fail
+    } else {
+        BenchThresholdStatus::Pass
+    }
+}
+
+fn release_row_issue(row: &VectorBench, threshold: Option<&ThresholdSpec>) -> Option<String> {
+    if row.skipped {
+        return Some(
+            row.skip_reason
+                .clone()
+                .unwrap_or_else(|| "required fixture missing".to_string()),
+        );
+    }
+    if row.crashed {
+        return Some(
+            row.crash_reason
+                .clone()
+                .unwrap_or_else(|| "benchmark row crashed".to_string()),
+        );
+    }
+    let threshold = threshold?;
+    if !has_complete_timings(row) {
+        return Some("missing complete encode/decode timings".to_string());
+    }
+    if let Some(ratio) = row.enc_ratio.filter(|r| r.is_finite()) {
+        if ratio > threshold.enc_release_fail_ratio {
+            return Some(format!(
+                "encode ratio {ratio:.3}x exceeds {:.3}x",
+                threshold.enc_release_fail_ratio
+            ));
+        }
+    }
+    if let Some(ratio) = row.dec_ratio.filter(|r| r.is_finite()) {
+        if ratio > threshold.dec_release_fail_ratio {
+            return Some(format!(
+                "decode ratio {ratio:.3}x exceeds {:.3}x",
+                threshold.dec_release_fail_ratio
+            ));
+        }
+    }
+    None
 }
 
 /// Prebuild `ropus-compare` in release mode. Returns `Some(err)` on failure
@@ -617,6 +1040,7 @@ thread 'main' panicked at 'decode crash'
         };
 
         let only_skipped = BenchResult {
+            profile: BenchProfile::ObservedWarnOnly,
             skipped: false,
             skip_reason: None,
             build_failed: false,
@@ -629,6 +1053,7 @@ thread 'main' panicked at 'decode crash'
         );
 
         let with_crash = BenchResult {
+            profile: BenchProfile::ObservedWarnOnly,
             skipped: false,
             skip_reason: None,
             build_failed: false,
@@ -647,6 +1072,7 @@ thread 'main' panicked at 'decode crash'
         // disk after a nominally-successful build) means nothing ran; the
         // stage should surface non-green rather than claiming all_passed.
         let r = BenchResult {
+            profile: BenchProfile::ObservedWarnOnly,
             skipped: false,
             skip_reason: Some("ropus-compare binary not on disk after build".to_string()),
             build_failed: true,
@@ -688,6 +1114,7 @@ thread 'main' panicked at 'decode crash'
         // the reason field for the report.
         let r = BenchResult::skipped("--skip-benchmarks");
         assert!(r.skipped);
+        assert_eq!(r.profile, BenchProfile::NotClaimed);
         assert_eq!(r.skip_reason.as_deref(), Some("--skip-benchmarks"));
         assert!(r.all_passed());
         assert!(r.vectors.is_empty());
@@ -698,6 +1125,7 @@ thread 'main' panicked at 'decode crash'
         // No vectors ran, no crashes, no build failure — stage stays green.
         // Phase 4's banner logic relies on this shape for the --skip paths.
         let r = BenchResult {
+            profile: BenchProfile::ObservedWarnOnly,
             skipped: false,
             skip_reason: None,
             build_failed: false,
@@ -705,6 +1133,233 @@ thread 'main' panicked at 'decode crash'
             vectors: Vec::new(),
         };
         assert!(r.all_passed());
+    }
+
+    #[test]
+    fn benchmark_profile_follows_release_and_skip_flags() {
+        assert_eq!(
+            BenchProfile::from_flags(false, false, false),
+            BenchProfile::ObservedWarnOnly
+        );
+        assert_eq!(
+            BenchProfile::from_flags(false, false, true),
+            BenchProfile::NotClaimed
+        );
+        assert_eq!(
+            BenchProfile::from_flags(true, true, false),
+            BenchProfile::NotClaimed
+        );
+        assert_eq!(
+            BenchProfile::from_flags(false, true, false),
+            BenchProfile::ReleaseThresholded
+        );
+        assert_eq!(
+            BenchProfile::from_flags(false, true, true),
+            BenchProfile::ReleaseThresholded
+        );
+    }
+
+    #[test]
+    fn release_thresholded_skip_is_release_blocking() {
+        let r = BenchResult::skipped_with_profile(
+            BenchProfile::ReleaseThresholded,
+            "--skip-benchmarks disables release performance gate",
+        );
+        assert!(r.banner_fail());
+        let issues = r.release_blocking_issues();
+        assert!(issues[0].contains("did not run"));
+        assert!(issues.iter().any(|issue| issue.contains("zero gateable")));
+    }
+
+    #[test]
+    fn release_thresholded_missing_required_fixture_is_blocking() {
+        let spec = VECTORS[0];
+        let r = BenchResult {
+            profile: BenchProfile::ReleaseThresholded,
+            skipped: false,
+            skip_reason: None,
+            build_failed: false,
+            duration_ms: 1000,
+            vectors: vec![VectorBench {
+                label: spec.label.to_string(),
+                bitrate: spec.bitrate,
+                skipped: true,
+                skip_reason: Some(format!("fixture missing at {}", spec.relative_path)),
+                crashed: false,
+                crash_reason: None,
+                c_encode_ms: None,
+                rust_encode_ms: None,
+                enc_ratio: None,
+                c_decode_ms: None,
+                rust_decode_ms: None,
+                dec_ratio: None,
+            }],
+        };
+        assert!(r.banner_fail());
+        assert!(
+            r.release_blocking_issues()
+                .iter()
+                .any(|issue| issue.contains("required benchmark fixture missing"))
+        );
+        let rows = r.threshold_rows();
+        assert_eq!(
+            rows[0].enc_status,
+            BenchThresholdStatus::MissingRequiredFixture
+        );
+    }
+
+    #[test]
+    fn release_thresholded_missing_timings_are_blocking() {
+        let spec = VECTORS[0];
+        let row = build_vector_row(
+            &spec,
+            BenchTimings {
+                c_encode_ms: Some(100.0),
+                rust_encode_ms: Some(110.0),
+                c_decode_ms: None,
+                rust_decode_ms: None,
+            },
+            None,
+        );
+        let r = BenchResult {
+            profile: BenchProfile::ReleaseThresholded,
+            skipped: false,
+            skip_reason: None,
+            build_failed: false,
+            duration_ms: 1000,
+            vectors: vec![row],
+        };
+        assert!(r.banner_fail());
+        assert!(
+            r.release_blocking_issues()
+                .iter()
+                .any(|issue| issue.contains("incomplete timings"))
+        );
+        let rows = r.threshold_rows();
+        assert_eq!(rows[0].dec_status, BenchThresholdStatus::MissingTiming);
+    }
+
+    #[test]
+    fn release_thresholded_missing_threshold_spec_is_blocking() {
+        let row = VectorBench {
+            label: "local exploratory vector".to_string(),
+            bitrate: 64_000,
+            skipped: false,
+            skip_reason: None,
+            crashed: false,
+            crash_reason: None,
+            c_encode_ms: Some(100.0),
+            rust_encode_ms: Some(100.0),
+            enc_ratio: Some(1.0),
+            c_decode_ms: Some(100.0),
+            rust_decode_ms: Some(100.0),
+            dec_ratio: Some(1.0),
+        };
+        let r = BenchResult {
+            profile: BenchProfile::ReleaseThresholded,
+            skipped: false,
+            skip_reason: None,
+            build_failed: false,
+            duration_ms: 1000,
+            vectors: vec![row],
+        };
+        assert!(r.banner_fail());
+        assert!(
+            r.release_blocking_issues()
+                .iter()
+                .any(|issue| issue.contains("missing threshold spec"))
+        );
+        let rows = r.threshold_rows();
+        assert_eq!(rows[0].enc_status, BenchThresholdStatus::MissingThreshold);
+        assert_eq!(rows[0].dec_status, BenchThresholdStatus::MissingThreshold);
+    }
+
+    #[test]
+    fn release_thresholded_crashed_row_is_blocking() {
+        let spec = VECTORS[0];
+        let row = build_vector_row(
+            &spec,
+            BenchTimings::default(),
+            Some("ropus-compare exited with status 1".to_string()),
+        );
+        let r = BenchResult {
+            profile: BenchProfile::ReleaseThresholded,
+            skipped: false,
+            skip_reason: None,
+            build_failed: false,
+            duration_ms: 1000,
+            vectors: vec![row],
+        };
+        assert!(r.banner_fail());
+        assert!(
+            r.release_blocking_issues()
+                .iter()
+                .any(|issue| issue.contains("benchmark row crashed"))
+        );
+        let rows = r.threshold_rows();
+        assert_eq!(rows[0].enc_status, BenchThresholdStatus::Crashed);
+        assert_eq!(rows[0].dec_status, BenchThresholdStatus::Crashed);
+    }
+
+    #[test]
+    fn release_thresholded_ratio_breach_is_blocking_per_operation() {
+        let spec = VECTORS[0];
+        let row = build_vector_row(
+            &spec,
+            BenchTimings {
+                c_encode_ms: Some(100.0),
+                rust_encode_ms: Some(200.0),
+                c_decode_ms: Some(100.0),
+                rust_decode_ms: Some(80.0),
+            },
+            None,
+        );
+        let r = BenchResult {
+            profile: BenchProfile::ReleaseThresholded,
+            skipped: false,
+            skip_reason: None,
+            build_failed: false,
+            duration_ms: 1000,
+            vectors: vec![row],
+        };
+        assert!(r.banner_fail());
+        assert!(
+            r.release_blocking_issues()
+                .iter()
+                .any(|issue| issue.contains("encode ratio 2.000x exceeds"))
+        );
+        let rows = r.threshold_rows();
+        assert_eq!(rows[0].enc_status, BenchThresholdStatus::Fail);
+        assert_eq!(rows[0].dec_status, BenchThresholdStatus::Pass);
+        assert_eq!(rows[0].enc_release_fail_ratio, Some(1.26));
+    }
+
+    #[test]
+    fn release_thresholded_complete_rows_pass_threshold_gate() {
+        let spec = VECTORS[0];
+        let row = build_vector_row(
+            &spec,
+            BenchTimings {
+                c_encode_ms: Some(100.0),
+                rust_encode_ms: Some(110.0),
+                c_decode_ms: Some(100.0),
+                rust_decode_ms: Some(90.0),
+            },
+            None,
+        );
+        let r = BenchResult {
+            profile: BenchProfile::ReleaseThresholded,
+            skipped: false,
+            skip_reason: None,
+            build_failed: false,
+            duration_ms: 1000,
+            vectors: vec![row],
+        };
+        assert!(!r.banner_fail());
+        assert!(r.release_blocking_issues().is_empty());
+        let rows = r.threshold_rows();
+        assert_eq!(rows[0].enc_status, BenchThresholdStatus::Pass);
+        assert_eq!(rows[0].dec_status, BenchThresholdStatus::Pass);
     }
 
     #[test]

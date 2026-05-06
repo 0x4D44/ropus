@@ -133,8 +133,31 @@ fn corpus_to_json(o: &CorpusOutcome) -> Value {
 
 fn bench_to_json(o: &BenchResult) -> Value {
     // Same splice pattern as ambisonics/tests: derive-Serialize on the
-    // outcome struct, then hand the `Value` to the envelope verbatim.
-    serde_json::to_value(o).unwrap_or(Value::Null)
+    // outcome struct, then splice in computed claim/threshold fields.
+    let mut value = serde_json::to_value(o).unwrap_or(Value::Null);
+    if let Value::Object(obj) = &mut value {
+        obj.insert("claimed".to_string(), Value::Bool(o.profile.claimed()));
+        obj.insert(
+            "claim_note".to_string(),
+            Value::String(o.profile.claim_note().to_string()),
+        );
+        obj.insert(
+            "threshold_source".to_string(),
+            o.profile
+                .threshold_source()
+                .map(|s| Value::String(s.to_string()))
+                .unwrap_or(Value::Null),
+        );
+        obj.insert(
+            "release_blocking_issues".to_string(),
+            serde_json::to_value(o.release_blocking_issues()).unwrap_or(Value::Null),
+        );
+        obj.insert(
+            "thresholds".to_string(),
+            serde_json::to_value(o.threshold_rows()).unwrap_or(Value::Null),
+        );
+    }
+    value
 }
 
 fn tests_to_json(o: &TestsOutcome) -> Value {
@@ -171,7 +194,7 @@ mod tests {
 
     use super::*;
     use crate::ambisonics::{AmbisonicsResult, OrderOutcome};
-    use crate::bench::{BenchResult, VectorBench};
+    use crate::bench::{BenchProfile, BenchResult, VectorBench};
     use crate::cargo_parse::{BinaryResult, Outcome as OutcomeKind, TestOutcome, TestsResult};
     use crate::cli::Options;
     use crate::ietf_vectors::IetfVectorProvision;
@@ -630,6 +653,7 @@ mod tests {
 
     fn bench_populated() -> BenchResult {
         BenchResult {
+            profile: BenchProfile::ObservedWarnOnly,
             skipped: false,
             skip_reason: None,
             build_failed: false,
@@ -726,6 +750,15 @@ mod tests {
         let v = env.to_json();
 
         assert_eq!(v["stages"]["bench"]["skipped"], false);
+        assert_eq!(v["stages"]["bench"]["profile"], "observed-warn-only");
+        assert_eq!(v["stages"]["bench"]["claimed"], true);
+        assert!(
+            v["stages"]["bench"]["claim_note"]
+                .as_str()
+                .unwrap()
+                .contains("WARN-only")
+        );
+        assert!(v["stages"]["bench"]["threshold_source"].is_null());
         assert_eq!(v["stages"]["bench"]["duration_ms"], 1_800_000);
         let vectors = v["stages"]["bench"]["vectors"].as_array().unwrap();
         assert_eq!(vectors.len(), 2);
@@ -790,7 +823,69 @@ mod tests {
         };
         let v = env.to_json();
         assert_eq!(v["stages"]["bench"]["skipped"], true);
+        assert_eq!(v["stages"]["bench"]["profile"], "not-claimed");
+        assert_eq!(v["stages"]["bench"]["claimed"], false);
         assert_eq!(v["stages"]["bench"]["skip_reason"], "--quick");
+    }
+
+    #[test]
+    fn release_thresholded_bench_json_exposes_threshold_contract() {
+        let setup = dummy_setup();
+        let quality = quality_ok();
+        let tests = tests_populated();
+        let amb = skipped_ambisonics();
+        let bench = BenchResult {
+            profile: BenchProfile::ReleaseThresholded,
+            skipped: false,
+            skip_reason: None,
+            build_failed: false,
+            duration_ms: 100,
+            vectors: vec![VectorBench {
+                label: "SILK NB 8k mono noise".to_string(),
+                bitrate: 16_000,
+                skipped: false,
+                skip_reason: None,
+                crashed: false,
+                crash_reason: None,
+                c_encode_ms: Some(100.0),
+                rust_encode_ms: Some(200.0),
+                enc_ratio: Some(2.0),
+                c_decode_ms: Some(100.0),
+                rust_decode_ms: Some(90.0),
+                dec_ratio: Some(0.9),
+            }],
+        };
+        let fuzz = fuzz_not_requested();
+        let env = Envelope {
+            setup: &setup,
+            quality: &quality,
+            tests: &tests,
+            fuzz: &fuzz,
+            corpus: &corpus_not_claimed(),
+            ambisonics: &amb,
+            bench: &bench,
+            exit_code: 1,
+        };
+        let v = env.to_json();
+        let bench_json = &v["stages"]["bench"];
+        assert_eq!(bench_json["profile"], "release-thresholded");
+        assert_eq!(bench_json["claimed"], true);
+        assert!(
+            bench_json["threshold_source"]
+                .as_str()
+                .unwrap()
+                .contains("initial calibration")
+        );
+        assert!(
+            bench_json["release_blocking_issues"][0]
+                .as_str()
+                .unwrap()
+                .contains("encode ratio 2.000x exceeds")
+        );
+        let thresholds = bench_json["thresholds"].as_array().unwrap();
+        assert_eq!(thresholds[0]["enc_status"], "fail");
+        assert_eq!(thresholds[0]["dec_status"], "pass");
+        assert_eq!(thresholds[0]["enc_release_fail_ratio"], 1.26);
     }
 
     #[test]
