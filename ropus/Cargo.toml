@@ -1,6 +1,6 @@
 [package]
 name = "ropus"
-version = "0.12.11"
+version = "0.12.13"
 edition = "2024"
 rust-version = "1.88"
 description = "Rust port of the xiph Opus audio codec (fixed-point), bit-exact against the reference."

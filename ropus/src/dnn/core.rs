@@ -1714,6 +1714,29 @@ mod tests {
     }
 
     #[test]
+    fn test_tanh_approx_spec_compliant_pin() {
+        // Locks tanh_approx(-0.498856246) to the polynomial-spec f32 result.
+        //
+        // The C reference's SSE2 tanh path (reference/dnn/vec_avx.h:486)
+        // uses _mm_rcp_ps (12-bit approx reciprocal, max relative error
+        // 3.66e-4 per Intel SDM) and produces -0.461223572 for this input.
+        // Rust performs an honest f32 division and produces the exact
+        // polynomial value. This test pins Rust to the spec-compliant
+        // value so a future "performance optimisation" can't silently
+        // downgrade us toward the C reference's looser output.
+        //
+        // See wrk_docs/2026.05.07 - HLD - pitchdnn-feat18-residual.md.
+        let input: f32 = -0.498856246;
+        let expected: f32 = -0.46118161;
+        let observed = tanh_approx(input);
+        let drift = (observed - expected).abs();
+        assert!(
+            drift < 1e-7,
+            "tanh_approx({input}) = {observed}, expected ~ {expected}, drift = {drift}",
+        );
+    }
+
+    #[test]
     fn test_sigmoid_approx_zero() {
         assert!(approx_eq(sigmoid_approx(0.0), 0.5, EPS));
     }

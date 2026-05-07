@@ -94,6 +94,23 @@ const FIXTURE_EXTRA_DELAY: i32 = 312;
 // MAX_RMS_PER_FRAME_DRIFT=1.6514838e-6.
 //
 // Cross-reference: wrk_docs/2026.05.07 - HLD - xcorr-features-cascade-fix.md.
+//
+// 2026-05-07 root-cause traced for the residual feat-18 drift (no code
+// change). The summation-order chase closed feats 0-17, 19, and 20-35 to
+// bit-exact; the remaining 1.013279e-5 on feat 18 (dnn_pitch) is NOT a
+// Rust bug. Root cause: `reference/dnn/vec_avx.h:486` uses `_mm_rcp_ps`
+// (12-bit approximate reciprocal, max relative error 3.66e-4 per Intel
+// SDM) inside `tanh4_approx`, while Rust performs an honest f32
+// division. Independent step-by-step Python f32 reproduction of
+// `tanh_approx(-0.498856246)` matches Rust to all printed digits;
+// the C reference is the loose path here, Rust is the spec-compliant
+// one. Decision: keep the locked bound; do NOT downgrade Rust to match
+// the C SIMD short-cut. A pin unit test in
+// `ropus/src/dnn/core.rs::tests::test_tanh_approx_spec_compliant_pin`
+// locks Rust at the polynomial-spec value so a future "performance
+// optimisation" can't silently drift toward the C reference's looser
+// output.
+// Cross-reference: wrk_docs/2026.05.07 - HLD - pitchdnn-feat18-residual.md.
 const MAX_ABS_FEATURE_DRIFT: f32 = 1.013279e-5;
 const MAX_RMS_PER_FRAME_DRIFT: f32 = 1.6888275e-6;
 const MAX_DRIFTING_FRAME_COUNT: usize = 50;
