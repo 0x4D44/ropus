@@ -225,6 +225,13 @@ unsafe extern "C" {
         out_process_stage: *mut c_int,
         out_dred_offset: *mut c_int,
     ) -> c_int;
+
+    // --- 2026-05-07 burg-cepstrum-pow-fix differential-test thunk ---
+    // Defined in `harness-deep-plc/c/burg_thunk.c`. One-line wrapper
+    // around the C reference's public `burg_cepstral_analysis` symbol
+    // (`reference/dnn/freq.c:183`); accepts a FRAME_SIZE = 160-sample
+    // f32 buffer and writes 2 * NB_BANDS = 36 cepstral outputs.
+    pub fn ropus_test_burg_cepstral_analysis(x: *const f32, ceps: *mut f32);
 }
 
 /// Opus application modes (mirrored from `opus_defines.h`). Only the ones

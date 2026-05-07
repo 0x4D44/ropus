@@ -995,7 +995,8 @@ fn compute_burg_cepstrum(pcm: &[f32], cepstrum: &mut [f32], len: usize, order: u
     let mut xbuf = [0.0f32; WINDOW_SIZE];
     xbuf[0] = 1.0;
     for i in 0..order {
-        xbuf[i + 1] = -burg_lpc[i] * 0.995f32.powi(i as i32 + 1);
+        // Match reference/dnn/freq.c:169 — pow() is the double overload, multiply stays in double until the store narrows to f32.
+        xbuf[i + 1] = (-(burg_lpc[i] as f64) * 0.995_f64.powi(i as i32 + 1)) as f32;
     }
     let mut lpc_spec = vec![Cpx::default(); FREQ_SIZE];
     forward_transform(&mut lpc_spec, &xbuf);
@@ -1008,7 +1009,8 @@ fn compute_burg_cepstrum(pcm: &[f32], cepstrum: &mut [f32], len: usize, order: u
     let mut ly = [0.0f32; NB_BANDS];
     let (mut log_max, mut follow) = (-2.0f32, -2.0f32);
     for i in 0..NB_BANDS {
-        ly[i] = (1e-2 + eburg[i]).log10();
+        // Match reference/dnn/freq.c:174 — 1e-2 is a double literal and log10() is the double overload; narrow only on store to Ly[i].
+        ly[i] = (1e-2_f64 + eburg[i] as f64).log10() as f32;
         ly[i] = fmax(log_max - 8.0, fmax(follow - 2.5, ly[i]));
         log_max = fmax(log_max, ly[i]);
         follow = fmax(follow - 2.5, ly[i]);

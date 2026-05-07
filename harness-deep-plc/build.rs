@@ -320,6 +320,12 @@ fn main() {
     // `ENABLE_DEEP_PLC=1`, and the internal headers without touching
     // `reference/`.
     build.file(harness_dir.join("c/peek.c"));
+    // 2026-05-07 burg-cepstrum-pow-fix: differential-test thunk for
+    // `burg_cepstral_analysis` (HLD wrk_docs/2026.05.07 - HLD - burg-
+    // cepstrum-pow-fix.md). One-line wrapper around the C reference's
+    // public symbol; named to match the `ropus_test_*` convention used
+    // by the other shims in this crate.
+    build.file(harness_dir.join("c/burg_thunk.c"));
 
     build.compile("opus_ref_float");
 
@@ -330,4 +336,5 @@ fn main() {
     println!("cargo:rerun-if-changed=dred_dec_shim.c");
     println!("cargo:rerun-if-changed=dred_encode_shim.c");
     println!("cargo:rerun-if-changed=c/peek.c");
+    println!("cargo:rerun-if-changed=c/burg_thunk.c");
 }
