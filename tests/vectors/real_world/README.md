@@ -31,20 +31,45 @@ release corpus claim. Arbitrary local `.opus` / `.ogg` / `.webm` files are still
 useful for exploration through `corpus_diff <dir>`, but they do not satisfy the
 release gate unless the manifest marks them required and supported.
 
-The current required entry is generated locally:
+The manifest declares three required entries:
+
+- `ffmpeg-native-sine-32k` (unpinned smoke; sine WAV, 32 kbps mono).
+- `ffmpeg-native-sine-24k-mono` (pinned; sine WAV, 24 kbps mono).
+- `ffmpeg-native-speech-40k-mono` (pinned; speech WAV, 40 kbps mono).
+
+Each entry's `generation_command` documents the exact recipe, e.g.
 
 ```bash
 ffmpeg -y -hide_banner -loglevel error \
   -i tests/vectors/48k_sine1k_loud.wav \
-  -c:a opus -strict -2 -b:a 32k \
-  tests/vectors/real_world/ffmpeg-native-sine-32k.opus
+  -c:a opus -strict -2 -b:a 24k -ac 1 \
+  tests/vectors/real_world/ffmpeg-native-sine-24k-mono.opus
 ```
 
-The generated `.opus` file stays ignored/local by default. Non-quick
-`full-test --release-preflight` uses a temporary directory for this generation,
+The generated `.opus` files stay ignored/local by default. Non-quick
+`full-test --release-preflight` uses a temporary directory for the generation,
 runs `corpus_diff`, and fails the corpus claim if FFmpeg or the native `opus`
-encoder is unavailable. Quick release-preflight explicitly makes no
-real-world/generated corpus claim.
+encoder is unavailable, if any pinned manifest entry's SHA256 disagrees with
+the produced digest, or if `corpus_diff` exits with `2`/`3`/`1`. Quick
+release-preflight explicitly makes no real-world/generated corpus claim.
+
+### Pinned digests (locked under)
+
+```
+ffmpeg version 7.0.2-static https://johnvansickle.com/ffmpeg/  Copyright (c) 2000-2024 the FFmpeg developers
+```
+
+The pin hashes the Opus packet **payload bytes only** — the concatenated
+payloads of every Ogg page after `OpusHead` and `OpusTags`. This pins encoder
+output without depending on the Ogg muxer's randomised stream serial or on
+metadata vendor strings, both of which would otherwise vary across runs and
+across FFmpeg versions.
+
+A maintainer running a different FFmpeg version may still see a hard-fail
+SHA256 mismatch when the encoder output itself changes (the pin fires on real
+encoder drift, not on muxer/metadata variation). In that case either match
+the locked FFmpeg version or re-lock both digests in `corpus_manifest.toml`
+and update the version line above.
 
 ## How to populate (baseline)
 
@@ -139,13 +164,15 @@ For each file it:
 | `0`  | Directory had at least one supported file that decoded nonzero audio, and every decoded file matched sample-for-sample. |
 | `1`  | One or more mismatches or panics, the directory argument was missing / unreadable, or candidate files existed but none decoded nonzero audio for comparison. |
 | `2`  | Directory exists but contains no candidate files (not populated). Distinct from `0` so CI cannot silently pass against an unpopulated corpus. Gate the CI step on `fetch_corpus.sh` or a populate-step having completed first. |
+| `3`  | All candidate files were deferred (e.g. only `.webm`). Distinct from `0` so a release-preflight cannot satisfy a corpus claim with only deferred-container entries. |
 
 ### Limitations (intentional for the P2 scope)
 
 - Channel-mapping family 0 only. Multichannel / ambisonic files are logged
   and skipped — `projection_roundtrip` covers family 3.
-- `.webm` files are logged and skipped (Matroska container parsing is not
-  in scope for this harness; transcode to `.opus` first if you care).
+- `.webm` files are loud-deferred with a per-file `DEFER ... reason=webm-matroska-container-deferred`
+  line (Matroska container parsing is not in scope for this harness; transcode
+  to `.opus` first if you care). Exit code `3` is reserved for the all-deferred case.
 - The oracle is exact PCM parity versus the C reference for supported Ogg
   family-0 packet decode only.
 - No WebM/player semantics, seek, output gain, pre-skip trimming, granule

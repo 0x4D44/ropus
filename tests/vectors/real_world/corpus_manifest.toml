@@ -3,6 +3,18 @@
 # Generated media remains local/ignored by default. The release corpus smoke
 # uses this manifest to decide which entries may satisfy a corpus coverage
 # claim; arbitrary files in this directory remain exploratory only.
+#
+# Pinned SHA256 digests below hash the Opus packet payload bytes only — the
+# concatenated payloads of every Ogg page after the OpusHead and OpusTags
+# header pages. This pins encoder output without depending on muxer state
+# (the Ogg page serial is randomised per FFmpeg invocation) or on metadata
+# vendor strings written into OpusTags. The digests were locked under:
+#   ffmpeg version 7.0.2-static https://johnvansickle.com/ffmpeg/  Copyright (c) 2000-2024 the FFmpeg developers
+#
+# A maintainer running a different FFmpeg version may see a hard-fail SHA256
+# mismatch when the encoder output itself changes (the pin only fires on real
+# encoder drift, not muxer/metadata variation). In that case either match the
+# locked FFmpeg version or re-lock both digests (manifest-only change).
 
 [[entries]]
 id = "ffmpeg-native-sine-32k"
@@ -10,9 +22,43 @@ path = "ffmpeg-native-sine-32k.opus"
 class = "generated-non-reference"
 encoder = "FFmpeg native opus"
 source_fixture = "tests/vectors/48k_sine1k_loud.wav"
-generation_command = "ffmpeg -y -hide_banner -loglevel error -i tests/vectors/48k_sine1k_loud.wav -c:a opus -strict -2 -b:a 32k tests/vectors/real_world/ffmpeg-native-sine-32k.opus"
+generation_command = "ffmpeg -y -hide_banner -loglevel error -i tests/vectors/48k_sine1k_loud.wav -c:a opus -strict -2 -b:a 32k -ac 1 tests/vectors/real_world/ffmpeg-native-sine-32k.opus"
 license = "Generated locally from checked-in synthetic WAV fixture; generated media remains untracked."
 container_support = "supported-ogg-family0"
 required = true
 max_size_bytes = 100000
 oracle = "exact-pcm-parity-vs-c-reference"
+bitrate_kbps = 32
+channels = 1
+
+[[entries]]
+id = "ffmpeg-native-sine-24k-mono"
+path = "ffmpeg-native-sine-24k-mono.opus"
+class = "generated-non-reference"
+encoder = "FFmpeg native opus"
+source_fixture = "tests/vectors/48k_sine1k_loud.wav"
+generation_command = "ffmpeg -y -hide_banner -loglevel error -i tests/vectors/48k_sine1k_loud.wav -c:a opus -strict -2 -b:a 24k -ac 1 tests/vectors/real_world/ffmpeg-native-sine-24k-mono.opus"
+license = "Generated locally from checked-in synthetic WAV fixture; generated media remains untracked."
+container_support = "supported-ogg-family0"
+required = true
+max_size_bytes = 60000
+oracle = "exact-pcm-parity-vs-c-reference"
+bitrate_kbps = 24
+channels = 1
+expected_sha256 = "d9b990ee3f2b3fe4d18c413cc550b4e5165d8710935b17f43a15c5f32fb01d39"
+
+[[entries]]
+id = "ffmpeg-native-speech-40k-mono"
+path = "ffmpeg-native-speech-40k-mono.opus"
+class = "generated-non-reference"
+encoder = "FFmpeg native opus"
+source_fixture = "tests/vectors/speech_48k_mono.wav"
+generation_command = "ffmpeg -y -hide_banner -loglevel error -i tests/vectors/speech_48k_mono.wav -c:a opus -strict -2 -b:a 40k -ac 1 tests/vectors/real_world/ffmpeg-native-speech-40k-mono.opus"
+license = "Generated locally from checked-in speech WAV fixture; generated media remains untracked."
+container_support = "supported-ogg-family0"
+required = true
+max_size_bytes = 1500000
+oracle = "exact-pcm-parity-vs-c-reference"
+bitrate_kbps = 40
+channels = 1
+expected_sha256 = "4e81fb84245420e87f7a9f864103d7e02ce35ccddaf3a57ab581b93a8d0bbfa1"

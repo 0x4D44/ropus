@@ -512,13 +512,14 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "full-test"
-version = "0.4.4"
+version = "0.5.1"
 dependencies = [
  "chrono",
  "colored",
  "regex",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 
@@ -1244,6 +1245,7 @@ dependencies = [
  "cc",
  "ogg 0.9.2",
  "ropus",
+ "tempfile",
 ]
 
 [[package]]

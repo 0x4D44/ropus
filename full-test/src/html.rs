@@ -771,15 +771,20 @@ fn render_corpus_gate(out: &mut String, corpus: &CorpusOutcome) {
     }
     if let Some(summary) = &corpus.corpus_diff_summary {
         out.push_str(&format!(
-            "<p class=\"meta\">corpus_diff: {} candidate(s), {} decoded-and-compared, {} zero-audio, {} skipped, {} mismatched, {} panicked.</p>\n",
+            "<p class=\"meta\">corpus_diff: {} candidate(s), {} decoded-and-compared, {} zero-audio, {} skipped, {} deferred, {} mismatched, {} panicked.</p>\n",
             summary.candidates,
             summary.decoded_and_compared,
             summary.zero_audio,
             summary.skipped,
+            summary.deferred,
             summary.mismatched,
             summary.panicked,
         ));
     }
+    out.push_str(&format!(
+        "<p class=\"meta\">Pinned entries matched: {}</p>\n",
+        corpus.pinned_entries_matched,
+    ));
     if !corpus.issues.is_empty() {
         out.push_str("<ul class=\"failed-tests\">\n");
         for issue in &corpus.issues {
@@ -1497,6 +1502,32 @@ mod tests {
         assert!(html.contains("FFmpeg native opus generation unavailable"));
         assert!(html.contains("supported Ogg family-0 packet decode only"));
         assert!(html.contains("no WebM/player semantics"));
+    }
+
+    #[test]
+    fn corpus_section_renders_pinned_matched_and_deferred_count() {
+        let mut corpus = crate::corpus::Outcome::not_claimed_for_tests();
+        corpus.pinned_entries_matched = 2;
+        corpus.corpus_diff_summary = Some(crate::corpus::CorpusDiffSummary {
+            candidates: 5,
+            decoded_and_compared: 3,
+            zero_audio: 0,
+            skipped: 1,
+            deferred: 1,
+            mismatched: 0,
+            panicked: 0,
+        });
+        let mut html = String::new();
+        render_corpus_gate(&mut html, &corpus);
+
+        assert!(
+            html.contains("Pinned entries matched: 2"),
+            "missing pinned-matched line: {html}"
+        );
+        assert!(
+            html.contains("1 deferred"),
+            "missing deferred count in summary: {html}"
+        );
     }
 
     #[test]

@@ -40,6 +40,9 @@
 //!       so a CI pipeline cannot silently pass against an unpopulated
 //!       corpus; gate the step on `fetch_corpus.sh` or a manual populate
 //!       having completed first.
+//!   3 — every candidate is a deferred container (e.g. WebM). Distinct from 0
+//!       so a release-preflight cannot satisfy a corpus claim with only
+//!       deferred-container entries.
 
 #![allow(clippy::needless_range_loop, clippy::collapsible_if)]
 
@@ -361,6 +364,7 @@ struct RunStats {
     decoded_and_compared: usize,
     zero_audio: usize,
     skipped: usize,
+    deferred: usize,
     mismatched: usize,
     panicked: usize,
 }
@@ -369,6 +373,9 @@ impl RunStats {
     fn exit_code(&self) -> i32 {
         if self.candidates == 0 {
             return 2;
+        }
+        if self.deferred == self.candidates {
+            return 3;
         }
         if self.mismatched > 0 || self.panicked > 0 || self.decoded_and_compared == 0 {
             return 1;
@@ -386,14 +393,33 @@ impl RunStats {
 
     fn summary_line(&self) -> String {
         format!(
-            "CORPUS_DIFF_SUMMARY candidates={} decoded_and_compared={} zero_audio={} skipped={} mismatched={} panicked={}",
+            "CORPUS_DIFF_SUMMARY candidates={} decoded_and_compared={} zero_audio={} skipped={} deferred={} mismatched={} panicked={}",
             self.candidates,
             self.decoded_and_compared,
             self.zero_audio,
             self.skipped,
+            self.deferred,
             self.mismatched,
             self.panicked
         )
+    }
+}
+
+/// Per-file dispatch decision: extracted so the routing rule for known-
+/// deferred containers vs decodable Ogg streams is unit-testable without
+/// writing real container files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileDispatch {
+    Decode,
+    Defer { reason: &'static str },
+}
+
+fn dispatch_action(kind: CorpusKind) -> FileDispatch {
+    match kind {
+        CorpusKind::Opus => FileDispatch::Decode,
+        CorpusKind::Webm => FileDispatch::Defer {
+            reason: "webm-matroska-container-deferred",
+        },
     }
 }
 
@@ -472,9 +498,13 @@ pub fn main() {
             .unwrap_or_else(|| path.display().to_string());
 
         let kind = classify(path).expect("classifier admitted only known kinds");
-        if kind == CorpusKind::Webm {
-            println!("  SKIP {display} (WebM/Matroska container not parsed here)");
-            stats.skipped += 1;
+        if let FileDispatch::Defer { reason } = dispatch_action(kind) {
+            let relpath = path
+                .strip_prefix(&dir)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| path.display().to_string());
+            println!("  DEFER {relpath} reason={reason}");
+            stats.deferred += 1;
             continue;
         }
 
@@ -529,10 +559,11 @@ pub fn main() {
     }
 
     println!(
-        "---\n{} decoded-and-compared, {} zero-audio, {} skipped, {} mismatched, {} panicked (of {} total)",
+        "---\n{} decoded-and-compared, {} zero-audio, {} skipped, {} deferred, {} mismatched, {} panicked (of {} total)",
         stats.decoded_and_compared,
         stats.zero_audio,
         stats.skipped,
+        stats.deferred,
         stats.mismatched,
         stats.panicked,
         stats.candidates
@@ -545,6 +576,73 @@ pub fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn corpus_all_deferred_set_returns_exit_three() {
+        let stats = RunStats {
+            candidates: 2,
+            deferred: 2,
+            ..RunStats::default()
+        };
+
+        assert_eq!(stats.exit_code(), 3);
+    }
+
+    #[test]
+    fn corpus_one_match_with_deferred_is_still_green() {
+        let mut stats = RunStats {
+            candidates: 2,
+            deferred: 1,
+            ..RunStats::default()
+        };
+        stats.record_match(960);
+
+        assert_eq!(stats.decoded_and_compared, 1);
+        assert_eq!(stats.exit_code(), 0);
+    }
+
+    #[test]
+    fn corpus_diff_summary_line_includes_deferred_count() {
+        let stats = RunStats {
+            candidates: 5,
+            deferred: 3,
+            skipped: 1,
+            decoded_and_compared: 1,
+            ..RunStats::default()
+        };
+        let line = stats.summary_line();
+        assert!(
+            line.contains("deferred=3"),
+            "missing deferred= field: {line}"
+        );
+        let skipped_pos = line.find("skipped=").expect("skipped= present");
+        let deferred_pos = line.find("deferred=").expect("deferred= present");
+        let mismatched_pos = line.find("mismatched=").expect("mismatched= present");
+        assert!(
+            skipped_pos < deferred_pos && deferred_pos < mismatched_pos,
+            "expected order skipped<deferred<mismatched: {line}"
+        );
+    }
+
+    #[test]
+    fn webm_dispatch_increments_deferred_not_skipped() {
+        let mut stats = RunStats::default();
+        stats.candidates = 1;
+        let action = dispatch_action(CorpusKind::Webm);
+        assert_eq!(
+            action,
+            FileDispatch::Defer {
+                reason: "webm-matroska-container-deferred"
+            }
+        );
+        match action {
+            FileDispatch::Defer { .. } => stats.deferred += 1,
+            FileDispatch::Decode => stats.decoded_and_compared += 1,
+        }
+        assert_eq!(stats.deferred, 1);
+        assert_eq!(stats.skipped, 0);
+        assert_eq!(stats.exit_code(), 3);
+    }
 
     #[test]
     fn corpus_skipped_only_candidate_set_is_non_green() {

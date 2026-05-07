@@ -1,6 +1,6 @@
 [package]
 name = "full-test"
-version = "0.4.4"
+version = "0.5.1"
 edition = "2024"
 publish = false
 description = "Local validation runner for the ropus workspace."
@@ -19,4 +19,5 @@ colored = "2.2"
 regex = "1.12"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.10"
 tempfile = "3.27"
