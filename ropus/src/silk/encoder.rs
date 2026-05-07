@@ -8364,6 +8364,21 @@ pub fn silk_encode(
                                 true,
                                 cond_coding,
                             );
+                            // C `silk_encode_indices` mutates `ec_prevSignalType`
+                            // and `ec_prevLagIndex` inside (`encode_indices.c:141,174`).
+                            // The Rust port takes `&SilkEncoderState`, so reproduce
+                            // the mutation here for LBRR writes. The equivalent for
+                            // regular-frame writes lives at the end of
+                            // `silk_encode_frame_fix` (lines 7706-7709 above).
+                            let lbrr_signal_type =
+                                enc.state_fxx[n].s_cmn.indices_lbrr[i].signal_type;
+                            let lbrr_lag_index =
+                                enc.state_fxx[n].s_cmn.indices_lbrr[i].lag_index;
+                            if lbrr_signal_type == TYPE_VOICED as i8 {
+                                enc.state_fxx[n].s_cmn.ec_prev_lag_index = lbrr_lag_index;
+                            }
+                            enc.state_fxx[n].s_cmn.ec_prev_signal_type =
+                                lbrr_signal_type as i32;
                             silk_encode_pulses(
                                 range_enc,
                                 enc.state_fxx[n].s_cmn.indices_lbrr[i].signal_type as i32,
