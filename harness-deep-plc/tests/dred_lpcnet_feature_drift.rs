@@ -39,10 +39,22 @@ const FIXTURE_EXTRA_DELAY: i32 = 312;
 //   - LPC features 22-35: bit-exact.
 //   - Residual drift confined to features 18-21 (pitch/frame_corr/
 //     LPC[0]/LPC[1]); max abs 3.0994415e-5, max RMS 5.4790185e-6.
-// Previous bounds (pre-fix): MAX_ABS_FEATURE_DRIFT=3.2544136e-5,
-// MAX_RMS_PER_FRAME_DRIFT=7.896632e-6.
-const MAX_ABS_FEATURE_DRIFT: f32 = 3.0994415e-5;
-const MAX_RMS_PER_FRAME_DRIFT: f32 = 5.4790185e-6;
+//
+// 2026-05-07 re-lock after lpc_from_bands f64 lag-windowing fix
+// (ropus/src/dnn/lpcnet.rs:793-808 matching reference/dnn/freq.c:287-289)
+// — the C `1 - 6e-5*i*i` expression is `double` because `6e-5` is a double
+// literal; previous Rust f32 pipeline drifted ~1 ULP per coefficient. Also
+// applied the noise-floor int-division fix `320/12=26` then `/38.0`
+// (correctness bug, no measurable effect on this fixture because
+// `ac[0]*1e-4` dominates the constant for loud signals):
+//   - LPC[0]/LPC[1] (features 20, 21): now bit-exact (was 7.6293945e-6 each).
+//   - pitch/frame_corr (features 18, 19): residual 1.001358e-5 / 8.34465e-7
+//     (was 9.775162e-6 / 3.0994415e-5). Feature 19 dropped ~37x; feature 18
+//     unchanged (~1e-5) — that path is pitch detection, not lpc_from_bands.
+// Previous bounds (pre-fix): MAX_ABS_FEATURE_DRIFT=3.0994415e-5,
+// MAX_RMS_PER_FRAME_DRIFT=5.4790185e-6.
+const MAX_ABS_FEATURE_DRIFT: f32 = 1.001358e-5;
+const MAX_RMS_PER_FRAME_DRIFT: f32 = 1.6713232e-6;
 const MAX_DRIFTING_FRAME_COUNT: usize = 50;
 const FIRST_DIVERGENT_FRAME_AT_LEAST: usize = 0;
 

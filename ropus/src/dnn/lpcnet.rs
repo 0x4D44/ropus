@@ -791,10 +791,18 @@ fn lpc_from_bands(lpc: &mut [f32], ex: &[f32]) -> f32 {
         ac[i] = x_auto_time[i];
     }
     // -40 dB noise floor.
-    ac[0] += ac[0] * 1e-4 + 320.0 / 12.0 / 38.0;
+    // Match C reference/dnn/freq.c:287 — the literal `320/12/38.` is integer
+    // division `320/12 = 26` (both `int`), then `26 / 38.0` in double; the
+    // f32 expression `320.0 / 12.0 / 38.0 = 0.7017543...` drifts ~2.6% from
+    // the C value `0.6842105...`. Compute in f64 and store in f32.
+    ac[0] = (ac[0] as f64 + ac[0] as f64 * 1e-4 + (320 / 12) as f64 / 38.0) as f32;
     // Lag windowing.
+    // Match C reference/dnn/freq.c:289 — `6e-5` is a `double` literal, so the
+    // entire `(1 - 6e-5*i*i)` expression is double; the multiply-and-store is
+    // the only narrowing step. Mirror that here to avoid 1-ULP-per-coefficient
+    // f32 drift.
     for i in 1..LPC_ORDER + 1 {
-        ac[i] *= 1.0 - 6e-5 * (i * i) as f32;
+        ac[i] = (ac[i] as f64 * (1.0 - 6e-5 * (i * i) as f64)) as f32;
     }
     lpcn_lpc(lpc, &mut rc, &ac, LPC_ORDER)
 }
