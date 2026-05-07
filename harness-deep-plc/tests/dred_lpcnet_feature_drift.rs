@@ -53,8 +53,22 @@ const FIXTURE_EXTRA_DELAY: i32 = 312;
 //     unchanged (~1e-5) — that path is pitch detection, not lpc_from_bands.
 // Previous bounds (pre-fix): MAX_ABS_FEATURE_DRIFT=3.0994415e-5,
 // MAX_RMS_PER_FRAME_DRIFT=5.4790185e-6.
-const MAX_ABS_FEATURE_DRIFT: f32 = 1.001358e-5;
-const MAX_RMS_PER_FRAME_DRIFT: f32 = 1.6713232e-6;
+//
+// 2026-05-07 re-lock after if_features norm_1 f64 divide+sqrt fix
+// (ropus/src/dnn/lpcnet.rs:1632 matching reference/dnn/lpcnet_enc.c:134) —
+// C's `1.f / sqrt(sumsq)` promotes to double at the libm sqrt() call site
+// while keeping the sumsq accumulation in f32 (both operands are float).
+// Previous Rust f32 path drifted 1 ULP at the rsqrt and propagated into
+// `prod.r*norm_1` / `prod.i*norm_1`, which feed the IF feature buffer used
+// by pitch detection (feat 18 dnn_pitch):
+//   - feat 18 (dnn_pitch): 9.894371e-6 (was 1.001358e-5; ~1.2% reduction).
+//     Residual is the xcorr_features cascade, below the propagation
+//     threshold to bit-exact but not dominated by the rsqrt anymore.
+//   - feat 19 (frame_corr): 8.34465e-7 (unchanged from previous re-lock).
+// Previous bounds (pre-fix): MAX_ABS_FEATURE_DRIFT=1.001358e-5,
+// MAX_RMS_PER_FRAME_DRIFT=1.6713232e-6.
+const MAX_ABS_FEATURE_DRIFT: f32 = 9.894371e-6;
+const MAX_RMS_PER_FRAME_DRIFT: f32 = 1.6514838e-6;
 const MAX_DRIFTING_FRAME_COUNT: usize = 50;
 const FIRST_DIVERGENT_FRAME_AT_LEAST: usize = 0;
 

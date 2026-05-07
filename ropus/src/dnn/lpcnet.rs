@@ -1629,7 +1629,10 @@ impl LPCNetEncState {
         );
         for i in 1..PITCH_IF_MAX_FREQ {
             let prod = cmulc(x_cpx[i], self.prev_if[i]);
-            let norm_1 = 1.0 / (1e-15 + prod.r * prod.r + prod.i * prod.i).sqrt();
+            // Match C reference/dnn/lpcnet_enc.c:134 — sumsq stays in f32 (matches C
+            // product accumulation), divide+sqrt route through f64 like libm.
+            let norm_1 =
+                (1.0_f64 / ((1e-15f32 + prod.r * prod.r + prod.i * prod.i) as f64).sqrt()) as f32;
             let prod = Cpx {
                 r: prod.r * norm_1,
                 i: prod.i * norm_1,
