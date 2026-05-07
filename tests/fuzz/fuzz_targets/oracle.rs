@@ -8,7 +8,7 @@
 
 #![allow(dead_code)]
 
-use ropus::opus::decoder::{opus_packet_parse_impl, MAX_FRAMES};
+use ropus::opus::decoder::{MAX_FRAMES, opus_packet_parse_impl};
 
 /// Minimum acceptable SNR (in decibels) when comparing the Rust port's
 /// SILK/Hybrid PCM output against the C reference. CELT-only packets remain
