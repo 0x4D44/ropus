@@ -148,7 +148,11 @@ fn first_f32_divergent(a: &[f32], b: &[f32]) -> Option<(usize, f32, f32)> {
 }
 
 #[test]
-#[ignore = "Stage 7 LPCNet drift: Ex[]/FFT-path bit-exactness pending. See JRN 2026.04.19 stage8-dred-port 8.6."]
+#[ignore = "DRED encoder byte-parity is blocked by LPCNet feature drift; \
+            test_dred_lpcnet_feature_drift_is_bounded_against_c_reference \
+            actively gates the upstream drift (max_abs=3.2544136e-5, \
+            max_rms=7.896632e-6, drift_frames=50/50, first_div_frame=0). \
+            See HLD '2026.05.06 - HLD - dred lpcnet feature drift diagnostic.md'."]
 fn dred_encode_silk_frame_bytes_match_c_reference() {
     if !weights_or_skip() {
         return;
