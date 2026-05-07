@@ -19,11 +19,25 @@
 //! tier-2 SNR floor (>= 50 dB) is the project-wide envelope from
 //! `CLAUDE.md`. Compressed bytes are asserted exact in every cell;
 //! decoded PCM is exact for CELT-only paths and SNR-bounded otherwise.
+//!
+//! NOTE on the shared oracle: `oracle::classify_decode_packet` demotes
+//! Hybrid packets at sr > 16 kHz to `SampleCountOnly` because it was
+//! tuned for attacker-controlled fuzz inputs (see oracle.rs:355-360).
+//! In *this* file we own the encoder, so packets are well-formed and
+//! the SNR floor is the right oracle. The HYBRID and AUTO cells use a
+//! local `is_hybrid_toc` check + direct SNR assertion instead of the
+//! conservative classifier — see `assert_pcm_tier_roundtrip`.
+//!
+//! Lints suppressed at file scope:
+//! * `clippy::too_many_arguments` — `run_grid_cell` takes a long flat
+//!   parameter list mirroring the C-side CTL surface; refactoring to a
+//!   single `CellCfg` arg is tracked as a TODO at the helper site.
+//! * `clippy::collapsible_match` — clippy wants the SNR-applicable
+//!   check folded into a match-arm guard, but the explicit nested `if`
+//!   is intentional so the assertion message can reference all
+//!   bindings cleanly.
 
 #![allow(clippy::too_many_arguments)]
-// Clippy wants the SNR-applicable check folded into a match-arm guard;
-// the explicit nested `if` is intentional here so the assertion message
-// can still reference all bindings cleanly. Suppress at file scope.
 #![allow(clippy::collapsible_match)]
 
 use ropus::opus::decoder::{
@@ -128,6 +142,9 @@ const OPUS_SET_FORCE_MODE_REQUEST: c_int = 11002;
 
 // ---------------------------------------------------------------------------
 // WAV reader — copied from c_ref_differential.rs:2787-2820.
+// TODO: extract to harness/tests/common/mod.rs (per planning doc §4) so
+// the parameterized grid and the original differential test share a
+// single implementation.
 // ---------------------------------------------------------------------------
 struct Wav {
     channels: u16,
@@ -196,22 +213,14 @@ fn decimate_interleaved(samples: &[i16], channels: usize, factor: usize) -> Vec<
     out
 }
 
-/// Duplicate mono interleaved PCM to N channels by replicating each
-/// sample. Used for multi-channel cells whose source fixture is mono.
-fn replicate_mono_to_n(samples: &[i16], channels: usize) -> Vec<i16> {
-    let mut out = Vec::with_capacity(samples.len() * channels);
-    for &s in samples {
-        for _ in 0..channels {
-            out.push(s);
-        }
-    }
-    out
-}
-
 /// Patterned PCM helper for synthetic multi-channel cells. Mirrors the
 /// `patterned_pcm_i16` helper in `c_ref_differential.rs:99` but generalized
 /// to N channels with a per-channel seed offset so each channel carries a
 /// distinct waveform (otherwise downmix collapses to a no-op).
+// TODO: review hash collision in N-channel pattern generator — the
+// per-channel `seed * 911 + ch * 911` mixing can alias for
+// adjacent-channel seeds in certain configurations; revisit if any
+// multistream cell shows unexpected channel correlation.
 fn patterned_pcm_nch(
     frame_size: usize,
     channels: usize,
@@ -261,10 +270,24 @@ struct CellCfg {
 fn build_rust_encoder(cfg: &CellCfg, label: &str) -> OpusEncoder {
     let mut enc = OpusEncoder::new(cfg.sr, cfg.ch, cfg.application)
         .unwrap_or_else(|e| panic!("[{label}] Rust encoder create failed: {e}"));
-    enc.set_bitrate(cfg.bitrate);
-    enc.set_complexity(cfg.complexity);
-    enc.set_vbr(if cfg.vbr { 1 } else { 0 });
-    enc.set_vbr_constraint(if cfg.vbr_constraint { 1 } else { 0 });
+    // Assert OPUS_OK on every setter so a future divergent clamp is
+    // caught immediately on the side it occurs (Rust or C).
+    let r = enc.set_bitrate(cfg.bitrate);
+    assert_eq!(r, 0, "[{label}] Rust set_bitrate({}) -> {r}", cfg.bitrate);
+    let r = enc.set_complexity(cfg.complexity);
+    assert_eq!(
+        r, 0,
+        "[{label}] Rust set_complexity({}) -> {r}",
+        cfg.complexity
+    );
+    let r = enc.set_vbr(if cfg.vbr { 1 } else { 0 });
+    assert_eq!(r, 0, "[{label}] Rust set_vbr({}) -> {r}", cfg.vbr);
+    let r = enc.set_vbr_constraint(if cfg.vbr_constraint { 1 } else { 0 });
+    assert_eq!(
+        r, 0,
+        "[{label}] Rust set_vbr_constraint({}) -> {r}",
+        cfg.vbr_constraint
+    );
     if let Some(bw) = cfg.max_bandwidth {
         let r = enc.set_max_bandwidth(bw);
         assert_eq!(r, 0, "[{label}] Rust set_max_bandwidth({bw}) -> {r}");
@@ -286,13 +309,27 @@ unsafe fn build_c_encoder(cfg: &CellCfg, label: &str) -> *mut u8 {
         "[{label}] C opus_encoder_create err={err}"
     );
     unsafe {
-        opus_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, cfg.bitrate);
-        opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY_REQUEST, cfg.complexity);
-        opus_encoder_ctl(enc, OPUS_SET_VBR_REQUEST, cfg.vbr as c_int);
-        opus_encoder_ctl(
+        // Assert OPUS_OK on every setter so a future divergent clamp is
+        // caught immediately on the side it occurs (Rust or C).
+        let r = opus_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, cfg.bitrate);
+        assert_eq!(r, 0, "[{label}] C set_bitrate({}) -> {r}", cfg.bitrate);
+        let r = opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY_REQUEST, cfg.complexity);
+        assert_eq!(
+            r, 0,
+            "[{label}] C set_complexity({}) -> {r}",
+            cfg.complexity
+        );
+        let r = opus_encoder_ctl(enc, OPUS_SET_VBR_REQUEST, cfg.vbr as c_int);
+        assert_eq!(r, 0, "[{label}] C set_vbr({}) -> {r}", cfg.vbr);
+        let r = opus_encoder_ctl(
             enc,
             OPUS_SET_VBR_CONSTRAINT_REQUEST,
             cfg.vbr_constraint as c_int,
+        );
+        assert_eq!(
+            r, 0,
+            "[{label}] C set_vbr_constraint({}) -> {r}",
+            cfg.vbr_constraint
         );
         if let Some(bw) = cfg.max_bandwidth {
             let r = opus_encoder_ctl(enc, OPUS_SET_MAX_BANDWIDTH_REQUEST, bw);
@@ -380,12 +417,26 @@ fn decode_one_frame(
     (rust_pcm, c_pcm)
 }
 
-/// Classify and assert PCM tier per the oracle module. CELT-only paths
-/// must be byte-exact; SILK/Hybrid SNR-comparable cells must clear the
-/// 50 dB floor. Cells classified as weakened (SampleCountOnly,
-/// RecoveryOrDtxOnly, ErrorAgreementOnly) only get a sample-count check
-/// here — the compressed-byte assert in `roundtrip_single` is the strong
-/// oracle for those cases.
+/// True iff the packet's TOC byte indicates a Hybrid mode (TOC config
+/// 12..=15). Mirrors the Hybrid detection used in
+/// `oracle::classify_decode_packet` (oracle.rs:355).
+fn is_hybrid_toc(packet: &[u8]) -> bool {
+    if packet.is_empty() {
+        return false;
+    }
+    let toc = packet[0];
+    (12..=15).contains(&(toc >> 3))
+}
+
+/// Classify and assert PCM tier. CELT-only paths must be byte-exact;
+/// SILK/Hybrid paths must clear the 50 dB SNR floor.
+///
+/// Round-trip cells own the encoder, so packets are well-formed; the
+/// conservative attacker-input classifier (oracle.rs:355-360) demotes
+/// Hybrid sr > 16 kHz to `SampleCountOnly`, which is wrong for this
+/// context. We therefore detect Hybrid locally via `is_hybrid_toc` and
+/// enforce SNR ≥ 50 dB directly, instead of routing those packets
+/// through `classify_decode_packet`.
 fn assert_pcm_tier(
     cell_label: &str,
     sr: i32,
@@ -401,6 +452,26 @@ fn assert_pcm_tier(
         rust_pcm.len(),
         c_pcm.len()
     );
+
+    // Local Hybrid override: well-formed encoder-produced Hybrid packets
+    // must clear the SNR floor regardless of sample rate. This bypasses
+    // the conservative `SampleCountOnly` demotion in the shared oracle.
+    if is_hybrid_toc(packet) {
+        if oracle::snr_oracle_applicable(c_pcm) {
+            let snr = oracle::snr_db(c_pcm, rust_pcm);
+            assert!(
+                snr >= oracle::SILK_DECODE_MIN_SNR_DB,
+                "[{cell_label}] Hybrid SNR {snr:.2} dB < {:.0} dB \
+                 (sr={sr}, ch={ch}, packet_len={})",
+                oracle::SILK_DECODE_MIN_SNR_DB,
+                packet.len()
+            );
+        }
+        // else: reference is silence/near-silence — sample count is
+        // the only oracle, already checked.
+        return;
+    }
+
     let class = oracle::classify_decode_packet(packet, sr);
     match class {
         oracle::DecodeOracleClass::CeltCodedComparable => {
@@ -436,6 +507,9 @@ fn assert_pcm_tier(
 /// single long-lived encoder + decoder per side. Compressed bytes are
 /// asserted exact on every frame including the silence-prefix warm-up;
 /// PCM tier is enforced (per the oracle) only on assertion frames.
+// TODO: refactor to single CellCfg arg — the current 12-positional
+// parameter list is awkward at every call site (suppressed via
+// `clippy::too_many_arguments` at the file head).
 fn run_grid_cell(
     cell_label: &str,
     sr: i32,
@@ -516,22 +590,18 @@ fn run_grid_cell(
 // (sr, ch) pinned per-bandwidth; 24 kbps mono / 48 kbps stereo; cx=5; 20 ms.
 // ---------------------------------------------------------------------------
 
-/// Load `speech_48k_mono.wav`, decimate to `target_sr` if needed, and
-/// optionally replicate to stereo.
-fn speech_at(target_sr: u32, target_ch: usize) -> Vec<i16> {
+/// Load `speech_48k_mono.wav`, decimating to `target_sr` if needed.
+/// Mono only — stereo cells use `music_at` so L != R and stereo
+/// coupling is actually exercised.
+fn speech_at(target_sr: u32) -> Vec<i16> {
     let wav = read_wav_i16(&["speech_48k_mono.wav"]);
     assert_eq!(wav.sample_rate, 48_000);
     assert_eq!(wav.channels, 1);
     let factor = (48_000 / target_sr) as usize;
-    let decimated = if factor == 1 {
-        wav.samples.clone()
+    if factor == 1 {
+        wav.samples
     } else {
         decimate_interleaved(&wav.samples, 1, factor)
-    };
-    if target_ch == 1 {
-        decimated
-    } else {
-        replicate_mono_to_n(&decimated, target_ch)
     }
 }
 
@@ -548,6 +618,13 @@ fn music_at(target_sr: u32) -> Vec<i16> {
     }
 }
 
+// Fixture choice: mono cells use `speech_48k_mono.wav` (matches the
+// design doc in wrk_docs/2026.05.07 - PLN - parameterized roundtrip
+// grid.md). Stereo cells substitute `music_48k_stereo.wav` for
+// speech-replicated-to-stereo so real stereo coupling drives the
+// bandwidth tier-2 oracle — replication produces L==R, which trivially
+// zeroes the side channel and would hide any stereo-coupling drift
+// between Rust and C.
 fn run_bandwidth_cell(label: &str, sr: i32, ch: i32, bw: i32) {
     let app = if matches!(bw, x if x == OPUS_BANDWIDTH_NARROWBAND || x == OPUS_BANDWIDTH_MEDIUMBAND)
     {
@@ -557,9 +634,9 @@ fn run_bandwidth_cell(label: &str, sr: i32, ch: i32, bw: i32) {
     };
     let bitrate = if ch == 1 { 24_000 } else { 48_000 };
     let pcm = if ch == 1 {
-        speech_at(sr as u32, 1)
+        speech_at(sr as u32)
     } else {
-        // Use music for stereo cells.
+        // Use music for stereo cells (see fn-level comment above).
         music_at(sr as u32)
     };
     let frame_size = sr / 50; // 20 ms
@@ -612,8 +689,11 @@ fn test_bandwidth_grid_fb() {
 
 #[test]
 fn test_force_mode_grid_auto() {
-    // AUTO + speech @ 48k stereo, 20 ms.
-    let pcm = speech_at(48_000, 2);
+    // AUTO + music @ 48k stereo, 20 ms. Use the real stereo fixture so
+    // L != R and stereo coupling is actually exercised — duplicating
+    // mono to two channels would give L==R and trivially zero the side
+    // channel, hiding any stereo-coupling drift between Rust and C.
+    let pcm = music_at(48_000);
     run_grid_cell(
         "fm/AUTO-48k-stereo",
         48_000,
@@ -635,7 +715,7 @@ fn test_force_mode_grid_auto() {
 #[test]
 fn test_force_mode_grid_silk_only() {
     // SILK_ONLY @ 16k mono, 20 ms.
-    let pcm = speech_at(16_000, 1);
+    let pcm = speech_at(16_000);
     run_grid_cell(
         "fm/SILK_ONLY-16k-mono",
         16_000,
@@ -817,6 +897,9 @@ fn run_multistream_cell(
 
         // Drive both decoders so their state stays synced for the
         // assertion frames.
+        // TODO: assert prefix-decode return symmetry — the Rust and C
+        // sides currently both `let _` the prefix decode return; we
+        // should assert they agree on sample count for free coverage.
         let mut rb = vec![0i16; max_frame * channels as usize];
         let _ = rust_dec
             .decode(
@@ -991,21 +1074,14 @@ fn run_rld_cell(label: &str, sr: i32, complexity: i32) {
     let frame_size = sr / 200; // 5 ms
     let bitrate = 64_000;
 
+    // Use the real stereo fixture so L != R and the CELT stereo coupling
+    // path is actually exercised. Duplicating a mono fixture would give
+    // L==R and trivially zero the side channel.
     let pcm = if sr == 48_000 {
-        // 48k_sweep.wav is mono — replicate to stereo so downmix sees a
-        // distinct L/R pair (identical channels would collapse to a
-        // trivially-zero side and miss any stereo-coupling drift).
-        let wav = read_wav_i16(&["48k_sweep.wav"]);
-        assert_eq!(wav.sample_rate, 48_000);
-        assert_eq!(wav.channels, 1);
-        replicate_mono_to_n(&wav.samples, 2)
+        music_at(48_000)
     } else if sr == 16_000 {
-        // Decimate 48k speech by 3 to 16k, replicate to stereo.
-        let wav = read_wav_i16(&["speech_48k_mono.wav"]);
-        assert_eq!(wav.sample_rate, 48_000);
-        assert_eq!(wav.channels, 1);
-        let decimated = decimate_interleaved(&wav.samples, 1, 3);
-        replicate_mono_to_n(&decimated, 2)
+        // Decimate the 48k stereo fixture by 3 to 16k.
+        music_at(16_000)
     } else {
         unreachable!()
     };
