@@ -429,11 +429,14 @@ fn kf_bfly5(fout: &mut [Cpx], fstride: usize, m: usize, n: usize, mm: usize) {
             let s10 = csub(s1, s4);
             let s8 = cadd(s2, s3);
             let s9 = csub(s2, s3);
-            fout[f0 + u].r = s0.r + s7.r + s8.r;
-            fout[f0 + u].i = s0.i + s7.i + s8.i;
+            // Match C grouping at reference/celt/kiss_fft.c:289-302; preserve
+            // s0 + (a+b) order for bit-exact FFT parity. f32 addition is not
+            // associative, so the parenthesisation matters.
+            fout[f0 + u].r = s0.r + (s7.r + s8.r);
+            fout[f0 + u].i = s0.i + (s7.i + s8.i);
             let s5 = Cpx {
-                r: s0.r + s7.r * ya.r + s8.r * yb.r,
-                i: s0.i + s7.i * ya.r + s8.i * yb.r,
+                r: s0.r + (s7.r * ya.r + s8.r * yb.r),
+                i: s0.i + (s7.i * ya.r + s8.i * yb.r),
             };
             let s6 = Cpx {
                 r: s10.i * ya.i + s9.i * yb.i,
@@ -442,8 +445,8 @@ fn kf_bfly5(fout: &mut [Cpx], fstride: usize, m: usize, n: usize, mm: usize) {
             fout[f1 + u] = csub(s5, s6);
             fout[f4 + u] = cadd(s5, s6);
             let s11 = Cpx {
-                r: s0.r + s7.r * yb.r + s8.r * ya.r,
-                i: s0.i + s7.i * yb.r + s8.i * ya.r,
+                r: s0.r + (s7.r * yb.r + s8.r * ya.r),
+                i: s0.i + (s7.i * yb.r + s8.i * ya.r),
             };
             let s12 = Cpx {
                 r: -(s10.i * yb.i) + s9.i * ya.i,
@@ -811,7 +814,11 @@ pub fn lpc_from_cepstrum(lpc: &mut [f32], cepstrum: &[f32]) -> f32 {
     tmp[0] += 4.0;
     idct(&mut ex, &tmp);
     for i in 0..NB_BANDS {
-        ex[i] = 10.0f32.powf(ex[i]) * COMPENSATION[i];
+        // Match reference/dnn/freq.c:313 `Ex[i] = pow(10.f, Ex[i])*compensation[i]`.
+        // C `pow` is double-precision and the multiply with `compensation[i]` is
+        // float-promoted-to-double; only the final assignment truncates back to
+        // f32. Using f64 throughout the expression preserves bit-exact parity.
+        ex[i] = (10.0_f64.powf(ex[i] as f64) * COMPENSATION[i] as f64) as f32;
     }
     lpc_from_bands(lpc, &ex)
 }

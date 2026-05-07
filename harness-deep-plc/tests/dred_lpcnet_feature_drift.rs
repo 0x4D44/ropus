@@ -27,11 +27,22 @@ const FIXTURE_FRAME_MS: i32 = 20;
 const FIXTURE_EXTRA_DELAY: i32 = 312;
 
 // Locked bounds. Observed-and-locked with no slack (HLD §"Measured-And-
-// Locked Bounds"); reproducibility confirmed across three consecutive
-// runs on the lock host. Re-locking requires explicit Arthur signoff
-// per the PLC drift policy.
-const MAX_ABS_FEATURE_DRIFT: f32 = 3.2544136e-5;
-const MAX_RMS_PER_FRAME_DRIFT: f32 = 7.896632e-6;
+// Locked Bounds"); reproducibility confirmed across consecutive runs on
+// the lock host. Re-locking requires explicit Arthur signoff per the PLC
+// drift policy.
+//
+// 2026-05-07 re-lock after kf_bfly5 associativity fix
+// (ropus/src/dnn/lpcnet.rs:432-450 grouped to match
+// reference/celt/kiss_fft.c:289-302) and lpc_from_cepstrum f64 pow
+// (ropus/src/dnn/lpcnet.rs:821 matching reference/dnn/freq.c:313):
+//   - cepstral features 0-17: bit-exact (was ~1e-6 noise floor).
+//   - LPC features 22-35: bit-exact.
+//   - Residual drift confined to features 18-21 (pitch/frame_corr/
+//     LPC[0]/LPC[1]); max abs 3.0994415e-5, max RMS 5.4790185e-6.
+// Previous bounds (pre-fix): MAX_ABS_FEATURE_DRIFT=3.2544136e-5,
+// MAX_RMS_PER_FRAME_DRIFT=7.896632e-6.
+const MAX_ABS_FEATURE_DRIFT: f32 = 3.0994415e-5;
+const MAX_RMS_PER_FRAME_DRIFT: f32 = 5.4790185e-6;
 const MAX_DRIFTING_FRAME_COUNT: usize = 50;
 const FIRST_DIVERGENT_FRAME_AT_LEAST: usize = 0;
 
