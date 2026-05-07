@@ -1051,10 +1051,15 @@ fn celt_pitch_xcorr_f32(x: &[f32], y: &[f32], xcorr: &mut [f32], len: usize, max
 
 /// FIR filter (float path). `x` points to the start of history; `y = x[0..n] + Σ num[j]*x[-(j+1)]`.
 fn celt_fir_f32(x: &[f32], num: &[f32], y: &mut [f32], n: usize, ord: usize) {
+    // Match reference/celt/celt_lpc.c:159-189 — accumulate num[ord-1]*x[i],
+    // then num[ord-2]*x[i+1], ..., num[0]*x[i+ord-1]. Float addition is
+    // non-associative; the C summation order is part of the bit-exact
+    // contract. The fixed-point sibling celt::lpc::celt_fir already does
+    // this via xcorr_kernel.
     for i in 0..n {
         let mut sum = x[ord + i];
         for j in 0..ord {
-            sum += num[j] * x[ord + i - j - 1];
+            sum += num[ord - 1 - j] * x[i + j];
         }
         y[i] = sum;
     }

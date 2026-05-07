@@ -67,10 +67,56 @@ const FIXTURE_EXTRA_DELAY: i32 = 312;
 //   - feat 19 (frame_corr): 8.34465e-7 (unchanged from previous re-lock).
 // Previous bounds (pre-fix): MAX_ABS_FEATURE_DRIFT=1.001358e-5,
 // MAX_RMS_PER_FRAME_DRIFT=1.6713232e-6.
-const MAX_ABS_FEATURE_DRIFT: f32 = 9.894371e-6;
-const MAX_RMS_PER_FRAME_DRIFT: f32 = 1.6514838e-6;
+//
+// 2026-05-07 re-lock after celt_fir_f32 summation-order fix
+// (ropus/src/dnn/lpcnet.rs:1052-1066 matching
+// reference/celt/celt_lpc.c:159-189). The C FIR accumulates
+// `num[ord-1]*x[i]` first, then `num[ord-2]*x[i+1]`, ..., then
+// `num[0]*x[i+ord-1]` last; float addition is non-associative so this
+// summation order is part of the bit-exact contract. Previous Rust loop
+// summed in the opposite direction.
+//
+// After the fix, 34 of 36 features are bit-exact; only features 18
+// (dnn_pitch) and 19 (frame_corr) retain residual drift, both bounded at
+// values much smaller than before:
+//   - feats 0-17 (cepstral) and 20-35 (LPC + pitch period + remaining):
+//     bit-exact (per_feature_max_abs_drift == 0.0). Bit-exact lock
+//     asserted via `BIT_EXACT_FEATURE_INDICES` below.
+//   - feat 18 (dnn_pitch): 1.013279e-5 (was 9.894371e-6 — slightly looser
+//     because the FIR fix re-balances drift between feats 18 and 19).
+//     Drift now lives entirely inside the PitchDNN neural inference;
+//     PitchDNN sees bit-exact inputs but produces a marginally different
+//     output due to its own f32 internal arithmetic noise — a separate
+//     surface for a future HLD. Locked via `FEAT18_MAX_ABS_DRIFT`.
+//   - feat 19 (frame_corr): 1.7881393e-7 (was 8.34465e-7; ~4.7x
+//     reduction). Locked via `FEAT19_MAX_ABS_DRIFT`.
+// Previous bounds (pre-fix): MAX_ABS_FEATURE_DRIFT=9.894371e-6,
+// MAX_RMS_PER_FRAME_DRIFT=1.6514838e-6.
+//
+// Cross-reference: wrk_docs/2026.05.07 - HLD - xcorr-features-cascade-fix.md.
+const MAX_ABS_FEATURE_DRIFT: f32 = 1.013279e-5;
+const MAX_RMS_PER_FRAME_DRIFT: f32 = 1.6888275e-6;
 const MAX_DRIFTING_FRAME_COUNT: usize = 50;
 const FIRST_DIVERGENT_FRAME_AT_LEAST: usize = 0;
+
+// Feature-18 (dnn_pitch) residual drift after the celt_fir_f32 fix. The
+// drift is now contained inside the PitchDNN neural inference (bit-exact
+// inputs, f32-noise output). Locking at the observed value pins the
+// residual; future PitchDNN-side fixes tighten this bound.
+const FEAT18_MAX_ABS_DRIFT: f32 = 1.013279e-5;
+
+// Feature-19 (frame_corr) residual drift after the celt_fir_f32 fix.
+// 4.7x smaller than the pre-fix bound; remaining drift is the float
+// arithmetic noise inside the frame correlation computation.
+const FEAT19_MAX_ABS_DRIFT: f32 = 1.7881393e-7;
+
+// All features except 18 (dnn_pitch) and 19 (frame_corr) are bit-exact
+// against the C reference. Any future change drifting any of these indices
+// fails the test.
+const BIT_EXACT_FEATURE_INDICES: &[usize] = &[
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 20, 21, 22, 23, 24, 25, 26, 27,
+    28, 29, 30, 31, 32, 33, 34, 35,
+];
 
 #[derive(Debug, Clone)]
 struct LpcnetFeatureDriftReport {
@@ -451,5 +497,33 @@ fn test_dred_lpcnet_feature_drift_is_bounded_against_c_reference() {
     assert!(
         report.drifting_frame_count <= MAX_DRIFTING_FRAME_COUNT,
         "{context}"
+    );
+
+    // Per-feature bit-exact lock: every feature except feats 18 (dnn_pitch)
+    // and 19 (frame_corr) is bit-exact against the C reference after the
+    // celt_fir_f32 summation-order fix. Catches future regressions on the
+    // 34 bit-exact features even if aggregate bounds remain satisfied.
+    for &j in BIT_EXACT_FEATURE_INDICES {
+        assert_eq!(
+            report.per_feature_max_abs_drift[j], 0.0,
+            "feature {j} regressed from bit-exact: per_feature_max_abs_drift[{j}] = {} ({context})",
+            report.per_feature_max_abs_drift[j],
+        );
+    }
+
+    // Feature-18-specific bound (PitchDNN neural inference residual).
+    assert!(
+        report.per_feature_max_abs_drift[18] <= FEAT18_MAX_ABS_DRIFT,
+        "feat 18 (dnn_pitch) drift exceeded FEAT18_MAX_ABS_DRIFT={FEAT18_MAX_ABS_DRIFT:?}: \
+         observed {} ({context})",
+        report.per_feature_max_abs_drift[18],
+    );
+
+    // Feature-19-specific bound (frame_corr float-arithmetic residual).
+    assert!(
+        report.per_feature_max_abs_drift[19] <= FEAT19_MAX_ABS_DRIFT,
+        "feat 19 (frame_corr) drift exceeded FEAT19_MAX_ABS_DRIFT={FEAT19_MAX_ABS_DRIFT:?}: \
+         observed {} ({context})",
+        report.per_feature_max_abs_drift[19],
     );
 }
