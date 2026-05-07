@@ -2891,7 +2891,7 @@ fn celt_encode_core(
     init_caps(mode, &mut cap, lm, c);
 
     // For LFE, everything interesting is in the first band.
-    // Matches C celt_encoder.c:2363-2365.
+    // Matches C celt_encoder.c:2348-2350.
     if st.lfe != 0 {
         offsets[0] = imin(8, effective_bytes / 3);
     }
