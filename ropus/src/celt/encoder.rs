@@ -2377,7 +2377,9 @@ fn celt_encode_core(
             nb_compressed_bytes = (nb_filled_bytes + 2).min(nb_compressed_bytes);
             total_bits = nb_compressed_bytes * 8;
             enc_ref.shrink(nb_compressed_bytes as u32);
-            st.vbr_reservoir += nb_compressed_bytes * (8 << BITRES) - vbr_rate;
+            // C reference (celt_encoder.c:1986-1992) does NOT update vbr_reservoir
+            // here — that update only happens in the non-silence constrained-VBR
+            // branch (C line 2507).
         }
         // Pretend we've filled all remaining bits with zeros
         // (that's what the initializer did anyway).
@@ -3238,6 +3240,16 @@ fn celt_encode_core(
             .min(1 << (DB_SHIFT - 1));
     }
 
+    // Reset old band energies for silence frames (C: celt_encoder.c:2716-2720)
+    // Must run BEFORE the mono->stereo copy and history copy below so that the
+    // silence reset propagates into old_log_e/old_log_e2 for the next frame.
+    let nbu = nb_ebands as usize;
+    if silence {
+        for i in 0..c as usize * nbu {
+            st.old_band_e[i] = gconst(-28.0);
+        }
+    }
+
     // Update state
     st.prefilter_period = pitch_index;
     st.prefilter_gain = gain1;
@@ -3245,14 +3257,12 @@ fn celt_encode_core(
 
     // Copy mono band energy to second channel if needed
     if cc == 2 && c == 1 {
-        let nbu = nb_ebands as usize;
         for i in 0..nbu {
             st.old_band_e[nbu + i] = st.old_band_e[i];
         }
     }
 
     // Update log energy history
-    let nbu = nb_ebands as usize;
     if !is_transient {
         for i in 0..cc as usize * nbu {
             st.old_log_e2[i] = st.old_log_e[i];
@@ -3277,13 +3287,6 @@ fn celt_encode_core(
             st.old_band_e[ch * nbu + i] = 0;
             st.old_log_e[ch * nbu + i] = GCONST_NEG28;
             st.old_log_e2[ch * nbu + i] = GCONST_NEG28;
-        }
-    }
-
-    // Reset old band energies for silence frames (C: celt_encoder.c)
-    if silence {
-        for i in 0..c as usize * nbu {
-            st.old_band_e[i] = gconst(-28.0);
         }
     }
 
