@@ -17,7 +17,7 @@
 //! pre-commit runs shouldn't spuriously block developers on bench noise.
 
 use crate::ambisonics::AmbisonicsResult;
-use crate::bench::{BenchProfile, BenchResult};
+use crate::bench::BenchResult;
 use crate::corpus::Outcome as CorpusOutcome;
 use crate::fuzz::Outcome as FuzzOutcome;
 use crate::platform::Outcome as PlatformOutcome;
@@ -71,10 +71,11 @@ impl Banner {
 /// full-test-phase4.md` and HLD § Decisions.
 pub const BENCH_WARN_RATIO: f64 = 1.15;
 
-/// Classify a run's overall banner. Returns `Banner::Pass` when stages 1-3 are
-/// all green and stage 4 (when enabled) shows no anomalies; `Banner::Fail`
-/// when any hard error surfaces; otherwise `Banner::Warn`.
-pub fn classify(
+/// Test-only convenience wrapper that fills in a default "no platform claim"
+/// outcome. Production code path goes through [`classify_with_platform`]
+/// directly because `main.rs` always builds a real `PlatformOutcome`.
+#[cfg(test)]
+fn classify(
     quality: &QualityOutcome,
     tests: &TestsOutcome,
     ambisonics: &AmbisonicsResult,
@@ -89,6 +90,10 @@ pub fn classify(
     )
 }
 
+// Each parameter is the outcome of an independent pipeline stage; the rule
+// table below cross-references all of them. Bundling into a struct would
+// only rename the field count, not reduce the surface area.
+#[allow(clippy::too_many_arguments)]
 pub fn classify_with_platform(
     quality: &QualityOutcome,
     tests: &TestsOutcome,
@@ -153,7 +158,7 @@ fn ratio_exceeds_warn(ratio: Option<f64>) -> bool {
 mod tests {
     use super::*;
     use crate::ambisonics::OrderOutcome;
-    use crate::bench::VectorBench;
+    use crate::bench::{BenchProfile, VectorBench};
     use crate::cargo_parse::TestsResult;
     use crate::quality::Check;
     use std::time::Duration;

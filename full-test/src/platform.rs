@@ -189,6 +189,11 @@ impl Outcome {
             .collect()
     }
 
+    /// Test-only helper: build a "no platform claim" outcome anchored to
+    /// the host architecture. Production never branches into a no-claim
+    /// outcome — `run` always produces a real one — so this exists solely
+    /// for `banner::classify`'s test wrapper.
+    #[cfg(test)]
     pub fn not_claimed() -> Self {
         outcome_without_claim(Profile::DefaultNoClaim, std::env::consts::ARCH)
     }
@@ -268,6 +273,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn outcome_without_claim(profile: Profile, host_arch: &str) -> Outcome {
     let generic = LaneOutcome::not_claimed(
         "generic-x86_64-smoke",

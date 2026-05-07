@@ -2660,8 +2660,10 @@ fn celt_encode_core(
     let mut surround_dynalloc = [0i32; 2 * NB_EBANDS];
     let mut surround_trim = 0;
     let mut surround_masking = 0;
-    if !hybrid && st.energy_mask.is_some() && st.lfe == 0 {
-        let energy_mask = st.energy_mask.as_ref().unwrap();
+    if !hybrid
+        && let Some(energy_mask) = st.energy_mask.as_ref()
+        && st.lfe == 0
+    {
         let mask_end = imax(2, st.last_coded_bands);
         let mut mask_avg = 0;
         let mut diff = 0;

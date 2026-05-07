@@ -626,8 +626,10 @@ mod tests {
 
     #[test]
     fn webm_dispatch_increments_deferred_not_skipped() {
-        let mut stats = RunStats::default();
-        stats.candidates = 1;
+        let mut stats = RunStats {
+            candidates: 1,
+            ..RunStats::default()
+        };
         let action = dispatch_action(CorpusKind::Webm);
         assert_eq!(
             action,

@@ -357,8 +357,10 @@ pub struct BenchResult {
 }
 
 impl BenchResult {
-    /// Construct a "stage disabled" outcome. Used by `--skip-benchmarks`,
-    /// `--quick`, and the upstream-build-failure chaining rule from the HLD.
+    /// Test-only convenience wrapper that defaults the profile to
+    /// `BenchProfile::NotClaimed`. Production sites always know which
+    /// profile applies and call [`Self::skipped_with_profile`] directly.
+    #[cfg(test)]
     pub fn skipped(reason: impl Into<String>) -> Self {
         Self::skipped_with_profile(BenchProfile::NotClaimed, reason)
     }
@@ -669,21 +671,21 @@ fn release_row_issue(row: &VectorBench, threshold: Option<&ThresholdSpec>) -> Op
     if !has_complete_timings(row) {
         return Some("missing complete encode/decode timings".to_string());
     }
-    if let Some(ratio) = row.enc_ratio.filter(|r| r.is_finite()) {
-        if ratio > threshold.enc_release_fail_ratio {
-            return Some(format!(
-                "encode ratio {ratio:.3}x exceeds {:.3}x",
-                threshold.enc_release_fail_ratio
-            ));
-        }
+    if let Some(ratio) = row.enc_ratio.filter(|r| r.is_finite())
+        && ratio > threshold.enc_release_fail_ratio
+    {
+        return Some(format!(
+            "encode ratio {ratio:.3}x exceeds {:.3}x",
+            threshold.enc_release_fail_ratio
+        ));
     }
-    if let Some(ratio) = row.dec_ratio.filter(|r| r.is_finite()) {
-        if ratio > threshold.dec_release_fail_ratio {
-            return Some(format!(
-                "decode ratio {ratio:.3}x exceeds {:.3}x",
-                threshold.dec_release_fail_ratio
-            ));
-        }
+    if let Some(ratio) = row.dec_ratio.filter(|r| r.is_finite())
+        && ratio > threshold.dec_release_fail_ratio
+    {
+        return Some(format!(
+            "decode ratio {ratio:.3}x exceeds {:.3}x",
+            threshold.dec_release_fail_ratio
+        ));
     }
     None
 }
