@@ -2890,6 +2890,12 @@ fn celt_encode_core(
     let mut cap = [0i32; NB_EBANDS];
     init_caps(mode, &mut cap, lm, c);
 
+    // For LFE, everything interesting is in the first band.
+    // Matches C celt_encoder.c:2363-2365.
+    if st.lfe != 0 {
+        offsets[0] = imin(8, effective_bytes / 3);
+    }
+
     // Dynamic allocation encoding
     let mut dynalloc_logp = 6i32;
     let total_bits_bitres = nb_compressed_bytes * 8 << BITRES;
