@@ -1775,7 +1775,9 @@ impl OpusEncoder {
             }
 
             self.range_final = 0;
-            self.update_delay_buffer(pcm, frame_size);
+            // C `opus_encoder.c:1396-1405` returns straight after the optional
+            // CBR pad — no delay_buffer write. Calling update_delay_buffer here
+            // contaminates filter history for the next frame's CELT encode.
             return Ok(ret);
         }
 
@@ -3382,29 +3384,6 @@ impl OpusEncoder {
         self.first = 0;
     }
 
-    /// Update delay buffer from raw pcm (for early return paths before pcm_buf exists).
-    fn update_delay_buffer(&mut self, pcm: &[i16], frame_size: i32) {
-        if self.encoder_buffer == 0 || self.delay_buffer.is_empty() {
-            return;
-        }
-        let ch = self.channels as usize;
-        let eb = self.encoder_buffer as usize;
-        let fs = frame_size as usize;
-        let db = &mut self.delay_buffer;
-        if eb > fs {
-            db.copy_within(fs * ch..eb * ch, 0);
-            let new_start = (eb - fs) * ch;
-            let copy_len = (fs * ch).min(pcm.len());
-            db[new_start..new_start + copy_len].copy_from_slice(&pcm[..copy_len]);
-        } else {
-            let skip = (fs - eb) * ch;
-            let copy_len = (eb * ch).min(pcm.len().saturating_sub(skip));
-            if skip < pcm.len() {
-                db[..copy_len].copy_from_slice(&pcm[skip..skip + copy_len]);
-            }
-        }
-    }
-
     /// Update delay buffer from pcm_buf (dc_reject'd data), matching C reference.
     /// C: copies from pcm_buf, NOT from raw pcm input.
     fn update_delay_buffer_from_pcm_buf(
@@ -4527,16 +4506,6 @@ mod tests {
     #[test]
     fn test_delay_buffer_update_branches() {
         let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
-        enc.encoder_buffer = 6;
-        enc.delay_buffer = vec![0; 6];
-
-        enc.update_delay_buffer(&[10, 11, 12, 13, 14, 15], 4);
-        assert_eq!(enc.delay_buffer, vec![0, 0, 10, 11, 12, 13]);
-
-        enc.encoder_buffer = 4;
-        enc.delay_buffer = vec![0; 4];
-        enc.update_delay_buffer(&[10, 11, 12, 13, 14, 15], 6);
-        assert_eq!(enc.delay_buffer, vec![12, 13, 14, 15]);
 
         enc.encoder_buffer = 6;
         enc.delay_buffer = vec![0; 6];
@@ -4993,14 +4962,8 @@ mod tests {
 
         enc.encoder_buffer = 0;
         enc.delay_buffer = vec![7, 8, 9];
-        enc.update_delay_buffer(&[1, 2, 3], 3);
         enc.update_delay_buffer_from_pcm_buf(&[4, 5, 6], 3, 0);
         assert_eq!(enc.delay_buffer, vec![7, 8, 9]);
-
-        enc.encoder_buffer = 4;
-        enc.delay_buffer = vec![11, 12, 13, 14];
-        enc.update_delay_buffer(&[1, 2], 6);
-        assert_eq!(enc.delay_buffer, vec![11, 12, 13, 14]);
     }
 
     /// In SILK_ONLY mode at very low bitrates, the encoder should cap the
