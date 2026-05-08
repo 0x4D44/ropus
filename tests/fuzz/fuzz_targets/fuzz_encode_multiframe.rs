@@ -1,10 +1,13 @@
 #![no_main]
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use ropus::opus::decoder::OpusDecoder;
+use ropus::opus::decoder::{
+    OpusDecoder, OPUS_BANDWIDTH_FULLBAND, OPUS_BANDWIDTH_MEDIUMBAND, OPUS_BANDWIDTH_NARROWBAND,
+    OPUS_BANDWIDTH_SUPERWIDEBAND, OPUS_BANDWIDTH_WIDEBAND,
+};
 use ropus::opus::encoder::{
     OpusEncoder, OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY,
-    OPUS_APPLICATION_VOIP,
+    OPUS_APPLICATION_VOIP, OPUS_AUTO, OPUS_SIGNAL_MUSIC, OPUS_SIGNAL_VOICE,
 };
 use std::cell::RefCell;
 use std::sync::Once;
@@ -65,6 +68,23 @@ const APPLICATIONS: [i32; 3] = [
     OPUS_APPLICATION_RESTRICTED_LOWDELAY,
 ];
 
+// Stream A grammar broadening — extended valid-config dimensions added on top
+// of the existing per-frame setter shuffle. AUTO is deliberately *omitted*
+// from MAX_BANDWIDTHS because `set_max_bandwidth` rejects OPUS_AUTO on both
+// sides; AUTO is included for SIGNALS and FORCE_CHANNELS since both setters
+// accept it identically. See `/home/md/language/ropus/wrk_docs/2026.05.08 -
+// HLD - fuzz_encode_multiframe grammar broadening.md`, "Selector → value
+// mapping" for rationale.
+const MAX_BANDWIDTHS: [i32; 5] = [
+    OPUS_BANDWIDTH_NARROWBAND,
+    OPUS_BANDWIDTH_MEDIUMBAND,
+    OPUS_BANDWIDTH_WIDEBAND,
+    OPUS_BANDWIDTH_SUPERWIDEBAND,
+    OPUS_BANDWIDTH_FULLBAND,
+];
+const SIGNALS: [i32; 3] = [OPUS_AUTO, OPUS_SIGNAL_VOICE, OPUS_SIGNAL_MUSIC];
+const FORCE_CHANNELS: [i32; 3] = [OPUS_AUTO, 1, 2];
+
 /// Map a u16 to a bitrate in the valid Opus range (6000..=510000).
 /// Mirrors `byte_to_bitrate` from Stream A's encode targets.
 fn raw_to_bitrate(raw: u16) -> i32 {
@@ -91,6 +111,15 @@ fn input_fingerprint(input: &MultiframeInput) -> [u8; 16] {
         fp[11] = first.fec;
         fp[12] = first.loss_perc;
         fp[13] = first.vbr as u8 | ((first.dtx as u8) << 1);
+        // Pack the new Stream A dimensions into the previously-spare fp[15].
+        // Bit budget: vbr_constraint(1b) + max_bw_idx(3b) + signal_idx(2b)
+        // + force_ch_idx(2b) = 8b exactly. `prediction_disabled` is omitted
+        // by design (no spare bits); the libFuzzer artifact preserves the
+        // raw bytes, so the fingerprint is a triage hint, not an oracle.
+        fp[15] = (first.vbr_constraint & 0x1)
+            | ((first.max_bw_idx & 0x7) << 1)
+            | ((first.signal_idx & 0x3) << 4)
+            | ((first.force_ch_idx & 0x3) << 6);
     }
     fp[14] = input.frame_duration_selector;
     fp
@@ -119,6 +148,16 @@ struct FrameConfig {
     fec: u8,
     dtx: bool,
     loss_perc: u8,
+    // Stream A grammar broadening: 5 extra valid-config dimensions per frame.
+    // `force_ch_idx == 2` (force stereo) on a mono encoder is intentionally
+    // left un-clamped: both Rust and C reject before any state mutation, so
+    // the byte-exact differential is preserved. See HLD "Risks and
+    // Trade-offs" for the parity proof.
+    vbr_constraint: u8,
+    max_bw_idx: u8,
+    signal_idx: u8,
+    force_ch_idx: u8,
+    prediction_disabled: u8,
     pcm_bytes: Vec<u8>,
 }
 
@@ -158,19 +197,41 @@ impl FrameConfig {
         u: &mut Unstructured<'a>,
         pcm_bytes_needed: usize,
     ) -> arbitrary::Result<Self> {
+        // Field draw order is deliberate: existing fields first (corpus
+        // prefix-compatible — older inputs still parse for these fields),
+        // then the 5 new dimensions appended, then PCM last so a short
+        // input still aborts cleanly with NotEnoughData.
+        let bitrate_raw = u.arbitrary()?;
+        // Cap at 9 to dodge the analysis.c divergence class
+        // (Campaign 9, 2026-04-19): C builds with DISABLE_FLOAT_API=off,
+        // so complexity ≥ 10 ∧ sr ≥ 16000 ∧ app != RESTRICTED_SILK
+        // produces an AnalysisInfo on the C side that the Rust port
+        // doesn't yet emit (analysis stage 6 still in flight).
+        let complexity = u.int_in_range(0..=9)?;
+        let vbr = u.arbitrary()?;
+        let fec = u.int_in_range(0..=2)?;
+        let dtx = u.arbitrary()?;
+        let loss_perc = u.int_in_range(0..=100)?;
+        // Stream A grammar broadening — 5 new dimensions, all valid-config:
+        let vbr_constraint = u.int_in_range(0..=1)?;
+        let max_bw_idx = u.int_in_range(0..=4)?; // 5 valid bandwidths, no AUTO
+        let signal_idx = u.int_in_range(0..=2)?; // AUTO / VOICE / MUSIC
+        let force_ch_idx = u.int_in_range(0..=2)?; // AUTO / 1 / 2 (un-clamped)
+        let prediction_disabled = u.int_in_range(0..=1)?;
+        let pcm_bytes = u.bytes(pcm_bytes_needed)?.to_vec();
         Ok(Self {
-            bitrate_raw: u.arbitrary()?,
-            // Cap at 9 to dodge the analysis.c divergence class
-            // (Campaign 9, 2026-04-19): C builds with DISABLE_FLOAT_API=off,
-            // so complexity ≥ 10 ∧ sr ≥ 16000 ∧ app != RESTRICTED_SILK
-            // produces an AnalysisInfo on the C side that the Rust port
-            // doesn't yet emit (analysis stage 6 still in flight).
-            complexity: u.int_in_range(0..=9)?,
-            vbr: u.arbitrary()?,
-            fec: u.int_in_range(0..=2)?,
-            dtx: u.arbitrary()?,
-            loss_perc: u.int_in_range(0..=100)?,
-            pcm_bytes: u.bytes(pcm_bytes_needed)?.to_vec(),
+            bitrate_raw,
+            complexity,
+            vbr,
+            fec,
+            dtx,
+            loss_perc,
+            vbr_constraint,
+            max_bw_idx,
+            signal_idx,
+            force_ch_idx,
+            prediction_disabled,
+            pcm_bytes,
         })
     }
 }
@@ -228,10 +289,14 @@ fuzz_target!(|input: MultiframeInput| {
             complexity: fc.complexity as i32,
             application,
             vbr: if fc.vbr { 1 } else { 0 },
-            vbr_constraint: 0,
+            vbr_constraint: fc.vbr_constraint as i32,
             inband_fec: fc.fec as i32,
             dtx: if fc.dtx { 1 } else { 0 },
             loss_perc: fc.loss_perc as i32,
+            max_bandwidth: MAX_BANDWIDTHS[fc.max_bw_idx as usize],
+            signal: SIGNALS[fc.signal_idx as usize],
+            force_channels: FORCE_CHANNELS[fc.force_ch_idx as usize],
+            prediction_disabled: fc.prediction_disabled as i32,
         })
         .collect();
 
@@ -243,6 +308,10 @@ fuzz_target!(|input: MultiframeInput| {
 
     let mut rust_packets: Vec<Vec<u8>> = Vec::with_capacity(input.frames.len());
     for (pcm, cfg) in pcm_frames.iter().zip(frame_cfgs.iter()) {
+        // CANONICAL SETTER ORDER — must match `apply_c_encoder_config` in
+        // `/home/md/language/ropus/tests/fuzz/fuzz_targets/c_reference.rs`.
+        // `set_force_channels`-side-effects (mode-logic writes) are reorder-
+        // sensitive; keep this in lockstep with the C side.
         rust_enc.set_bitrate(cfg.bitrate);
         rust_enc.set_vbr(cfg.vbr);
         rust_enc.set_vbr_constraint(cfg.vbr_constraint);
@@ -250,6 +319,10 @@ fuzz_target!(|input: MultiframeInput| {
         rust_enc.set_dtx(cfg.dtx);
         rust_enc.set_packet_loss_perc(cfg.loss_perc);
         rust_enc.set_complexity(cfg.complexity);
+        rust_enc.set_max_bandwidth(cfg.max_bandwidth);
+        rust_enc.set_signal(cfg.signal);
+        rust_enc.set_force_channels(cfg.force_channels);
+        rust_enc.set_prediction_disabled(cfg.prediction_disabled);
 
         let mut out = vec![0u8; 4000];
         match rust_enc.encode(pcm, frame_size, &mut out, 4000) {
@@ -317,16 +390,22 @@ fuzz_target!(|input: MultiframeInput| {
             "Frame {i}/{} length mismatch: Rust={}, C={}, \
              sr={sample_rate}, ch={channels}, app={application}, \
              frame_duration={frame_duration_label}, frame_size={frame_size}, \
-             br={}, cx={}, vbr={}, fec={}, dtx={}, loss={}",
+             br={}, cx={}, vbr={}, vbr_constraint={}, fec={}, dtx={}, loss={}, \
+             max_bw={}, signal={}, force_ch={}, pred_dis={}",
             input.frames.len(),
             rust_pkt.len(),
             c_pkt.len(),
             cfg.bitrate,
             cfg.complexity,
             cfg.vbr,
+            cfg.vbr_constraint,
             cfg.inband_fec,
             cfg.dtx,
             cfg.loss_perc,
+            cfg.max_bandwidth,
+            cfg.signal,
+            cfg.force_channels,
+            cfg.prediction_disabled,
         );
 
         assert_eq!(
@@ -335,14 +414,20 @@ fuzz_target!(|input: MultiframeInput| {
             "Frame {i}/{} byte mismatch: \
              sr={sample_rate}, ch={channels}, app={application}, \
              frame_duration={frame_duration_label}, frame_size={frame_size}, \
-             br={}, cx={}, vbr={}, fec={}, dtx={}, loss={}, len={}",
+             br={}, cx={}, vbr={}, vbr_constraint={}, fec={}, dtx={}, loss={}, \
+             max_bw={}, signal={}, force_ch={}, pred_dis={}, len={}",
             input.frames.len(),
             cfg.bitrate,
             cfg.complexity,
             cfg.vbr,
+            cfg.vbr_constraint,
             cfg.inband_fec,
             cfg.dtx,
             cfg.loss_perc,
+            cfg.max_bandwidth,
+            cfg.signal,
+            cfg.force_channels,
+            cfg.prediction_disabled,
             rust_pkt.len(),
         );
     }

@@ -175,6 +175,13 @@ fuzz_target!(|data: &[u8]| {
         inband_fec,
         dtx: if dtx { 1 } else { 0 },
         loss_perc,
+        // Defaults match the C reference's encoder defaults so this target's
+        // byte-exact differential is unaffected by the new dimensions added
+        // by Stream A's grammar broadening.
+        max_bandwidth: c_reference::OPUS_BANDWIDTH_FULLBAND,
+        signal: c_reference::OPUS_AUTO,
+        force_channels: c_reference::OPUS_AUTO,
+        prediction_disabled: 0,
     };
 
     // --- Rust encoder construction (shared between i16 and f32 paths) ---

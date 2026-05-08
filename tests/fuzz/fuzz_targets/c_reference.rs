@@ -24,6 +24,11 @@ pub const OPUS_APPLICATION_VOIP: c_int = 2048;
 pub const OPUS_APPLICATION_AUDIO: c_int = 2049;
 pub const OPUS_APPLICATION_RESTRICTED_LOWDELAY: c_int = 2051;
 
+// Sentinel/signal/auto values (matching opus_defines.h)
+pub const OPUS_AUTO: c_int = -1000;
+pub const OPUS_SIGNAL_VOICE: c_int = 3001;
+pub const OPUS_SIGNAL_MUSIC: c_int = 3002;
+
 // CTL request codes
 pub const OPUS_SET_APPLICATION_REQUEST: c_int = 4000;
 pub const OPUS_GET_APPLICATION_REQUEST: c_int = 4001;
@@ -283,6 +288,24 @@ pub fn c_decode(data: &[u8], sample_rate: i32, channels: i32) -> Result<Vec<i16>
 
 /// Configuration for the C-side encoder, mirroring the Rust prologue setters
 /// in the differential fuzz targets so byte-exact compare stays valid.
+///
+/// CANONICAL SETTER ORDER (must match the Rust call site in
+/// `/home/md/language/ropus/tests/fuzz/fuzz_targets/fuzz_encode_multiframe.rs`
+/// and any other differential fuzz target that uses this struct):
+///   1. bitrate
+///   2. vbr
+///   3. vbr_constraint
+///   4. inband_fec
+///   5. dtx
+///   6. loss_perc
+///   7. complexity
+///   8. max_bandwidth
+///   9. signal
+///  10. force_channels
+///  11. prediction_disabled
+///
+/// Setter side-effects in `set_force_channels` (mode-logic writes) are
+/// reorder-sensitive — keep this list in lockstep with the Rust target.
 #[derive(Clone, Copy, Debug)]
 pub struct CEncodeConfig {
     pub bitrate: i32,
@@ -293,6 +316,10 @@ pub struct CEncodeConfig {
     pub inband_fec: i32,
     pub dtx: i32,
     pub loss_perc: i32,
+    pub max_bandwidth: i32,
+    pub signal: i32,
+    pub force_channels: i32,
+    pub prediction_disabled: i32,
 }
 
 #[inline]
@@ -305,6 +332,14 @@ unsafe fn apply_c_encoder_config(enc: *mut OpusEncoder, cfg: &CEncodeConfig) {
         opus_encoder_ctl(enc, OPUS_SET_DTX_REQUEST, cfg.dtx);
         opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC_REQUEST, cfg.loss_perc);
         opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY_REQUEST, cfg.complexity);
+        opus_encoder_ctl(enc, OPUS_SET_MAX_BANDWIDTH_REQUEST, cfg.max_bandwidth);
+        opus_encoder_ctl(enc, OPUS_SET_SIGNAL_REQUEST, cfg.signal);
+        opus_encoder_ctl(enc, OPUS_SET_FORCE_CHANNELS_REQUEST, cfg.force_channels);
+        opus_encoder_ctl(
+            enc,
+            OPUS_SET_PREDICTION_DISABLED_REQUEST,
+            cfg.prediction_disabled,
+        );
     }
 }
 
