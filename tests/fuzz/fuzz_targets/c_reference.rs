@@ -66,6 +66,12 @@ pub const OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST: c_int = 4046;
 pub const OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST: c_int = 4047;
 pub const OPUS_GET_IN_DTX_REQUEST: c_int = 4049;
 
+// Private CTL from `reference/src/opus_private.h:172`
+// (`#define OPUS_SET_FORCE_MODE_REQUEST 11002`). Not exported in
+// opus_defines.h — used only by the Opus reference's own tests and analysers
+// to override the auto-mode decision. Mirrors the Rust `set_force_mode` setter.
+pub const OPUS_SET_FORCE_MODE_REQUEST: c_int = 11002;
+
 // Getter CTL request codes
 pub const OPUS_GET_FINAL_RANGE_REQUEST: c_int = 4031;
 
@@ -604,6 +610,113 @@ pub fn c_encode_multiframe_inherit(
 
         for (pcm, cfg) in pcm_frames.iter().zip(frame_cfgs.iter()) {
             apply_c_encoder_config_with_inherit(enc, cfg);
+
+            let mut out = vec![0u8; max_data_bytes as usize];
+            let ret = opus_encode(
+                enc,
+                pcm.as_ptr(),
+                frame_size,
+                out.as_mut_ptr(),
+                max_data_bytes,
+            );
+
+            if ret < 0 {
+                opus_encoder_destroy(enc);
+                return Err(ret as i32);
+            }
+            out.truncate(ret as usize);
+            results.push(out);
+        }
+
+        opus_encoder_destroy(enc);
+        Ok(results)
+    }
+}
+
+/// Configuration for the C-side encoder used by the mode-transition fuzz
+/// target. A separate struct from `CEncodeConfig` so the saturated targets
+/// driving `apply_c_encoder_config{,_with_inherit}` stay byte-stable. Adds
+/// `forced_mode` (`OPUS_SET_FORCE_MODE_REQUEST = 11002`) on top of the
+/// existing CTL set; `max_bandwidth` and `signal` are always applied (no
+/// inherit semantics — the mode-transition target's grammar always emits
+/// concrete values for these CTLs).
+///
+/// CANONICAL SETTER ORDER (must match the Rust call site in
+/// `/home/md/language/ropus/tests/fuzz/fuzz_targets/fuzz_encode_mode_transitions.rs`):
+///   1. bitrate
+///   2. vbr
+///   3. vbr_constraint
+///   4. inband_fec
+///   5. dtx
+///   6. loss_perc
+///   7. complexity
+///   8. max_bandwidth
+///   9. signal
+///  10. forced_mode (private CTL, sets `user_forced_mode`)
+#[derive(Clone, Copy, Debug)]
+pub struct CModeTransitionConfig {
+    pub bitrate: i32,
+    pub complexity: i32,
+    pub application: i32,
+    pub vbr: i32,
+    pub vbr_constraint: i32,
+    pub inband_fec: i32,
+    pub dtx: i32,
+    pub loss_perc: i32,
+    pub max_bandwidth: i32,
+    pub signal: i32,
+    /// `OPUS_AUTO` | `MODE_SILK_ONLY` (1000) | `MODE_HYBRID` (1001) | `MODE_CELT_ONLY` (1002).
+    /// Cited from `reference/src/opus_private.h:148-150`.
+    pub forced_mode: i32,
+}
+
+#[inline]
+unsafe fn apply_c_mode_transition_config(enc: *mut OpusEncoder, cfg: &CModeTransitionConfig) {
+    unsafe {
+        opus_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, cfg.bitrate);
+        opus_encoder_ctl(enc, OPUS_SET_VBR_REQUEST, cfg.vbr);
+        opus_encoder_ctl(enc, OPUS_SET_VBR_CONSTRAINT_REQUEST, cfg.vbr_constraint);
+        opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC_REQUEST, cfg.inband_fec);
+        opus_encoder_ctl(enc, OPUS_SET_DTX_REQUEST, cfg.dtx);
+        opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC_REQUEST, cfg.loss_perc);
+        opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY_REQUEST, cfg.complexity);
+        opus_encoder_ctl(enc, OPUS_SET_MAX_BANDWIDTH_REQUEST, cfg.max_bandwidth);
+        opus_encoder_ctl(enc, OPUS_SET_SIGNAL_REQUEST, cfg.signal);
+        opus_encoder_ctl(enc, OPUS_SET_FORCE_MODE_REQUEST, cfg.forced_mode);
+    }
+}
+
+/// Encode multiple sequential frames using the C reference for the
+/// mode-transition fuzz target. Mirrors `c_encode_multiframe`'s lifecycle
+/// (single encoder created with `frame_cfgs[0].application`, per-frame CTL
+/// shuffle, byte-exact output) but applies `apply_c_mode_transition_config`
+/// per frame so byte-exact compare stays valid against the Rust-side setter
+/// sequence in `fuzz_encode_mode_transitions`.
+pub fn c_encode_mode_transitions(
+    pcm_frames: &[&[i16]],
+    frame_cfgs: &[CModeTransitionConfig],
+    frame_size: i32,
+    sample_rate: i32,
+    channels: i32,
+) -> Result<Vec<Vec<u8>>, i32> {
+    if pcm_frames.len() != frame_cfgs.len() || frame_cfgs.is_empty() {
+        return Err(-1);
+    }
+    unsafe {
+        let mut error: c_int = 0;
+        let enc = opus_encoder_create(sample_rate, channels, frame_cfgs[0].application, &mut error);
+        if enc.is_null() || error != OPUS_OK {
+            if !enc.is_null() {
+                opus_encoder_destroy(enc);
+            }
+            return Err(error);
+        }
+
+        let max_data_bytes: opus_int32 = 4000;
+        let mut results = Vec::with_capacity(pcm_frames.len());
+
+        for (pcm, cfg) in pcm_frames.iter().zip(frame_cfgs.iter()) {
+            apply_c_mode_transition_config(enc, cfg);
 
             let mut out = vec![0u8; max_data_bytes as usize];
             let ret = opus_encode(
