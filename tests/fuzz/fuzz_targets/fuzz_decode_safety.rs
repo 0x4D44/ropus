@@ -1,7 +1,8 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 use ropus::opus::decoder::{
-    opus_packet_get_nb_frames, opus_packet_get_samples_per_frame, OpusDecoder,
+    opus_packet_get_nb_frames, opus_packet_get_nb_samples, opus_packet_get_samples_per_frame,
+    OpusDecoder,
 };
 use std::cell::RefCell;
 use std::sync::Once;
@@ -139,6 +140,16 @@ fuzz_target!(|data: &[u8]| {
 
     let max_pcm = MAX_FRAME as usize * channels as usize;
 
+    // Derive the packet's actual sample count for FEC sizing. Real callers
+    // request a frame_size matching the packet they're concealing; passing
+    // MAX_FRAME for FEC asks the decoder to run prelude PLC for hundreds of
+    // milliseconds of phantom audio at low API rates, which exercises the
+    // deep-PLC neural path tens of times per call. Clamp to the packet's
+    // actual duration; skip the FEC call if the helper rejects the packet.
+    let fec_frame_size: Option<i32> = opus_packet_get_nb_samples(packet, sample_rate)
+        .ok()
+        .filter(|&n| n > 0);
+
     if use_float_pcm {
         let mut pcm = vec![0f32; max_pcm];
         let rust_ret = dec.decode_float(Some(packet), &mut pcm, MAX_FRAME, false);
@@ -162,7 +173,9 @@ fuzz_target!(|data: &[u8]| {
         let plc_frame = sample_rate / 50;
         let mut plc_pcm = vec![0f32; plc_frame as usize * channels as usize];
         let _ = dec.decode_float(None, &mut plc_pcm, plc_frame, false);
-        let _ = dec.decode_float(Some(packet), &mut pcm, MAX_FRAME, true);
+        if let Some(fs) = fec_frame_size {
+            let _ = dec.decode_float(Some(packet), &mut pcm, fs, true);
+        }
     } else {
         let mut pcm = vec![0i16; max_pcm];
         let rust_ret = dec.decode(Some(packet), &mut pcm, MAX_FRAME, false);
@@ -187,6 +200,8 @@ fuzz_target!(|data: &[u8]| {
         let plc_frame = sample_rate / 50;
         let mut plc_pcm = vec![0i16; plc_frame as usize * channels as usize];
         let _ = dec.decode(None, &mut plc_pcm, plc_frame, false);
-        let _ = dec.decode(Some(packet), &mut pcm, MAX_FRAME, true);
+        if let Some(fs) = fec_frame_size {
+            let _ = dec.decode(Some(packet), &mut pcm, fs, true);
+        }
     }
 });
