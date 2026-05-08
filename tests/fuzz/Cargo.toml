@@ -60,6 +60,11 @@ path = "fuzz_targets/fuzz_encode_multiframe.rs"
 doc = false
 
 [[bin]]
+name = "fuzz_encode_multiframe_stereo"
+path = "fuzz_targets/fuzz_encode_multiframe_stereo.rs"
+doc = false
+
+[[bin]]
 name = "fuzz_ctl_sequence"
 path = "fuzz_targets/fuzz_ctl_sequence.rs"
 doc = false

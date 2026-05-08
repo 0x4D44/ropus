@@ -343,6 +343,61 @@ unsafe fn apply_c_encoder_config(enc: *mut OpusEncoder, cfg: &CEncodeConfig) {
     }
 }
 
+/// Sentinel value: "do not apply this CTL on this frame".
+///
+/// Used by `apply_c_encoder_config_with_inherit` and
+/// `c_encode_multiframe_inherit` to let a per-frame config carry the prior
+/// frame's CTL setting forward instead of re-applying a value. The legal value
+/// ranges for the inherit-aware CTLs are bounded:
+///
+/// - `OPUS_AUTO` = -1000 (smallest legal value across the three CTLs)
+/// - `OPUS_BANDWIDTH_*` = 1101..=1105
+/// - `OPUS_SIGNAL_VOICE` / `OPUS_SIGNAL_MUSIC` = 3001 / 3002
+/// - `force_channels` ∈ {OPUS_AUTO, 1, 2}
+///
+/// `i32::MIN` (-2_147_483_648) is unambiguously outside every legal range, so
+/// it cannot collide with any value the encoder would accept.
+pub const FORCE_CHANNELS_INHERIT: i32 = i32::MIN;
+pub const BANDWIDTH_INHERIT: i32 = i32::MIN;
+pub const SIGNAL_INHERIT: i32 = i32::MIN;
+
+/// Inherit-aware sibling of `apply_c_encoder_config`.
+///
+/// Identical setter order to `apply_c_encoder_config` for every always-apply
+/// CTL (bitrate, vbr, vbr_constraint, inband_fec, dtx, loss_perc, complexity,
+/// prediction_disabled). The only difference: `max_bandwidth`, `signal`, and
+/// `force_channels` are skipped when their value equals their respective
+/// `*_INHERIT` sentinel — the encoder retains the previous frame's setting.
+///
+/// CANONICAL SETTER ORDER (must match the Rust call site in
+/// `/home/md/language/ropus/tests/fuzz/fuzz_targets/fuzz_encode_multiframe_stereo.rs`).
+#[inline]
+unsafe fn apply_c_encoder_config_with_inherit(enc: *mut OpusEncoder, cfg: &CEncodeConfig) {
+    unsafe {
+        opus_encoder_ctl(enc, OPUS_SET_BITRATE_REQUEST, cfg.bitrate);
+        opus_encoder_ctl(enc, OPUS_SET_VBR_REQUEST, cfg.vbr);
+        opus_encoder_ctl(enc, OPUS_SET_VBR_CONSTRAINT_REQUEST, cfg.vbr_constraint);
+        opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC_REQUEST, cfg.inband_fec);
+        opus_encoder_ctl(enc, OPUS_SET_DTX_REQUEST, cfg.dtx);
+        opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC_REQUEST, cfg.loss_perc);
+        opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY_REQUEST, cfg.complexity);
+        if cfg.max_bandwidth != BANDWIDTH_INHERIT {
+            opus_encoder_ctl(enc, OPUS_SET_MAX_BANDWIDTH_REQUEST, cfg.max_bandwidth);
+        }
+        if cfg.signal != SIGNAL_INHERIT {
+            opus_encoder_ctl(enc, OPUS_SET_SIGNAL_REQUEST, cfg.signal);
+        }
+        if cfg.force_channels != FORCE_CHANNELS_INHERIT {
+            opus_encoder_ctl(enc, OPUS_SET_FORCE_CHANNELS_REQUEST, cfg.force_channels);
+        }
+        opus_encoder_ctl(
+            enc,
+            OPUS_SET_PREDICTION_DISABLED_REQUEST,
+            cfg.prediction_disabled,
+        );
+    }
+}
+
 /// Encode PCM samples using the C reference. Creates an encoder, configures it,
 /// encodes one frame, destroys the encoder. Returns compressed bytes or an error code.
 pub fn c_encode(
@@ -495,6 +550,60 @@ pub fn c_encode_multiframe(
 
         for (pcm, cfg) in pcm_frames.iter().zip(frame_cfgs.iter()) {
             apply_c_encoder_config(enc, cfg);
+
+            let mut out = vec![0u8; max_data_bytes as usize];
+            let ret = opus_encode(
+                enc,
+                pcm.as_ptr(),
+                frame_size,
+                out.as_mut_ptr(),
+                max_data_bytes,
+            );
+
+            if ret < 0 {
+                opus_encoder_destroy(enc);
+                return Err(ret as i32);
+            }
+            out.truncate(ret as usize);
+            results.push(out);
+        }
+
+        opus_encoder_destroy(enc);
+        Ok(results)
+    }
+}
+
+/// Inherit-aware multiframe encode. Mirrors `c_encode_multiframe` but applies
+/// per-frame CTLs through `apply_c_encoder_config_with_inherit`, so configs
+/// flagged with `FORCE_CHANNELS_INHERIT` / `BANDWIDTH_INHERIT` / `SIGNAL_INHERIT`
+/// skip the corresponding setter call and inherit the prior frame's value.
+/// Used by stereo-biased fuzz targets where the per-frame grammar wants a
+/// "no change" slot for those three CTLs (mid-stream coercion paths).
+pub fn c_encode_multiframe_inherit(
+    pcm_frames: &[&[i16]],
+    frame_cfgs: &[CEncodeConfig],
+    frame_size: i32,
+    sample_rate: i32,
+    channels: i32,
+) -> Result<Vec<Vec<u8>>, i32> {
+    if pcm_frames.len() != frame_cfgs.len() || frame_cfgs.is_empty() {
+        return Err(-1);
+    }
+    unsafe {
+        let mut error: c_int = 0;
+        let enc = opus_encoder_create(sample_rate, channels, frame_cfgs[0].application, &mut error);
+        if enc.is_null() || error != OPUS_OK {
+            if !enc.is_null() {
+                opus_encoder_destroy(enc);
+            }
+            return Err(error);
+        }
+
+        let max_data_bytes: opus_int32 = 4000;
+        let mut results = Vec::with_capacity(pcm_frames.len());
+
+        for (pcm, cfg) in pcm_frames.iter().zip(frame_cfgs.iter()) {
+            apply_c_encoder_config_with_inherit(enc, cfg);
 
             let mut out = vec![0u8; max_data_bytes as usize];
             let ret = opus_encode(
