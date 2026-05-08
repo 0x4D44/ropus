@@ -2890,6 +2890,23 @@ impl OpusEncoder {
                 celt.ctl(CeltEncoderCtl::SetBitrate(OPUS_BITRATE_MAX));
             }
 
+            // --- Set CELT prediction ---
+            // C: opus_encoder.c:2288-2295 — set CELT prediction BEFORE the CELT->SILK
+            // redundancy frame so the 5 ms redundancy encode sees the correct
+            // disable_pf/force_intra. Without this, on a CELT_ONLY -> HYBRID transition
+            // the redundancy frame inherits the prior frame's prefill SetPrediction(0)
+            // and produces bytes that diverge from the C reference.
+            if self.mode != MODE_SILK_ONLY {
+                if let Some(ref mut celt) = self.celt_enc {
+                    let celt_pred = if self.silk_mode.reduced_dependency != 0 {
+                        0
+                    } else {
+                        2
+                    };
+                    celt.ctl(CeltEncoderCtl::SetPrediction(celt_pred));
+                }
+            }
+
             // --- Save CELT prefill data BEFORE delay buffer update ---
             // C: OPUS_COPY(tmp_prefill, &delay_buffer[(encoder_buffer-total_buffer-Fs/400)*ch], ch*Fs/400)
             // This captures 2.5ms from the delay buffer at an offset that will be
@@ -3086,18 +3103,6 @@ impl OpusEncoder {
             // --- Set CELT start band ---
             if let Some(ref mut celt) = self.celt_enc {
                 celt.ctl(CeltEncoderCtl::SetStartBand(start_band));
-            }
-
-            // --- Set CELT prediction ---
-            if self.mode != MODE_SILK_ONLY {
-                if let Some(ref mut celt) = self.celt_enc {
-                    let celt_pred = if self.silk_mode.reduced_dependency != 0 {
-                        0
-                    } else {
-                        2
-                    };
-                    celt.ctl(CeltEncoderCtl::SetPrediction(celt_pred));
-                }
             }
 
             // --- Main CELT encode ---
