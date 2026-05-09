@@ -123,9 +123,14 @@ const MAX_PACKET: usize = 1500;
 fn encode_rust_frames(samples: &[i16], channels: i32, num_frames: usize) -> Vec<Vec<u8>> {
     let mut enc = OpusEncoder::new(TARGET_FS, channels, ROPUS_APP_VOIP)
         .expect("OpusEncoder::new(48k, mono, VOIP) should succeed");
-    // Match the C shim's bitrate so the two sides allocate comparable budgets.
+    // Match the C shim's setup verbatim. FEC + non-zero packet loss are
+    // required to make `compute_dred_bitrate` allocate any chunks at all
+    // — without them, both Rust and C set `dred_target_chunks = 0` and
+    // skip DRED emission entirely.
     assert_eq!(enc.set_bitrate(32000), 0);
     assert_eq!(enc.set_complexity(5), 0);
+    assert_eq!(enc.set_inband_fec(1), 0);
+    assert_eq!(enc.set_packet_loss_perc(20), 0);
     assert_eq!(enc.set_dred_duration(DRED_DURATION_2_5MS), 0);
     assert_eq!(enc.get_dred_duration(), DRED_DURATION_2_5MS);
 

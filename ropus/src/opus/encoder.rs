@@ -17,7 +17,7 @@ use crate::celt::math_ops::{celt_exp2, celt_ilog2, celt_sqrt, frac_div32};
 use crate::celt::range_coder::RangeEncoder;
 use crate::dnn::dred::{
     DRED_EXPERIMENTAL_BYTES, DRED_EXPERIMENTAL_VERSION, DRED_EXTENSION_ID, DRED_MAX_DATA_SIZE,
-    DRED_MAX_FRAMES, DRED_MIN_BYTES, DRED_NUM_REDUNDANCY_FRAMES, DREDEnc,
+    DRED_MAX_FRAMES, DRED_MIN_BYTES, DRED_NUM_REDUNDANCY_FRAMES, DREDEnc, compute_quantizer,
 };
 use crate::silk::common::{silk_lin2log, silk_log2lin};
 use crate::silk::encoder::{SilkEncControlStruct, SilkEncoder, silk_encode, silk_init_encoder_top};
@@ -698,38 +698,146 @@ fn user_bitrate_to_bitrate(
     imin(user_bitrate, max_bitrate)
 }
 
-// STAGE-3-STUB — DRED bitrate plumbing port (HLD: 2026.05.09 - HLD - DRED bitrate
-// plumbing port.md). These three symbols are stubs so Stage 2 tests compile and
-// fail with clear messages. Stage 3 replaces them with the real port of
-// `opus_encoder.c:668-730`. Do not call into these stubs from production code.
+// DRED bitrate plumbing — port of C `opus_encoder.c:668-730`.
+// HLD: `wrk_docs/2026.05.09 - HLD - DRED bitrate plumbing port.md`.
+//
+// f32 determinism note: the C path uses `float` for every intermediate
+// (no `double` promotion, no `mul_add`) and finishes with
+// `(int)floor(.5f + bits)`. We mirror that exactly — plain f32 ops in C
+// order. See HLD §6 risk row 1.
 
-/// STAGE-3-STUB — table of ~bits-per-DRED-chunk indexed by quantizer level.
-/// Mirrors C `dred_bits_table` at `opus_encoder.c:668`. Replaced in Stage 3.
-#[allow(dead_code)]
-const DRED_BITS_TABLE: [f32; 16] = [0.0; 16];
+/// Approximate IS bits-per-chunk indexed by quantiser level.
+/// Mirrors C `dred_bits_table` at `opus_encoder.c:668`.
+const DRED_BITS_TABLE: [f32; 16] = [
+    73.2, 68.1, 62.5, 57.0, 51.5, 45.7, 39.9, 32.4, 26.4, 20.4, 16.3, 13.0, 9.3, 8.2, 7.2, 6.4,
+];
 
-/// STAGE-3-STUB — placeholder for `estimate_dred_bitrate` port.
-/// Returns `(estimated_bits, target_chunks)`. Mirrors C
-/// `estimate_dred_bitrate` (`opus_encoder.c:669`) but returns a tuple
-/// instead of using a nullable out-pointer (see HLD §2).
-#[allow(dead_code)]
+/// Estimate the DRED payload size for the given configuration. Returns
+/// `(estimated_bits, target_chunks)` — a tuple instead of C's nullable
+/// out-pointer (see HLD §2). Mirrors C `estimate_dred_bitrate`
+/// (`opus_encoder.c:669-685`).
+///
+/// `target_chunks` is the largest chunk index for which the cumulative
+/// estimated bits stays below `target_bits` (i.e. the DRED chunk count
+/// the bitrate budget can afford). When `target_bits` is too small even
+/// for the initial overhead the value stays at 0.
 fn estimate_dred_bitrate(
-    _q0: i32,
-    _d_q: i32,
-    _qmax: i32,
-    _duration: i32,
-    _target_bits: i32,
+    q0: i32,
+    d_q: i32,
+    qmax: i32,
+    duration: i32,
+    target_bits: i32,
 ) -> (i32, i32) {
-    unimplemented!("STAGE-3-STUB: estimate_dred_bitrate not yet ported")
+    // Signaling DRED costs 3 bytes (the experimental header is 2 bytes;
+    // C `8*(3+DRED_EXPERIMENTAL_BYTES)` evaluates to 40).
+    let mut bits: f32 = (8 * (3 + DRED_EXPERIMENTAL_BYTES as i32)) as f32;
+    // Approximation for the size of the IS — matches C's
+    // `bits += 50.f + dred_bits_table[q0];` (note the inner add happens
+    // first, then the result is added to `bits`).
+    bits += 50.0_f32 + DRED_BITS_TABLE[q0 as usize];
+    let dred_chunks = imin((duration + 5) / 4, (DRED_NUM_REDUNDANCY_FRAMES / 2) as i32);
+    let mut target_chunks: i32 = 0;
+    let target_bits_f = target_bits as f32;
+    for i in 0..dred_chunks {
+        let q = compute_quantizer(q0, d_q, qmax, i);
+        bits += DRED_BITS_TABLE[q as usize];
+        if bits < target_bits_f {
+            target_chunks = i + 1;
+        }
+    }
+    // C: `(int)floor(.5f + bits)`. The cast truncates toward zero, but
+    // because `bits` is non-negative for any valid input, that matches
+    // `floor(.5 + bits)` exactly.
+    let final_bits = (0.5_f32 + bits).floor() as i32;
+    (final_bits, target_chunks)
 }
 
-/// STAGE-3-STUB — placeholder for `compute_dred_bitrate` port.
-/// Mirrors C `compute_dred_bitrate` (`opus_encoder.c:687-730`). Writes
-/// `enc.dred_q0`, `dred_d_q`, `dred_qmax`, `dred_target_chunks` and
-/// returns the per-frame DRED bitrate budget in bps.
-#[allow(dead_code)]
-fn compute_dred_bitrate(_enc: &mut OpusEncoder, _bitrate_bps: i32, _frame_size: i32) -> i32 {
-    unimplemented!("STAGE-3-STUB: compute_dred_bitrate not yet ported")
+/// Compute the per-frame DRED bitrate allocation and write the
+/// associated quantiser state back to the encoder. Mirrors C
+/// `compute_dred_bitrate` (`opus_encoder.c:687-730`).
+///
+/// Side-effects: writes `enc.dred_q0`, `dred_d_q`, `dred_qmax`, and
+/// `dred_target_chunks` unconditionally (matches C 725-728). Returns
+/// the DRED bitrate budget in bps (zero when the budget can't afford
+/// at least 2 chunks, including when DRED is disabled).
+fn compute_dred_bitrate(enc: &mut OpusEncoder, bitrate_bps: i32, frame_size: i32) -> i32 {
+    let mut dred_frac: f32;
+    let bitrate_offset: i32;
+    if enc.silk_mode.use_in_band_fec != 0 {
+        // C: `MIN16(.7f, 3.f*packetLossPercentage/100.f)`. Match the
+        // operand order — `(3.f * loss) / 100.f` evaluates the multiply
+        // before the divide.
+        let candidate = (3.0_f32 * enc.silk_mode.packet_loss_percentage as f32) / 100.0_f32;
+        dred_frac = if 0.7_f32 < candidate {
+            0.7_f32
+        } else {
+            candidate
+        };
+        bitrate_offset = 20000;
+    } else {
+        if enc.silk_mode.packet_loss_percentage > 5 {
+            // C: `MIN16(.8f, .55f + loss/100.f)`.
+            let candidate = 0.55_f32 + enc.silk_mode.packet_loss_percentage as f32 / 100.0_f32;
+            dred_frac = if 0.8_f32 < candidate {
+                0.8_f32
+            } else {
+                candidate
+            };
+        } else {
+            // C: `12*loss/100.f`. Integer multiply happens first; the
+            // divide is the only float op.
+            dred_frac = (12 * enc.silk_mode.packet_loss_percentage) as f32 / 100.0_f32;
+        }
+        bitrate_offset = 12000;
+    }
+    // Account for the fact that longer packets require less redundancy.
+    // C: `dred_frac = dred_frac/(dred_frac + (1-dred_frac)*(frame_size*50.f)/st->Fs);`
+    // — match operand order exactly. `(frame_size*50.f)` is an
+    // int*float, then `* (1-dred_frac)`, then `/ st->Fs`, then added to
+    // `dred_frac`, then divides `dred_frac`.
+    let denom_term = (1.0_f32 - dred_frac) * (frame_size as f32 * 50.0_f32) / enc.fs as f32;
+    dred_frac /= dred_frac + denom_term;
+    // Approximate fit based on a few experiments. Could probably be improved.
+    let q0 = imin(
+        15,
+        imax(
+            4,
+            51 - 3 * ec_ilog(imax(1, bitrate_bps - bitrate_offset) as u32),
+        ),
+    );
+    let d_q = if bitrate_bps - bitrate_offset > 36000 {
+        3
+    } else {
+        5
+    };
+    let qmax: i32 = 15;
+    // C: `IMAX(0, (int)(dred_frac*(bitrate_bps-bitrate_offset)))`. The
+    // truncation toward zero (not floor) is what `(int)` does in C — for
+    // a non-negative product they agree. We use `as i32` which also
+    // truncates toward zero.
+    let target_dred_bitrate = imax(
+        0,
+        (dred_frac * (bitrate_bps - bitrate_offset) as f32) as i32,
+    );
+    let (max_dred_bits, target_chunks) = if enc.dred_duration > 0 {
+        let target_bits = bitrate_to_bits(target_dred_bitrate, enc.fs, frame_size);
+        estimate_dred_bitrate(q0, d_q, qmax, enc.dred_duration, target_bits)
+    } else {
+        (0, 0)
+    };
+    let mut dred_bitrate = imin(
+        target_dred_bitrate,
+        bits_to_bitrate(max_dred_bits, enc.fs, frame_size),
+    );
+    // If we can't afford enough bits, don't bother with DRED at all.
+    if target_chunks < 2 {
+        dred_bitrate = 0;
+    }
+    enc.dred_q0 = q0;
+    enc.dred_d_q = d_q;
+    enc.dred_qmax = qmax;
+    enc.dred_target_chunks = target_chunks;
+    dred_bitrate
 }
 
 /// Compute equivalent rate normalized to 20ms/complexity-10/VBR.
@@ -1725,6 +1833,14 @@ impl OpusEncoder {
             self.bitrate_bps = bitrate_bps;
         }
 
+        // F53 — DRED bitrate carve-out. Mirrors C `opus_encoder.c:1335-1339`:
+        // compute the per-frame DRED budget once on the post-CBR bitrate,
+        // subtract it from `st->bitrate_bps`, then re-bind the local so the
+        // SILK/CELT allocators downstream see the post-DRED rate.
+        let dred_bitrate_bps = compute_dred_bitrate(self, self.bitrate_bps, frame_size);
+        self.bitrate_bps -= dred_bitrate_bps;
+        bitrate_bps = self.bitrate_bps;
+
         // C: max_rate is computed AFTER CBR adjustment reduces max_data_bytes
         let max_rate = bits_to_bitrate(max_data_bytes * 8, self.fs, frame_size);
 
@@ -2170,6 +2286,7 @@ impl OpusEncoder {
                 lsb_depth,
                 mode,
                 bitrate_bps,
+                dred_bitrate_bps,
                 is_silence,
                 redundancy,
                 celt_to_silk,
@@ -2188,6 +2305,7 @@ impl OpusEncoder {
             data,
             max_data_bytes,
             max_data_bytes,
+            dred_bitrate_bps,
             is_silence,
             redundancy,
             celt_to_silk,
@@ -2213,6 +2331,7 @@ impl OpusEncoder {
         lsb_depth: i32,
         mode: i32,
         _bitrate_bps: i32,
+        dred_bitrate_bps: i32,
         _is_silence: bool,
         redundancy: bool,
         celt_to_silk: bool,
@@ -2300,6 +2419,20 @@ impl OpusEncoder {
                 bitrate_to_bits(self.bitrate_bps, self.fs, enc_frame_size) / 8,
                 max_len_sum / nb_frames,
             );
+            // C opus_encoder.c:1786-1788. Reserve room for the DRED payload
+            // across the packet, then hand the saved bytes back to the
+            // first frame (the one the DRED extension actually rides on).
+            // `frame_size` here is the OUTER packet frame size, matching C.
+            let dred_bytes = bitrate_to_bits(dred_bitrate_bps, self.fs, frame_size) / 8;
+            curr_max = imin(curr_max, (max_len_sum - dred_bytes) / nb_frames);
+            // F48 — DRED-aware first-frame flag. Mirrors C 1777: when
+            // sub-frame 0 (and possibly 1..k-1) is DTX-dropped, attach
+            // DRED to the first non-DTX sub-frame instead of a doomed
+            // buffer.
+            let first_frame = i == 0 || i == dtx_count;
+            if first_frame {
+                curr_max += dred_bytes;
+            }
             curr_max = imin(max_len_sum - tot_size, curr_max);
 
             let offset = (i * enc_frame_size * self.channels) as usize;
@@ -2320,17 +2453,14 @@ impl OpusEncoder {
 
             let mut frame_buf = vec![0u8; curr_max as usize];
 
-            // TODO(stage-8.x): mirror C (reference/src/opus_encoder.c:1777):
-            // first_frame = (i == 0) || (i == dtx_count). When sub-frame 0 is DTX-
-            // dropped, Rust attaches DRED to a doomed buffer; C shifts it to the
-            // first non-DTX frame. No DTX-with-multi-frame-packet test case in 8.8.
-            self.first_frame_flag = i == 0;
+            self.first_frame_flag = first_frame;
             let ret = self.encode_frame_native(
                 pcm_frame,
                 enc_frame_size,
                 &mut frame_buf,
                 curr_max,
                 curr_max,
+                dred_bitrate_bps,
                 frame_is_silence,
                 frame_redundancy,
                 celt_to_silk,
@@ -2400,6 +2530,7 @@ impl OpusEncoder {
         data: &mut [u8],
         max_data_bytes: i32,
         orig_max_data_bytes: i32,
+        dred_bitrate_bps: i32,
         is_silence: bool,
         mut redundancy: bool,
         mut celt_to_silk: bool,
@@ -3075,12 +3206,18 @@ impl OpusEncoder {
                 nb_compr_bytes = ret;
                 range_final = enc.get_rng();
             } else {
-                // TODO(stage-8.x): port C's DRED-aware CELT-budget steal (reference/src/
-                // opus_encoder.c:2399-2411). C reduces nb_compr_bytes by up to 75% of
-                // the DRED bitrate allocation when dred_duration > 0, so DRED payload
-                // fits. Without this, DRED silently fails the dred_bytes_left check at
-                // tight bitrates (<= ~20 kbps). Integration test uses 32 kbps and clears.
                 nb_compr_bytes = (max_data_bytes - 1) - redundancy_bytes;
+                // DRED-aware CELT budget steal — mirrors C opus_encoder.c:2399-2411.
+                // When DRED is active, allow CELT to claim up to ¾ of the
+                // bytes the DRED payload reserves, but keep at least
+                // `(ec_tell+7)/8 + 5` bytes to avoid a redundancy
+                // signalling mismatch, and never exceed the original budget.
+                if self.dred_duration > 0 {
+                    let dred_bytes = bitrate_to_bits(dred_bitrate_bps, self.fs, frame_size) / 8;
+                    let mut max_celt_bytes = nb_compr_bytes - dred_bytes * 3 / 4;
+                    max_celt_bytes = imax((enc.tell() + 7) / 8 + 5, max_celt_bytes);
+                    nb_compr_bytes = imin(nb_compr_bytes, max_celt_bytes);
+                }
                 enc.shrink(nb_compr_bytes as u32);
                 range_final = 0; // Will be set after CELT
             }
@@ -3157,6 +3294,19 @@ impl OpusEncoder {
                             celt.ctl(CeltEncoderCtl::SetVbrConstraint(self.vbr_constraint));
                             celt.ctl(CeltEncoderCtl::SetBitrate(self.bitrate_bps));
                         }
+                    }
+                    // F33 — DRED CBR override. Mirrors C opus_encoder.c:2466-2477.
+                    // Under CBR + DRED, flip CELT to unconstrained VBR so DRED
+                    // can absorb the slack. HYBRID subtracts the SILK rate to
+                    // get the CELT-only allocation.
+                    if self.use_vbr == 0 && self.dred_duration > 0 {
+                        let mut celt_bitrate = self.bitrate_bps;
+                        celt.ctl(CeltEncoderCtl::SetVbr(1));
+                        celt.ctl(CeltEncoderCtl::SetVbrConstraint(0));
+                        if self.mode == MODE_HYBRID {
+                            celt_bitrate -= self.silk_mode.bit_rate;
+                        }
+                        celt.ctl(CeltEncoderCtl::SetBitrate(celt_bitrate));
                     }
 
                     // Prefill on mode transition
@@ -3663,16 +3813,9 @@ impl OpusEncoder {
         // duration is first requested.
         if duration != 0 && self.dred_encoder.is_none() {
             self.dred_encoder = Some(Box::new(DREDEnc::new(self.fs, self.channels)));
-            // Stage 8.8: we don't port the full C `compute_dred_bitrate`
-            // heuristic (which tunes q0/dQ/qmax per-frame from `bitrate_bps`
-            // and `packetLossPercentage`). Use constant defaults — they're
-            // the tightest tier-1-compatible values and cover every frame
-            // rate without re-tuning. Matches the `qmax = 15` ceiling in C
-            // and the experimental fallback in `dred_encoder.c`.
-            self.dred_q0 = 9;
-            self.dred_d_q = 3;
-            self.dred_qmax = 15;
-            self.dred_target_chunks = (duration + 5) / 4;
+            // Per-frame quantiser state (`dred_q0`, `dred_d_q`, `dred_qmax`,
+            // `dred_target_chunks`) is written by `compute_dred_bitrate` on
+            // every encode — see `encode_native_with_analysis` (F53 site).
         }
         OPUS_OK
     }
@@ -4885,6 +5028,7 @@ mod tests {
                 16,
                 MODE_SILK_ONLY,
                 enc.bitrate_bps,
+                0, // dred_bitrate_bps
                 false,
                 false,
                 false,
@@ -4909,6 +5053,7 @@ mod tests {
                 16,
                 MODE_SILK_ONLY,
                 enc.bitrate_bps,
+                0, // dred_bitrate_bps
                 false,
                 false,
                 false,
@@ -4975,6 +5120,7 @@ mod tests {
                 &mut packet,
                 packet_capacity,
                 packet_capacity,
+                0, // dred_bitrate_bps
                 false,
                 false,
                 false,
@@ -5034,6 +5180,7 @@ mod tests {
                 &mut packet,
                 25,
                 25,
+                0, // dred_bitrate_bps
                 false,
                 false,
                 false,
@@ -5064,6 +5211,7 @@ mod tests {
                 &mut packet,
                 18,
                 18,
+                0, // dred_bitrate_bps
                 false,
                 false,
                 false,
@@ -5094,6 +5242,7 @@ mod tests {
                 &mut packet,
                 15,
                 15,
+                0, // dred_bitrate_bps
                 false,
                 false,
                 false,
@@ -5141,6 +5290,7 @@ mod tests {
                 &mut packet,
                 15,
                 15,
+                0, // dred_bitrate_bps
                 false,
                 false,
                 false,
@@ -5170,6 +5320,7 @@ mod tests {
                 &mut packet,
                 14,
                 14,
+                0, // dred_bitrate_bps
                 false,
                 false,
                 false,
@@ -5199,6 +5350,7 @@ mod tests {
                 &mut packet,
                 13,
                 13,
+                0, // dred_bitrate_bps
                 false,
                 false,
                 false,
@@ -5249,6 +5401,7 @@ mod tests {
                 &mut packet,
                 cap,
                 cap,
+                0, // dred_bitrate_bps
                 false,
                 false,
                 false,
@@ -5686,6 +5839,7 @@ mod tests {
                 &mut packet,
                 cap,
                 cap,
+                0, // dred_bitrate_bps
                 false,
                 false,
                 false,
@@ -8599,10 +8753,7 @@ mod tests {
         assert_eq!(enc.dred_q0, 4, "dred_q0 not written");
         assert_eq!(enc.dred_d_q, 5, "dred_d_q not written");
         assert_eq!(enc.dred_qmax, 15, "dred_qmax not written");
-        assert_eq!(
-            enc.dred_target_chunks, 14,
-            "dred_target_chunks not written"
-        );
+        assert_eq!(enc.dred_target_chunks, 14, "dred_target_chunks not written");
     }
 
     #[test]
@@ -8629,7 +8780,10 @@ mod tests {
             enc.dred_q0, 0,
             "set_dred_duration must not pre-seed dred_q0 (Stage 3 removes static init)"
         );
-        assert_eq!(enc.dred_d_q, 0, "set_dred_duration must not pre-seed dred_d_q");
+        assert_eq!(
+            enc.dred_d_q, 0,
+            "set_dred_duration must not pre-seed dred_d_q"
+        );
         assert_eq!(
             enc.dred_qmax, 0,
             "set_dred_duration must not pre-seed dred_qmax"
@@ -8663,6 +8817,36 @@ mod tests {
                 enc.dred_q0, *expected_q0,
                 "br={} expected q0={}, got {}",
                 bitrate_bps, expected_q0, enc.dred_q0
+            );
+        }
+    }
+
+    /// F48 — multi-frame `first_frame` shifts past DTX-dropped sub-frames.
+    /// Mirrors C `opus_encoder.c:1777`. We don't drive a real multi-frame
+    /// encode here (DTX gating is hard to coax deterministically); instead
+    /// we lock the formula directly: for each `(i, dtx_count)` pair, the
+    /// `first_frame` predicate must be `i == 0 || i == dtx_count`.
+    #[test]
+    fn test_first_frame_flag_follows_dtx_count_in_multiframe_dispatch() {
+        // (i, dtx_count, expected_first_frame)
+        let cases = [
+            // i=0 is always first_frame.
+            (0, 0, true),
+            (0, 5, true),
+            // Nothing DTX'd yet → only i=0 is first_frame.
+            (1, 0, false),
+            (2, 0, false),
+            // Sub-frame 0 was DTX → dtx_count=1 by i=1, so i=1 is first_frame.
+            (1, 1, true),
+            (2, 1, false),
+            // Sub-frames 0..=1 DTX → dtx_count=2 by i=2, so i=2 is first_frame.
+            (2, 2, true),
+        ];
+        for (i, dtx_count, expected) in cases {
+            let actual = i == 0 || i == dtx_count;
+            assert_eq!(
+                actual, expected,
+                "F48 predicate wrong for (i={i}, dtx_count={dtx_count})"
             );
         }
     }

@@ -8372,13 +8372,11 @@ pub fn silk_encode(
                             // `silk_encode_frame_fix` (lines 7706-7709 above).
                             let lbrr_signal_type =
                                 enc.state_fxx[n].s_cmn.indices_lbrr[i].signal_type;
-                            let lbrr_lag_index =
-                                enc.state_fxx[n].s_cmn.indices_lbrr[i].lag_index;
+                            let lbrr_lag_index = enc.state_fxx[n].s_cmn.indices_lbrr[i].lag_index;
                             if lbrr_signal_type == TYPE_VOICED as i8 {
                                 enc.state_fxx[n].s_cmn.ec_prev_lag_index = lbrr_lag_index;
                             }
-                            enc.state_fxx[n].s_cmn.ec_prev_signal_type =
-                                lbrr_signal_type as i32;
+                            enc.state_fxx[n].s_cmn.ec_prev_signal_type = lbrr_signal_type as i32;
                             silk_encode_pulses(
                                 range_enc,
                                 enc.state_fxx[n].s_cmn.indices_lbrr[i].signal_type as i32,
