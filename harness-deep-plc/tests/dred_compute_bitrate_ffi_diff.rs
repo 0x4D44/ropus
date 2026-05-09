@@ -40,7 +40,13 @@ use std::os::raw::c_int;
 
 /// Call the C reference's `estimate_dred_bitrate` and return
 /// `(estimated_bits, target_chunks)`.
-fn c_estimate_dred_bitrate(q0: i32, d_q: i32, qmax: i32, duration: i32, target_bits: i32) -> (i32, i32) {
+fn c_estimate_dred_bitrate(
+    q0: i32,
+    d_q: i32,
+    qmax: i32,
+    duration: i32,
+    target_bits: i32,
+) -> (i32, i32) {
     let mut tc: c_int = 0;
     let bits = unsafe {
         ropus_c_estimate_dred_bitrate(q0, d_q, qmax, duration, target_bits, &mut tc as *mut c_int)
