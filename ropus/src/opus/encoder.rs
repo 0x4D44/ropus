@@ -698,6 +698,40 @@ fn user_bitrate_to_bitrate(
     imin(user_bitrate, max_bitrate)
 }
 
+// STAGE-3-STUB — DRED bitrate plumbing port (HLD: 2026.05.09 - HLD - DRED bitrate
+// plumbing port.md). These three symbols are stubs so Stage 2 tests compile and
+// fail with clear messages. Stage 3 replaces them with the real port of
+// `opus_encoder.c:668-730`. Do not call into these stubs from production code.
+
+/// STAGE-3-STUB — table of ~bits-per-DRED-chunk indexed by quantizer level.
+/// Mirrors C `dred_bits_table` at `opus_encoder.c:668`. Replaced in Stage 3.
+#[allow(dead_code)]
+const DRED_BITS_TABLE: [f32; 16] = [0.0; 16];
+
+/// STAGE-3-STUB — placeholder for `estimate_dred_bitrate` port.
+/// Returns `(estimated_bits, target_chunks)`. Mirrors C
+/// `estimate_dred_bitrate` (`opus_encoder.c:669`) but returns a tuple
+/// instead of using a nullable out-pointer (see HLD §2).
+#[allow(dead_code)]
+fn estimate_dred_bitrate(
+    _q0: i32,
+    _d_q: i32,
+    _qmax: i32,
+    _duration: i32,
+    _target_bits: i32,
+) -> (i32, i32) {
+    unimplemented!("STAGE-3-STUB: estimate_dred_bitrate not yet ported")
+}
+
+/// STAGE-3-STUB — placeholder for `compute_dred_bitrate` port.
+/// Mirrors C `compute_dred_bitrate` (`opus_encoder.c:687-730`). Writes
+/// `enc.dred_q0`, `dred_d_q`, `dred_qmax`, `dred_target_chunks` and
+/// returns the per-frame DRED bitrate budget in bps.
+#[allow(dead_code)]
+fn compute_dred_bitrate(_enc: &mut OpusEncoder, _bitrate_bps: i32, _frame_size: i32) -> i32 {
+    unimplemented!("STAGE-3-STUB: compute_dred_bitrate not yet ported")
+}
+
 /// Compute equivalent rate normalized to 20ms/complexity-10/VBR.
 /// Matches C `compute_equiv_rate`.
 fn compute_equiv_rate(
@@ -8330,5 +8364,306 @@ mod tests {
         // Mono must continue to accept the same non-zero duration.
         let mut mono = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
         assert_eq!(mono.set_dred_duration(100), OPUS_OK);
+    }
+
+    // ===========================================================================
+    // Stage 2 — DRED bitrate plumbing TDD tests.
+    //
+    // These tests target symbols that Stage 3 will introduce. They are
+    // expected to fail with clear messages until then. See
+    // `wrk_docs/2026.05.09 - HLD - DRED bitrate plumbing port.md` §5.
+    // ===========================================================================
+
+    /// Helper for the `compute_dred_bitrate` tests: build a mono encoder
+    /// configured with the given DRED-relevant knobs and return it.
+    fn make_dred_encoder_mono(
+        bitrate_bps: i32,
+        use_in_band_fec: i32,
+        packet_loss_perc: i32,
+        dred_duration: i32,
+    ) -> OpusEncoder {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        // Match the inputs `compute_dred_bitrate` reads off the encoder.
+        enc.silk_mode.use_in_band_fec = use_in_band_fec;
+        enc.silk_mode.packet_loss_percentage = packet_loss_perc;
+        enc.dred_duration = dred_duration;
+        // bitrate_bps is also passed as a parameter, but the constructor
+        // initialises it from `3000 + fs*channels`; align it for clarity.
+        enc.bitrate_bps = bitrate_bps;
+        enc
+    }
+
+    #[test]
+    fn test_dred_bits_table_constants() {
+        // C `opus_encoder.c:668`:
+        //   static const float dred_bits_table[16] = {
+        //     73.2f, 68.1f, 62.5f, 57.0f, 51.5f, 45.7f, 39.9f, 32.4f,
+        //     26.4f, 20.4f, 16.3f, 13.f,  9.3f,  8.2f,  7.2f,  6.4f
+        //   };
+        // C `73.2f` and Rust `73.2_f32` both round-to-nearest the same
+        // decimal, so `to_bits()` of the matching f32 literals must match.
+        let expected: [f32; 16] = [
+            73.2_f32, 68.1_f32, 62.5_f32, 57.0_f32, 51.5_f32, 45.7_f32, 39.9_f32, 32.4_f32,
+            26.4_f32, 20.4_f32, 16.3_f32, 13.0_f32, 9.3_f32, 8.2_f32, 7.2_f32, 6.4_f32,
+        ];
+        for (i, exp) in expected.iter().enumerate() {
+            assert_eq!(
+                DRED_BITS_TABLE[i].to_bits(),
+                exp.to_bits(),
+                "DRED_BITS_TABLE[{}] = {:?} (bits {:#x}) != expected {:?} (bits {:#x})",
+                i,
+                DRED_BITS_TABLE[i],
+                DRED_BITS_TABLE[i].to_bits(),
+                exp,
+                exp.to_bits(),
+            );
+        }
+    }
+
+    #[test]
+    fn test_estimate_dred_bitrate_golden() {
+        // Five (q0, dQ, qmax, duration, target_bits) tuples and their expected
+        // (bits, target_chunks). Each derivation simulates C
+        // `estimate_dred_bitrate` (opus_encoder.c:669-685) faithfully in f32.
+        //
+        // Constants:
+        //   bits_init = 8*(3+DRED_EXPERIMENTAL_BYTES) + 50 = 8*5 + 50 = 90
+        //   dred_chunks = min((duration+5)/4, DRED_NUM_REDUNDANCY_FRAMES/2 = 26)
+        //   compute_quantizer(q0, dQ, qmax, i): dQ_table=[0,2,3,4,6,8,12,16];
+        //     quant = q0 + (dQ_table[dQ]*i + 8)/16 (integer div), capped at qmax
+        //   table = [73.2, 68.1, 62.5, 57.0, 51.5, 45.7, 39.9, 32.4,
+        //            26.4, 20.4, 16.3, 13.0,  9.3,  8.2,  7.2,  6.4]
+        //
+        // Tuple 1: (15, 5, 15, 4, 1_000_000)
+        //   dred_chunks = min((4+5)/4, 26) = min(2, 26) = 2
+        //   bits = 90 + table[15] = 90 + 6.4 = 96.4
+        //   i=0: q=15, bits += 6.4 → 102.8 (< 1M → target=1)
+        //   i=1: q=min(15+(8+8)/16, 15)=15, bits += 6.4 → 109.2 (< 1M → target=2)
+        //   floor(.5 + 109.2) = 109
+        //
+        // Tuple 2: (9, 3, 15, 100, 1_000_000)
+        //   dred_chunks = min((100+5)/4, 26) = min(26, 26) = 26
+        //   bits = 90 + table[9] = 90 + 20.4 = 110.4
+        //   q sequence (dQ=3 → step 4): [9,9,10,10,10,10,11,11,11,11,
+        //     12,12,12,12,13,13,13,13,14,14,14,14,15,15,15,15]
+        //   sum table[q] = 393 - 110 (from python sim) → final 393
+        //   target_chunks = 26 (all chunks fit under 1M target)
+        //
+        // Tuple 3: (4, 5, 15, 100, 10_000)
+        //   dred_chunks = 26; bits start = 90 + table[4] = 90 + 51.5 = 141.5
+        //   dQ=5 → step 8; q sequence saturates at 15 quickly
+        //   simulated total = 663, all 26 chunks fit under 10k target → tc=26
+        //
+        // Tuple 4: (4, 3, 15, 8, 8000)
+        //   dred_chunks = min((8+5)/4, 26) = min(3, 26) = 3
+        //   bits = 90 + 51.5 = 141.5
+        //   i=0: q=4+8/16=4, bits += 51.5 → 193.0 (< 8000 → tc=1)
+        //   i=1: q=4+(4+8)/16=4, bits += 51.5 → 244.5 (< 8000 → tc=2)
+        //   i=2: q=4+(8+8)/16=5, bits += 45.7 → 290.2 (< 8000 → tc=3)
+        //   floor(.5 + 290.2) = 290
+        //
+        // Tuple 5: (15, 5, 15, 104, 0)
+        //   dred_chunks = min(109/4, 26) = min(27, 26) = 26
+        //   target_bits = 0 → no `bits < target_bits` ever true → tc=0
+        //   bits stays at 90 + 6.4 + 26*6.4 = 263.0; floor(.5+263) = 263
+        let cases: [(i32, i32, i32, i32, i32, i32, i32); 5] = [
+            // q0, dQ, qmax, duration, target_bits, expected_bits, expected_target_chunks
+            (15, 5, 15, 4, 1_000_000, 109, 2),
+            (9, 3, 15, 100, 1_000_000, 393, 26),
+            (4, 5, 15, 100, 10_000, 663, 26),
+            (4, 3, 15, 8, 8000, 290, 3),
+            (15, 5, 15, 104, 0, 263, 0),
+        ];
+        for (q0, d_q, qmax, duration, target_bits, exp_bits, exp_tc) in cases.iter().copied() {
+            let (bits, tc) = estimate_dred_bitrate(q0, d_q, qmax, duration, target_bits);
+            assert_eq!(
+                (bits, tc),
+                (exp_bits, exp_tc),
+                "estimate_dred_bitrate(q0={}, dQ={}, qmax={}, dur={}, tgt={}) \
+                 returned ({}, {}), expected ({}, {})",
+                q0,
+                d_q,
+                qmax,
+                duration,
+                target_bits,
+                bits,
+                tc,
+                exp_bits,
+                exp_tc,
+            );
+        }
+    }
+
+    #[test]
+    fn test_compute_dred_bitrate_no_dred() {
+        // When `dred_duration == 0`, C sets max_dred_bits=0 and target_chunks=0
+        // then returns 0 (since `bits_to_bitrate(0,...)=0` ⇒ dred_bitrate=0,
+        // and target_chunks<2 also forces 0). q0/dQ/qmax are still written
+        // unconditionally (C 725-727) — only target_chunks should be 0.
+        let mut enc = make_dred_encoder_mono(32000, 0, 0, 0);
+        let ret = compute_dred_bitrate(&mut enc, 32000, 960);
+        assert_eq!(ret, 0, "no-DRED path must return 0");
+        assert_eq!(
+            enc.dred_target_chunks, 0,
+            "target_chunks must be 0 when dred_duration=0"
+        );
+    }
+
+    #[test]
+    fn test_compute_dred_bitrate_fec_off_loss_zero() {
+        // FEC off, packet_loss=0 → dred_frac = 12*0/100 = 0
+        // ⇒ target_dred_bitrate = 0 ⇒ even with dred_duration>0 the
+        // estimate gets target_chunks=0 (target_bits=0, so the loop never
+        // sets it) ⇒ target_chunks<2 ⇒ return 0.
+        let mut enc = make_dred_encoder_mono(32000, 0, 0, 100);
+        let ret = compute_dred_bitrate(&mut enc, 32000, 960);
+        assert_eq!(ret, 0, "FEC off + loss=0 must return 0");
+        assert_eq!(enc.dred_target_chunks, 0);
+    }
+
+    #[test]
+    fn test_compute_dred_bitrate_fec_off_loss_30() {
+        // FEC off, loss=30 (>5) ⇒ dred_frac = min(.8, .55+.30) = .8
+        // bitrate_offset = 12000.
+        // At 48 kHz / 960 sample frame, frame_size*50/fs = 1.0 ⇒ denom=1
+        // ⇒ dred_frac stays .8.
+        // bitrate_bps=48000: diff=36000 (NOT > 36000) ⇒ dQ = 5
+        //   q0 = min(15, max(4, 51 - 3*ec_ilog(36000))) = min(15, max(4, 51-48)) = 4
+        //   target_dred_bitrate = .8*36000 = 28800 (int cast of f32)
+        //   target_bits = bitrate_to_bits(28800,48000,960) = 28800/50 = 576
+        //   Sim of estimate(q0=4, dQ=5, qmax=15, duration=100, target_bits=576)
+        //   gives target_chunks=14, max_dred_bits=663
+        //   bits_to_bitrate(663, 48000, 960) = 663*50 = 33150
+        //   dred_bitrate = min(28800, 33150) = 28800 (>= 2 chunks)
+        let mut enc = make_dred_encoder_mono(48000, 0, 30, 100);
+        let ret = compute_dred_bitrate(&mut enc, 48000, 960);
+        assert_eq!(ret, 28800, "FEC off, loss=30, 48kbps expected 28800 bps");
+        assert_eq!(enc.dred_q0, 4);
+        assert_eq!(enc.dred_d_q, 5);
+        assert_eq!(enc.dred_qmax, 15);
+        assert_eq!(enc.dred_target_chunks, 14);
+    }
+
+    #[test]
+    fn test_compute_dred_bitrate_fec_on() {
+        // FEC on, loss=15 ⇒ dred_frac = min(.7, 3*15/100) = min(.7, .45) = .45
+        // bitrate_offset = 20000.
+        // At 48 kHz / 960 frame: frame_size*50/fs = 1.0 ⇒ dred_frac stays .45
+        // bitrate_bps=48000: diff=28000 (NOT > 36000) ⇒ dQ=5
+        //   q0 = min(15, max(4, 51 - 3*ec_ilog(28000))) = min(15, max(4, 51-45)) = 6
+        //   target_dred_bitrate = .45*28000 = 12600
+        //   estimate(6, 5, 15, 100, target_bits=12600/50=252):
+        //     gives target_chunks=3, max_dred_bits computed accordingly
+        //   bits_to_bitrate yields > 12600 ⇒ ret = min = 12600 (3 ≥ 2 chunks)
+        let mut enc = make_dred_encoder_mono(48000, 1, 15, 100);
+        let ret = compute_dred_bitrate(&mut enc, 48000, 960);
+        assert_eq!(ret, 12600, "FEC on, loss=15, 48kbps expected 12600 bps");
+        assert_eq!(enc.dred_q0, 6);
+        assert_eq!(enc.dred_d_q, 5);
+        assert_eq!(enc.dred_qmax, 15);
+        assert_eq!(enc.dred_target_chunks, 3);
+    }
+
+    #[test]
+    fn test_compute_dred_bitrate_under_2_chunks() {
+        // FEC off, loss=30, very low bitrate (16 kbps) — target_dred_bitrate
+        // resolves to a tiny target_bits that doesn't cover 2 chunks. C 723
+        // sets dred_bitrate=0 even though target_dred_bitrate is nonzero.
+        // diff=4000, ec_ilog(4000)=12, q0=min(15, max(4, 51-36))=15
+        // target_dred_bitrate=int(.8*4000)=3200; target_bits=3200/50=64
+        // estimate(15,5,15,100,64): bits start = 90+6.4=96.4 > 64, so
+        // every iteration's bits >= 64 ⇒ target_chunks stays 0 ⇒ return 0.
+        let mut enc = make_dred_encoder_mono(16000, 0, 30, 100);
+        let ret = compute_dred_bitrate(&mut enc, 16000, 960);
+        assert_eq!(ret, 0, "target_chunks<2 must clamp to 0");
+        assert_eq!(enc.dred_target_chunks, 0, "tc must be 0 here");
+    }
+
+    #[test]
+    fn test_compute_dred_bitrate_writes_q_state() {
+        // Verify the four fields are written per call. Picks an input
+        // that exercises non-default q-state values: 48k/FEC-off/loss=30/dur=100
+        // ⇒ q0=4, dQ=5, qmax=15, target_chunks=14 (per
+        // `test_compute_dred_bitrate_fec_off_loss_30`). The constructor
+        // sets all four fields to 0, so this test catches the regression
+        // where Stage 3 forgets one of the writes.
+        let mut enc = make_dred_encoder_mono(48000, 0, 30, 100);
+        // Pre-conditions: ctor defaults are all zero.
+        assert_eq!(enc.dred_q0, 0);
+        assert_eq!(enc.dred_d_q, 0);
+        assert_eq!(enc.dred_qmax, 0);
+        assert_eq!(enc.dred_target_chunks, 0);
+        let _ = compute_dred_bitrate(&mut enc, 48000, 960);
+        // Post-conditions: all four written to the values the C function
+        // computes for these inputs.
+        assert_eq!(enc.dred_q0, 4, "dred_q0 not written");
+        assert_eq!(enc.dred_d_q, 5, "dred_d_q not written");
+        assert_eq!(enc.dred_qmax, 15, "dred_qmax not written");
+        assert_eq!(
+            enc.dred_target_chunks, 14,
+            "dred_target_chunks not written"
+        );
+    }
+
+    #[test]
+    fn test_set_dred_duration_no_longer_writes_q_state() {
+        // Locks the F-quieter regression: after Stage 3 removes the
+        // four-line static init at the bottom of `set_dred_duration`,
+        // calling `set_dred_duration(100)` must NOT write `dred_q0` etc.
+        // The encoder's constructor leaves them at 0; only
+        // `compute_dred_bitrate` (run during `encode_native_with_analysis`)
+        // is allowed to mutate them.
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        // Sanity: ctor defaults.
+        assert_eq!(enc.dred_q0, 0);
+        assert_eq!(enc.dred_d_q, 0);
+        assert_eq!(enc.dred_qmax, 0);
+        assert_eq!(enc.dred_target_chunks, 0);
+        let r = enc.set_dred_duration(100);
+        assert_eq!(r, OPUS_OK);
+        // After Stage 3: these stay zero (and only `compute_dred_bitrate`
+        // updates them on each encode). Currently this test FAILS because
+        // `set_dred_duration` still writes 9/3/15/(duration+5)/4 = 26.
+        // That failure is the desired Stage 2 signal.
+        assert_eq!(
+            enc.dred_q0, 0,
+            "set_dred_duration must not pre-seed dred_q0 (Stage 3 removes static init)"
+        );
+        assert_eq!(enc.dred_d_q, 0, "set_dred_duration must not pre-seed dred_d_q");
+        assert_eq!(
+            enc.dred_qmax, 0,
+            "set_dred_duration must not pre-seed dred_qmax"
+        );
+        assert_eq!(
+            enc.dred_target_chunks, 0,
+            "set_dred_duration must not pre-seed dred_target_chunks"
+        );
+    }
+
+    #[test]
+    fn test_compute_dred_bitrate_q0_boundaries() {
+        // q0 is computed as:
+        //   q0 = min(15, max(4, 51 - 3*EC_ILOG(max(1, bitrate_bps - bitrate_offset))))
+        // EC_ILOG(x) = position of highest set bit (1-based for x>0). It
+        // jumps by 1 at each power-of-two boundary, which causes q0 to
+        // step down by 3.
+        //
+        // FEC off ⇒ bitrate_offset = 12000.
+        // Pick three bitrates that flip q0:
+        //   br=16095: diff=4095 → EC_ILOG=12 → 51-36=15 → q0=min(15,max(4,15))=15
+        //   br=16096: diff=4096 → EC_ILOG=13 → 51-39=12 → q0=12
+        //   br=100000: diff=88000 → EC_ILOG=17 → 51-51=0 → q0=max(4, 0)=4
+        //
+        // We assert on `enc.dred_q0` (always written) rather than the
+        // returned bitrate, since at low diffs target_chunks<2 forces ret=0.
+        for (bitrate_bps, expected_q0) in &[(16095_i32, 15_i32), (16096, 12), (100_000, 4)] {
+            let mut enc = make_dred_encoder_mono(*bitrate_bps, 0, 30, 100);
+            let _ = compute_dred_bitrate(&mut enc, *bitrate_bps, 960);
+            assert_eq!(
+                enc.dred_q0, *expected_q0,
+                "br={} expected q0={}, got {}",
+                bitrate_bps, expected_q0, enc.dred_q0
+            );
+        }
     }
 }
