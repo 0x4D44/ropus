@@ -208,6 +208,22 @@ unsafe extern "C" {
         application: c_int,
         dred_duration: c_int,
     ) -> *mut c_void;
+    /// Stage-5 extension: parameterised version of
+    /// `ropus_test_c_encoder_new`. Lets the new Tier-1 differential test
+    /// pass a non-trivial `(bitrate_bps, use_inband_fec, loss_perc,
+    /// use_vbr)` so `compute_dred_bitrate` returns a non-zero
+    /// `dred_bitrate_bps` and exercises F33/F33b/F53/F48 + the f32 ops.
+    /// Pass `use_vbr = -1` to leave VBR at the encoder default.
+    pub fn ropus_test_c_encoder_new_ex(
+        fs: c_int,
+        channels: c_int,
+        application: c_int,
+        dred_duration: c_int,
+        bitrate_bps: c_int,
+        use_inband_fec: c_int,
+        loss_perc: c_int,
+        use_vbr: c_int,
+    ) -> *mut c_void;
     pub fn ropus_test_c_encoder_free(enc: *mut c_void);
     pub fn ropus_test_c_encoder_encode(
         enc: *mut c_void,
@@ -232,6 +248,34 @@ unsafe extern "C" {
     // (`reference/dnn/freq.c:183`); accepts a FRAME_SIZE = 160-sample
     // f32 buffer and writes 2 * NB_BANDS = 36 cepstral outputs.
     pub fn ropus_test_burg_cepstral_analysis(x: *const f32, ceps: *mut f32);
+
+    // --- Stage-5 (apply-feedback): direct FFI scalar fixture for the
+    // DRED bitrate helpers ---
+    //
+    // Both functions in C are `static` inside `opus_encoder.c`; the shim
+    // file (`harness-deep-plc/dred_encode_shim.c`) holds verbatim copies
+    // of the C function bodies and exposes them via these symbols. See
+    // the comment block in that file for the rationale and sync rules.
+    pub fn ropus_c_estimate_dred_bitrate(
+        q0: c_int,
+        d_q: c_int,
+        qmax: c_int,
+        duration: c_int,
+        target_bits: c_int,
+        target_chunks: *mut c_int,
+    ) -> c_int;
+    pub fn ropus_c_compute_dred_bitrate(
+        use_in_band_fec: c_int,
+        packet_loss_perc: c_int,
+        fs: c_int,
+        dred_duration: c_int,
+        bitrate_bps: c_int,
+        frame_size: c_int,
+        out_q0: *mut c_int,
+        out_d_q: *mut c_int,
+        out_qmax: *mut c_int,
+        out_target_chunks: *mut c_int,
+    ) -> c_int;
 }
 
 /// Opus application modes (mirrored from `opus_defines.h`). Only the ones

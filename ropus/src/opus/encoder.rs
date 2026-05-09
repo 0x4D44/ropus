@@ -760,6 +760,13 @@ fn estimate_dred_bitrate(
 /// `dred_target_chunks` unconditionally (matches C 725-728). Returns
 /// the DRED bitrate budget in bps (zero when the budget can't afford
 /// at least 2 chunks, including when DRED is disabled).
+///
+/// Negative-input safety: if `bitrate_bps - bitrate_offset` is negative
+/// (very low total bitrate) the `IMAX(1, ...)` argument to `ec_ilog`
+/// keeps that helper in domain, and the `IMAX(0, ...)` on
+/// `target_dred_bitrate` clamps the float product to a non-negative
+/// integer, so the function still returns 0 rather than wrapping or
+/// producing junk.
 fn compute_dred_bitrate(enc: &mut OpusEncoder, bitrate_bps: i32, frame_size: i32) -> i32 {
     let mut dred_frac: f32;
     let bitrate_offset: i32;
@@ -838,6 +845,78 @@ fn compute_dred_bitrate(enc: &mut OpusEncoder, bitrate_bps: i32, frame_size: i32
     enc.dred_qmax = qmax;
     enc.dred_target_chunks = target_chunks;
     dred_bitrate
+}
+
+// Stage-5 (apply-feedback): direct FFI scalar fixture entry points.
+//
+// The functions above are private to this module. Stage-5 added a
+// direct-FFI Tier-1 differential test in `harness-deep-plc/tests/
+// dred_compute_bitrate_ffi_diff.rs` that calls C's verbatim copies of
+// `estimate_dred_bitrate` / `compute_dred_bitrate` (exported as
+// `ropus_c_*` from `harness-deep-plc/dred_encode_shim.c`) alongside
+// these Rust ports and asserts byte-exact agreement on the return value
+// and every out-parameter.
+//
+// To avoid widening the public surface of the encoder, both helpers are
+// re-exported as `#[doc(hidden)] pub` shims that forward to the private
+// implementations. The shim signatures match the C wrappers in shape
+// (scalar in / scalar out — no `&mut OpusEncoder`) so the test can call
+// either side with the same argument tuple.
+
+/// `#[doc(hidden)]` test-only re-export of `estimate_dred_bitrate`. See
+/// the comment block above for rationale. Returns
+/// `(estimated_bits, target_chunks)`.
+#[doc(hidden)]
+pub fn ropus_test_estimate_dred_bitrate(
+    q0: i32,
+    d_q: i32,
+    qmax: i32,
+    duration: i32,
+    target_bits: i32,
+) -> (i32, i32) {
+    estimate_dred_bitrate(q0, d_q, qmax, duration, target_bits)
+}
+
+/// `#[doc(hidden)]` test-only entry point that mirrors the C wrapper's
+/// signature: takes the four scalar fields `compute_dred_bitrate` reads
+/// off the `OpusEncoder` (`use_in_band_fec`, `packet_loss_perc`, `fs`,
+/// `dred_duration`) plus `bitrate_bps` and `frame_size`, and returns
+/// `(dred_bitrate_bps, q0, d_q, qmax, target_chunks)` so the test can
+/// compare every observable scalar.
+///
+/// The implementation builds a fresh stack-local `OpusEncoder` and
+/// configures it to match — calling the real `compute_dred_bitrate` —
+/// so the test is exercising the same code path the encoder uses, not
+/// a parallel reimplementation.
+#[doc(hidden)]
+pub fn ropus_test_compute_dred_bitrate(
+    use_in_band_fec: i32,
+    packet_loss_perc: i32,
+    fs: i32,
+    dred_duration: i32,
+    bitrate_bps: i32,
+    frame_size: i32,
+) -> (i32, i32, i32, i32, i32) {
+    // VOIP application is the natural home of a SILK-side bitrate
+    // computation; channels=1 keeps DRED enabled (set_dred_duration
+    // rejects stereo per the Stage-8 close-out gate). The C side does
+    // the same fan-in via the `(useInBandFEC, packetLossPercentage, Fs,
+    // dred_duration)` tuple, so the channel/application choice here is
+    // not load-bearing.
+    let mut enc = OpusEncoder::new(fs, 1, OPUS_APPLICATION_VOIP)
+        .expect("ropus_test_compute_dred_bitrate: encoder construction must succeed");
+    enc.silk_mode.use_in_band_fec = use_in_band_fec;
+    enc.silk_mode.packet_loss_percentage = packet_loss_perc;
+    enc.dred_duration = dred_duration;
+    enc.bitrate_bps = bitrate_bps;
+    let dred_bitrate = compute_dred_bitrate(&mut enc, bitrate_bps, frame_size);
+    (
+        dred_bitrate,
+        enc.dred_q0,
+        enc.dred_d_q,
+        enc.dred_qmax,
+        enc.dred_target_chunks,
+    )
 }
 
 /// Compute equivalent rate normalized to 20ms/complexity-10/VBR.
@@ -1837,6 +1916,12 @@ impl OpusEncoder {
         // compute the per-frame DRED budget once on the post-CBR bitrate,
         // subtract it from `st->bitrate_bps`, then re-bind the local so the
         // SILK/CELT allocators downstream see the post-DRED rate.
+        //
+        // Side-effect: `compute_dred_bitrate` writes `dred_q0/d_q/qmax/
+        // target_chunks` unconditionally (matches C 725-728). Even when the
+        // PLC short-frame branch below returns early, those fields are
+        // updated — intentional, faithful to C, and harmless because no
+        // DRED extension is emitted on that path.
         let dred_bitrate_bps = compute_dred_bitrate(self, self.bitrate_bps, frame_size);
         self.bitrate_bps -= dred_bitrate_bps;
         bitrate_bps = self.bitrate_bps;
@@ -2401,6 +2486,14 @@ impl OpusEncoder {
         let mut tot_size: i32 = 0;
         let mut dtx_count: i32 = 0;
 
+        // C opus_encoder.c:1786-1788. Reserve room for the DRED payload
+        // across the packet, then hand the saved bytes back to the first
+        // frame (the one the DRED extension actually rides on). This is
+        // loop-invariant — both `dred_bitrate_bps` and the outer
+        // `frame_size` are fixed for the whole packet — so compute it
+        // once here.
+        let dred_bytes = bitrate_to_bits(dred_bitrate_bps, self.fs, frame_size) / 8;
+
         // Encode each sub-frame using encode_frame_native with per-frame
         // transition flags (matching C opus_encode_native multiframe loop).
         let mut sub_packets: Vec<Vec<u8>> = Vec::with_capacity(nb_frames as usize);
@@ -2419,16 +2512,15 @@ impl OpusEncoder {
                 bitrate_to_bits(self.bitrate_bps, self.fs, enc_frame_size) / 8,
                 max_len_sum / nb_frames,
             );
-            // C opus_encoder.c:1786-1788. Reserve room for the DRED payload
-            // across the packet, then hand the saved bytes back to the
-            // first frame (the one the DRED extension actually rides on).
-            // `frame_size` here is the OUTER packet frame size, matching C.
-            let dred_bytes = bitrate_to_bits(dred_bitrate_bps, self.fs, frame_size) / 8;
             curr_max = imin(curr_max, (max_len_sum - dred_bytes) / nb_frames);
             // F48 — DRED-aware first-frame flag. Mirrors C 1777: when
             // sub-frame 0 (and possibly 1..k-1) is DTX-dropped, attach
             // DRED to the first non-DTX sub-frame instead of a doomed
-            // buffer.
+            // buffer. Predicate contract: `first_frame == (i == 0 || i ==
+            // dtx_count)`. Locked at the integration level by
+            // `harness-deep-plc/tests/dred_dtx_first_frame_diff.rs`; an
+            // earlier unit test that re-derived this same expression was
+            // tautological and has been removed.
             let first_frame = i == 0 || i == dtx_count;
             if first_frame {
                 curr_max += dred_bytes;
@@ -2867,7 +2959,12 @@ impl OpusEncoder {
                 if self.silk_mode.use_cbr != 0 {
                     // When in CBR mode but encoding hybrid, switch SILK to
                     // VBR with cap. Variations are absorbed by CELT/DRED.
-                    if self.mode == MODE_HYBRID {
+                    // F33b — mirrors C opus_encoder.c:2168-2178 under
+                    // `ENABLE_DRED`: the steal also fires when DRED is
+                    // active (`dred_bitrate_bps > 0`), even in SILK_ONLY,
+                    // so the SILK budget gets reduced and `useCBR` cleared
+                    // to leave headroom for the DRED extension.
+                    if self.mode == MODE_HYBRID || dred_bitrate_bps > 0 {
                         let other_bits = 0i16.max(
                             (self.silk_mode.max_bits
                                 - self.silk_mode.bit_rate * frame_size / self.fs)
@@ -8528,15 +8625,18 @@ mod tests {
     // `wrk_docs/2026.05.09 - HLD - DRED bitrate plumbing port.md` §5.
     // ===========================================================================
 
-    /// Helper for the `compute_dred_bitrate` tests: build a mono encoder
-    /// configured with the given DRED-relevant knobs and return it.
-    fn make_dred_encoder_mono(
+    /// Helper for the `compute_dred_bitrate` tests: build a 48 kHz mono
+    /// encoder configured with the given DRED-relevant knobs and return
+    /// it. Hard-coded to 48 kHz because the golden values for the
+    /// `compute_dred_bitrate` tests are derived against that rate.
+    fn make_dred_encoder_mono_48k(
         bitrate_bps: i32,
         use_in_band_fec: i32,
         packet_loss_perc: i32,
         dred_duration: i32,
     ) -> OpusEncoder {
         let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_VOIP).unwrap();
+        debug_assert_eq!(enc.fs, 48000, "make_dred_encoder_mono_48k expects fs=48000");
         // Match the inputs `compute_dred_bitrate` reads off the encoder.
         enc.silk_mode.use_in_band_fec = use_in_band_fec;
         enc.silk_mode.packet_loss_percentage = packet_loss_perc;
@@ -8654,7 +8754,7 @@ mod tests {
         // then returns 0 (since `bits_to_bitrate(0,...)=0` ⇒ dred_bitrate=0,
         // and target_chunks<2 also forces 0). q0/dQ/qmax are still written
         // unconditionally (C 725-727) — only target_chunks should be 0.
-        let mut enc = make_dred_encoder_mono(32000, 0, 0, 0);
+        let mut enc = make_dred_encoder_mono_48k(32000, 0, 0, 0);
         let ret = compute_dred_bitrate(&mut enc, 32000, 960);
         assert_eq!(ret, 0, "no-DRED path must return 0");
         assert_eq!(
@@ -8669,7 +8769,7 @@ mod tests {
         // ⇒ target_dred_bitrate = 0 ⇒ even with dred_duration>0 the
         // estimate gets target_chunks=0 (target_bits=0, so the loop never
         // sets it) ⇒ target_chunks<2 ⇒ return 0.
-        let mut enc = make_dred_encoder_mono(32000, 0, 0, 100);
+        let mut enc = make_dred_encoder_mono_48k(32000, 0, 0, 100);
         let ret = compute_dred_bitrate(&mut enc, 32000, 960);
         assert_eq!(ret, 0, "FEC off + loss=0 must return 0");
         assert_eq!(enc.dred_target_chunks, 0);
@@ -8689,7 +8789,7 @@ mod tests {
         //   gives target_chunks=14, max_dred_bits=663
         //   bits_to_bitrate(663, 48000, 960) = 663*50 = 33150
         //   dred_bitrate = min(28800, 33150) = 28800 (>= 2 chunks)
-        let mut enc = make_dred_encoder_mono(48000, 0, 30, 100);
+        let mut enc = make_dred_encoder_mono_48k(48000, 0, 30, 100);
         let ret = compute_dred_bitrate(&mut enc, 48000, 960);
         assert_eq!(ret, 28800, "FEC off, loss=30, 48kbps expected 28800 bps");
         assert_eq!(enc.dred_q0, 4);
@@ -8709,7 +8809,7 @@ mod tests {
         //   estimate(6, 5, 15, 100, target_bits=12600/50=252):
         //     gives target_chunks=3, max_dred_bits computed accordingly
         //   bits_to_bitrate yields > 12600 ⇒ ret = min = 12600 (3 ≥ 2 chunks)
-        let mut enc = make_dred_encoder_mono(48000, 1, 15, 100);
+        let mut enc = make_dred_encoder_mono_48k(48000, 1, 15, 100);
         let ret = compute_dred_bitrate(&mut enc, 48000, 960);
         assert_eq!(ret, 12600, "FEC on, loss=15, 48kbps expected 12600 bps");
         assert_eq!(enc.dred_q0, 6);
@@ -8727,7 +8827,7 @@ mod tests {
         // target_dred_bitrate=int(.8*4000)=3200; target_bits=3200/50=64
         // estimate(15,5,15,100,64): bits start = 90+6.4=96.4 > 64, so
         // every iteration's bits >= 64 ⇒ target_chunks stays 0 ⇒ return 0.
-        let mut enc = make_dred_encoder_mono(16000, 0, 30, 100);
+        let mut enc = make_dred_encoder_mono_48k(16000, 0, 30, 100);
         let ret = compute_dred_bitrate(&mut enc, 16000, 960);
         assert_eq!(ret, 0, "target_chunks<2 must clamp to 0");
         assert_eq!(enc.dred_target_chunks, 0, "tc must be 0 here");
@@ -8741,7 +8841,7 @@ mod tests {
         // `test_compute_dred_bitrate_fec_off_loss_30`). The constructor
         // sets all four fields to 0, so this test catches the regression
         // where Stage 3 forgets one of the writes.
-        let mut enc = make_dred_encoder_mono(48000, 0, 30, 100);
+        let mut enc = make_dred_encoder_mono_48k(48000, 0, 30, 100);
         // Pre-conditions: ctor defaults are all zero.
         assert_eq!(enc.dred_q0, 0);
         assert_eq!(enc.dred_d_q, 0);
@@ -8811,7 +8911,7 @@ mod tests {
         // We assert on `enc.dred_q0` (always written) rather than the
         // returned bitrate, since at low diffs target_chunks<2 forces ret=0.
         for (bitrate_bps, expected_q0) in &[(16095_i32, 15_i32), (16096, 12), (100_000, 4)] {
-            let mut enc = make_dred_encoder_mono(*bitrate_bps, 0, 30, 100);
+            let mut enc = make_dred_encoder_mono_48k(*bitrate_bps, 0, 30, 100);
             let _ = compute_dred_bitrate(&mut enc, *bitrate_bps, 960);
             assert_eq!(
                 enc.dred_q0, *expected_q0,
@@ -8821,33 +8921,11 @@ mod tests {
         }
     }
 
-    /// F48 — multi-frame `first_frame` shifts past DTX-dropped sub-frames.
-    /// Mirrors C `opus_encoder.c:1777`. We don't drive a real multi-frame
-    /// encode here (DTX gating is hard to coax deterministically); instead
-    /// we lock the formula directly: for each `(i, dtx_count)` pair, the
-    /// `first_frame` predicate must be `i == 0 || i == dtx_count`.
-    #[test]
-    fn test_first_frame_flag_follows_dtx_count_in_multiframe_dispatch() {
-        // (i, dtx_count, expected_first_frame)
-        let cases = [
-            // i=0 is always first_frame.
-            (0, 0, true),
-            (0, 5, true),
-            // Nothing DTX'd yet → only i=0 is first_frame.
-            (1, 0, false),
-            (2, 0, false),
-            // Sub-frame 0 was DTX → dtx_count=1 by i=1, so i=1 is first_frame.
-            (1, 1, true),
-            (2, 1, false),
-            // Sub-frames 0..=1 DTX → dtx_count=2 by i=2, so i=2 is first_frame.
-            (2, 2, true),
-        ];
-        for (i, dtx_count, expected) in cases {
-            let actual = i == 0 || i == dtx_count;
-            assert_eq!(
-                actual, expected,
-                "F48 predicate wrong for (i={i}, dtx_count={dtx_count})"
-            );
-        }
-    }
+    // F48 (multi-frame `first_frame = i == 0 || i == dtx_count`) is
+    // covered at the integration level by
+    // `harness-deep-plc/tests/dred_dtx_first_frame_diff.rs`. The earlier
+    // unit test re-derived the same predicate it was supposed to assert
+    // and so was tautological — it has been deleted in favour of the
+    // integration coverage and the F33b test below, which exercises a
+    // real C-vs-Rust divergence at the same code site.
 }
