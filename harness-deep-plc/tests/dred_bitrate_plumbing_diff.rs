@@ -214,18 +214,31 @@ fn rust_and_c_dred_packets_match_byte_for_byte() {
 
     assert_eq!(rust_packets.len(), c_packets.len());
 
-    // Stage 3 fallback per HLD §5 #12. The two encoders produce different
-    // packets for the configured DRED setup (FEC=1, loss=20, br=32kbps,
-    // dur=100, VBR default). Investigation: at these settings my f32 port
-    // of `compute_dred_bitrate` returns `target_chunks=1` and clamps
-    // `dred_bitrate_bps` to 0 (because `target_chunks < 2`). With
-    // `dred_bitrate_bps = 0`, the F33/F53/F48/budget-steal changes are all
-    // no-ops, and `compute_dred_bitrate`'s f32 ops contribute nothing to
-    // the bitstream. The remaining byte-level drift is pre-existing
-    // C-vs-Rust divergence in the SILK FEC/LBRR path under
-    // `useInBandFEC=1, packetLossPercentage=20` (unrelated to this Stage 3
-    // port). Asserting at least packet shape parity (length within ±2
-    // bytes, identical TOC) until the SILK side is reconciled separately.
+    // The two encoders cannot be byte-exact at this configuration because
+    // they run different SILK precision modes:
+    //
+    //   - Rust ports the **fixed-point** C SILK encoder
+    //     (`reference/silk/fixed/*.FIX.c`). Function names in the Rust port
+    //     carry the `_fix` suffix to make this explicit.
+    //   - This harness builds the C reference in **float mode** because xiph
+    //     forbids `FIXED_POINT + DEEP_PLC` at autoconf time
+    //     (`reference/configure.ac:973` AC_MSG_ERROR), so the linked C SILK
+    //     comes from `reference/silk/float/*.FLP.c` — a separate
+    //     implementation, not a precision variant of the same code.
+    //
+    // Cross-precision SILK output is fundamentally different at the bit
+    // level; ~30 dB PCM SNR is the floor for typical configs (see the
+    // 2026-05-10 cross-precision attribution journal). The byte-envelope
+    // check below is a coarse "SILK didn't go off the rails" gate; the
+    // genuine byte-exactness gate for this Stage's f32 work lives in
+    // `tests/dred_compute_bitrate_ffi_diff.rs` (which compares scalar f32
+    // outputs against the same C symbols, side-stepping the SILK
+    // precision boundary).
+    //
+    // Note also that at FEC=1/loss=20/br=32kbps/dur=100 my f32 port of
+    // `compute_dred_bitrate` returns `target_chunks=1` and clamps
+    // `dred_bitrate_bps` to 0, so F33/F53/F48/budget-steal are no-ops here
+    // anyway.
     let mut total_bytes_rust = 0usize;
     let mut total_bytes_c = 0usize;
     for (i, (rs, cs)) in rust_packets.iter().zip(c_packets.iter()).enumerate() {
@@ -249,13 +262,11 @@ fn rust_and_c_dred_packets_match_byte_for_byte() {
         diff <= envelope,
         "cumulative byte drift outside 20% envelope: \
          rust={total_bytes_rust} c={total_bytes_c} diff={diff} (envelope={envelope}). \
-         Pre-existing SILK FEC/LBRR drift suspected; check ropus/src/silk under \
-         use_in_band_fec=1, packet_loss_percentage=20."
+         Cross-precision SILK comparison (fixed-point Rust vs float-mode C); a \
+         drift this large means SILK has gone off the rails, not just precision."
     );
     eprintln!(
         "dred_bitrate_plumbing_diff: rust={total_bytes_rust} bytes, c={total_bytes_c} bytes, \
-         diff={diff} (Tier-2 fallback per HLD §5 #12 — pre-existing SILK FEC/LBRR drift, not \
-         caused by this Stage 3 port; `compute_dred_bitrate` returns 0 at these settings so \
-         F33/F53/budget-steal are no-ops here)"
+         diff={diff} (envelope check; cross-precision SILK comparison — see file header)"
     );
 }
