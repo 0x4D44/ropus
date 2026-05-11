@@ -4,6 +4,87 @@ All notable changes to the `ropus` crate are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 crate aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.18] - 2026-05-11
+
+First crates.io publish since `0.12.6` (2026-05-04). This entry consolidates
+the work of the unpublished `0.12.7` – `0.12.17` patch bumps so the public
+record matches the source. Theme: integration round-trip hardening — every
+fix below traces to a divergence the harness or fuzz cluster surfaced after
+0.12.0.
+
+### Fixed
+
+- Multistream encoder: `ms_*` setter family was writing only `fec_config`,
+  leaving `silk_mode.use_in_band_fec` stale. Collapsed the entire `ms_*`
+  setter+getter family into the public `OpusEncoder::set_*` fan-out (mirrors
+  C `opus_multistream_encoder_ctl`'s SET path). Closes 24h-fuzz Cluster A
+  H1, plus latent H2 (`ms_set_vbr` skipping `silk_mode.use_cbr`). (`739f9c6`)
+- SILK prefill branch was structurally diverged from the non-prefill body.
+  Unified the two so prefill no longer drifts from the C reference. Closes
+  Cluster A B1. (`71b37dd`)
+- Multistream wrapper had a complexity-modulus asymmetry vs. C; aligned the
+  per-stream complexity computation. Closes Cluster A NEW class. (`05702b5`)
+- Multistream packet validation: removed Rust-side error tolerances that
+  were masking real Ok/Err divergences against the C reference, and tightened
+  the parity oracle. (`e127a4e`, `89c4989`)
+- Multiframe encoder VBR/FEC/DTX parity (`0fc1261`), CBR rate-switch
+  resampler parity (`96ec3d1`), hybrid CELT↔SILK info handoff parity
+  (`27be4ff`), and gain-fade fixed-point parity (`8847c20`).
+- CELT decoder PLC default state did not match C on the first PLC frame;
+  fixed initial state. (`4f52410`)
+- CELT encoder: two silence-path state divergences and a CELT→SILK
+  redundancy-frame prediction sequencing bug. (`612fe78`, `9d9d9cc`)
+- SILK LBRR `ec_prev` state mutation parity — the LBRR pass was leaving
+  `ec_prev` in a different state than the C reference. (`55e224c`)
+- PLC short-frame `delay_buffer` contamination: state from the previous
+  frame was bleeding through. (`9b8c552`)
+- DRED bitrate plumbing: five setter-sequence divergences (F33, F48, F53,
+  stale-quantizer, F33b) where the encoder's response to CTL ordering
+  differed from C. `compute_dred_bitrate` / `estimate_dred_bitrate` ported
+  byte-exact in f32, validated via 15-vector FFI fixture across FEC,
+  loss 0–30 %, 5–120 kbps, frame sizes 160/320/480/960, and 8/16/24/48 kHz.
+  (`755eb3b`, `8f342bc`, `9a420c4`, `c0c145d`)
+- DRED LPCNet feature drift: radix-5 FFT grouping and a `pow` precision
+  fix bring DRED feature output substantially closer to C. (`b1bfa6f`)
+- DNN/SILK numerical parity: `lpc_from_bands` lag-windowing precision +
+  noise-floor constant (`eb4c310`); `if_features` `norm_1` routed through
+  f64 to match C semantics (`6b1b8d9`); `compute_burg_cepstrum` f32/f64
+  parity via `powi` + `log10` (`6dc7f2e`); `celt_fir_f32` summation order
+  (`da62d7a`).
+- LFE band-0 boost added to match the C reference. (`f354712`)
+- C-ABI shim (`capi/`) float-PCM ingest fix (Cluster B Phase 1). (`3f76dd6`)
+
+### Tooling / Build
+
+- Build cleanliness: `-msse4.1` applied to xiph/opus C reference SIMD
+  sources (`368f336`); silenced the upstream "opus will be very slow"
+  note (`b8e82a5`); FFI extern blocks annotated with `#[link]` for
+  self-contained linking (`2f21d43`); cleared all default-lint warnings
+  workspace-wide (`bce8490`); final fmt + clippy sweep (`6cbff17`).
+
+### Testing
+
+These changes don't affect the published API but materially change what
+"green" means for the crate.
+
+- Two large fuzz campaigns (24 h cluster + 8 h overnight), 11+ crash
+  classes triaged and fixed; all repros migrated to permanent regression
+  seeds. New targets: `fuzz_encode_multiframe` (rebuilt + 5 new CTL
+  dimensions), `fuzz_multistream`, `fuzz_repacketizer_seq`, `fuzz_dnn_blob`,
+  `fuzz_decode_plc_seq`, mode-transition (SILK/HYBRID/CELT), stereo-biased
+  multiframe.
+- Bounded PLC recovery-drift oracle on `decode24` (exact prefix + bounded
+  drift; full-frame exact remains documented debt).
+- Release-preflight gate now distinguishes exact byte parity, exact PCM
+  parity, bounded drift, SNR-gated parity, recovery-only,
+  error-agreement-only, smoke-only, ignored, and asset-skipped lanes.
+  Adds release-blocking gates for DRED/DNN assets, generated Ogg
+  family-0 corpus, performance threshold (decode 1.26×), and platform/
+  sanitizer breadth (x86_64 smoke + cargo-fuzz ASan).
+- Mutation-testing audit runner revived against the current
+  `ropus/src/...` crate layout.
+- Parameterized round-trip differential grid added to the harness.
+
 ## [0.12.0] - 2026-04-29
 
 ### Added
@@ -261,6 +342,7 @@ crate aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `publish = false` crate hosting the C reference FFI build, integration
   binaries, and tooling. (`fa031ab`)
 
+[0.12.18]: https://github.com/0x4D44/ropus/releases/tag/v0.12.18
 [0.12.0]: https://github.com/0x4D44/ropus/releases/tag/v0.12.0
 [0.11.1]: https://github.com/0x4D44/ropus/releases/tag/v0.11.1
 [0.11.0]: https://github.com/0x4D44/ropus/releases/tag/v0.11.0
