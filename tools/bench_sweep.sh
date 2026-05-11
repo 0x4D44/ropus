@@ -14,7 +14,8 @@ done
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/target/release/ropus-compare.exe"
-[[ -x "$BIN" ]] || { echo "Bench binary not found at $BIN"; exit 1; }
+[[ -x "$BIN" ]] || BIN="$ROOT/target/release/ropus-compare"
+[[ -x "$BIN" ]] || { echo "Bench binary not found under $ROOT/target/release"; exit 1; }
 
 # label|wav|bitrate
 VECTORS=(

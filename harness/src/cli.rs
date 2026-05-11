@@ -2679,20 +2679,22 @@ fn bench_encode_c(
     let mut packet = vec![0u8; max_packet];
     let num_frames = pcm.len() / samples_per_frame;
 
+    // Construct the encoder once outside the timed loop; see bench_decode_c for
+    // the rationale (matches real-caller construct-once / encode-many usage).
     let start = std::time::Instant::now();
-    for _ in 0..iters {
-        unsafe {
-            let mut error: i32 = 0;
-            let enc = bindings::opus_encoder_create(
-                sample_rate,
-                channels,
-                bindings::OPUS_APPLICATION_AUDIO,
-                &mut error,
-            );
-            bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
-            bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, complexity);
-            bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_VBR_REQUEST, 0i32);
+    unsafe {
+        let mut error: i32 = 0;
+        let enc = bindings::opus_encoder_create(
+            sample_rate,
+            channels,
+            bindings::OPUS_APPLICATION_AUDIO,
+            &mut error,
+        );
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, complexity);
+        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_VBR_REQUEST, 0i32);
 
+        for _ in 0..iters {
             let mut pos = 0;
             while pos + samples_per_frame <= pcm.len() {
                 let ret = bindings::opus_encode(
@@ -2705,8 +2707,8 @@ fn bench_encode_c(
                 let _ = std::hint::black_box(ret);
                 pos += samples_per_frame;
             }
-            bindings::opus_encoder_destroy(enc);
         }
+        bindings::opus_encoder_destroy(enc);
     }
     let elapsed = start.elapsed().as_secs_f64();
     BenchResult {
@@ -2733,13 +2735,13 @@ fn bench_encode_rust(
     let mut packet = vec![0u8; max_packet];
     let num_frames = pcm.len() / samples_per_frame;
 
+    // Construct the encoder once outside the timed loop; see bench_decode_c.
+    let mut enc = OpusEncoder::new(sample_rate, channels, OPUS_APPLICATION_AUDIO).unwrap();
+    enc.set_bitrate(bitrate);
+    enc.set_complexity(complexity);
+    enc.set_vbr(0);
     let start = std::time::Instant::now();
     for _ in 0..iters {
-        let mut enc = OpusEncoder::new(sample_rate, channels, OPUS_APPLICATION_AUDIO).unwrap();
-        enc.set_bitrate(bitrate);
-        enc.set_complexity(complexity);
-        enc.set_vbr(0);
-
         let mut pos = 0;
         while pos + samples_per_frame <= pcm.len() {
             let ret = enc.encode(
@@ -2776,12 +2778,16 @@ fn bench_decode_c(encoded: &[u8], sample_rate: i32, channels: i32, iters: u32) -
         }
     }
 
+    // Construct the decoder once outside the timed loop. Real callers create
+    // a decoder per stream and decode many packets through it; recreating per
+    // iter measured constructor cost (which for Rust includes loading the DNN
+    // weights blob) instead of steady-state decode throughput.
     let start = std::time::Instant::now();
-    for _ in 0..iters {
-        unsafe {
-            let mut error: i32 = 0;
-            let dec = bindings::opus_decoder_create(sample_rate, channels, &mut error);
+    unsafe {
+        let mut error: i32 = 0;
+        let dec = bindings::opus_decoder_create(sample_rate, channels, &mut error);
 
+        for _ in 0..iters {
             let mut pos = 0;
             while pos + 2 <= encoded.len() {
                 let pkt_len = u16::from_le_bytes([encoded[pos], encoded[pos + 1]]) as usize;
@@ -2800,8 +2806,8 @@ fn bench_decode_c(encoded: &[u8], sample_rate: i32, channels: i32, iters: u32) -
                 let _ = std::hint::black_box(ret);
                 pos += pkt_len;
             }
-            bindings::opus_decoder_destroy(dec);
         }
+        bindings::opus_decoder_destroy(dec);
     }
     let elapsed = start.elapsed().as_secs_f64();
     BenchResult {
@@ -2828,10 +2834,11 @@ fn bench_decode_rust(encoded: &[u8], sample_rate: i32, channels: i32, iters: u32
         }
     }
 
+    // Construct the decoder once outside the timed loop. See the C-side bench
+    // for the rationale.
+    let mut dec = OpusDecoder::new(sample_rate, channels).unwrap();
     let start = std::time::Instant::now();
     for _ in 0..iters {
-        let mut dec = OpusDecoder::new(sample_rate, channels).unwrap();
-
         let mut pos = 0;
         while pos + 2 <= encoded.len() {
             let pkt_len = u16::from_le_bytes([encoded[pos], encoded[pos + 1]]) as usize;
