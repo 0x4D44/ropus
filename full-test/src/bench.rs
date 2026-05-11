@@ -217,92 +217,95 @@ struct ThresholdSpec {
     dec_release_fail_ratio: f64,
 }
 
-/// Initial threshold source. Values are deliberately conservative and
-/// release-only: each row starts from the published README performance table,
-/// applies the signed HLD's same-run ratio policy, and adds a small floor so
-/// rows currently faster than C are not required to stay faster than C.
-pub const THRESHOLD_SOURCE: &str = "initial calibration from README 2026-04-19 ratios; release_fail=max(published_ratio+0.05, published_ratio*1.20, 1.05), rounded up";
+/// Recalibrated 2026-05-11 against a fresh 5-sweep median baseline measured on
+/// i7-14700KF / WSL2 / x86-64-v3 with the bench harness fixed to construct the
+/// codec once outside the timed loop (commit 54fef85 — prior runs measured
+/// constructor cost, not steady-state decode throughput). Per-row baseline is
+/// the median of 5 clean sweeps; release_fail is computed by the same formula
+/// as the original calibration. See `wrk_journals/2026.05.11 - JRN -
+/// perf-recalibration.md`.
+pub const THRESHOLD_SOURCE: &str = "recalibrated 2026-05-11 from 5-sweep median on i7-14700KF/WSL2/x86-64-v3 with bench-amortise fix; release_fail=max(baseline+0.05, baseline*1.20, 1.05), rounded up";
 
 const THRESHOLDS: &[ThresholdSpec] = &[
     ThresholdSpec {
         label: "SILK NB 8k mono noise",
         relative_path: "tests/vectors/8000hz_mono_noise.wav",
-        enc_baseline_ratio: 1.05,
-        dec_baseline_ratio: 0.69,
-        enc_release_fail_ratio: 1.26,
-        dec_release_fail_ratio: 1.05,
+        enc_baseline_ratio: 0.97,
+        dec_baseline_ratio: 0.95,
+        enc_release_fail_ratio: 1.17,
+        dec_release_fail_ratio: 1.14,
     },
     ThresholdSpec {
         label: "SILK WB 16k mono noise",
         relative_path: "tests/vectors/16000hz_mono_noise.wav",
-        enc_baseline_ratio: 1.14,
-        dec_baseline_ratio: 0.89,
-        enc_release_fail_ratio: 1.37,
-        dec_release_fail_ratio: 1.07,
+        enc_baseline_ratio: 0.96,
+        dec_baseline_ratio: 1.10,
+        enc_release_fail_ratio: 1.16,
+        dec_release_fail_ratio: 1.32,
     },
     ThresholdSpec {
         label: "Hybrid 24k mono noise",
         relative_path: "tests/vectors/24000hz_mono_noise.wav",
-        enc_baseline_ratio: 1.11,
-        dec_baseline_ratio: 0.90,
-        enc_release_fail_ratio: 1.34,
-        dec_release_fail_ratio: 1.08,
+        enc_baseline_ratio: 0.97,
+        dec_baseline_ratio: 1.02,
+        enc_release_fail_ratio: 1.17,
+        dec_release_fail_ratio: 1.23,
     },
     ThresholdSpec {
         label: "CELT FB 48k mono noise",
         relative_path: "tests/vectors/48000hz_mono_noise.wav",
-        enc_baseline_ratio: 1.08,
-        dec_baseline_ratio: 0.92,
-        enc_release_fail_ratio: 1.30,
-        dec_release_fail_ratio: 1.11,
+        enc_baseline_ratio: 1.13,
+        dec_baseline_ratio: 0.98,
+        enc_release_fail_ratio: 1.36,
+        dec_release_fail_ratio: 1.18,
     },
     ThresholdSpec {
         label: "CELT FB 48k stereo noise",
         relative_path: "tests/vectors/48000hz_stereo_noise.wav",
-        enc_baseline_ratio: 1.04,
-        dec_baseline_ratio: 0.94,
-        enc_release_fail_ratio: 1.25,
-        dec_release_fail_ratio: 1.13,
+        enc_baseline_ratio: 1.10,
+        dec_baseline_ratio: 1.07,
+        enc_release_fail_ratio: 1.32,
+        dec_release_fail_ratio: 1.29,
     },
     ThresholdSpec {
         label: "CELT 48k mono sine 1k loud",
         relative_path: "tests/vectors/48k_sine1k_loud.wav",
-        enc_baseline_ratio: 0.94,
-        dec_baseline_ratio: 1.05,
-        enc_release_fail_ratio: 1.13,
-        dec_release_fail_ratio: 1.26,
+        enc_baseline_ratio: 1.00,
+        dec_baseline_ratio: 0.99,
+        enc_release_fail_ratio: 1.20,
+        dec_release_fail_ratio: 1.19,
     },
     ThresholdSpec {
         label: "CELT 48k mono sweep",
         relative_path: "tests/vectors/48k_sweep.wav",
         enc_baseline_ratio: 0.96,
-        dec_baseline_ratio: 0.99,
+        dec_baseline_ratio: 1.00,
         enc_release_fail_ratio: 1.16,
-        dec_release_fail_ratio: 1.19,
+        dec_release_fail_ratio: 1.20,
     },
     ThresholdSpec {
         label: "CELT 48k mono square 1k",
         relative_path: "tests/vectors/48k_square1k.wav",
-        enc_baseline_ratio: 1.03,
-        dec_baseline_ratio: 1.03,
-        enc_release_fail_ratio: 1.24,
-        dec_release_fail_ratio: 1.24,
+        enc_baseline_ratio: 1.20,
+        dec_baseline_ratio: 0.92,
+        enc_release_fail_ratio: 1.44,
+        dec_release_fail_ratio: 1.11,
     },
     ThresholdSpec {
         label: "SPEECH 48k mono (SAPI TTS)",
         relative_path: "tests/vectors/speech_48k_mono.wav",
-        enc_baseline_ratio: 0.84,
-        dec_baseline_ratio: 0.98,
-        enc_release_fail_ratio: 1.05,
-        dec_release_fail_ratio: 1.18,
+        enc_baseline_ratio: 1.20,
+        dec_baseline_ratio: 1.01,
+        enc_release_fail_ratio: 1.44,
+        dec_release_fail_ratio: 1.22,
     },
     ThresholdSpec {
         label: "MUSIC 48k stereo",
         relative_path: "tests/vectors/music_48k_stereo.wav",
-        enc_baseline_ratio: 1.01,
-        dec_baseline_ratio: 0.98,
-        enc_release_fail_ratio: 1.22,
-        dec_release_fail_ratio: 1.18,
+        enc_baseline_ratio: 1.16,
+        dec_baseline_ratio: 1.07,
+        enc_release_fail_ratio: 1.40,
+        dec_release_fail_ratio: 1.29,
     },
 ];
 

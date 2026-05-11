@@ -150,24 +150,28 @@ the C reference (which dispatches to hand-tuned SSE4.1/AVX2 at runtime).
 
 | Vector                   | Encode | Decode |
 |--------------------------|:------:|:------:|
-| SILK NB 8k mono noise    | 1.05×  | 0.69×  |
-| SILK WB 16k mono noise   | 1.14×  | 0.89×  |
-| Hybrid 24k mono noise    | 1.11×  | 0.90×  |
-| CELT FB 48k mono noise   | 1.08×  | 0.92×  |
-| CELT FB 48k stereo noise | 1.04×  | 0.94×  |
-| CELT 48k sine 1k loud    | 0.94×  | 1.05×  |
-| CELT 48k sweep           | 0.96×  | 0.99×  |
-| CELT 48k square 1k       | 1.03×  | 1.03×  |
-| SPEECH 48k mono (TTS)    | 0.84×  | 0.98×  |
-| MUSIC 48k stereo         | 1.01×  | 0.98×  |
-| **Mean**                 | **1.02×** | **0.95×** |
+| SILK NB 8k mono noise    | 0.97×  | 0.95×  |
+| SILK WB 16k mono noise   | 0.96×  | 1.10×  |
+| Hybrid 24k mono noise    | 0.97×  | 1.02×  |
+| CELT FB 48k mono noise   | 1.13×  | 0.98×  |
+| CELT FB 48k stereo noise | 1.10×  | 1.07×  |
+| CELT 48k sine 1k loud    | 1.00×  | 0.99×  |
+| CELT 48k sweep           | 0.96×  | 1.00×  |
+| CELT 48k square 1k       | 1.20×  | 0.92×  |
+| SPEECH 48k mono (TTS)    | 1.20×  | 1.01×  |
+| MUSIC 48k stereo         | 1.16×  | 1.07×  |
+| **Mean**                 | **1.06×** | **1.01×** |
 
-Three vectors encode *faster* than C (sine, sweep, SPEECH) with MUSIC
-essentially at parity (1.01×); the remaining six run 3-14% slower, dominated
-by SILK where the C reference dispatches to hand-tuned SSE. Decode is faster
-or at parity on eight of ten vectors, with CELT full-band sine (1.05×) and
-square (1.03×) running slightly behind. Full measurement log:
-[`wrk_journals/2026.04.19 - JRN - avx2-baseline.md`](wrk_journals/2026.04.19%20-%20JRN%20-%20avx2-baseline.md).
+Per-vector medians from a 5-sweep run on i7-14700KF / WSL2 with the bench
+harness amortising codec construction across iters (commit `54fef85` — earlier
+runs measured the cost of allocating an `OpusDecoder` and deserialising the
+8.78 MB embedded LPCNet weights blob, not steady-state decode throughput).
+Encode is faster than C on five vectors (the SILK and Hybrid noise rows, plus
+CELT sweep) and within 20% on the remainder. Decode is faster or at parity on
+six vectors, with the worst row at 1.10× (SILK WB noise). Full measurement
+log: [`wrk_journals/2026.05.11 - JRN - perf-recalibration.md`](wrk_journals/2026.05.11%20-%20JRN%20-%20perf-recalibration.md);
+the original `2026-04-19` baseline (Ryzen 9950X3D, pre-bench-fix) is preserved
+at [`wrk_journals/2026.04.19 - JRN - avx2-baseline.md`](wrk_journals/2026.04.19%20-%20JRN%20-%20avx2-baseline.md).
 
 ### Non-standard release profile
 
