@@ -257,6 +257,17 @@ public:
             const int rc = ropus_fb2k_seek(m_reader, 0);
             if (rc != 0) throw_from_ropus_error(/*during_open=*/false);
         }
+
+        // Seed the live-bitrate EWMA with the file-wide average so the status
+        // bar starts at a sensible value rather than ramping from zero. If the
+        // nominal bitrate is unknown (-1), leave at 0.0 — decode_run's
+        // cold-start branch will seed directly from the first real packet.
+        // Reset m_reported_kbps so the next dynamic-info call re-asserts the
+        // value (matters across decode_initialize replays).
+        m_smoothed_bps  = m_info.nominal_bitrate > 0
+                              ? static_cast<double>(m_info.nominal_bitrate)
+                              : 0.0;
+        m_reported_kbps = -1;
     }
 
     bool decode_run(audio_chunk& p_chunk, abort_callback& p_abort) {
@@ -265,10 +276,12 @@ public:
         m_io_ctx.abort   = &p_abort;
         m_io_ctx.pending = nullptr;
 
+        uint64_t bytes_consumed = 0;
         const int samples = ropus_fb2k_decode_next(
             m_reader,
             m_decode_buf.data(),
-            MAX_SAMPLES_PER_CHANNEL);
+            MAX_SAMPLES_PER_CHANNEL,
+            &bytes_consumed);
 
         if (samples < 0) {
             throw_from_ropus_error(/*during_open=*/false);
@@ -279,6 +292,26 @@ public:
 
         const unsigned channels = m_info.channels > 0 ? m_info.channels : 1;
         const unsigned srate    = m_info.sample_rate != 0 ? m_info.sample_rate : 48000;
+
+        // Update the live-bitrate EWMA from this call's bytes-consumed signal.
+        // Smoothing parameters and display logic live here on the C++ side
+        // (HLD §4.1): the Rust reader stays UI-agnostic, the shim translates.
+        {
+            const double inst_bps = static_cast<double>(bytes_consumed) * 8.0 *
+                                    static_cast<double>(srate) /
+                                    static_cast<double>(samples);
+            if (m_smoothed_bps <= 0.0) {
+                // Cold start (unseekable stream / nominal_bitrate < 0). Seed
+                // directly from the first real packet rather than ramping from
+                // zero, which would otherwise flash 3 → 6 → 9 kbps in the
+                // status bar over the first second of playback.
+                m_smoothed_bps = inst_bps;
+            } else {
+                constexpr double ALPHA = 0.02;   // ~1 s @ 20 ms packets
+                m_smoothed_bps = ALPHA * inst_bps + (1.0 - ALPHA) * m_smoothed_bps;
+            }
+        }
+
         // set_data_32 takes float* directly — audio_sample is double on x64,
         // and it performs the float→double conversion internally (with
         // g_guess_channel_config(channels) for the channel mask).
@@ -287,6 +320,20 @@ public:
             static_cast<size_t>(samples),
             channels,
             srate);
+        return true;
+    }
+
+    // Called by fb2k after every successful decode_run (input.h:99-103), on
+    // the same thread — no dirty flag or atomics needed. We round the
+    // smoothed bps to integer kbps and report it only when it changes,
+    // matching fb2k's display resolution. Returning false leaves the
+    // existing readout untouched.
+    bool decode_get_dynamic_info(file_info& p_out, double& p_timestamp_delta) {
+        const int kbps = static_cast<int>((m_smoothed_bps + 500.0) / 1000.0);
+        if (kbps == m_reported_kbps || kbps <= 0) return false;
+        p_out.info_set_bitrate(kbps);
+        p_timestamp_delta = 0.0;   // applies as of the chunk we just delivered
+        m_reported_kbps   = kbps;
         return true;
     }
 
@@ -406,6 +453,11 @@ private:
     IoCtx               m_io_ctx;
     RopusFb2kReader*    m_reader = nullptr;
     RopusFb2kInfo       m_info   = {};
+    // Live-VBR readout state (HLD §4.4). EWMA in bits/sec, plus the last
+    // integer kbps we pushed to fb2k via decode_get_dynamic_info. Seeded in
+    // decode_initialize, updated in decode_run.
+    double              m_smoothed_bps  = 0.0;
+    int                 m_reported_kbps = -1;
     std::array<float, MAX_SAMPLES_PER_CHANNEL * 2> m_decode_buf{};
 };
 

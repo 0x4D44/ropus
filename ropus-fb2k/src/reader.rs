@@ -419,10 +419,15 @@ impl<R: Read + Seek> OggOpusReader<R> {
     /// worth preserving).
     ///
     /// `bytes_consumed` is the sum of `pkt.data.len()` for every Ogg packet
-    /// read by this call — including packets silently dropped because their
-    /// samples fell entirely within the pre-skip / post-seek pre-roll window
-    /// — so the caller can compute an instantaneous bitrate that accounts
-    /// for every byte of compressed payload pulled from the stream.
+    /// whose decoded samples contributed at least one *kept* sample to the
+    /// returned buffer. Packets fully discarded as post-seek pre-roll
+    /// (RFC 7845 §4.2) are NOT counted — they don't map to caller-visible
+    /// samples, and the C++ EWMA at `input_ropus_opus.cpp:300` divides by
+    /// the kept-sample count: charging it pre-roll bytes would spike the
+    /// instantaneous bitrate by ~5× for the first second of playback after
+    /// every seek. See HLD §4.2 parenthetical ("the bytes that map to the
+    /// samples-per-channel returned"); the §4.3 prose was the buggy
+    /// initial draft and §4.2 wins.
     ///
     /// Discard logic is unified across pre-skip (first call) and post-seek
     /// pre-roll (after `seek`): we drop samples until `next_sample_abs_pos`
@@ -467,27 +472,27 @@ impl<R: Read + Seek> OggOpusReader<R> {
             .expect("decoder was just lazy-initialised");
         let scratch = self.decode_scratch.as_mut_slice();
 
-        // Accumulated encoded payload bytes consumed by this call. Includes
-        // every packet read — both the one whose samples we ultimately return
-        // and any earlier packets fully consumed by the pre-skip / post-seek
-        // pre-roll discard window. Reported back so the C++ shim can compute
-        // a live VBR bitrate that doesn't drop pre-roll-only callbacks (HLD
-        // §4.3 "Rust side").
+        // Accumulated encoded payload bytes consumed by this call. Counts
+        // ONLY packets that contributed at least one kept sample to the
+        // caller's buffer — fully-discarded pre-skip / post-seek pre-roll
+        // packets do not bump the accumulator. The C++ EWMA at
+        // `input_ropus_opus.cpp:300` divides bytes by the kept-sample count
+        // returned to fb2k; including pre-roll bytes here would inflate the
+        // instantaneous bitrate by ~5× for ~1 s after every seek (4 × 20 ms
+        // discarded packets / 1 kept partial packet). The accumulator is
+        // therefore updated AFTER the `kept == 0 { continue; }` guard, not
+        // before — see the comment on that branch.
         let mut bytes_consumed: u64 = 0;
 
         loop {
             let pkt = packet_reader.read_packet().map_err(ogg_err_to_reader)?;
             let Some(pkt) = pkt else {
                 // Clean EOF. Per HLD §4.2 the EOF return reports
-                // `bytes_consumed == 0`, even if this call had already
-                // accumulated payload from pre-roll packets that all got
-                // discarded before EOF was hit. The C++ shim never reads
-                // the value when samples == 0 anyway, but the simpler
-                // contract is worth preserving — and it pins the test that
-                // would otherwise still pass if we leaked the accumulator.
+                // `bytes_consumed == 0`. The C++ shim never reads the value
+                // when samples == 0, but the simpler contract is worth
+                // preserving.
                 return Ok((0, 0));
             };
-            bytes_consumed += pkt.data.len() as u64;
 
             let decoded = decoder
                 .decode_float(
@@ -529,9 +534,26 @@ impl<R: Read + Seek> OggOpusReader<R> {
             self.next_sample_abs_pos = self.next_sample_abs_pos.saturating_add(decoded as u64);
 
             if kept == 0 {
-                // Packet entirely consumed by discard — grab the next one.
+                // Packet entirely consumed by pre-skip / post-seek pre-roll
+                // discard. Do NOT add `pkt.data.len()` to `bytes_consumed` and
+                // grab the next packet. The C++ EWMA computes
+                // `inst_bps = bytes * 8 * srate / kept_samples`; charging it
+                // for pre-roll bytes (which produce zero caller-visible
+                // samples) would spike the bitrate ~5× for ~1 s of playback
+                // after each seek. This ordering is load-bearing — if you
+                // ever move the accumulator above the discard logic, the
+                // post-seek bitrate readout will visibly mis-attribute the
+                // pre-roll bytes. See HLD §4.2 (the §4.3 prose was buggy).
                 continue;
             }
+            // This packet produced at least one kept sample, so its payload
+            // bytes map onto caller-visible audio — count them. Same rule
+            // for the first call's pre-skip trim: the very first audio
+            // packet always emits `frame_samples - pre_skip` kept samples
+            // (e.g. 960 - 312 = 648), so it lands here, not in the discard
+            // branch above. Therefore the regular pre-skip path is also
+            // covered by the kept-only attribution.
+            bytes_consumed += pkt.data.len() as u64;
 
             // The FFI shim enforces `max_samples_per_ch >= 5760 ==
             // MAX_FRAME_SAMPLES_PER_CH`, and Opus packets produce at most

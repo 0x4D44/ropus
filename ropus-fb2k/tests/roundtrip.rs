@@ -1106,6 +1106,108 @@ fn seek_to_nonzero_then_decode() {
 }
 
 // ---------------------------------------------------------------------------
+// decode_next_excludes_preroll_bytes_after_seek — regression for the live-VBR
+// bitrate FFI contract (HLD §4.2). After a seek that lands well inside the
+// fixture, the 80 ms pre-roll discards roughly 4 × 20 ms packets before the
+// first kept sample. Those discarded packets' payload bytes must NOT show up
+// in the post-seek `decode_next` call's `bytes_consumed` — the C++ EWMA at
+// `input_ropus_opus.cpp:300` computes `inst_bps = bytes * 8 * srate /
+// kept_samples`, so leaking pre-roll bytes here would inflate the
+// instantaneous bitrate by ~5× for ~1 s of playback, visibly skewing the
+// status-bar readout.
+//
+// Oracle: compare against a no-seek baseline taken from the very first
+// `decode_next` call on the same fixture (which also exercises the pre-skip
+// trim path). With the bug the post-seek call's bytes_consumed would be
+// multi-packet-sized; with the fix it should be within a small multiple of
+// the no-seek baseline (one kept partial packet either way).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn decode_next_excludes_preroll_bytes_after_seek() {
+    // 30 packets ≈ 600 ms. Seek to 10 000 samples (~208 ms) — well past the
+    // first few packets so the 80 ms pre-roll spans ~4 fully-discarded
+    // packets before any kept sample lands. Matches the fixture shape used
+    // by `seek_to_nonzero_then_decode`.
+    const PACKETS: usize = 30;
+    const PRE_SKIP: u16 = 312;
+    const SEEK_SAMPLE: u64 = 10_000;
+    let bytes =
+        build_opus_fixture_with_audio_packets("ropus-fb2k-test", &[], PACKETS, Some(PRE_SKIP));
+
+    // Baseline: no-seek decode_next on a fresh handle. The first kept frame
+    // post-pre-skip-trim is 960 - 312 = 648 samples and consumes ONE packet
+    // payload. This is the reference for "kept samples per single-packet
+    // payload" — the post-seek call should land in the same ballpark, not
+    // ~5× higher.
+    let baseline_bytes = {
+        let (_io, handle) = open_from_bytes(bytes.clone());
+        assert!(!handle.is_null(), "fixture must open");
+        let mut buf = vec![0f32; 5760 * 2];
+        let mut bc = 0u64;
+        let rc = unsafe {
+            ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bc)
+        };
+        assert!(rc > 0, "baseline decode must produce samples (got {rc})");
+        unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+        bc
+    };
+    assert!(
+        baseline_bytes > 0,
+        "baseline bytes_consumed must be positive"
+    );
+
+    // Open a fresh handle, seek past the pre-roll window, then call
+    // decode_next exactly ONCE. With the fix `bytes_consumed` reflects only
+    // the kept-sample-producing packet(s); with the bug it would also
+    // include ~4 fully-discarded pre-roll packets.
+    let (_io, handle) = open_from_bytes(bytes);
+    assert!(!handle.is_null(), "fixture must open");
+    let rc_seek = unsafe { ropus_fb2k::ropus_fb2k_seek(handle, SEEK_SAMPLE) };
+    assert_eq!(
+        rc_seek,
+        0,
+        "seek failed: {}",
+        last_error_string()
+    );
+
+    let mut buf = vec![0f32; 5760 * 2];
+    let mut post_seek_bytes = 0u64;
+    let rc = unsafe {
+        ropus_fb2k::ropus_fb2k_decode_next(
+            handle,
+            buf.as_mut_ptr(),
+            5760,
+            &mut post_seek_bytes,
+        )
+    };
+    assert!(
+        rc > 0,
+        "post-seek decode must produce samples (got {rc}, last_error={:?})",
+        last_error_string()
+    );
+    unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+
+    // Core assertion: bytes_consumed must NOT be multi-packet-sized. With the
+    // bug we'd expect ~5× baseline (4 discarded pre-roll packets + 1 kept
+    // packet, all of similar size for a silence fixture). The 2× window
+    // tolerates ordinary packet-size variance for partial-frame landings
+    // while still flagging the ~5× regression unambiguously.
+    let bound = baseline_bytes * 2;
+    assert!(
+        post_seek_bytes <= bound,
+        "post-seek bytes_consumed = {post_seek_bytes} exceeds 2× baseline ({baseline_bytes}) — \
+         pre-roll bytes are leaking into the kept-sample byte count, which would skew the \
+         C++ EWMA. Expected <= {bound}."
+    );
+    // Sanity: it shouldn't be zero either — the kept packet was real.
+    assert!(
+        post_seek_bytes > 0,
+        "post-seek bytes_consumed must be positive (got 0)"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // seek_past_end_clamps — seek beyond total_samples returns OK (clamped);
 // next decode is effectively EOF (zero samples).
 // ---------------------------------------------------------------------------

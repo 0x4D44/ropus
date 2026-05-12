@@ -93,7 +93,8 @@ copy foo_ropus\build\Release\foo_ropus.dll ^
 Then restart foobar2000. *Preferences → Components* should list
 `ropus (Rust Opus decoder) 0.2.0`. Opening any `.opus` file logs
 `[ropus] open …` and `[ropus] decode_run` lines to the foobar2000
-console and plays the audio.
+console and plays the audio. The status bar bitrate readout updates
+live (~1 s smoothing) as a VBR track plays.
 
 ## Layout
 

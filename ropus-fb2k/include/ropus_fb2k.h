@@ -104,9 +104,10 @@ int ropus_fb2k_read_tags(RopusFb2kReader*, RopusFb2kTagCb cb, void* ctx);
  * `out_bytes_consumed` is required (non-null; a null pointer returns
  * `ROPUS_FB2K_BAD_ARG`). On a successful decode (samples > 0),
  * `*out_bytes_consumed` is set to the sum of encoded packet payload bytes
- * consumed during this call. The sum spans every packet read in the call,
- * including pages silently discarded as post-seek pre-roll (RFC 7845 §4.2),
- * so the caller sees an accurate instantaneous bitrate signal.
+ * that produced the returned samples. Packets fully discarded as
+ * post-seek pre-roll (RFC 7845 §4.2) do NOT contribute — they map to
+ * zero caller-visible samples, so charging them to the bitrate signal
+ * would skew it (the C++ shim divides bytes by kept-sample count).
  * On EOF (return 0), `*out_bytes_consumed` is set to 0.
  * On error (negative return), it is not written. */
 int ropus_fb2k_decode_next(RopusFb2kReader*,

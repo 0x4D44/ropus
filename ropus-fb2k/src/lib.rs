@@ -397,11 +397,13 @@ use crate::reader::MAX_FRAME_SAMPLES_PER_CH as MIN_OUT_SAMPLES_PER_CH;
 ///
 /// `out_bytes_consumed` is required (non-null; a null pointer returns
 /// `ROPUS_FB2K_BAD_ARG`). On a successful decode (samples > 0) it receives
-/// the sum of encoded packet payload bytes consumed during this call,
-/// including any pages silently discarded as pre-skip / post-seek pre-roll.
-/// On EOF (return 0), `*out_bytes_consumed` is set to 0. On error (negative
-/// return), it is not written; the C++ shim short-circuits on the negative
-/// return.
+/// the sum of encoded packet payload bytes that produced the returned
+/// samples. Packets fully discarded as post-seek pre-roll (RFC 7845 §4.2)
+/// do NOT contribute — they map to zero caller-visible samples, so
+/// counting them would skew the C++ shim's `bytes / kept_samples` EWMA.
+/// On EOF (return 0), `*out_bytes_consumed` is set to 0. On error
+/// (negative return), it is not written; the C++ shim short-circuits on
+/// the negative return.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ropus_fb2k_decode_next(
     r: *mut RopusFb2kReader,
