@@ -394,14 +394,23 @@ use crate::reader::MAX_FRAME_SAMPLES_PER_CH as MIN_OUT_SAMPLES_PER_CH;
 /// or a negative status. On the very first successful call after open, the
 /// leading `pre_skip` samples (typically 312) are trimmed transparently —
 /// callers never see the encoder warm-up.
+///
+/// `out_bytes_consumed` is required (non-null; a null pointer returns
+/// `ROPUS_FB2K_BAD_ARG`). On a successful decode (samples > 0) it receives
+/// the sum of encoded packet payload bytes consumed during this call,
+/// including any pages silently discarded as pre-skip / post-seek pre-roll.
+/// On EOF (return 0), `*out_bytes_consumed` is set to 0. On error (negative
+/// return), it is not written; the C++ shim short-circuits on the negative
+/// return.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ropus_fb2k_decode_next(
     r: *mut RopusFb2kReader,
     out_interleaved: *mut f32,
     max_samples_per_ch: usize,
+    out_bytes_consumed: *mut u64,
 ) -> c_int {
     ffi_guard!(ROPUS_FB2K_BAD_ARG, {
-        if r.is_null() || out_interleaved.is_null() {
+        if r.is_null() || out_interleaved.is_null() || out_bytes_consumed.is_null() {
             set_last_error_with_code("decode_next: null pointer", ROPUS_FB2K_BAD_ARG);
             return ROPUS_FB2K_BAD_ARG;
         }
@@ -423,8 +432,12 @@ pub unsafe extern "C" fn ropus_fb2k_decode_next(
         };
 
         match reader.inner.decode_next(out_slice, max_samples_per_ch) {
-            Ok(n) => {
+            Ok((n, bytes)) => {
                 clear_last_error();
+                // SAFETY: null check above guarantees `out_bytes_consumed`
+                // is non-null; header contract says it points to a writable
+                // `uint64_t`.
+                unsafe { ptr::write(out_bytes_consumed, bytes) };
                 n
             }
             Err(e) => {

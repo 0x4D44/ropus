@@ -99,10 +99,20 @@ int ropus_fb2k_read_tags(RopusFb2kReader*, RopusFb2kTagCb cb, void* ctx);
 
 /* Decode next packet into caller buffer (interleaved float, 48 kHz).
  * `max_samples_per_ch` must be >= 5760 (120 ms, the longest Opus frame).
- * Returns samples-per-channel decoded, 0 on EOF, negative on error. */
+ * Returns samples-per-channel decoded, 0 on EOF, negative on error.
+ *
+ * `out_bytes_consumed` is required (non-null; a null pointer returns
+ * `ROPUS_FB2K_BAD_ARG`). On a successful decode (samples > 0),
+ * `*out_bytes_consumed` is set to the sum of encoded packet payload bytes
+ * consumed during this call. The sum spans every packet read in the call,
+ * including pages silently discarded as post-seek pre-roll (RFC 7845 §4.2),
+ * so the caller sees an accurate instantaneous bitrate signal.
+ * On EOF (return 0), `*out_bytes_consumed` is set to 0.
+ * On error (negative return), it is not written. */
 int ropus_fb2k_decode_next(RopusFb2kReader*,
-                           float*  out_interleaved,
-                           size_t  max_samples_per_ch);
+                           float*    out_interleaved,
+                           size_t    max_samples_per_ch,
+                           uint64_t* out_bytes_consumed);
 
 /* Seek to per-channel sample position (48 kHz). Clamped to [0, total_samples].
  * Post-seek, the next `decode_next` silently discards >= 80 ms per RFC 7845

@@ -411,8 +411,18 @@ impl<R: Read + Seek> OggOpusReader<R> {
     }
 
     /// Pull the next Opus packet, decode it into the caller's interleaved
-    /// float buffer, and return the number of samples-per-channel written.
-    /// Returns `Ok(0)` at end-of-stream.
+    /// float buffer, and return `(samples_per_ch, bytes_consumed)`.
+    /// Returns `Ok((0, 0))` at end-of-stream — `bytes_consumed` is forced
+    /// to 0 at EOF regardless of how many pre-roll packets the call drained
+    /// before hitting end-of-stream (HLD §4.2 contract; the C++ shim never
+    /// reads the value when samples == 0, but the simpler invariant is
+    /// worth preserving).
+    ///
+    /// `bytes_consumed` is the sum of `pkt.data.len()` for every Ogg packet
+    /// read by this call — including packets silently dropped because their
+    /// samples fell entirely within the pre-skip / post-seek pre-roll window
+    /// — so the caller can compute an instantaneous bitrate that accounts
+    /// for every byte of compressed payload pulled from the stream.
     ///
     /// Discard logic is unified across pre-skip (first call) and post-seek
     /// pre-roll (after `seek`): we drop samples until `next_sample_abs_pos`
@@ -423,7 +433,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
         &mut self,
         out_interleaved: &mut [f32],
         max_samples_per_ch: usize,
-    ) -> Result<i32, ReaderError> {
+    ) -> Result<(i32, u64), ReaderError> {
         // Test-only panic injection. Compiled out unless the `test-panic`
         // feature is on; see `lib.rs::ropus_fb2k_test_set_panic_flag` for
         // the sibling FFI hook the integration test uses to arm it.
@@ -457,11 +467,27 @@ impl<R: Read + Seek> OggOpusReader<R> {
             .expect("decoder was just lazy-initialised");
         let scratch = self.decode_scratch.as_mut_slice();
 
+        // Accumulated encoded payload bytes consumed by this call. Includes
+        // every packet read — both the one whose samples we ultimately return
+        // and any earlier packets fully consumed by the pre-skip / post-seek
+        // pre-roll discard window. Reported back so the C++ shim can compute
+        // a live VBR bitrate that doesn't drop pre-roll-only callbacks (HLD
+        // §4.3 "Rust side").
+        let mut bytes_consumed: u64 = 0;
+
         loop {
             let pkt = packet_reader.read_packet().map_err(ogg_err_to_reader)?;
             let Some(pkt) = pkt else {
-                return Ok(0); // clean EOF
+                // Clean EOF. Per HLD §4.2 the EOF return reports
+                // `bytes_consumed == 0`, even if this call had already
+                // accumulated payload from pre-roll packets that all got
+                // discarded before EOF was hit. The C++ shim never reads
+                // the value when samples == 0 anyway, but the simpler
+                // contract is worth preserving — and it pins the test that
+                // would otherwise still pass if we leaked the accumulator.
+                return Ok((0, 0));
             };
+            bytes_consumed += pkt.data.len() as u64;
 
             let decoded = decoder
                 .decode_float(
@@ -527,7 +553,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
             let src_end = src_start + kept * channels;
             out_interleaved[..kept * channels].copy_from_slice(&scratch[src_start..src_end]);
 
-            return Ok(kept as i32);
+            return Ok((kept as i32, bytes_consumed));
         }
     }
 
