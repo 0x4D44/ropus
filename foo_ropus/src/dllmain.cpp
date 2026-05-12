@@ -14,12 +14,12 @@
 
 // Version below is the single user-facing component version shown in fb2k's
 // Components dialog. The Rust ropus-fb2k crate has its own internal version
-// (Cargo.toml 0.3.0); post-M4b it's statically linked into this DLL and no
+// (Cargo.toml 0.3.1); post-M4b it's statically linked into this DLL and no
 // longer surfaces as a separate artefact. Bump this string when the
 // component's user-visible behaviour changes.
 DECLARE_COMPONENT_VERSION(
     "ropus (Rust Opus decoder)",
-    "0.2.0",
+    "0.2.1",
     "Opus input component backed by the Rust `ropus` codec.\n"
     "48 kHz output, mono + stereo, seekable, ReplayGain from OpusTags.");
 

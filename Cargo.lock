@@ -1232,7 +1232,7 @@ dependencies = [
 
 [[package]]
 name = "ropus-fb2k"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "ogg 0.9.2",
  "ropus",
