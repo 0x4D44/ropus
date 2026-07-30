@@ -432,12 +432,7 @@ fn decode_returns_zero_at_eof() {
     }
     // Subsequent calls keep returning 0.
     let rc = unsafe {
-        ropus_fb2k::ropus_fb2k_decode_next(
-            handle,
-            scratch.as_mut_ptr(),
-            5760,
-            &mut bytes_consumed,
-        )
+        ropus_fb2k::ropus_fb2k_decode_next(handle, scratch.as_mut_ptr(), 5760, &mut bytes_consumed)
     };
     assert_eq!(rc, 0, "post-EOF decode_next stays at 0");
 
@@ -472,12 +467,7 @@ fn decode_next_reports_bytes_consumed_correctly() {
     loop {
         let mut bytes_consumed = 0u64;
         let rc = unsafe {
-            ropus_fb2k::ropus_fb2k_decode_next(
-                handle,
-                buf.as_mut_ptr(),
-                5760,
-                &mut bytes_consumed,
-            )
+            ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bytes_consumed)
         };
         assert!(
             rc >= 0,
@@ -561,12 +551,7 @@ fn decode_propagates_abort() {
     let mut scratch = vec![0f32; 5760 * 2];
     let mut bytes_consumed = 0u64;
     let rc = unsafe {
-        ropus_fb2k::ropus_fb2k_decode_next(
-            handle,
-            scratch.as_mut_ptr(),
-            5760,
-            &mut bytes_consumed,
-        )
+        ropus_fb2k::ropus_fb2k_decode_next(handle, scratch.as_mut_ptr(), 5760, &mut bytes_consumed)
     };
     assert_eq!(
         rc, ROPUS_FB2K_ABORTED,
@@ -596,12 +581,7 @@ fn decode_rejects_small_buffer() {
     let mut scratch = vec![0f32; 4096 * 2];
     let mut bytes_consumed = 0u64;
     let rc = unsafe {
-        ropus_fb2k::ropus_fb2k_decode_next(
-            handle,
-            scratch.as_mut_ptr(),
-            4096,
-            &mut bytes_consumed,
-        )
+        ropus_fb2k::ropus_fb2k_decode_next(handle, scratch.as_mut_ptr(), 4096, &mut bytes_consumed)
     };
     assert_eq!(rc, ROPUS_FB2K_BAD_ARG);
 
@@ -824,12 +804,7 @@ fn seek_round_trip_within_tolerance() {
     let mut bytes_consumed = 0u64;
     while post_seek.len() < WINDOW_SAMPLES * 2 {
         let rc = unsafe {
-            ropus_fb2k::ropus_fb2k_decode_next(
-                handle,
-                buf.as_mut_ptr(),
-                5760,
-                &mut bytes_consumed,
-            )
+            ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bytes_consumed)
         };
         assert!(
             rc > 0,
@@ -896,12 +871,7 @@ fn seek_to_zero_is_valid() {
     let mut buf = vec![0f32; 5760 * 2];
     let mut bytes_consumed = 0u64;
     let first = unsafe {
-        ropus_fb2k::ropus_fb2k_decode_next(
-            handle,
-            buf.as_mut_ptr(),
-            5760,
-            &mut bytes_consumed,
-        )
+        ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bytes_consumed)
     };
     assert!(
         first > 0,
@@ -913,12 +883,7 @@ fn seek_to_zero_is_valid() {
     // Drain the rest.
     loop {
         let rc = unsafe {
-            ropus_fb2k::ropus_fb2k_decode_next(
-                handle,
-                buf.as_mut_ptr(),
-                5760,
-                &mut bytes_consumed,
-            )
+            ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bytes_consumed)
         };
         assert!(rc >= 0);
         if rc == 0 {
@@ -971,12 +936,7 @@ fn seek_zero_after_decode_rewinds() {
         let mut buf = vec![0f32; 5760 * 2];
         let mut bytes_consumed = 0u64;
         let n = unsafe {
-            ropus_fb2k::ropus_fb2k_decode_next(
-                handle,
-                buf.as_mut_ptr(),
-                5760,
-                &mut bytes_consumed,
-            )
+            ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bytes_consumed)
         };
         assert!(n > 0, "fresh-handle first decode must produce samples");
         let captured: Vec<f32> = buf[..n as usize * 2].to_vec();
@@ -994,12 +954,7 @@ fn seek_zero_after_decode_rewinds() {
     let mut bytes_consumed = 0u64;
 
     let first_decode = unsafe {
-        ropus_fb2k::ropus_fb2k_decode_next(
-            handle,
-            buf.as_mut_ptr(),
-            5760,
-            &mut bytes_consumed,
-        )
+        ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bytes_consumed)
     };
     assert!(first_decode > 0, "pre-seek decode must produce samples");
 
@@ -1012,12 +967,7 @@ fn seek_zero_after_decode_rewinds() {
     );
 
     let post_seek_first = unsafe {
-        ropus_fb2k::ropus_fb2k_decode_next(
-            handle,
-            buf.as_mut_ptr(),
-            5760,
-            &mut bytes_consumed,
-        )
+        ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bytes_consumed)
     };
     assert!(
         post_seek_first > 0,
@@ -1080,12 +1030,7 @@ fn seek_to_nonzero_then_decode() {
     let mut bytes_consumed = 0u64;
     while post.len() < WINDOW_PER_CH * 2 {
         let rc = unsafe {
-            ropus_fb2k::ropus_fb2k_decode_next(
-                handle,
-                buf.as_mut_ptr(),
-                5760,
-                &mut bytes_consumed,
-            )
+            ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bytes_consumed)
         };
         assert!(rc > 0, "decode_next after seek returned {rc}");
         post.extend_from_slice(&buf[..rc as usize * 2]);
@@ -1145,9 +1090,8 @@ fn decode_next_excludes_preroll_bytes_after_seek() {
         assert!(!handle.is_null(), "fixture must open");
         let mut buf = vec![0f32; 5760 * 2];
         let mut bc = 0u64;
-        let rc = unsafe {
-            ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bc)
-        };
+        let rc =
+            unsafe { ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bc) };
         assert!(rc > 0, "baseline decode must produce samples (got {rc})");
         unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
         bc
@@ -1164,22 +1108,12 @@ fn decode_next_excludes_preroll_bytes_after_seek() {
     let (_io, handle) = open_from_bytes(bytes);
     assert!(!handle.is_null(), "fixture must open");
     let rc_seek = unsafe { ropus_fb2k::ropus_fb2k_seek(handle, SEEK_SAMPLE) };
-    assert_eq!(
-        rc_seek,
-        0,
-        "seek failed: {}",
-        last_error_string()
-    );
+    assert_eq!(rc_seek, 0, "seek failed: {}", last_error_string());
 
     let mut buf = vec![0f32; 5760 * 2];
     let mut post_seek_bytes = 0u64;
     let rc = unsafe {
-        ropus_fb2k::ropus_fb2k_decode_next(
-            handle,
-            buf.as_mut_ptr(),
-            5760,
-            &mut post_seek_bytes,
-        )
+        ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut post_seek_bytes)
     };
     assert!(
         rc > 0,
@@ -1241,12 +1175,7 @@ fn seek_past_end_clamps() {
     let mut bytes_consumed = 0u64;
     loop {
         let rc = unsafe {
-            ropus_fb2k::ropus_fb2k_decode_next(
-                handle,
-                buf.as_mut_ptr(),
-                5760,
-                &mut bytes_consumed,
-            )
+            ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bytes_consumed)
         };
         assert!(rc >= 0, "decode after clamp returned {rc}");
         if rc == 0 {
@@ -1491,12 +1420,7 @@ fn rg_malformed_tag_is_nan() {
     let mut buf = vec![0f32; 5760 * 2];
     let mut bytes_consumed = 0u64;
     let rc = unsafe {
-        ropus_fb2k::ropus_fb2k_decode_next(
-            handle,
-            buf.as_mut_ptr(),
-            5760,
-            &mut bytes_consumed,
-        )
+        ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bytes_consumed)
     };
     assert!(rc >= 0, "decode must still work; got {rc}");
 
@@ -1553,12 +1477,7 @@ fn panic_in_decode_surfaces_internal_code() {
     let mut buf = vec![0f32; 5760 * 2];
     let mut bytes_consumed = 0u64;
     let rc = unsafe {
-        ropus_fb2k::ropus_fb2k_decode_next(
-            handle,
-            buf.as_mut_ptr(),
-            5760,
-            &mut bytes_consumed,
-        )
+        ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bytes_consumed)
     };
     // Per-entry sentinel — ffi_guard!'s on_panic for decode_next is BAD_ARG.
     assert_eq!(
@@ -1617,12 +1536,7 @@ fn decode_through_fb2k(bytes: Vec<u8>) -> Vec<f32> {
     let mut bytes_consumed = 0u64;
     loop {
         let rc = unsafe {
-            ropus_fb2k::ropus_fb2k_decode_next(
-                handle,
-                buf.as_mut_ptr(),
-                5760,
-                &mut bytes_consumed,
-            )
+            ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bytes_consumed)
         };
         assert!(rc >= 0, "path-A decode failure {rc}");
         if rc == 0 {
