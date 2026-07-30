@@ -6,10 +6,80 @@ fallback = [
 ]
 
 [[component]]
-name = "workspace"
-paths = ["tests/", "tools/"]
+name = "core"
+paths = ["ropus/"]
+cargo_packages = ["ropus"]
 gate = [
   { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
-  { program = "cargo", args = ["clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"] },
-  { program = "cargo", args = ["test", "--workspace", "--locked"] },
+  { program = "cargo", args = ["clippy", "-p", "ropus", "--all-targets", "--locked", "--", "-D", "warnings"] },
+  { program = "cargo", args = ["test", "-p", "ropus", "--locked"] },
+]
+
+[[component]]
+name = "harness"
+paths = ["harness/"]
+cargo_packages = ["ropus-harness"]
+gate = [
+  { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
+  { program = "cargo", args = ["clippy", "-p", "ropus-harness", "--all-targets", "--locked", "--", "-D", "warnings"] },
+  { program = "cargo", args = ["test", "-p", "ropus-harness", "--locked"] },
+  { program = "cargo", args = ["check", "--manifest-path", "tests/fuzz/Cargo.toml", "--locked"] },
+]
+
+[[component]]
+name = "fuzz"
+paths = ["tests/fuzz/"]
+gate = [
+  { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
+  { program = "cargo", args = ["check", "--manifest-path", "tests/fuzz/Cargo.toml", "--locked"] },
+]
+
+[[component]]
+name = "deep-plc"
+paths = ["harness-deep-plc/"]
+cargo_packages = ["ropus-harness-deep-plc"]
+gate = [
+  { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
+  { program = "cargo", args = ["clippy", "-p", "ropus-harness-deep-plc", "--all-targets", "--locked", "--", "-D", "warnings"] },
+  { program = "cargo", args = ["test", "-p", "ropus-harness-deep-plc", "--locked"] },
+]
+
+[[component]]
+name = "harness-control"
+paths = ["harness-control/"]
+cargo_packages = ["ropus-harness-control"]
+gate = [
+  { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
+  { program = "cargo", args = ["clippy", "-p", "ropus-harness-control", "--all-targets", "--locked", "--", "-D", "warnings"] },
+  { program = "cargo", args = ["test", "-p", "ropus-harness-control", "--locked"] },
+]
+
+[[component]]
+name = "fb2k"
+paths = ["ropus-fb2k/"]
+cargo_packages = ["ropus-fb2k"]
+gate = [
+  { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
+  { program = "cargo", args = ["clippy", "-p", "ropus-fb2k", "--all-targets", "--locked", "--", "-D", "warnings"] },
+  { program = "cargo", args = ["test", "-p", "ropus-fb2k", "--locked"] },
+]
+
+[[component]]
+name = "full-test"
+paths = ["full-test/"]
+cargo_packages = ["full-test"]
+gate = [
+  { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
+  { program = "cargo", args = ["clippy", "-p", "full-test", "--all-targets", "--locked", "--", "-D", "warnings"] },
+  { program = "cargo", args = ["test", "-p", "full-test", "--locked"] },
+]
+
+[[component]]
+name = "fetch-assets"
+paths = ["tools/fetch-assets/"]
+cargo_packages = ["fetch-assets"]
+gate = [
+  { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
+  { program = "cargo", args = ["clippy", "-p", "fetch-assets", "--all-targets", "--locked", "--", "-D", "warnings"] },
+  { program = "cargo", args = ["test", "-p", "fetch-assets", "--locked"] },
 ]
