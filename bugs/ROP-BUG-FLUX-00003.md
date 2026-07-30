@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** harness/build
 - **Raised:** 2026-07-30
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260730T205358Z-p41959-n128536000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00003-run-fix-20260730T205358Z-p41959-n128536000-c1
+- **Owner base:** a658686517d39266f53432323cff90f7e63ca1bf
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-07-30T20:53:58Z
+- **Owner until:** 2026-07-30T22:53:58Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
