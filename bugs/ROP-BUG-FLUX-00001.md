@@ -5,15 +5,15 @@
 - **Severity:** Low
 - **Area:** validation/ropus-fb2k
 - **Raised:** 2026-07-30
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260730T172357Z-p67668-n901388000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00001-run-fix-20260730T172357Z-p67668-n901388000-c1
+- **Owner base:** 3c1e2f71383dada8f41e7d3cf17495fdb834727c
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-07-30T17:23:57Z
+- **Owner until:** 2026-07-30T19:23:57Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
