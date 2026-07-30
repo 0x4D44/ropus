@@ -1750,7 +1750,7 @@ mod tests {
         let html = render(&c);
 
         assert!(html.contains("Profile: <code>release-thresholded</code>"));
-        assert!(html.contains("Threshold source: initial calibration"));
+        assert!(html.contains("Threshold source: recalibrated 2026-05-11"));
         assert!(html.contains("Benchmark release thresholds"));
         assert!(html.contains("tests/vectors/8000hz_mono_noise.wav"));
         assert!(html.contains("encode ratio 2.000x exceeds"));

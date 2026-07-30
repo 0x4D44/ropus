@@ -1336,7 +1336,7 @@ thread 'main' panicked at 'decode crash'
         let rows = r.threshold_rows();
         assert_eq!(rows[0].enc_status, BenchThresholdStatus::Fail);
         assert_eq!(rows[0].dec_status, BenchThresholdStatus::Pass);
-        assert_eq!(rows[0].enc_release_fail_ratio, Some(1.26));
+        assert_eq!(rows[0].enc_release_fail_ratio, Some(1.17));
     }
 
     #[test]

@@ -910,7 +910,7 @@ mod tests {
             bench_json["threshold_source"]
                 .as_str()
                 .unwrap()
-                .contains("initial calibration")
+                .contains("recalibrated 2026-05-11")
         );
         assert!(
             bench_json["release_blocking_issues"][0]
@@ -921,7 +921,7 @@ mod tests {
         let thresholds = bench_json["thresholds"].as_array().unwrap();
         assert_eq!(thresholds[0]["enc_status"], "fail");
         assert_eq!(thresholds[0]["dec_status"], "pass");
-        assert_eq!(thresholds[0]["enc_release_fail_ratio"], 1.26);
+        assert_eq!(thresholds[0]["enc_release_fail_ratio"], 1.17);
     }
 
     #[test]
