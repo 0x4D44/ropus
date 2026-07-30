@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00003 — C reference harness compiles x86 CPU probe on Apple Silicon
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Must
 - **Severity:** Medium
 - **Area:** harness/build
 - **Raised:** 2026-07-30
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260730T205358Z-p41959-n128536000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00003-run-fix-20260730T205358Z-p41959-n128536000-c1
-- **Owner base:** a658686517d39266f53432323cff90f7e63ca1bf
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-07-30T20:53:58Z
-- **Owner until:** 2026-07-30T22:53:58Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-30, raised via `deltic bugs new`)
+- **State history:** Open (2026-07-30, raised via `deltic bugs new`) -> Fixed (2026-07-30, deltic:auto role=fix run=fix-20260730T205358Z-p41959-n128536000-c1 branch=task/bug-ROP-BUG-FLUX-00003-run-fix-20260730T205358Z-p41959-n128536000-c1 code=a08e2fa gate=manual)
 
 ## Observation
 
