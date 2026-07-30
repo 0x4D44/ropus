@@ -9,6 +9,7 @@
 #include "celt/mathops.h"
 #include "celt/vq.h"
 #include "celt/mdct.h"
+#include "celt/celt_lpc.h"
 #include "celt/cpu_support.h"
 #include "src/analysis.h"
 #include "opus_private.h" /* for struct OpusMSEncoder + align() helper */
@@ -37,6 +38,17 @@ extern opus_int32 silk_lin2log(const opus_int32 inLin);
 extern void silk_gains_quant(
     opus_int8 ind[], opus_int32 gain_Q16[], opus_int8 *prev_ind,
     const opus_int conditional, const opus_int nb_subfr);
+
+void debug_c_celt_fir(
+    const opus_int16 *x_with_history, const opus_int16 *num,
+    opus_int16 *y, int n, int ord) {
+#ifdef OPUS_HAVE_RTCD
+    int arch = opus_select_arch();
+#else
+    int arch = 0;
+#endif
+    celt_fir(x_with_history + ord, num, y, n, ord, arch);
+}
 
 void debug_test_gains_quant(void) {
     opus_int32 gains[4] = {115456, 115456, 115456, 115456};

@@ -359,6 +359,13 @@ unsafe extern "C" {
         y: *const opus_int32,
         len: c_int,
     ) -> opus_int32;
+    pub fn debug_c_celt_fir(
+        x_with_history: *const opus_int16,
+        num: *const opus_int16,
+        y: *mut opus_int16,
+        n: c_int,
+        ord: c_int,
+    );
     pub fn debug_c_celt_rsqrt_norm32(x: opus_int32) -> opus_int32;
     pub fn debug_c_celt_rsqrt_norm(x: opus_int32) -> opus_int32;
     pub fn debug_c_celt_rcp_norm16(x: opus_int32) -> opus_int32;

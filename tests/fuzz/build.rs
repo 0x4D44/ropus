@@ -13,8 +13,12 @@ fn main() {
     let harness_dir = crate_dir.join("../../harness");
     let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH")
         .expect("Cargo must set CARGO_CFG_TARGET_ARCH for build scripts");
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS")
+        .expect("Cargo must set CARGO_CFG_TARGET_OS for build scripts");
     let target_is_x86 = matches!(target_arch.as_str(), "x86" | "x86_64");
+    let target_is_apple_aarch64 = target_arch == "aarch64" && target_os == "macos";
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_ARCH");
+    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
 
     if !ref_dir.join("celt/bands.c").exists() {
         panic!(
@@ -171,6 +175,16 @@ fn main() {
         "silk/fixed/x86/vector_ops_FIX_sse4_1.c",
     ];
 
+    let arm_neon_sources = [
+        "celt/arm/celt_neon_intr.c",
+        "celt/arm/pitch_neon_intr.c",
+        "silk/arm/biquad_alt_neon_intr.c",
+        "silk/arm/LPC_inv_pred_gain_neon_intr.c",
+        "silk/arm/NSQ_del_dec_neon_intr.c",
+        "silk/arm/NSQ_neon.c",
+        "silk/fixed/arm/warped_autocorrelation_FIX_neon_intr.c",
+    ];
+
     let opus_sources = [
         "src/opus.c",
         "src/opus_decoder.c",
@@ -201,6 +215,20 @@ fn main() {
         .include(ref_dir.join("src"))
         .define("HAVE_CONFIG_H", "1")
         .define("OPUS_BUILD", None);
+
+    if target_is_x86 {
+        build
+            .define("OPUS_HAVE_RTCD", "1")
+            .define("OPUS_X86_MAY_HAVE_SSE", "1")
+            .define("OPUS_X86_MAY_HAVE_SSE2", "1")
+            .define("OPUS_X86_MAY_HAVE_SSE4_1", "1")
+            .define("CPU_INFO_BY_C", "1");
+    } else if target_is_apple_aarch64 {
+        build
+            .define("OPUS_ARM_MAY_HAVE_NEON_INTR", "1")
+            .define("OPUS_ARM_PRESUME_NEON_INTR", "1")
+            .define("OPUS_ARM_PRESUME_AARCH64_NEON_INTR", "1");
+    }
 
     build.flag_if_supported("-ffp-contract=off");
 
@@ -237,6 +265,10 @@ fn main() {
     }
     if target_is_x86 {
         for src in celt_x86_sources.iter().chain(silk_x86_sources.iter()) {
+            build.file(ref_dir.join(src));
+        }
+    } else if target_is_apple_aarch64 {
+        for src in &arm_neon_sources {
             build.file(ref_dir.join(src));
         }
     }
