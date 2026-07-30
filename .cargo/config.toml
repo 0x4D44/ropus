@@ -9,3 +9,9 @@
 # See wrk_journals/2026.04.19 - JRN - avx2-baseline.md for the measurement.
 [target.'cfg(target_arch = "x86_64")']
 rustflags = ["-C", "target-cpu=x86-64-v3"]
+
+# Apple A14 is LLVM's conservative M1-generation baseline. This improves
+# workspace-built Apple-Silicon tools without changing other AArch64 targets
+# or downstream consumers that choose their own final target flags.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "target-cpu=apple-a14"]

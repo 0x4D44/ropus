@@ -1,8 +1,7 @@
 //! SIMD-accelerated implementations of performance-critical CELT functions.
 //!
-//! Gated behind the `simd` cargo feature. Uses the `wide` crate for safe SIMD
-//! abstractions over SSE2/AVX2/NEON. All functions produce bit-exact output
-//! matching their scalar counterparts.
+//! Uses the `wide` crate for safe SIMD abstractions over SSE2/AVX2/NEON. All
+//! functions produce bit-exact output matching their scalar counterparts.
 //!
 //! The core primitive is `mac16_16_x4`: a 4-lane multiply-accumulate that
 //! replicates the scalar `mac16_16` semantics (i16 truncation of both operands

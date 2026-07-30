@@ -180,7 +180,6 @@ fn main() {
         "celt/arm/pitch_neon_intr.c",
         "silk/arm/biquad_alt_neon_intr.c",
         "silk/arm/LPC_inv_pred_gain_neon_intr.c",
-        "silk/arm/NSQ_del_dec_neon_intr.c",
         "silk/arm/NSQ_neon.c",
         "silk/fixed/arm/warped_autocorrelation_FIX_neon_intr.c",
     ];

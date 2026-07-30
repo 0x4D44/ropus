@@ -143,10 +143,12 @@ ropus/            # workspace root
 
 ## Performance
 
-Rust / C reference ratio (lower is better) measured via `tools/bench_sweep.sh --iters=30`
-on an Opus 1.5.2 C reference baseline, current `master`. Encode ratio is what you pay
-to encode; decode ratio is what you pay to decode. <1.0 means Rust is *faster* than
-the C reference (which dispatches to hand-tuned SSE4.1/AVX2 at runtime).
+Rust / C reference ratio (lower is better) measured via
+`tools/bench_sweep.sh --iters=30` on an Opus 1.5.2 C reference baseline,
+current `master`. Encode ratio is what you pay to encode; decode ratio is
+what you pay to decode. <1.0 means Rust is *faster* than the C reference.
+This first table is the x86-64 result, where C dispatches to hand-tuned
+SSE4.1/AVX2 at runtime.
 
 | Vector                   | Encode | Decode |
 |--------------------------|:------:|:------:|
@@ -173,9 +175,31 @@ log: [`wrk_journals/2026.05.11 - JRN - perf-recalibration.md`](wrk_journals/2026
 the original `2026-04-19` baseline (Ryzen 9950X3D, pre-bench-fix) is preserved
 at [`wrk_journals/2026.04.19 - JRN - avx2-baseline.md`](wrk_journals/2026.04.19%20-%20JRN%20-%20avx2-baseline.md).
 
+On Apple M1 Pro, both sides use AArch64 Advanced SIMD: ropus through portable
+Rust/LLVM vectorisation and C through the pinned upstream NEON intrinsics.
+Five clean sweeps produced these median ratios:
+
+| Vector                   | Encode | Decode |
+|--------------------------|:------:|:------:|
+| SILK NB 8k mono noise    | 0.99×  | 1.30×  |
+| SILK WB 16k mono noise   | 1.00×  | 1.50×  |
+| Hybrid 24k mono noise    | 1.06×  | 1.30×  |
+| CELT FB 48k mono noise   | 1.23×  | 1.16×  |
+| CELT FB 48k stereo noise | 1.20×  | 1.19×  |
+| CELT 48k sine 1k loud    | 1.27×  | 1.18×  |
+| CELT 48k sweep           | 1.11×  | 1.16×  |
+| CELT 48k square 1k       | 1.34×  | 1.19×  |
+| SPEECH 48k mono (TTS)    | 1.16×  | 1.14×  |
+| MUSIC 48k stereo         | 1.24×  | 1.11×  |
+| **Mean**                 | **1.16×** | **1.22×** |
+
+`full-test` selects separate release thresholds for this target. It never
+compares the Apple ratios against the x86 calibration because enabling the C
+NEON oracle changes the denominator.
+
 ### Non-standard release profile
 
-Two deliberate tunings in the release profile, both empirically justified:
+Three deliberate tunings in the release profile, all empirically justified:
 
 1. **`Cargo.toml` sets `lto = "thin"`**, not the more common `"fat"`. A bake-off
    across all four `{ThinLTO, FatLTO} × {no-PGO, PGO}` cells showed **ThinLTO
@@ -192,6 +216,14 @@ Two deliberate tunings in the release profile, both empirically justified:
    effect of all three stages of indexing work. Full data:
    [`wrk_journals/2026.04.19 - JRN - avx2-baseline.md`](wrk_journals/2026.04.19%20-%20JRN%20-%20avx2-baseline.md).
 
+3. **Apple-Silicon workspace builds set `target-cpu = "apple-a14"`**, LLVM's
+   conservative M1-generation baseline. It won all five alternating baseline
+   pairs and four of five fresh final-tree pairs; the two median total gains
+   were about 3.3% and 1.6%. Fixed-serial output remained byte-identical to a
+   generic AArch64 build. This exact target key does not change Linux/Android
+   AArch64 or downstream builds that supply their own flags. Evidence:
+   [`wrk_journals/2026.07.30 - JRN - macos arm optimisation.md`](wrk_journals/2026.07.30%20-%20JRN%20-%20macos%20arm%20optimisation.md).
+
 PGO is still available opt-in via `tools/pgo_build.sh` for one-off measurements,
 but is not part of the canonical build. Users on pre-2013 CPUs (Sandy/Ivy Bridge,
 pre-Excavator AMD — ~2% of current x86 machines per Steam HW survey) can rebuild
@@ -205,7 +237,7 @@ bash tools/bench_sweep.sh --iters=50
 ```
 
 The sweep runs both the C reference and the Rust port on each vector, reports
-per-iter medians, and prints the ratio shown above.
+per-iter medians, and prints the architecture-specific ratio shown above.
 
 ## Development notes
 

@@ -150,18 +150,25 @@ square (1.03×) running slightly behind. Full measurement log and methodology:
 ## SIMD
 
 ropus uses portable SIMD through the [`wide`](https://crates.io/crates/wide)
-crate. The published binary also sets `target-cpu = "x86-64-v3"` in
-`.cargo/config.toml` — the AVX2 + FMA3 + BMI1/2 baseline (Haswell 2013 /
-Excavator 2015). This unblocks LLVM to emit AVX2 from the existing
-`wide::i32x4` kernels and to auto-vectorise scalar hot paths at 256-bit
-width, which is what keeps encode/decode at or ahead of the C reference's
-runtime-dispatched AVX2.
+crate. Workspace builds set architecture-specific compiler baselines in
+`.cargo/config.toml`: `x86-64-v3` enables AVX2 + FMA3 + BMI1/2, while
+`apple-a14` is LLVM's conservative M1-generation baseline for
+`aarch64-apple-darwin`. The exact Apple target key leaves other AArch64
+platforms unchanged. These settings let LLVM lower the same safe Rust kernels
+and suitable scalar loops to each architecture's SIMD instructions.
 
 Hand-written platform intrinsics (NEON, direct AVX/AVX-512) are intentionally
 deferred: at C-parity through the portable path, a per-architecture backend
 is optimization-above-parity rather than a correctness gate. Users on
 pre-2013 x86 (~2% of x86 machines per Steam HW survey) can rebuild with
 `RUSTFLAGS="-C target-cpu=x86-64-v2"` or `=x86-64`.
+
+The comparison harness follows the build target too: x86 uses the pinned C
+reference's runtime-dispatched SSE path, while Apple Silicon compiles the six
+upstream AArch64 NEON-intrinsic translation units its safe macro set selects.
+Release benchmark
+thresholds are calibrated separately because those optimized C denominators
+are not interchangeable.
 
 ## Changelog
 

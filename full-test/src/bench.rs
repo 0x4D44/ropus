@@ -79,7 +79,7 @@ impl BenchProfile {
 
     pub fn threshold_source(self) -> Option<&'static str> {
         match self {
-            Self::ReleaseThresholded => Some(THRESHOLD_SOURCE),
+            Self::ReleaseThresholded => Some(threshold_source()),
             _ => None,
         }
     }
@@ -224,9 +224,9 @@ struct ThresholdSpec {
 /// the median of 5 clean sweeps; release_fail is computed by the same formula
 /// as the original calibration. See `wrk_journals/2026.05.11 - JRN -
 /// perf-recalibration.md`.
-pub const THRESHOLD_SOURCE: &str = "recalibrated 2026-05-11 from 5-sweep median on i7-14700KF/WSL2/x86-64-v3 with bench-amortise fix; release_fail=max(baseline+0.05, baseline*1.20, 1.05), rounded up";
+const X86_64_THRESHOLD_SOURCE: &str = "recalibrated 2026-05-11 from 5-sweep median on i7-14700KF/WSL2/x86-64-v3 with bench-amortise fix; release_fail=max(baseline+0.05, baseline*1.20, 1.05), rounded up";
 
-const THRESHOLDS: &[ThresholdSpec] = &[
+const X86_64_THRESHOLDS: &[ThresholdSpec] = &[
     ThresholdSpec {
         label: "SILK NB 8k mono noise",
         relative_path: "tests/vectors/8000hz_mono_noise.wav",
@@ -308,6 +308,112 @@ const THRESHOLDS: &[ThresholdSpec] = &[
         dec_release_fail_ratio: 1.29,
     },
 ];
+
+/// Calibrated 2026-07-30 from five clean sweeps on Apple M1 Pro /
+/// aarch64-apple-darwin with `target-cpu=apple-a14` and the C reference's
+/// AArch64 intrinsics enabled. The release limits use the same formula as the
+/// x86_64 table. Keeping the tables separate matters because the optimized C
+/// denominator differs by architecture.
+const APPLE_AARCH64_THRESHOLD_SOURCE: &str = "calibrated 2026-07-30 from 5-sweep median on Apple M1 Pro/aarch64-apple-darwin/apple-a14 with C AArch64 intrinsics; release_fail=max(baseline+0.05, baseline*1.20, 1.05), rounded up";
+
+const APPLE_AARCH64_THRESHOLDS: &[ThresholdSpec] = &[
+    ThresholdSpec {
+        label: "SILK NB 8k mono noise",
+        relative_path: "tests/vectors/8000hz_mono_noise.wav",
+        enc_baseline_ratio: 0.99,
+        dec_baseline_ratio: 1.30,
+        enc_release_fail_ratio: 1.20,
+        dec_release_fail_ratio: 1.56,
+    },
+    ThresholdSpec {
+        label: "SILK WB 16k mono noise",
+        relative_path: "tests/vectors/16000hz_mono_noise.wav",
+        enc_baseline_ratio: 1.00,
+        dec_baseline_ratio: 1.50,
+        enc_release_fail_ratio: 1.20,
+        dec_release_fail_ratio: 1.80,
+    },
+    ThresholdSpec {
+        label: "Hybrid 24k mono noise",
+        relative_path: "tests/vectors/24000hz_mono_noise.wav",
+        enc_baseline_ratio: 1.06,
+        dec_baseline_ratio: 1.30,
+        enc_release_fail_ratio: 1.28,
+        dec_release_fail_ratio: 1.56,
+    },
+    ThresholdSpec {
+        label: "CELT FB 48k mono noise",
+        relative_path: "tests/vectors/48000hz_mono_noise.wav",
+        enc_baseline_ratio: 1.23,
+        dec_baseline_ratio: 1.16,
+        enc_release_fail_ratio: 1.48,
+        dec_release_fail_ratio: 1.40,
+    },
+    ThresholdSpec {
+        label: "CELT FB 48k stereo noise",
+        relative_path: "tests/vectors/48000hz_stereo_noise.wav",
+        enc_baseline_ratio: 1.20,
+        dec_baseline_ratio: 1.19,
+        enc_release_fail_ratio: 1.45,
+        dec_release_fail_ratio: 1.43,
+    },
+    ThresholdSpec {
+        label: "CELT 48k mono sine 1k loud",
+        relative_path: "tests/vectors/48k_sine1k_loud.wav",
+        enc_baseline_ratio: 1.27,
+        dec_baseline_ratio: 1.18,
+        enc_release_fail_ratio: 1.53,
+        dec_release_fail_ratio: 1.42,
+    },
+    ThresholdSpec {
+        label: "CELT 48k mono sweep",
+        relative_path: "tests/vectors/48k_sweep.wav",
+        enc_baseline_ratio: 1.11,
+        dec_baseline_ratio: 1.16,
+        enc_release_fail_ratio: 1.34,
+        dec_release_fail_ratio: 1.39,
+    },
+    ThresholdSpec {
+        label: "CELT 48k mono square 1k",
+        relative_path: "tests/vectors/48k_square1k.wav",
+        enc_baseline_ratio: 1.34,
+        dec_baseline_ratio: 1.19,
+        enc_release_fail_ratio: 1.61,
+        dec_release_fail_ratio: 1.43,
+    },
+    ThresholdSpec {
+        label: "SPEECH 48k mono (SAPI TTS)",
+        relative_path: "tests/vectors/speech_48k_mono.wav",
+        enc_baseline_ratio: 1.16,
+        dec_baseline_ratio: 1.14,
+        enc_release_fail_ratio: 1.40,
+        dec_release_fail_ratio: 1.37,
+    },
+    ThresholdSpec {
+        label: "MUSIC 48k stereo",
+        relative_path: "tests/vectors/music_48k_stereo.wav",
+        enc_baseline_ratio: 1.24,
+        dec_baseline_ratio: 1.11,
+        enc_release_fail_ratio: 1.50,
+        dec_release_fail_ratio: 1.34,
+    },
+];
+
+fn threshold_source() -> &'static str {
+    if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+        APPLE_AARCH64_THRESHOLD_SOURCE
+    } else {
+        X86_64_THRESHOLD_SOURCE
+    }
+}
+
+fn thresholds() -> &'static [ThresholdSpec] {
+    if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+        APPLE_AARCH64_THRESHOLDS
+    } else {
+        X86_64_THRESHOLDS
+    }
+}
 
 /// The four timings we pull out of a single `ropus-compare bench` run.
 #[derive(Debug, Clone, Copy, Default)]
@@ -613,7 +719,7 @@ enum Operation {
 }
 
 fn threshold_for_label(label: &str) -> Option<&'static ThresholdSpec> {
-    THRESHOLDS.iter().find(|t| t.label == label)
+    thresholds().iter().find(|t| t.label == label)
 }
 
 fn has_complete_timings(row: &VectorBench) -> bool {
@@ -1165,6 +1271,27 @@ thread 'main' panicked at 'decode crash'
     }
 
     #[test]
+    fn release_thresholds_match_the_build_architecture() {
+        if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+            assert!(threshold_source().contains("Apple M1 Pro"));
+            assert_eq!(
+                threshold_for_label(VECTORS[0].label)
+                    .unwrap()
+                    .dec_baseline_ratio,
+                1.30
+            );
+        } else {
+            assert!(threshold_source().contains("i7-14700KF"));
+            assert_eq!(
+                threshold_for_label(VECTORS[0].label)
+                    .unwrap()
+                    .dec_baseline_ratio,
+                0.95
+            );
+        }
+    }
+
+    #[test]
     fn release_thresholded_skip_is_release_blocking() {
         let r = BenchResult::skipped_with_profile(
             BenchProfile::ReleaseThresholded,
@@ -1336,7 +1463,12 @@ thread 'main' panicked at 'decode crash'
         let rows = r.threshold_rows();
         assert_eq!(rows[0].enc_status, BenchThresholdStatus::Fail);
         assert_eq!(rows[0].dec_status, BenchThresholdStatus::Pass);
-        assert_eq!(rows[0].enc_release_fail_ratio, Some(1.17));
+        let expected_limit = if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+            1.20
+        } else {
+            1.17
+        };
+        assert_eq!(rows[0].enc_release_fail_ratio, Some(expected_limit));
     }
 
     #[test]
