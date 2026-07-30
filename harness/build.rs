@@ -9,6 +9,10 @@ use std::path::PathBuf;
 fn main() {
     let ref_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../reference");
     let harness_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".");
+    let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH")
+        .expect("Cargo must set CARGO_CFG_TARGET_ARCH for build scripts");
+    let target_is_x86 = matches!(target_arch.as_str(), "x86" | "x86_64");
+    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_ARCH");
 
     // Declare `no_reference` for cfg-checking regardless of which branch we take.
     println!("cargo:rustc-check-cfg=cfg(no_reference)");
@@ -296,7 +300,9 @@ fn main() {
     // the build a single cc::Build invocation. Without this, GCC 13 rejects
     // _mm_mul_epi32 / _mm_shuffle_epi8 / _mm_alignr_epi8 / _mm_mullo_epi32
     // with "target specific option mismatch".
-    build.flag_if_supported("-msse4.1");
+    if target_is_x86 {
+        build.flag_if_supported("-msse4.1");
+    }
 
     // --- Fuzzing context detection ---
     //
@@ -331,8 +337,10 @@ fn main() {
     for src in &celt_sources {
         build.file(ref_dir.join(src));
     }
-    for src in &celt_x86_sources {
-        build.file(ref_dir.join(src));
+    if target_is_x86 {
+        for src in &celt_x86_sources {
+            build.file(ref_dir.join(src));
+        }
     }
     for src in &silk_sources {
         build.file(ref_dir.join(src));
@@ -340,8 +348,10 @@ fn main() {
     for src in &silk_fixed_sources {
         build.file(ref_dir.join(src));
     }
-    for src in &silk_x86_sources {
-        build.file(ref_dir.join(src));
+    if target_is_x86 {
+        for src in &silk_x86_sources {
+            build.file(ref_dir.join(src));
+        }
     }
     for src in &opus_sources {
         build.file(ref_dir.join(src));

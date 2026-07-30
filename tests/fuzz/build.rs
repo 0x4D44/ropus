@@ -11,6 +11,10 @@ fn main() {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let ref_dir = crate_dir.join("../../reference");
     let harness_dir = crate_dir.join("../../harness");
+    let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH")
+        .expect("Cargo must set CARGO_CFG_TARGET_ARCH for build scripts");
+    let target_is_x86 = matches!(target_arch.as_str(), "x86" | "x86_64");
+    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_ARCH");
 
     if !ref_dir.join("celt/bands.c").exists() {
         panic!(
@@ -207,7 +211,9 @@ fn main() {
     // host is one) and keeps the build a single cc::Build invocation. Without
     // this, GCC 13 rejects _mm_mul_epi32 / _mm_shuffle_epi8 / _mm_alignr_epi8
     // / _mm_mullo_epi32 with "target specific option mismatch".
-    build.flag_if_supported("-msse4.1");
+    if target_is_x86 {
+        build.flag_if_supported("-msse4.1");
+    }
 
     let fuzzing = std::env::var("CARGO_CFG_FUZZING").is_ok();
     let rustflags = std::env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
@@ -223,13 +229,16 @@ fn main() {
 
     for src in celt_sources
         .iter()
-        .chain(celt_x86_sources.iter())
         .chain(silk_sources.iter())
         .chain(silk_fixed_sources.iter())
-        .chain(silk_x86_sources.iter())
         .chain(opus_sources.iter())
     {
         build.file(ref_dir.join(src));
+    }
+    if target_is_x86 {
+        for src in celt_x86_sources.iter().chain(silk_x86_sources.iter()) {
+            build.file(ref_dir.join(src));
+        }
     }
 
     build.compile("opus_ref");

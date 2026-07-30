@@ -24,12 +24,14 @@
    signal that Stage 6 is needed. Do NOT re-gate analysis by adding
    DISABLE_FLOAT_API back unless the closeout is abandoned. */
 
-/* Enable x86 SIMD (SSE/SSE2/SSE4.1) with runtime detection */
-#define OPUS_HAVE_RTCD 1
-#define OPUS_X86_MAY_HAVE_SSE 1
-#define OPUS_X86_MAY_HAVE_SSE2 1
-#define OPUS_X86_MAY_HAVE_SSE4_1 1
-#define CPU_INFO_BY_C 1
+/* Enable x86 SIMD (SSE/SSE2/SSE4.1) with runtime detection on x86 only. */
+#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
+# define OPUS_HAVE_RTCD 1
+# define OPUS_X86_MAY_HAVE_SSE 1
+# define OPUS_X86_MAY_HAVE_SSE2 1
+# define OPUS_X86_MAY_HAVE_SSE4_1 1
+# define CPU_INFO_BY_C 1
+#endif
 
 /* DNN / ML features.
  *
