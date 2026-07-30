@@ -13,4 +13,4 @@
 | harness-control/ | (never) |
 | capi/ | 2026-07-31 |
 | ropus-fb2k/ | (never) |
-| full-test/ | (never) |
+| full-test/ | 2026-07-31 |
