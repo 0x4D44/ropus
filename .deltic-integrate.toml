@@ -1,0 +1,15 @@
+version = 1
+fallback = [
+  { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
+  { program = "cargo", args = ["clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"] },
+  { program = "cargo", args = ["test", "--workspace", "--locked"] },
+]
+
+[[component]]
+name = "workspace"
+paths = ["tests/", "tools/"]
+gate = [
+  { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
+  { program = "cargo", args = ["clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"] },
+  { program = "cargo", args = ["test", "--workspace", "--locked"] },
+]
