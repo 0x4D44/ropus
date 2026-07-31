@@ -29,3 +29,24 @@ Static review at origin/main ac7ff8a. Public options are intended for GUI/plugin
 <unfixed — raised only>
 
 ## Notes
+
+### Additional `ropusenc` boundary cases (2026-07-31)
+
+Static review at `origin/main` `b4e2c31` found two more triggers covered by this
+bug's command-boundary validation fix:
+
+- `/Users/md/language/ropus/ropusenc/src/main.rs:44-47` accepts complexity
+  `11..=255`, then
+  `/Users/md/language/ropus/ropus-tools-core/src/commands/encode.rs:112-177`
+  decodes and resamples the complete input before the encoder rejects it.
+- `/Users/md/language/ropus/ropusenc/src/main.rs:36-42` accepts every `u32`
+  bitrate, and
+  `/Users/md/language/ropus/ropus-tools-core/src/commands/encode.rs:162-164`
+  uses unchecked `Bitrate::Bits`. `/Users/md/language/ropus/ropus/src/api.rs:105-136`
+  says untrusted values should use `Bitrate::try_bits`, because values above
+  `i32::MAX` silently clamp. A huge requested bitrate can therefore succeed at
+  a different effective value.
+
+Add early Clap validation for complexity and bitrate, repeat the validation at
+the public core boundary, and prove invalid options consume no input and create
+no output. This was a static review; no command or test ran.
