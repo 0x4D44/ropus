@@ -29,3 +29,16 @@ Static review at origin/main ac7ff8a. Direct decode applies OpusHead output_gain
 <unfixed — raised only>
 
 ## Notes
+
+### `ropusplay --gain` is not decoder gain (2026-07-31)
+
+The signed parity design requires decoder `set_gain` semantics, but
+`/Users/md/language/ropus/ropus-tools-core/src/commands/play.rs:153-158,227-255`
+multiplies already decoded float PCM. The actual decoder applies Q8 gain before
+the saturating i16 clamp at
+`/Users/md/language/ropus/ropus/src/opus/decoder.rs:1152-1159,1382-1411`.
+Positive gain can therefore clip and quantize differently from `ropusdec`, in
+addition to omitting `OpusHead.output_gain`. Combine header and user Q8 gain in
+the decoder, define non-Opus policy, and add zero, negative, and positive
+saturation fixtures plus a CLI mapping case. Static review at `origin/main`
+`e5d7113`; no decoder, player, or test ran.

@@ -43,3 +43,16 @@ The fix and oracle must require selected-stream EOS before publication and
 reject physical EOF before EOS. Use an independently built stream truncated
 after a complete non-EOS page so the test does not depend on the encoder tracked
 by `ROP-BUG-FLUX-00042`. This was a static review; no decoder or test ran.
+
+### `ropusplay` completion acceptance (2026-07-31)
+
+`/Users/md/language/ropus/ropus-tools-core/src/audio/decode.rs:160-235`
+also treats physical `UnexpectedEof` as successful completion and exposes the
+result directly to playback at
+`/Users/md/language/ropus/ropus-tools-core/src/commands/play.rs:132-193`.
+Require selected-stream EOS and exact end trimming before a track is published.
+Tighten `/Users/md/language/ropus/ropus-tools-core/tests/round_trip.rs:120-134`
+from shared-prefix comparison to an independently granulated exact sample-count
+oracle. Wholly undecodable tracks are tracked separately as
+`ROP-BUG-FLUX-00064`. Static review at `origin/main` `e5d7113`; no decoder,
+player, or test ran.

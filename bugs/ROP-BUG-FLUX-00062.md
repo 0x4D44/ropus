@@ -53,3 +53,21 @@ banner-only meaning of `--quiet` for this read-only tool, but make strict query
 mode itself select no banner and no colour after authoritative parsing.
 Pseudo-terminal help/error and strict-query output must contain no ANSI.
 Static review at `origin/main` `6a312e1`; no binary or test ran.
+
+### Confirmed in `ropusplay` (2026-07-31)
+
+`/Users/md/language/ropus/ropusplay/src/main.rs:78-90` prints the banner before
+authoritative parsing, so plain `--list-devices` violates its one-device-name
+per-line stdout contract. It also fixes Clap to `ColorChoice::Auto` and
+discards typed `no_color` at :32-37,78-104.
+
+The noninteractive path is structurally malformed:
+`/Users/md/language/ropus/ropus-tools-core/src/commands/play.rs:113-139`
+unconditionally writes a carriage-return progress prefix and, on failure,
+ANSI erase-to-line-end before the plain summary at :444-470. Redirected and
+quiet playback can therefore emit joined `decoding …playing …` text and raw
+escapes. Quiet intentionally means noninteractive rather than silent for this
+tool. Render ephemeral/ANSI UI only on the interactive TTY path, select
+list-device and color policy after typed parsing, and assert exact redirected,
+quiet, list, and pseudo-terminal output. Static review at `origin/main`
+`e5d7113`; no binary, terminal, or test ran.

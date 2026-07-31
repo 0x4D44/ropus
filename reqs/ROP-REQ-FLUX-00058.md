@@ -43,3 +43,21 @@ cases:
 No workload, benchmark, decoder, or test ran. Per-sample write cost,
 large-metadata impact, and atomic replacement policy remain unverified, so they
 were not raised as separate defects.
+
+### `ropusplay` acceptance detail (2026-07-31)
+
+- `/Users/md/language/ropus/ropus-tools-core/src/audio/decode.rs:155-235` and
+  `/Users/md/language/ropus/ropus-tools-core/src/commands/play.rs:110-178`
+  retain the complete current track before creating the sink. Bound memory
+  independently of duration and begin playback before full-file decode.
+- Do not wait for the next full decode at every track transition. Preserve the
+  signed non-gapless policy while bounding queue depth and first-sound latency.
+- The display path at
+  `/Users/md/language/ropus/ropus-tools-core/src/commands/play.rs:488-511,550-608,673-686`
+  owns arbitrary tag strings and rescans the full selected label on each
+  100 ms UI tick before truncation. Apply a metadata/display budget once and
+  make repaint work independent of the original tag length.
+
+Use memory, first-sound, transition-latency, and examined-label resource
+oracles. Static review at `origin/main` `e5d7113`; no workload, player,
+benchmark, or test ran.

@@ -29,3 +29,14 @@ Static review at origin/main ac7ff8a. OpusTags accepts arbitrary valid UTF-8 at 
 <unfixed — raised only>
 
 ## Notes
+
+### Additional `ropusplay` device-name sinks (2026-07-31)
+
+Raw cpal device names and the requested name are also emitted at
+`/Users/md/language/ropus/ropus-tools-core/src/commands/play.rs:266-299,314-338`.
+Include them in the single-line control-escaping policy. The machine-facing
+device-list format needs an explicit reversible encoding so embedded CR/LF or
+terminal controls cannot create forged device rows while exact selection
+remains possible. Add deterministic device names containing ESC, OSC, BEL,
+CR/LF, and C1 controls. Static review at `origin/main` `e5d7113`; no device,
+terminal, player, or test ran.

@@ -38,3 +38,14 @@ also injects `--quiet --no-color` into every invocation, so it cannot catch
 banner-routing or default-color regressions. Make required fixtures
 deterministic and mandatory, then test default and controlled output paths
 separately. Static review at `origin/main` `6a312e1`; no test ran.
+
+### `ropusplay` device test can skip every failure (2026-07-31)
+
+`/Users/md/language/ropus/ropusplay/tests/cli.rs:18-48` labels every nonzero
+status from `--list-devices` as a headless-host skip, including panics, argument
+regressions, and enumeration failures. Its forced `--quiet` plus nonempty-line
+assertion also cannot detect a leaked banner. Skip only a structured
+no-device outcome, fail every unrelated status, and use an injected
+deterministic enumerator for mandatory empty/nonempty and exact-output
+coverage. Keep real hardware enumeration explicitly manual or ignored. Static
+review at `origin/main` `e5d7113`; no binary, device, or test ran.

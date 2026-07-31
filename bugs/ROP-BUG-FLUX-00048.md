@@ -66,3 +66,18 @@ Centralize validation in the public core boundary, use checked Q8 conversion
 and addition, and keep Clap range parsers only for early diagnostics. Cover
 direct library construction as well as wrapper parsing. This was a static
 review; no decoder or test ran.
+
+### Additional `ropusplay` boundary cases (2026-07-31)
+
+`/Users/md/language/ropus/ropusplay/src/main.rs:43-45` accepts every `f32`
+volume. `/Users/md/language/ropus/ropus-tools-core/src/commands/play.rs:171-173`
+passes NaN through `clamp` to the audio sink. Reject non-finite volume at the
+public command boundary and constrain the CLI to the documented `0.0..=1.0`.
+Finite out-of-range values may retain the signed design's clamping policy.
+
+The same command accepts `+128 dB` at
+`/Users/md/language/ropus/ropus-tools-core/src/commands/play.rs:227-243`, but
+the promised Q8 decoder gain tops out at 32767, just below +128 dB. Validate
+the representable combined header-plus-user gain before decoding. Cover CLI and
+direct `PlayOptions` construction without opening a device or input. Static
+review at `origin/main` `e5d7113`; no player, device, or test ran.

@@ -45,3 +45,11 @@ Static review at `origin/main` `bfe19ba`; no build ran.
 same provenance script. Include `ropusinfo` in the shared correction and the
 normal-clone, linked-worktree, detached-HEAD, packaged, and vendored-layout
 oracles. Static review at `origin/main` `6a312e1`; no build ran.
+
+### Confirmed in `ropusplay` (2026-07-31)
+
+`/Users/md/language/ropus/ropusplay/build.rs:1-36` is the fourth
+byte-identical provenance script. The shared correction and normal-clone,
+linked-worktree, detached-HEAD, packaged, and vendored-layout oracles must
+cover all four CLI binaries. Static review at `origin/main` `e5d7113`; no
+build ran.

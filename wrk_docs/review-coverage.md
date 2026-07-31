@@ -7,7 +7,7 @@
 | ropusenc/ | 2026-07-31 |
 | ropusdec/ | 2026-07-31 |
 | ropusinfo/ | 2026-07-31 |
-| ropusplay/ | (never) |
+| ropusplay/ | 2026-07-31 |
 | harness/ | 2026-07-31 |
 | harness-deep-plc/ | (never) |
 | harness-control/ | (never) |
