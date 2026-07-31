@@ -906,11 +906,9 @@ mod tests {
         let bench_json = &v["stages"]["bench"];
         assert_eq!(bench_json["profile"], "release-thresholded");
         assert_eq!(bench_json["claimed"], true);
-        assert!(
-            bench_json["threshold_source"]
-                .as_str()
-                .unwrap()
-                .contains("recalibrated 2026-05-11")
+        assert_eq!(
+            bench_json["threshold_source"],
+            BenchProfile::ReleaseThresholded.threshold_source().unwrap()
         );
         assert!(
             bench_json["release_blocking_issues"][0]
@@ -921,7 +919,12 @@ mod tests {
         let thresholds = bench_json["thresholds"].as_array().unwrap();
         assert_eq!(thresholds[0]["enc_status"], "fail");
         assert_eq!(thresholds[0]["dec_status"], "pass");
-        assert_eq!(thresholds[0]["enc_release_fail_ratio"], 1.17);
+        let expected_limit = if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+            1.20
+        } else {
+            1.17
+        };
+        assert_eq!(thresholds[0]["enc_release_fail_ratio"], expected_limit);
     }
 
     #[test]

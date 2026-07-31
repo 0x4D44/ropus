@@ -1750,7 +1750,8 @@ mod tests {
         let html = render(&c);
 
         assert!(html.contains("Profile: <code>release-thresholded</code>"));
-        assert!(html.contains("Threshold source: recalibrated 2026-05-11"));
+        let threshold_source = BenchProfile::ReleaseThresholded.threshold_source().unwrap();
+        assert!(html.contains(&format!("Threshold source: {threshold_source}")));
         assert!(html.contains("Benchmark release thresholds"));
         assert!(html.contains("tests/vectors/8000hz_mono_noise.wav"));
         assert!(html.contains("encode ratio 2.000x exceeds"));

@@ -181,7 +181,6 @@ fn main() {
         "silk/arm/biquad_alt_neon_intr.c",
         "silk/arm/LPC_inv_pred_gain_neon_intr.c",
         "silk/arm/NSQ_neon.c",
-        "silk/fixed/arm/warped_autocorrelation_FIX_neon_intr.c",
     ];
 
     let opus_sources = [
@@ -270,6 +269,7 @@ fn main() {
         for src in &arm_neon_sources {
             build.file(ref_dir.join(src));
         }
+        build.file(harness_dir.join("warped_autocorrelation_FIX_neon_shim.c"));
     }
 
     build.compile("opus_ref");
