@@ -12,5 +12,5 @@
 | harness-deep-plc/ | (never) |
 | harness-control/ | (never) |
 | capi/ | 2026-07-31 |
-| ropus-fb2k/ | (never) |
+| ropus-fb2k/ | 2026-07-31 |
 | full-test/ | 2026-07-31 |
