@@ -40,3 +40,15 @@ PCM has already been written. Share one fallible framing parser with the fixed
 control path, require LOST length zero and exact EOF, and publish output only
 after a complete valid stream. Static review at `origin/main` `b65f812`; no
 control decoder or packet stream ran.
+
+### Lossless control accepts matching truncated output (2026-07-31)
+
+The lossy control asserts the full expected output length at
+`/Users/md/language/ropus/harness-control/tests/control_snr.rs:304-315`, but
+the lossless path at `:368-386` checks only that both children have the same
+length. If both decoders return the same nonempty prefix after a shared framing
+or loop regression, SNR is infinite and the test passes despite missing audio.
+Use one shared validator that requires exactly
+`TOTAL_FRAMES * FRAME_SIZE * CHANNELS` samples, nonempty signal energy, and a
+finite-or-explicitly-identical SNR policy before either comparison. Static
+review at `origin/main` `1ae9e50`; no control decoder or test ran.
