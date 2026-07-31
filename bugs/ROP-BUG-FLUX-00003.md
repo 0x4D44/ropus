@@ -26,6 +26,31 @@ Observed on Apple Silicon macOS in a clean task worktree based on origin/main ae
 
 ## Fix
 
-<unfixed — raised only>
+Commit `a08e2fa` gated the x86 reference sources and `-msse4.1` behind
+`CARGO_CFG_TARGET_ARCH` in `harness/build.rs` and `tests/fuzz/build.rs`, and wrapped the
+`OPUS_X86_MAY_HAVE_*` / `CPU_INFO_BY_C` macros in `harness/config.h` behind an x86 preprocessor
+guard. Later commits (`ca425df`, `b2124c9`, `dad075e`) moved those macros out of `config.h`
+into arch-conditional `cc::Build::define` calls in `harness/build.rs` and added the
+`OPUS_ARM_*_NEON_INTR` defines for aarch64.
 
 ## Notes
+
+### Verification attempt — NOT closed (2026-07-31, host KILN / Windows x86_64)
+
+Left at **Fixed**: this host cannot reproduce the original observation, so closing it here
+would be a fabricated closure. What was and was not established:
+
+- **Not verifiable here.** The recorded symptom is Apple Clang rejecting
+  `reference/celt/x86/x86cpu.c` on `aarch64-apple-darwin`. Reproducing it needs an Apple
+  Silicon macOS host; this verifier ran on Windows x86_64, which takes the x86 branch and
+  never compiles the failing path. There is no host-independent regression test either — the
+  only coverage is the harness build itself on ARM, so the check must run on the platform.
+- **Established by inspection only (inference, not observation).** The arch gating is present
+  and intact on trunk 6ccb736: `harness/build.rs:16` derives `target_is_x86` from
+  `CARGO_CFG_TARGET_ARCH` and guards the `-msse4.1` flag and both x86 source lists
+  (`harness/build.rs:305,339,382`); `tests/fuzz/build.rs` mirrors it
+  (`tests/fuzz/build.rs:217,240,264`); the x86 RTCD macros are now defined only under the x86
+  branch (`harness/build.rs:307`). That addresses the stated root cause.
+- **Next step for closure.** A verifier on Apple Silicon macOS should run the recorded repro —
+  `cargo clippy --locked --all-targets -- -D warnings` with the pinned xiph/opus tree
+  provisioned via `cargo run -p fetch-assets -- all` — and close on that evidence.
