@@ -29,3 +29,17 @@ Static review at origin/main ac7ff8a. /Users/md/language/ropus/ropus-tools-core/
 <unfixed — raised only>
 
 ## Notes
+
+### Additional `ropusdec` EOF trigger (2026-07-31)
+
+Static review at `origin/main` `bfe19ba` confirmed that
+`/Users/md/language/ropus/ropus-tools-core/src/commands/decode.rs:255-300`
+also treats physical EOF after a complete non-EOS page as successful decode.
+The loop stops on `Ok(None)` without requiring `last_in_stream` or retaining the
+final absolute granule. It can therefore publish a plausible truncated WAV/PCM
+with exit zero, not only expose padding beyond a present EOS granule.
+
+The fix and oracle must require selected-stream EOS before publication and
+reject physical EOF before EOS. Use an independently built stream truncated
+after a complete non-EOS page so the test does not depend on the encoder tracked
+by `ROP-BUG-FLUX-00042`. This was a static review; no decoder or test ran.

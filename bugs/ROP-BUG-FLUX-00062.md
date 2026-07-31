@@ -29,3 +29,17 @@ Static review at origin/main b4e2c31. The signed parity goal at /Users/md/langua
 <unfixed — raised only>
 
 ## Notes
+
+### Confirmed in `ropusdec` (2026-07-31)
+
+`/Users/md/language/ropus/ropusdec/src/main.rs:67-99` uses quiet only for the
+banner and discards typed `no_color`. The shared decoder still emits headings,
+paths, tags, active flags, and completion at
+`/Users/md/language/ropus/ropus-tools-core/src/commands/decode.rs:87-118,141-159,190-227,460-495`,
+while Clap remains `ColorChoice::Auto` at
+`/Users/md/language/ropus/ropusdec/src/main.rs:12-18`.
+
+Extend the output-policy fix and oracles to `ropusdec`: successful file and
+stdout decodes under quiet must emit no informational text, and pseudo-terminal
+help/error output under `--no-color` must contain no ANSI. Static review at
+`origin/main` `bfe19ba`; no binary or test ran.

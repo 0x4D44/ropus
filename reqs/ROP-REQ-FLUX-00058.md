@@ -16,3 +16,30 @@
 Replace whole-track PCM batching in ropus-tools-core with bounded streaming stages. /Users/md/language/ropus/ropus-tools-core/src/audio/decode.rs:155-235 accumulates every decoded sample and feeds encode/play at commands/encode.rs:112-153 and commands/play.rs:132-177. /Users/md/language/ropus/ropus-tools-core/src/commands/decode.rs:249-370 likewise retains the entire output and can create further full copies while trimming, resampling, and quantizing. Multi-hour stereo inputs can therefore require GiBs despite sequential codecs and sinks. Provide a reusable streaming decode/resample/downmix/sink contract with explicit final trimming, bounded queues, stdin policy, WAV header patch/RF64 or explicit size failure, and resource oracles proving memory does not scale with duration. Preserve current file/stdin behavior and codec output semantics. Raised from static review at origin/main ac7ff8a; no workload or measurement ran.
 
 ## Notes
+
+### `ropusdec` acceptance detail (2026-07-31)
+
+Static review at `origin/main` `bfe19ba` adds these bounded-pipeline acceptance
+cases:
+
+- `/Users/md/language/ropus/ropus-tools-core/src/commands/decode.rs:188,211,252-348`
+  sends `--rate 48000 --no-dither` through whole-track float accumulation,
+  cloning, and requantization even though `need_resample` is false. Identity
+  rate must take the direct path and remain byte-identical to omitted rate.
+- Raw and WAV writers issue one buffered `write_all` per sample at
+  `/Users/md/language/ropus/ropus-tools-core/src/commands/decode.rs:424-444`
+  and `/Users/md/language/ropus/ropus-tools-core/src/audio/wav.rs:64-69,149-154`.
+  Use bounded byte blocks; benchmark before claiming a material speedup.
+- Decode retains the complete `OpusTags` packet and owned copies of vendor and
+  comments although it reports only vendor and count
+  (`/Users/md/language/ropus/ropus-tools-core/src/commands/decode.rs:148-159`;
+  `/Users/md/language/ropus/ropus-tools-core/src/container/ogg.rs:42-114`).
+  Give metadata an explicit budget and drop unneeded storage before audio
+  accumulation.
+- Compute WAV/RF64 representability before opening a regular destination.
+  Current path writers create the file before the 4 GiB checks at
+  `/Users/md/language/ropus/ropus-tools-core/src/audio/wav.rs:18-47,78-108`.
+
+No workload, benchmark, decoder, or test ran. Per-sample write cost,
+large-metadata impact, and atomic replacement policy remain unverified, so they
+were not raised as separate defects.

@@ -5,7 +5,7 @@
 | ropus/ | 2026-07-31 |
 | ropus-tools-core/ | 2026-07-31 |
 | ropusenc/ | 2026-07-31 |
-| ropusdec/ | (never) |
+| ropusdec/ | 2026-07-31 |
 | ropusinfo/ | (never) |
 | ropusplay/ | (never) |
 | harness/ | 2026-07-31 |

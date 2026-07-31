@@ -50,3 +50,19 @@ bug's command-boundary validation fix:
 Add early Clap validation for complexity and bitrate, repeat the validation at
 the public core boundary, and prove invalid options consume no input and create
 no output. This was a static review; no command or test ran.
+
+### Additional `ropusdec` boundary cases (2026-07-31)
+
+Static review at `origin/main` `bfe19ba` confirmed split validation ownership in
+the decoder. `/Users/md/language/ropus/ropusdec/src/main.rs:99-106` rejects
+packet loss above 100 only for CLI callers, while public
+`DecodeOptions.packet_loss_pct` values `101..=255` reach
+`/Users/md/language/ropus/ropus-tools-core/src/commands/decode.rs:255-281` and
+make every packet lost. The core rejects non-finite gain at `:50-56`, but a huge
+finite gain is saturated during float-to-`i32` conversion and then added to the
+header gain at `:167-175`, which can panic in checked builds or wrap in release.
+
+Centralize validation in the public core boundary, use checked Q8 conversion
+and addition, and keep Clap range parsers only for early diagnostics. Cover
+direct library construction as well as wrapper parsing. This was a static
+review; no decoder or test ran.

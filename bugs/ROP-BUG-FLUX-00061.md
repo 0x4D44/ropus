@@ -29,3 +29,12 @@ Static review at origin/main b4e2c31. /Users/md/language/ropus/ropusenc/build.rs
 <unfixed — raised only>
 
 ## Notes
+
+### Confirmed in `ropusdec` (2026-07-31)
+
+`/Users/md/language/ropus/ropusdec/build.rs:1-36` is byte-identical to the
+script originally cited above. It has the same missing linked-worktree and
+symbolic-ref watches and the same unrestricted ancestor-repository lookup.
+Treat this as one four-CLI fix and run the normal clone, linked worktree,
+detached HEAD, packaged, and vendored-layout oracles against every binary.
+Static review at `origin/main` `bfe19ba`; no build ran.

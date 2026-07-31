@@ -29,3 +29,18 @@ Static review at origin/main ac7ff8a. /Users/md/language/ropus/ropus-tools-core/
 <unfixed — raised only>
 
 ## Notes
+
+### Additional default-output aliases (2026-07-31)
+
+Static review at `origin/main` `bfe19ba` confirmed two implicit decode aliases
+in addition to explicit direct, symlink, and hard-link output aliases.
+`/Users/md/language/ropus/ropus-tools-core/src/commands/decode.rs:78-84`
+derives the destination by replacing the extension, but input format detection
+is content-based. A valid Ogg Opus stream named `x.wav` therefore defaults to
+itself in WAV mode, and `x.pcm --raw` defaults to itself in raw mode. Output
+creation at `:395-457` or
+`/Users/md/language/ropus/ropus-tools-core/src/audio/wav.rs:18-28,78-88`
+truncates the source after decoding.
+
+Add both unchanged-extension cases to the non-colliding default policy and
+source-preservation tests. This was a static review; no file or decoder ran.
