@@ -44,3 +44,12 @@ truncates the source after decoding.
 
 Add both unchanged-extension cases to the non-colliding default policy and
 source-preservation tests. This was a static review; no file or decoder ran.
+
+### Float control decoder explicit alias (2026-07-31)
+
+`/Users/md/language/ropus/harness-deep-plc/src/bin_inner/ctrl_decode_float.rs:68-87`
+opens the packet input, reads only its header, then creates the caller-selected
+PCM output without rejecting direct, symlink, or hard-link aliases. The create
+truncates the still-needed packet stream before frame decoding begins. Include
+this binary in the shared file-identity rejection and source-preservation
+oracles. Static review at `origin/main` `b65f812`; no file was written.

@@ -9,7 +9,7 @@
 | ropusinfo/ | 2026-07-31 |
 | ropusplay/ | 2026-07-31 |
 | harness/ | 2026-07-31 |
-| harness-deep-plc/ | (never) |
+| harness-deep-plc/ | 2026-07-31 |
 | harness-control/ | (never) |
 | capi/ | 2026-07-31 |
 | ropus-fb2k/ | 2026-07-31 |

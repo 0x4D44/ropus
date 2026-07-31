@@ -29,3 +29,14 @@ Static review at `origin/main` `d0ab87e`. Both framed decoders stop and return p
 <unfixed — raised only>
 
 ## Notes
+
+### Float control framing also accepts ambiguous records (2026-07-31)
+
+`/Users/md/language/ropus/harness-deep-plc/src/bin_inner/ctrl_decode_float.rs:94-121`
+stops after the declared frame count without requiring exact EOF. A LOST record
+with a nonzero low-bit length is treated as PLC without consuming its declared
+payload, desynchronising later records. Later short reads panic after partial
+PCM has already been written. Share one fallible framing parser with the fixed
+control path, require LOST length zero and exact EOF, and publish output only
+after a complete valid stream. Static review at `origin/main` `b65f812`; no
+control decoder or packet stream ran.

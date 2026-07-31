@@ -49,3 +49,17 @@ no-device outcome, fail every unrelated status, and use an injected
 deterministic enumerator for mandatory empty/nonempty and exact-output
 coverage. Keep real hardware enumeration explicitly manual or ignored. Static
 review at `origin/main` `e5d7113`; no binary, device, or test ran.
+
+### DTX/DRED first-frame gate succeeds when inconclusive (2026-07-31)
+
+`/Users/md/language/ropus/harness-deep-plc/tests/dred_dtx_first_frame_diff.rs:189-205`
+returns success when it never observes a suitable multi-frame DRED packet.
+When it does observe one with `ext_frame == 0`, `:208-225` only logs that DTX
+did not fire and still passes. The test was meant to replace the deleted
+tautological unit oracle, as recorded at
+`/Users/md/language/ropus/ropus/src/opus/encoder.rs:8924-8929`, so regressing
+the first-frame shift can now remain green. Pre-warm deterministic DTX state,
+independently prove the first sub-frame was dropped, require DRED presence, and
+assert its extension frame equals the observed `dtx_count`; an inconclusive
+fixture must fail or be explicitly ignored. Static review at `origin/main`
+`b65f812`; no encoder or test ran.

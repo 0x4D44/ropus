@@ -29,3 +29,14 @@ Static review at `origin/main` `d0ab87e`. `/Users/md/language/ropus/harness/src/
 <unfixed — raised only>
 
 ## Notes
+
+### Float control decoder repeats the unbounded-input path (2026-07-31)
+
+`/Users/md/language/ropus/harness-deep-plc/src/bin_inner/ctrl_decode_float.rs:73-76,92-109`
+trusts unsigned packet-file dimensions, frame count, and a 31-bit payload
+length. Signed-to-`usize` casts and unchecked multiplication can request nearly
+the address space, while a tiny record can request about 2 GiB before
+`read_exact` discovers EOF. Apply the same supported-rate/channel/frame,
+checked-arithmetic, packet-length, frame-count, and output-budget validation to
+both control decoders before creating output. Static review at `origin/main`
+`b65f812`; no decoder or malformed input ran.

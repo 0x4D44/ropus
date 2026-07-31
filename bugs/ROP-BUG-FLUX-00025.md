@@ -29,3 +29,22 @@ Static review at `origin/main` `d0ab87e`. `/Users/md/language/ropus/harness/buil
 <unfixed — raised only>
 
 ## Notes
+
+### Float-reference harness and copied bitrate oracle (2026-07-31)
+
+Static review at `origin/main` `b65f812` confirmed the same invalidation failure
+in the float DEEP_PLC harness. `/Users/md/language/ropus/harness-deep-plc/build.rs:57-259,289-330`
+compiles more than one hundred reference sources, while explicit watches cover
+only three reference files at `:22-33` and local harness files at `:333-339`.
+The one-manifest fix must cover both fixed and float reference builds and their
+headers.
+
+The direct bitrate oracle has a second stale-reference path even after Cargo
+rebuilds correctly. `/Users/md/language/ropus/harness-deep-plc/dred_encode_shim.c:349-478`
+copies the vendor-static bitrate table and function bodies, and
+`/Users/md/language/ropus/harness-deep-plc/tests/dred_compute_bitrate_ffi_diff.rs:18-25`
+calls that copy as the C side. A vendor change can therefore leave a rebuilt
+but stale “reference” oracle. Expose a wrapper from the live implementation
+translation unit, or enforce a pinned source-block hash as part of the
+one-to-one manifest oracle. This was a static review; the absent `reference/`
+tree made current copied-body parity **UNVERIFIED**.
