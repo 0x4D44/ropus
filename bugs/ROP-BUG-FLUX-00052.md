@@ -29,3 +29,12 @@ Static review at origin/main ac7ff8a. /Users/md/language/ropus/ropus-tools-core/
 <unfixed — raised only>
 
 ## Notes
+
+### Query-specific collection acceptance (2026-07-31)
+
+Parse and validate `QueryKey` before opening the input. Use a header/tag plan
+for fixed metadata, a streaming page plan for duration and bitrate, and retain
+packet TOCs only for extended human output. Non-tag scalar queries must not
+allocate tag strings or picture payloads. Prove the plans with bounded-reader
+and large-comment oracles. Static review of `ropusinfo` at `origin/main`
+`6a312e1`; no command or measurement ran.

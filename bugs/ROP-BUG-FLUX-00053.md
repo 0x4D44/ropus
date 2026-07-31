@@ -29,3 +29,13 @@ Static review at origin/main ac7ff8a. /Users/md/language/ropus/ropus-tools-core/
 <unfixed — raised only>
 
 ## Notes
+
+### Confirmed in `ropusinfo` strict-query routing (2026-07-31)
+
+`/Users/md/language/ropus/ropusinfo/src/main.rs:44-62` duplicates raw argument
+parsing to decide whether the banner is safe. Clap accepts `-q=duration`, but
+the scanner misses it and prints the banner before the scalar query result.
+Arguments after `--` are also not separated from options. Derive output routing
+from the authoritative parsed command and add attached-short-query and
+end-of-options cases without injecting `--quiet`. Static review at
+`origin/main` `6a312e1`; no binary or test ran.

@@ -29,3 +29,13 @@ Static review at origin/main ac7ff8a. The crate advertises GUI/plugin use at /Us
 <unfixed — raised only>
 
 ## Notes
+
+### `ropusinfo` validation order (2026-07-31)
+
+`/Users/md/language/ropus/ropus-tools-core/src/commands/info.rs:68-76,305-358`
+opens and fully inspects the input before validating the query name. An unknown
+query against a missing or unreadable file therefore reports an I/O error
+instead of the documented query error. Parse to a typed query before any file
+I/O, return the typed error through the library boundary, and let only
+`ropusinfo` map it to exit 2. Static review at `origin/main` `6a312e1`; no
+command or test ran.

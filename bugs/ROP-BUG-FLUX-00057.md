@@ -29,3 +29,12 @@ Static review at origin/main ac7ff8a. Five behavioral tests at /Users/md/languag
 <unfixed — raised only>
 
 ## Notes
+
+### Confirmed in all `ropusinfo` CLI behavior tests (2026-07-31)
+
+`/Users/md/language/ropus/ropusinfo/tests/cli.rs:16-42,86-287` lets all six
+tests return success when the shared vector is absent. Its helper at :65-83
+also injects `--quiet --no-color` into every invocation, so it cannot catch
+banner-routing or default-color regressions. Make required fixtures
+deterministic and mandatory, then test default and controlled output paths
+separately. Static review at `origin/main` `6a312e1`; no test ran.

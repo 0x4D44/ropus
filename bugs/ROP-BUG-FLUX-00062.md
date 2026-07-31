@@ -43,3 +43,13 @@ Extend the output-policy fix and oracles to `ropusdec`: successful file and
 stdout decodes under quiet must emit no informational text, and pseudo-terminal
 help/error output under `--no-color` must contain no ANSI. Static review at
 `origin/main` `bfe19ba`; no binary or test ran.
+
+### Confirmed in `ropusinfo` (2026-07-31)
+
+`/Users/md/language/ropus/ropusinfo/src/main.rs:12-18,44-67` keeps Clap at
+`ColorChoice::Auto`, uses quiet only for its banner, and relies on an
+approximate raw-argument scan to infer query mode. Keep the intentional
+banner-only meaning of `--quiet` for this read-only tool, but make strict query
+mode itself select no banner and no colour after authoritative parsing.
+Pseudo-terminal help/error and strict-query output must contain no ANSI.
+Static review at `origin/main` `6a312e1`; no binary or test ran.

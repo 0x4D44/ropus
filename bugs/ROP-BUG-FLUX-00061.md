@@ -38,3 +38,10 @@ symbolic-ref watches and the same unrestricted ancestor-repository lookup.
 Treat this as one four-CLI fix and run the normal clone, linked worktree,
 detached HEAD, packaged, and vendored-layout oracles against every binary.
 Static review at `origin/main` `bfe19ba`; no build ran.
+
+### Confirmed in `ropusinfo` (2026-07-31)
+
+`/Users/md/language/ropus/ropusinfo/build.rs:1-36` is byte-identical to the
+same provenance script. Include `ropusinfo` in the shared correction and the
+normal-clone, linked-worktree, detached-HEAD, packaged, and vendored-layout
+oracles. Static review at `origin/main` `6a312e1`; no build ran.
