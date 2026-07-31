@@ -3,7 +3,7 @@
 | Area | Last reviewed |
 |---|---|
 | ropus/ | 2026-07-31 |
-| ropus-tools-core/ | (never) |
+| ropus-tools-core/ | 2026-07-31 |
 | ropusenc/ | (never) |
 | ropusdec/ | (never) |
 | ropusinfo/ | (never) |
