@@ -1,0 +1,31 @@
+# ROP-BUG-FLUX-00033 — Decode command accepts truncated framed input as a passing comparison
+
+- **State:** Open
+- **Priority:** Should
+- **Severity:** Medium
+- **Area:** harness/decode-framing
+- **Raised:** 2026-07-31
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
+- **Verify retry after:** -
+- **Held branch:** -
+- **Legacy fixed run:** -
+- **Attempts:** fix=0, doubt=0, indeterminate=0
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+
+## Observation
+
+Static review at `origin/main` `d0ab87e`. Both framed decoders stop and return prior PCM when a declared packet overruns EOF at `/Users/md/language/ropus/harness/src/cli.rs:558` through `:588` and `:714` through `:742`; a trailing single byte is ignored because both loops require a complete length field. `cmd_decode` at `:1119` through `:1151` compares only those equal partial outputs and can return Pass. Expected: the documented length-prefixed input must end exactly on a packet boundary. Actual: a valid prefix plus truncated tail can print an error and still exit 0 as a bit-exact comparison. Fix: parse framing once into a fallible packet list, require exact EOF, propagate framing/decode failures to the command outcome, and add truncated-length and truncated-payload cases. Static review only; no decode command ran.
+
+## Fix
+
+<unfixed — raised only>
+
+## Notes

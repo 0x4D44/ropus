@@ -8,7 +8,7 @@
 | ropusdec/ | (never) |
 | ropusinfo/ | (never) |
 | ropusplay/ | (never) |
-| harness/ | (never) |
+| harness/ | 2026-07-31 |
 | harness-deep-plc/ | (never) |
 | harness-control/ | (never) |
 | capi/ | 2026-07-31 |
