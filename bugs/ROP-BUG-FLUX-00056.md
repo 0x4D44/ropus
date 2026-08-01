@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00056 — Empty Ogg audio packets become fabricated PLC audio and TOC data
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/empty-packets
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T231813Z-p13207-n706702000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00056-run-fix-20260801T231813Z-p13207-n706702000-c1
-- **Owner base:** 7511b5e7ed97cd8092ed6b22e671ab63b29bb701
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T23:18:13Z
-- **Owner until:** 2026-08-02T01:18:13Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260801T231813Z-p13207-n706702000-c1 branch=task/bug-ROP-BUG-FLUX-00056-run-fix-20260801T231813Z-p13207-n706702000-c1 code=6d5e94ca025ad1954ee066f89d1c56c0aeaf1c8a gate=manual)
 
 ## Observation
 
