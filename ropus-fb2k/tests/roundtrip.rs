@@ -229,6 +229,21 @@ fn open_parses_tags() {
     unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
 }
 
+#[test]
+fn open_rejects_invalid_tag_field_names() {
+    for comment in ["BAD\nKEY=value", "CAFÉ=value"] {
+        let (_io, handle) = open_from_bytes(build_opus_fixture("v", &[(comment, "ignored")]));
+        assert!(
+            handle.is_null(),
+            "invalid field name {comment:?} must reject"
+        );
+        assert_eq!(
+            unsafe { ropus_fb2k::ropus_fb2k_last_error_code() },
+            ROPUS_FB2K_INVALID_STREAM
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Separate fixture: zero user comments is also fine.
 // ---------------------------------------------------------------------------

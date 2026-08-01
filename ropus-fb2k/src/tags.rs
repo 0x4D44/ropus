@@ -64,6 +64,9 @@ pub(crate) enum TagError {
     /// A comment started with `=` (zero-length key). RFC 7845 /
     /// vorbis_comment requires keys be 1+ ASCII chars.
     EmptyKey,
+    /// A comment key contains a byte outside the RFC 7845 ASCII field-name
+    /// range (0x20..=0x7D, excluding `=`).
+    InvalidKey,
 }
 
 impl fmt::Display for TagError {
@@ -77,6 +80,7 @@ impl fmt::Display for TagError {
                 f.write_str("OpusTags comment missing '=' separator")
             }
             TagError::EmptyKey => f.write_str("OpusTags comment has zero-length key"),
+            TagError::InvalidKey => f.write_str("OpusTags comment has invalid field-name bytes"),
         }
     }
 }
@@ -121,6 +125,13 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ParsedTags, TagError> {
         // input like `=foo` has a zero-length key and is malformed.
         if key.is_empty() {
             return Err(TagError::EmptyKey);
+        }
+        if key
+            .as_bytes()
+            .iter()
+            .any(|&byte| !(0x20..=0x7D).contains(&byte) || byte == b'=')
+        {
+            return Err(TagError::InvalidKey);
         }
         // Keys are 7-bit ASCII per the spec; uppercase via ASCII table,
         // don't involve Unicode case folding.
@@ -366,6 +377,18 @@ mod tests {
         // means a malformed packet.
         let bytes = build("v", &["=foo"]);
         assert!(matches!(parse(&bytes), Err(TagError::EmptyKey)));
+    }
+
+    #[test]
+    fn rejects_control_byte_in_field_name() {
+        let bytes = build("v", &["BAD\nKEY=value"]);
+        assert!(matches!(parse(&bytes), Err(TagError::InvalidKey)));
+    }
+
+    #[test]
+    fn rejects_non_ascii_field_name() {
+        let bytes = build("v", &["CAFÉ=value"]);
+        assert!(matches!(parse(&bytes), Err(TagError::InvalidKey)));
     }
 
     #[test]

@@ -1,3 +1,7 @@
+- Validate OpusTags field-name bytes before ASCII uppercasing (`tags.rs:parse`); UTF-8 validity alone permits illegal keys.
+
+  Vorbis keys must stay in ASCII `0x20..=0x7D` excluding `=`; reject controls and non-ASCII bytes with a typed error.
+
 - Stop fb2k decode at `Packet::last_in_stream()` before reading a chained OpusHead (`reader.rs:decode_next`).
 
   PacketReader spans physical pages and logical chains; track sticky selected-stream EOS so later headers never reach OpusDecoder.
