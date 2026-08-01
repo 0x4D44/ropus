@@ -1,3 +1,7 @@
+- Multistream decoder resets must clear neural PLC history via `lpcnet.reset()` (`ropus/src/opus/decoder.rs:OpusDecoder::ms_reset`).
+
+  Keep `ms_reset` aligned with the canonical decoder reset: clear FEC/GRU and analysis state while preserving loaded neural model weights.
+
 - Validate expert frame-duration controls before storing them (`ropus/src/opus/multistream.rs:OpusMSEncoder::set_expert_frame_duration`).
 
   Multistream setters should mirror the single-stream CTL's accepted sentinel and duration range, return `OPUS_BAD_ARG`, and leave the prior duration unchanged; C callers must receive that status instead of an unconditional success.

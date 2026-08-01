@@ -1620,6 +1620,9 @@ impl OpusDecoder {
         self.range_final = 0;
         self.silk_dec.init();
         self.celt_dec.reset();
+        // Clear neural PLC/FEC history while preserving loaded model weights,
+        // matching the canonical single-stream reset path.
+        self.lpcnet.reset();
     }
 
     /// Test-only accessor for the CELT decoder's last-frame-type marker.
@@ -2147,6 +2150,26 @@ mod tests {
         assert_eq!(dec.ms_get_range_final(), 0);
         assert_eq!(dec.ms_get_last_packet_duration(), 0);
         assert_eq!(dec.frame_size, 120);
+    }
+
+    #[test]
+    fn test_ms_reset_clears_neural_plc_history() {
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        let blob = crate::dnn::lpcnet::test_support::make_plc_weight_blob();
+        dec.set_dnn_blob(&blob).expect("weight blob should load");
+        assert!(dec.lpcnet.loaded);
+        let features = vec![0.25; crate::dnn::lpcnet::NB_FEATURES];
+        dec.fec_add(Some(&features));
+        dec.fec_add(None);
+        assert_eq!(dec.lpcnet.fec_fill_pos, 1);
+        assert_eq!(dec.lpcnet.fec_skip, 1);
+
+        dec.ms_reset();
+
+        assert_eq!(dec.lpcnet.fec_fill_pos, 0);
+        assert_eq!(dec.lpcnet.fec_read_pos, 0);
+        assert_eq!(dec.lpcnet.fec_skip, 0);
+        assert!(dec.lpcnet.loaded, "reset must preserve neural model state");
     }
 
     #[test]
