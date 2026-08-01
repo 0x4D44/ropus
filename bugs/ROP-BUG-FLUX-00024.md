@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** harness/fuzz-replay
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T193543Z-p55189-n217293000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00024-run-fix-20260801T193543Z-p55189-n217293000-c1
+- **Owner base:** 2dbab0eb2b100477062a685f70de099559c28a0a
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T19:35:43Z
+- **Owner until:** 2026-08-01T21:35:43Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
