@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00016 — Multistream decoder C CTL omits complexity requests
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** capi/multistream-decoder-ctl
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T171344Z-p80782-n124719000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00016-run-fix-20260801T171344Z-p80782-n124719000-c1
-- **Owner base:** 385544151645a63c2dc8b75ccebad118e996cedf
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T17:13:44Z
-- **Owner until:** 2026-08-01T19:13:44Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new`)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new`) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T171344Z-p80782-n124719000-c1 branch=task/bug-ROP-BUG-FLUX-00016-run-fix-20260801T171344Z-p80782-n124719000-c1 code=e05659c779c4d1ae354bcaa70d78bd415b6571f4 gate=manual)
 
 ## Observation
 
