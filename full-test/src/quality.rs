@@ -5,7 +5,7 @@
 //! signals are independent and developers want both diagnostics surfaced
 //! from a single invocation.
 
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use colored::Colorize;
@@ -55,11 +55,9 @@ fn run_fmt() -> Check {
     let start = Instant::now();
     // `cargo fmt --check` already applies to the whole workspace (rustfmt's
     // default); HLD explicitly says no `--all`.
-    let output = Command::new("cargo")
-        .args(["fmt", "--check"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output();
+    let mut command = Command::new("cargo");
+    command.args(["fmt", "--check"]);
+    let output = crate::process_capture::output(&mut command);
     let duration = start.elapsed();
     let (passed, issues) = match output {
         Ok(out) => {
@@ -115,18 +113,16 @@ fn run_clippy() -> Check {
         "[quality]".cyan().bold()
     );
     let start = Instant::now();
-    let output = Command::new("cargo")
-        .args([
-            "clippy",
-            "--workspace",
-            "--all-targets",
-            "--",
-            "-D",
-            "warnings",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output();
+    let mut command = Command::new("cargo");
+    command.args([
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings",
+    ]);
+    let output = crate::process_capture::output(&mut command);
     let duration = start.elapsed();
     let (passed, issues) = match output {
         Ok(out) => {

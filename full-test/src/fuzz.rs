@@ -141,10 +141,9 @@ fn selected_mode(options: &Options) -> Mode {
 fn run_full_sanity(root: &Path) -> Outcome {
     let command = sanity_command();
     let started = Instant::now();
-    let output = Command::new(&command[0])
-        .args(&command[1..])
-        .current_dir(root)
-        .output();
+    let mut child_command = Command::new(&command[0]);
+    child_command.args(&command[1..]).current_dir(root);
+    let output = crate::process_capture::output(&mut child_command);
     let duration_ms = started.elapsed().as_millis() as u64;
 
     match output {
@@ -429,11 +428,9 @@ fn cargo_fuzz_on_path() -> bool {
 }
 
 fn nightly_available() -> bool {
-    Command::new("cargo")
-        .arg("+nightly")
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
+    let mut command = Command::new("cargo");
+    command.args(["+nightly", "--version"]);
+    crate::process_capture::output(&mut command).is_ok_and(|output| output.status.success())
 }
 
 fn executable_exists(path: PathBuf) -> bool {

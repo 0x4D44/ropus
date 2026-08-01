@@ -21,7 +21,7 @@
 //!    `ms` and whitespace, parse the float.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Instant;
 
 use colored::Colorize;
@@ -805,12 +805,11 @@ fn prebuild_ropus_compare() -> Option<String> {
     // `CARGO_TERM_COLOR=never` suppresses ANSI escapes in cargo's own output
     // regardless of terminal detection on the developer box. Keeps stderr
     // parsing (e.g. `detect_build_failure`) robust.
-    let output = Command::new("cargo")
+    let mut command = Command::new("cargo");
+    command
         .env("CARGO_TERM_COLOR", "never")
-        .args(["build", "--release", "--bin", "ropus-compare"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output();
+        .args(["build", "--release", "--bin", "ropus-compare"]);
+    let output = crate::process_capture::output(&mut command);
     match output {
         Ok(o) if o.status.success() => None,
         Ok(o) => {
@@ -854,22 +853,19 @@ fn run_one_vector(bin: &Path, spec: &VectorSpec, wav: &Path) -> VectorBench {
     // Force plain output: `--color=never` on the subcommand plus
     // `CARGO_TERM_COLOR=never` in the env hardens the Unicode-box-drawing
     // parser against any future terminal-detection logic.
-    let output = Command::new(bin)
-        .env("CARGO_TERM_COLOR", "never")
-        .args([
-            "bench",
-            wav.to_string_lossy().as_ref(),
-            "--iters",
-            "30",
-            "--repeats",
-            "1",
-            "--bitrate",
-            &spec.bitrate.to_string(),
-            "--color=never",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output();
+    let mut command = Command::new(bin);
+    command.env("CARGO_TERM_COLOR", "never").args([
+        "bench",
+        wav.to_string_lossy().as_ref(),
+        "--iters",
+        "30",
+        "--repeats",
+        "1",
+        "--bitrate",
+        &spec.bitrate.to_string(),
+        "--color=never",
+    ]);
+    let output = crate::process_capture::output(&mut command);
 
     match output {
         Ok(o) if o.status.success() => {

@@ -16,7 +16,7 @@ pub const MAX_ISSUES: usize = 20;
 
 /// Cap the raw stderr buffer we even bother to scan. 1 MiB is far more than
 /// any healthy clippy run emits; beyond that we truncate and append a note.
-pub const MAX_STDERR_BYTES: usize = 1024 * 1024;
+pub const MAX_STDERR_BYTES: usize = crate::process_capture::MAX_CAPTURE_BYTES;
 
 /// Extract up to `MAX_ISSUES` diagnostic lines from combined stderr text.
 ///

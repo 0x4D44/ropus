@@ -452,10 +452,9 @@ enum GenericRun {
 
 fn execute_generic_smoke(command: &[String], root: &Path) -> GenericRun {
     let started = Instant::now();
-    let output = Command::new(&command[0])
-        .args(&command[1..])
-        .current_dir(root)
-        .output();
+    let mut child_command = Command::new(&command[0]);
+    child_command.args(&command[1..]).current_dir(root);
+    let output = crate::process_capture::output(&mut child_command);
     let duration_ms = started.elapsed().as_millis() as u64;
 
     match output {

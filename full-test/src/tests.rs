@@ -25,7 +25,7 @@
 //! outcome lines to stdout and build progress / diagnostics to stderr;
 //! `cargo_parse::parse` needs both.
 
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Command, ExitStatus};
 use std::time::Instant;
 
 use colored::Colorize;
@@ -36,6 +36,10 @@ use crate::cargo_parse::{
 use crate::ietf_vectors::IetfVectorProvision;
 use crate::issues;
 use crate::llvm_cov_parse::{self, CoverageResult};
+
+/// Coverage JSON is a structured artifact rather than diagnostic output, so
+/// keep a larger bounded budget while refusing an unexpectedly huge file.
+const MAX_COVERAGE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Stage 2 result, combining test parse output with optional coverage
 /// metrics and the skip-reason reporting hook.
@@ -325,7 +329,7 @@ pub fn run(
     let mut cmd = Command::new("cargo");
     cmd.args(&args);
 
-    let output = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).output();
+    let output = crate::process_capture::output(&mut cmd);
 
     let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -344,11 +348,10 @@ pub fn run(
         Err(e) => (String::new(), String::new(), None, Some(e.to_string())),
     };
 
-    // Bound memory use before parsing. A ~45 min run can emit many MiB of
-    // stderr (build chatter plus per-test failure backtraces); `cap_stderr`
-    // truncates both buffers at 1 MiB with an inline note. Per-test outcome
-    // lines (~80 B × ≤2000 tests ≈ <200 KB) and `test result:` summaries sit
-    // well under the cap, so the authoritative totals are preserved.
+    // The capture helper already bounds both pipes while draining them. Keep
+    // this post-capture normalization for its stable truncation note; per-test
+    // outcome lines (~80 B × ≤2000 tests ≈ <200 KB) and `test result:` summaries
+    // sit well under the cap, so authoritative totals are preserved.
     let (stdout, _) = issues::cap_stderr(&stdout);
     let (stderr, _) = issues::cap_stderr(&stderr);
 
@@ -374,7 +377,7 @@ pub fn run(
         tests.coverage_skip_reason = Some("--skip-coverage passed".to_string());
         None
     } else {
-        match cov_path.as_ref().map(std::fs::read_to_string) {
+        match cov_path.as_ref().map(|path| read_coverage_file(path)) {
             Some(Ok(text)) if text.is_empty() => {
                 tests.coverage_skip_reason = Some(
                     "llvm-cov produced no output (likely a build failure before instrumentation \
@@ -426,6 +429,20 @@ pub fn run(
         coverage,
         coverage_skipped: skip_coverage,
     }
+}
+
+fn read_coverage_file(path: &std::path::Path) -> Result<String, String> {
+    let size = std::fs::metadata(path)
+        .map_err(|e| format!("reading llvm-cov metadata {}: {e}", path.display()))?
+        .len();
+    if size > MAX_COVERAGE_BYTES {
+        return Err(format!(
+            "llvm-cov output {} is {size} bytes, above the {MAX_COVERAGE_BYTES}-byte cap",
+            path.display()
+        ));
+    }
+    std::fs::read_to_string(path)
+        .map_err(|e| format!("reading llvm-cov output {}: {e}", path.display()))
 }
 
 fn append_ietf_provisioning_failure(tests: &mut TestsResult, ietf_vectors: &IetfVectorProvision) {
@@ -811,5 +828,16 @@ mod unit_tests {
             ..TestsResult::default()
         };
         assert!(outcome_with(t).all_passed());
+    }
+
+    #[test]
+    fn oversized_coverage_file_is_rejected_before_read() {
+        let temp = tempfile::NamedTempFile::new().expect("tempfile");
+        temp.as_file()
+            .set_len(MAX_COVERAGE_BYTES + 1)
+            .expect("size coverage fixture");
+
+        let error = read_coverage_file(temp.path()).expect_err("must reject oversized JSON");
+        assert!(error.contains("above the"), "error={error}");
     }
 }

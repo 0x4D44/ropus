@@ -29,7 +29,9 @@ pub struct RealCommandRunner;
 
 impl CommandRunner for RealCommandRunner {
     fn run(&self, program: &str, args: &[String]) -> std::io::Result<Output> {
-        Command::new(program).args(args).output()
+        let mut command = Command::new(program);
+        command.args(args);
+        crate::process_capture::output(&mut command)
     }
 }
 

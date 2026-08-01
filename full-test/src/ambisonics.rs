@@ -23,7 +23,7 @@
 //! mismatches. We use that distinction to set `build_failed` without pattern-
 //! matching on error text.
 
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Instant;
 
 use colored::Colorize;
@@ -100,12 +100,11 @@ pub fn run() -> AmbisonicsResult {
     // `CARGO_TERM_COLOR=never` forces plain cargo output regardless of any
     // terminal-detection logic on the developer box, keeping the stdout /
     // stderr parsers simple.
-    let output = Command::new("cargo")
+    let mut command = Command::new("cargo");
+    command
         .env("CARGO_TERM_COLOR", "never")
-        .args(build_cargo_args())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output();
+        .args(build_cargo_args());
+    let output = crate::process_capture::output(&mut command);
 
     let duration_ms = start.elapsed().as_millis() as u64;
 

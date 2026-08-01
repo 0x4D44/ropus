@@ -4,13 +4,11 @@
 //! owns the gate semantics: before Stage 2 can claim conformance, the 12
 //! bitstreams and matching reference PCM files must be present or fetched.
 
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
-
-use crate::issues;
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
@@ -302,12 +300,7 @@ fn read_capped_tempfile(file: &mut std::fs::File) -> String {
     if file.seek(SeekFrom::Start(0)).is_err() {
         return String::new();
     }
-    let mut bytes = Vec::new();
-    if file.read_to_end(&mut bytes).is_err() {
-        return String::new();
-    }
-    let (text, _) = issues::cap_stderr(&String::from_utf8_lossy(&bytes));
-    text
+    crate::process_capture::read_bounded(file).unwrap_or_default()
 }
 
 fn fetch_attempt_spawn_error(error: String) -> FetchAttempt {

@@ -77,7 +77,7 @@ fn format_branch(raw: Option<String>, commit_short: &str) -> String {
 }
 
 fn run_trimmed(cmd: &mut Command) -> Option<String> {
-    let out = cmd.output().ok()?;
+    let out = crate::process_capture::output(cmd).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -91,10 +91,9 @@ fn run_trimmed(cmd: &mut Command) -> Option<String> {
 /// top-level key, so we scan `packages[]` for the `ropus` crate — that is the
 /// authoritative workspace version today.
 fn workspace_version() -> Option<String> {
-    let out = Command::new("cargo")
-        .args(["metadata", "--format-version", "1", "--no-deps"])
-        .output()
-        .ok()?;
+    let mut command = Command::new("cargo");
+    command.args(["metadata", "--format-version", "1", "--no-deps"]);
+    let out = crate::process_capture::output(&mut command).ok()?;
     if !out.status.success() {
         return None;
     }

@@ -1,3 +1,7 @@
+- `Command::output()` buffers untrusted child output before any cap; drain stdout/stderr concurrently into bounded prefix+tail buffers (`full-test/src/process_capture.rs:output`).
+
+  Apply the helper to every runner subprocess, bound coverage JSON by file size, and read temp-file logs through the same bounded reader.
+
 - The full-test HTML report is a required output: atomically rename a complete temporary file and fail the run if delivery fails (`full-test/src/main.rs:attempt_report`).
 
   PASS/WARN describes validation only; a missing primary report must still return nonzero and show its write error in the summary.

@@ -26,6 +26,7 @@ mod issues;
 mod llvm_cov_parse;
 mod platform;
 mod preflight;
+mod process_capture;
 mod quality;
 mod report;
 mod setup;
@@ -219,9 +220,9 @@ fn main() -> ExitCode {
 /// `(no subject available)` outside a git checkout rather than panicking or
 /// propagating a spawn error — the report must always render.
 fn resolve_commit_subject() -> String {
-    let out = Command::new("git")
-        .args(["log", "-1", "--format=%s"])
-        .output();
+    let mut command = Command::new("git");
+    command.args(["log", "-1", "--format=%s"]);
+    let out = process_capture::output(&mut command);
     match out {
         Ok(o) if o.status.success() => {
             let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
