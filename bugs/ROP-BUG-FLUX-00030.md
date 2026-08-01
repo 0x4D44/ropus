@@ -5,15 +5,15 @@
 - **Severity:** Low
 - **Area:** harness/wav-parser
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T200923Z-p96292-n603336000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00030-run-fix-20260801T200923Z-p96292-n603336000-c1
+- **Owner base:** 316856551feb0723f8e2ac5299ee2f9538889f39
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T20:09:23Z
+- **Owner until:** 2026-08-01T22:09:23Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
