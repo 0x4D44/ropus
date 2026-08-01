@@ -19,7 +19,7 @@
 use ropus_harness_deep_plc::CRefFloatDecoder;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 const LOST_BIT: u32 = 0x8000_0000;
@@ -144,6 +144,56 @@ fn validate_packets_file(path: &PathBuf) -> Result<DecodeHeader, String> {
     Ok(header)
 }
 
+fn reject_input_output_alias(input: &Path, output: &Path) -> Result<(), String> {
+    if input == output {
+        return Err("input and output refer to the same path".to_string());
+    }
+
+    let input_metadata = match std::fs::metadata(input) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("reading input metadata: {error}")),
+    };
+    let output_metadata = match std::fs::metadata(output) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("reading output metadata: {error}")),
+    };
+
+    if let (Some(input_id), Some(output_id)) = (
+        metadata_identity(&input_metadata),
+        metadata_identity(&output_metadata),
+    ) && input_id == output_id
+    {
+        return Err("input and output refer to the same file".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn metadata_identity(metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+
+    Some((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(windows)]
+fn metadata_identity(metadata: &std::fs::Metadata) -> Option<(u64, u64, u64, u32)> {
+    use std::os::windows::fs::MetadataExt;
+
+    Some((
+        metadata.creation_time(),
+        metadata.last_write_time(),
+        metadata.file_size(),
+        metadata.file_attributes(),
+    ))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn metadata_identity(_metadata: &std::fs::Metadata) -> Option<()> {
+    None
+}
+
 fn write_pcm<W: Write>(w: &mut W, pcm: &[i16]) -> std::io::Result<()> {
     let mut buf = [0u8; 4096];
     let mut pos = 0;
@@ -176,6 +226,11 @@ pub fn main() {
     }
     let packets_path = PathBuf::from(&args[1]);
     let pcm_path = PathBuf::from(&args[2]);
+
+    if let Err(error) = reject_input_output_alias(&packets_path, &pcm_path) {
+        eprintln!("refusing output {}: {error}", pcm_path.display());
+        process::exit(1);
+    }
 
     // Validate the complete bounded stream before creating the decoder,
     // output file, or any payload/scratch allocation.
@@ -293,5 +348,20 @@ mod tests {
             .chain([0x2a])
             .collect::<Vec<_>>();
         assert!(validate_packet_records(&mut valid.as_slice(), 1).is_ok());
+    }
+
+    #[test]
+    fn output_aliases_are_rejected_before_decode() {
+        let path = std::env::temp_dir().join(format!(
+            "ropus-float-alias-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock before epoch")
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"source").expect("write input");
+        assert!(reject_input_output_alias(&path, &path).is_err());
+        std::fs::remove_file(path).expect("remove input");
     }
 }

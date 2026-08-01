@@ -20,7 +20,10 @@ use crate::container::picture::{
 };
 use crate::options::EncodeOptions;
 use crate::ui::{escape_terminal_path, format_num, heading, ok};
-use crate::util::{channel_count_to_ropus, is_stdio_sentinel, with_extension};
+use crate::util::{
+    channel_count_to_ropus, is_stdio_sentinel, noncolliding_default_output,
+    reject_input_output_alias,
+};
 
 use ropus::FrameDuration;
 
@@ -98,9 +101,10 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
     let output_path: std::path::PathBuf = match opts.output.clone() {
         Some(p) => p,
         None if input_is_stdin => std::path::PathBuf::from("-"),
-        None => with_extension(&opts.input, "opus"),
+        None => noncolliding_default_output(&opts.input, "opus", "encoded")?,
     };
     let output_is_stdout = is_stdio_sentinel(&output_path);
+    reject_input_output_alias(&opts.input, &output_path)?;
 
     // Print progress/banner lines. Gated on output-sink: stdout gets the
     // bitstream, so progress must go to stderr in that case.
@@ -452,5 +456,27 @@ mod tests {
         let mut opts = valid_options();
         opts.expect_loss = 101;
         assert!(validate_encode_options(&opts).is_err());
+    }
+
+    #[test]
+    fn encode_rejects_direct_input_output_alias_before_decode() {
+        let path = std::env::temp_dir().join(format!(
+            "ropus_encode_alias_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let original = b"source bytes that must survive".to_vec();
+        std::fs::write(&path, &original).expect("write input");
+
+        let mut opts = valid_options();
+        opts.input = path.clone();
+        opts.output = Some(path.clone());
+        let error = encode(opts).expect_err("direct alias must be rejected");
+        assert!(error.to_string().contains("same file"));
+        assert_eq!(std::fs::read(&path).expect("read input"), original);
+        std::fs::remove_file(path).expect("remove input");
     }
 }

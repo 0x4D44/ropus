@@ -34,7 +34,10 @@ use crate::container::ogg::{OpusTags, UNKNOWN_GRANULE, parse_opus_head};
 use crate::container::toc::decode_toc;
 use crate::options::DecodeOptions;
 use crate::ui::{escape_terminal_path, escape_terminal_text, format_num, heading, ok};
-use crate::util::{channel_count_to_ropus, is_stdio_sentinel, with_extension};
+use crate::util::{
+    channel_count_to_ropus, is_stdio_sentinel, noncolliding_default_output,
+    reject_input_output_alias,
+};
 
 /// Accepted output sample-rate range for `--rate`. Mirrors the WAV-supported
 /// band (8 kHz for narrowband telephony up to 192 kHz high-res). rubato can
@@ -119,9 +122,10 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
     let output_path: std::path::PathBuf = match opts.output.clone() {
         Some(p) => p,
         None if input_is_stdin => std::path::PathBuf::from("-"),
-        None => with_extension(&opts.input, default_ext),
+        None => noncolliding_default_output(&opts.input, default_ext, "decoded")?,
     };
     let output_is_stdout = is_stdio_sentinel(&output_path);
+    reject_input_output_alias(&opts.input, &output_path)?;
 
     // Progress/banner lines. Gated on output-sink so that piping bytes to
     // stdout doesn't mix with the banner text.
@@ -664,5 +668,34 @@ mod tests {
         .expect_err("+128 dB cannot fit decoder Q8");
         assert!(format!("{err:#}").contains("gain"));
         assert!(!output.exists(), "invalid options must not create output");
+    }
+
+    #[test]
+    fn decode_rejects_direct_input_output_alias_before_reading() {
+        let path = std::env::temp_dir().join(format!(
+            "ropus_decode_alias_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let original = b"source bytes that must survive".to_vec();
+        std::fs::write(&path, &original).expect("write input");
+
+        let error = decode(DecodeOptions {
+            input: path.clone(),
+            output: Some(path.clone()),
+            float: false,
+            raw: false,
+            rate: None,
+            gain_db: 0.0,
+            dither: true,
+            packet_loss_pct: 0,
+        })
+        .expect_err("direct alias must be rejected");
+        assert!(error.to_string().contains("same file"));
+        assert_eq!(std::fs::read(&path).expect("read input"), original);
+        std::fs::remove_file(path).expect("remove input");
     }
 }

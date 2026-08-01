@@ -1,3 +1,7 @@
+- Never create a derived output before comparing filesystem identity (`util.rs:reject_input_output_alias`); metadata catches links.
+
+  Compare lexical paths plus platform file identities before decoding or opening a writer. If a default extension equals the source, select a suffixed destination; explicit aliases must fail.
+
 - Info scalar queries must select a bounded plan before opening payload (`commands/info.rs:QueryKey`); skip tags and TOCs.
 
   Parse the query first, read only OpusHead for fixed metadata, read OpusTags only for tag lookups, and stream raw Ogg pages rather than loading the whole file. Keep packet TOCs only for extended human output.
