@@ -5,15 +5,15 @@
 - **Severity:** High
 - **Area:** harness/benchmark-tracing
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T075011Z-p48083-n853583000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00026-run-fix-20260801T075011Z-p48083-n853583000-c1
+- **Owner base:** 47242ec8d0fdac4dddf8f9f9dadf25f1bd29e54e
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T07:50:11Z
+- **Owner until:** 2026-08-01T09:50:11Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
