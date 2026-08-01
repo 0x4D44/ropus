@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** ropus-tools-core/test-integrity
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T232638Z-p40721-n439187000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00057-run-fix-20260801T232638Z-p40721-n439187000-c1
+- **Owner base:** 3528b9e3dc1defd9395c42978ed451b779ea83c5
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T23:26:38Z
+- **Owner until:** 2026-08-02T01:26:38Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
