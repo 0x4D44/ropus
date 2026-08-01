@@ -5,15 +5,15 @@
 - **Severity:** High
 - **Area:** ropus-tools-core/encode-timeline
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T075202Z-p52945-n178076000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00042-run-fix-20260801T075202Z-p52945-n178076000-c1
+- **Owner base:** 115849e9e23afc93db292e90dec3de5ce3871ed2
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T07:52:02Z
+- **Owner until:** 2026-08-01T09:52:02Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
