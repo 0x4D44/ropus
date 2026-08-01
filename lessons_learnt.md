@@ -1,3 +1,7 @@
+- Validate control packet streams before decoder/output allocation (`ctrl_decode_fixed.rs:validate_packets_file`).
+
+  Bound Opus headers, packet lengths, frame/output counts, lost flags, payload extents, and trailing bytes; reuse the same contract in float mode.
+
 - RSS leak checks must baseline after fixed setup and tear down before sampling (`harness/src/cli.rs:cmd_torture`).
 
   Stream deterministic input through a bounded frame buffer; otherwise duration-sized PCM dominates the delta and masks real growth.
