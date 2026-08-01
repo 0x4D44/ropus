@@ -25,6 +25,12 @@ pub fn resample(
     if to_sr == 0 {
         bail!("zero-Hz target");
     }
+    if !interleaved.len().is_multiple_of(channels) {
+        bail!(
+            "interleaved sample count {} is not divisible by {channels} channels",
+            interleaved.len()
+        );
+    }
     let ratio = to_sr as f64 / from_sr as f64;
 
     let frames_in = interleaved.len() / channels;
@@ -171,6 +177,13 @@ mod tests {
         assert!(resample(&[1.0_f32], 0, 48_000, 1).is_err());
         assert!(resample(&[1.0_f32], 48_000, 0, 1).is_err());
         assert!(resample(&[1.0_f32], 48_000, 48_000, 0).is_err());
+    }
+
+    #[test]
+    fn resample_rejects_incomplete_interleaved_frame() {
+        let err = resample(&[1.0, 2.0, 3.0], 48_000, 44_100, 2)
+            .expect_err("incomplete stereo frame must error");
+        assert!(format!("{err:#}").contains("not divisible by 2 channels"));
     }
 
     #[test]

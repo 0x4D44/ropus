@@ -17,6 +17,12 @@ pub fn downmix_to_mono(interleaved: &[f32], channels: usize) -> Result<Vec<f32>>
     match channels {
         1 => Ok(interleaved.to_vec()),
         2 => {
+            if !interleaved.len().is_multiple_of(2) {
+                bail!(
+                    "stereo input has {} interleaved samples; length must be divisible by 2",
+                    interleaved.len()
+                );
+            }
             let frames = interleaved.len() / 2;
             let mut out = Vec::with_capacity(frames);
             for frame in interleaved.chunks_exact(2) {
@@ -76,5 +82,11 @@ mod tests {
         let input: [f32; 0] = [];
         let out = downmix_to_mono(&input, 2).expect("empty stereo downmixes");
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn downmix_rejects_incomplete_stereo_frame() {
+        let err = downmix_to_mono(&[0.0, 1.0, 0.5], 2).expect_err("odd stereo input must error");
+        assert!(format!("{err:#}").contains("divisible by 2"));
     }
 }

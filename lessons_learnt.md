@@ -1,3 +1,7 @@
+- Public interleaved audio helpers must reject incomplete frames before `chunks_exact` or WAV header math (`audio/{downmix,resample,wav}.rs`).
+
+  Validate channel/rate shape first, then use checked block-align, byte-rate, data-size, and frame-count calculations.
+
 - JPEG MIME sniffing must match the SOI signature, not one marker layout (`container/picture.rs:detect_format`); APP2/APP14 are valid.
 
   Keep format detection deliberately shallow: accept `FF D8 FF` and leave full image parsing to the eventual consumer.

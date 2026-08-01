@@ -13,6 +13,64 @@ const WAVE_FORMAT_PCM: u16 = 1;
 /// WAVE format code for IEEE-754 float samples (3 = WAVE_FORMAT_IEEE_FLOAT).
 const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
 
+#[derive(Debug, Clone, Copy)]
+struct WavLayout {
+    byte_rate: u32,
+    block_align: u16,
+    data_bytes: u32,
+    sample_frames: u32,
+}
+
+/// Validate the interleaved shape and calculate every bounded WAV header field.
+/// Keeping this before `File::create` makes invalid public inputs fail without
+/// creating a partial destination file.
+fn validate_wav_layout(
+    sample_count: usize,
+    sample_rate: u32,
+    channels: u16,
+    bytes_per_sample: u16,
+) -> Result<WavLayout> {
+    if sample_rate == 0 {
+        return Err(anyhow!("WAV sample rate must be greater than zero"));
+    }
+    if channels == 0 {
+        return Err(anyhow!("WAV requires channels >= 1"));
+    }
+    if bytes_per_sample == 0 {
+        return Err(anyhow!("WAV bytes per sample must be greater than zero"));
+    }
+
+    let channel_count = usize::from(channels);
+    if !sample_count.is_multiple_of(channel_count) {
+        return Err(anyhow!(
+            "WAV sample count {sample_count} is not divisible by {channels} channels"
+        ));
+    }
+
+    let block_align_u32 = u32::from(channels)
+        .checked_mul(u32::from(bytes_per_sample))
+        .ok_or_else(|| anyhow!("WAV block-align overflow"))?;
+    let block_align = u16::try_from(block_align_u32)
+        .map_err(|_| anyhow!("WAV block-align {block_align_u32} exceeds u16::MAX"))?;
+    let byte_rate = sample_rate
+        .checked_mul(block_align_u32)
+        .ok_or_else(|| anyhow!("WAV byte-rate overflow"))?;
+    let data_bytes = u64::try_from(sample_count)
+        .map_err(|_| anyhow!("WAV sample count exceeds u64"))?
+        .checked_mul(u64::from(bytes_per_sample))
+        .ok_or_else(|| anyhow!("WAV data size overflow"))?;
+    let data_bytes = u32::try_from(data_bytes).map_err(|_| anyhow!("WAV data exceeds 4 GiB"))?;
+    let sample_frames = u32::try_from(sample_count / channel_count)
+        .map_err(|_| anyhow!("WAV sample-frame count exceeds u32"))?;
+
+    Ok(WavLayout {
+        byte_rate,
+        block_align,
+        data_bytes,
+        sample_frames,
+    })
+}
+
 /// Write a 16-bit PCM mono/stereo WAV file. RIFF / fmt / data, fully
 /// hand-rolled — avoids pulling in another dependency for ~30 lines.
 pub fn write_wav_pcm16(
@@ -21,6 +79,7 @@ pub fn write_wav_pcm16(
     sample_rate: u32,
     channels: u16,
 ) -> Result<()> {
+    validate_wav_layout(samples.len(), sample_rate, channels, 2)?;
     let f = File::create(path).with_context(|| format!("creating {}", path.display()))?;
     let mut w = BufWriter::new(f);
     write_wav_pcm16_to(&mut w, samples, sample_rate, channels)?;
@@ -37,13 +96,9 @@ pub fn write_wav_pcm16_to<W: Write + ?Sized>(
     channels: u16,
 ) -> Result<()> {
     let bits_per_sample: u16 = 16;
-    let byte_rate: u32 = sample_rate * channels as u32 * (bits_per_sample as u32 / 8);
-    let block_align: u16 = channels * (bits_per_sample / 8);
-    let data_bytes: u32 = (samples.len() as u64 * 2)
-        .try_into()
-        .map_err(|_| anyhow!("WAV data exceeds 4 GiB"))?;
+    let layout = validate_wav_layout(samples.len(), sample_rate, channels, bits_per_sample / 8)?;
     let riff_size: u32 = 36u32
-        .checked_add(data_bytes)
+        .checked_add(layout.data_bytes)
         .ok_or_else(|| anyhow!("WAV header size overflow"))?;
 
     // RIFF header
@@ -57,13 +112,13 @@ pub fn write_wav_pcm16_to<W: Write + ?Sized>(
     w.write_all(&WAVE_FORMAT_PCM.to_le_bytes())?;
     w.write_all(&channels.to_le_bytes())?;
     w.write_all(&sample_rate.to_le_bytes())?;
-    w.write_all(&byte_rate.to_le_bytes())?;
-    w.write_all(&block_align.to_le_bytes())?;
+    w.write_all(&layout.byte_rate.to_le_bytes())?;
+    w.write_all(&layout.block_align.to_le_bytes())?;
     w.write_all(&bits_per_sample.to_le_bytes())?;
 
     // data chunk
     w.write_all(b"data")?;
-    w.write_all(&data_bytes.to_le_bytes())?;
+    w.write_all(&layout.data_bytes.to_le_bytes())?;
     for s in samples {
         w.write_all(&s.to_le_bytes())?;
     }
@@ -81,6 +136,7 @@ pub fn write_wav_float32(
     sample_rate: u32,
     channels: u16,
 ) -> Result<()> {
+    validate_wav_layout(samples.len(), sample_rate, channels, 4)?;
     let f = File::create(path).with_context(|| format!("creating {}", path.display()))?;
     let mut w = BufWriter::new(f);
     write_wav_float32_to(&mut w, samples, sample_rate, channels)?;
@@ -96,22 +152,8 @@ pub fn write_wav_float32_to<W: Write + ?Sized>(
     sample_rate: u32,
     channels: u16,
 ) -> Result<()> {
-    if channels == 0 {
-        return Err(anyhow!("float WAV requires channels >= 1"));
-    }
-
     let bits_per_sample: u16 = 32;
-    let block_align: u16 = channels * (bits_per_sample / 8);
-    let byte_rate: u32 = sample_rate * u32::from(block_align);
-    let data_bytes: u32 = (samples.len() as u64 * 4)
-        .try_into()
-        .map_err(|_| anyhow!("WAV data exceeds 4 GiB"))?;
-
-    // Sample-frame count for the fact chunk. `samples.len()` counts
-    // interleaved samples, so divide by channels.
-    let sample_frames: u32 = ((samples.len() as u64) / u64::from(channels))
-        .try_into()
-        .map_err(|_| anyhow!("WAV sample-frame count exceeds u32"))?;
+    let layout = validate_wav_layout(samples.len(), sample_rate, channels, bits_per_sample / 8)?;
 
     // Chunk layout (all sizes in bytes of content, excluding the 8-byte
     // "magic + size" prefix that each chunk header contributes):
@@ -122,7 +164,7 @@ pub fn write_wav_float32_to<W: Write + ?Sized>(
     // RIFF size = 4 ("WAVE") + 26 (fmt chunk) + 12 (fact chunk) + 8 + data
     //           = 50 + data_bytes.
     let riff_size: u32 = 50u32
-        .checked_add(data_bytes)
+        .checked_add(layout.data_bytes)
         .ok_or_else(|| anyhow!("WAV header size overflow"))?;
 
     // RIFF header
@@ -136,19 +178,19 @@ pub fn write_wav_float32_to<W: Write + ?Sized>(
     w.write_all(&WAVE_FORMAT_IEEE_FLOAT.to_le_bytes())?;
     w.write_all(&channels.to_le_bytes())?;
     w.write_all(&sample_rate.to_le_bytes())?;
-    w.write_all(&byte_rate.to_le_bytes())?;
-    w.write_all(&block_align.to_le_bytes())?;
+    w.write_all(&layout.byte_rate.to_le_bytes())?;
+    w.write_all(&layout.block_align.to_le_bytes())?;
     w.write_all(&bits_per_sample.to_le_bytes())?;
     w.write_all(&0u16.to_le_bytes())?; // cbSize (no extension)
 
     // fact chunk (required for non-PCM): sample-frame count as u32.
     w.write_all(b"fact")?;
     w.write_all(&4u32.to_le_bytes())?;
-    w.write_all(&sample_frames.to_le_bytes())?;
+    w.write_all(&layout.sample_frames.to_le_bytes())?;
 
     // data chunk
     w.write_all(b"data")?;
-    w.write_all(&data_bytes.to_le_bytes())?;
+    w.write_all(&layout.data_bytes.to_le_bytes())?;
     for s in samples {
         w.write_all(&s.to_le_bytes())?;
     }
@@ -230,5 +272,44 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let frames = u32::from_le_bytes([bytes[46], bytes[47], bytes[48], bytes[49]]);
         assert_eq!(frames, 8, "stereo 16-sample buffer = 8 frames");
+    }
+
+    #[test]
+    fn pcm_wav_rejects_invalid_shape_and_header_arithmetic_before_writing() {
+        let cases = [
+            (&[][..], 48_000, 0, "zero channels"),
+            (&[][..], 0, 1, "zero sample rate"),
+            (&[0i16][..], 48_000, 2, "incomplete frame"),
+            (&[][..], u32::MAX, 32_767, "byte-rate overflow"),
+            (&[][..], 48_000, u16::MAX, "block-align overflow"),
+        ];
+        for (samples, sample_rate, channels, label) in cases {
+            let mut bytes = Vec::new();
+            let err =
+                write_wav_pcm16_to(&mut bytes, samples, sample_rate, channels).expect_err(label);
+            assert!(
+                bytes.is_empty(),
+                "{label} must fail before writing: {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn float_wav_rejects_invalid_shape_before_writing() {
+        let cases = [
+            (&[][..], 48_000, 0, "zero channels"),
+            (&[][..], 0, 1, "zero sample rate"),
+            (&[0.0f32][..], 48_000, 2, "incomplete frame"),
+            (&[][..], u32::MAX, 16_383, "byte-rate overflow"),
+        ];
+        for (samples, sample_rate, channels, label) in cases {
+            let mut bytes = Vec::new();
+            let err =
+                write_wav_float32_to(&mut bytes, samples, sample_rate, channels).expect_err(label);
+            assert!(
+                bytes.is_empty(),
+                "{label} must fail before writing: {err:#}"
+            );
+        }
     }
 }
