@@ -15,6 +15,7 @@
 )]
 
 use ropus_harness::bindings;
+use ropus_harness::wav::{Pcm16Wav, read_pcm16_wav};
 
 use std::fs;
 use std::path::Path;
@@ -24,89 +25,11 @@ use std::process;
 // WAV reading (minimal, 16-bit PCM only)
 // ---------------------------------------------------------------------------
 
-struct WavData {
-    sample_rate: u32,
-    channels: u16,
-    samples: Vec<i16>,
-}
-
-fn read_wav(path: &Path) -> WavData {
-    let data = fs::read(path).unwrap_or_else(|e| {
-        eprintln!("ERROR: cannot read {}: {}", path.display(), e);
+fn read_wav(path: &Path) -> Pcm16Wav {
+    read_pcm16_wav(path).unwrap_or_else(|e| {
+        eprintln!("ERROR: {e}");
         process::exit(1);
-    });
-    if data.len() < 44 {
-        eprintln!("ERROR: file too small to be a WAV: {}", path.display());
-        process::exit(1);
-    }
-    if &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
-        eprintln!("ERROR: not a WAV file: {}", path.display());
-        process::exit(1);
-    }
-
-    // Find "fmt " chunk
-    let mut pos = 12;
-    let mut sample_rate = 0u32;
-    let mut channels = 0u16;
-    let mut bits_per_sample;
-    let mut fmt_found = false;
-
-    while pos + 8 <= data.len() {
-        let chunk_id = &data[pos..pos + 4];
-        let chunk_size =
-            u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
-                as usize;
-        if chunk_id == b"fmt " {
-            if chunk_size < 16 {
-                eprintln!("ERROR: fmt chunk too small");
-                process::exit(1);
-            }
-            let audio_format = u16::from_le_bytes([data[pos + 8], data[pos + 9]]);
-            if audio_format != 1 {
-                eprintln!(
-                    "ERROR: only PCM WAV supported (got format {})",
-                    audio_format
-                );
-                process::exit(1);
-            }
-            channels = u16::from_le_bytes([data[pos + 10], data[pos + 11]]);
-            sample_rate = u32::from_le_bytes([
-                data[pos + 12],
-                data[pos + 13],
-                data[pos + 14],
-                data[pos + 15],
-            ]);
-            bits_per_sample = u16::from_le_bytes([data[pos + 22], data[pos + 23]]);
-            if bits_per_sample != 16 {
-                eprintln!("ERROR: only 16-bit PCM supported (got {})", bits_per_sample);
-                process::exit(1);
-            }
-            fmt_found = true;
-        }
-        if chunk_id == b"data" {
-            if !fmt_found {
-                eprintln!("ERROR: data chunk before fmt chunk");
-                process::exit(1);
-            }
-            let sample_data = &data[pos + 8..pos + 8 + chunk_size];
-            let samples: Vec<i16> = sample_data
-                .chunks_exact(2)
-                .map(|b| i16::from_le_bytes([b[0], b[1]]))
-                .collect();
-            return WavData {
-                sample_rate,
-                channels,
-                samples,
-            };
-        }
-        pos += 8 + chunk_size;
-        // WAV chunks are word-aligned
-        if !chunk_size.is_multiple_of(2) {
-            pos += 1;
-        }
-    }
-    eprintln!("ERROR: no data chunk found in WAV");
-    process::exit(1);
+    })
 }
 
 // ---------------------------------------------------------------------------

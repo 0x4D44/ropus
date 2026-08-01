@@ -10,6 +10,8 @@
 #[cfg(not(no_reference))]
 pub mod bindings;
 
+pub mod wav;
+
 #[cfg(test)]
 #[path = "../reference_build_manifest.rs"]
 mod reference_build_manifest;

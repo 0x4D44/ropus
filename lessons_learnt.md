@@ -1,3 +1,7 @@
+- Keep RIFF parsing fallible and shared (`harness/src/wav.rs:parse_pcm16_wav`).
+
+  Check the container and every padded chunk extent before slicing, then validate PCM format and sample alignment once for all harness callers.
+
 - Validate control packet streams before decoder/output allocation (`ctrl_decode_fixed.rs:validate_packets_file`).
 
   Bound Opus headers, packet lengths, frame/output counts, lost flags, payload extents, and trailing bytes; reuse the same contract in float mode.

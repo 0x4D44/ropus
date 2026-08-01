@@ -15,9 +15,9 @@
 #![allow(clippy::too_many_arguments)]
 
 use ropus_harness::bindings;
+use ropus_harness::wav::{Pcm16Wav, read_pcm16_wav};
 
 use std::ffi::c_int;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -25,60 +25,13 @@ use std::process;
 // Minimal WAV reader (16-bit PCM only)
 // ---------------------------------------------------------------------------
 
-struct Wav {
-    sample_rate: u32,
-    channels: u16,
-    samples: Vec<i16>,
-}
+type Wav = Pcm16Wav;
 
 fn read_wav(path: &Path) -> Wav {
-    let data = fs::read(path).unwrap_or_else(|e| {
-        eprintln!("ERROR: cannot read {}: {}", path.display(), e);
+    read_pcm16_wav(path).unwrap_or_else(|e| {
+        eprintln!("ERROR: {e}");
         process::exit(1);
-    });
-    assert!(data.len() >= 44, "WAV too small");
-    assert_eq!(&data[0..4], b"RIFF");
-    assert_eq!(&data[8..12], b"WAVE");
-
-    let mut pos = 12;
-    let mut sample_rate = 0u32;
-    let mut channels = 0u16;
-    let mut bits_per_sample = 0u16;
-    let mut pcm: Vec<i16> = Vec::new();
-
-    while pos + 8 <= data.len() {
-        let id = &data[pos..pos + 4];
-        let sz = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
-            as usize;
-        if id == b"fmt " {
-            channels = u16::from_le_bytes([data[pos + 10], data[pos + 11]]);
-            sample_rate = u32::from_le_bytes([
-                data[pos + 12],
-                data[pos + 13],
-                data[pos + 14],
-                data[pos + 15],
-            ]);
-            bits_per_sample = u16::from_le_bytes([data[pos + 22], data[pos + 23]]);
-        } else if id == b"data" {
-            assert_eq!(bits_per_sample, 16, "only 16-bit PCM supported");
-            let bytes = &data[pos + 8..pos + 8 + sz];
-            pcm = bytes
-                .chunks_exact(2)
-                .map(|c| i16::from_le_bytes([c[0], c[1]]))
-                .collect();
-        }
-        pos += 8 + sz;
-        if !sz.is_multiple_of(2) {
-            pos += 1;
-        }
-    }
-    assert!(sample_rate > 0, "no fmt chunk");
-    assert!(!pcm.is_empty(), "no data chunk");
-    Wav {
-        sample_rate,
-        channels,
-        samples: pcm,
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
