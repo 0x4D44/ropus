@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00032 — Stereo Phase-C trace maps overwrite earlier channel records
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness/phase-c-trace
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T202848Z-p16523-n343500000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00032-run-fix-20260801T202848Z-p16523-n343500000-c1
-- **Owner base:** 73866941dec1bd94f33287b00bf84058a8617442
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T20:28:48Z
-- **Owner until:** 2026-08-01T22:28:48Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T202848Z-p16523-n343500000-c1 branch=task/bug-ROP-BUG-FLUX-00032-run-fix-20260801T202848Z-p16523-n343500000-c1 code=5f1f3f91341f6033f2684cfa9e75e160cbeaa1ee gate=manual)
 
 ## Observation
 
