@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** ropus-fb2k/seek
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T205757Z-p68527-n499317000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00036-run-fix-20260801T205757Z-p68527-n499317000-c1
+- **Owner base:** 392d3539e1da10e588cb0fa93c4003230a41aaec
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T20:57:57Z
+- **Owner until:** 2026-08-01T22:57:57Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
