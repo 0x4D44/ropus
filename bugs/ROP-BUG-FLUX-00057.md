@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00057 — Required integration tests silently pass when vectors are absent
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/test-integrity
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T232638Z-p40721-n439187000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00057-run-fix-20260801T232638Z-p40721-n439187000-c1
-- **Owner base:** 3528b9e3dc1defd9395c42978ed451b779ea83c5
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T23:26:38Z
-- **Owner until:** 2026-08-02T01:26:38Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260801T232638Z-p40721-n439187000-c1 branch=task/bug-ROP-BUG-FLUX-00057-run-fix-20260801T232638Z-p40721-n439187000-c1 code=033b529c520a4a2af11cda3ed69c0171d2dcb95c gate=manual)
 
 ## Observation
 
