@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00048 — Public command options permit panics and invalid loss semantics
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/options-validation
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T221503Z-p96641-n943371000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00048-run-fix-20260801T221503Z-p96641-n943371000-c1
-- **Owner base:** af4e348c67b9605e79bb54509ec14b40dba5126c
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T22:15:03Z
-- **Owner until:** 2026-08-02T00:15:03Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T221503Z-p96641-n943371000-c1 branch=task/bug-ROP-BUG-FLUX-00048-run-fix-20260801T221503Z-p96641-n943371000-c1 code=39f955467fc65a7af104eebf0bd345dade7a8152 gate=manual)
 
 ## Observation
 
