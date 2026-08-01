@@ -23,6 +23,7 @@ use ropus::{DecodeMode, Decoder as RopusDecoder};
 
 use ogg::reading::PacketReader;
 
+use crate::audio::decode::gain_db_to_q8;
 use crate::audio::dither::{DITHER_SEED, PACKET_LOSS_SEED, Xorshift32, quantize_to_i16};
 use crate::audio::resample::resample;
 use crate::audio::wav::{
@@ -81,11 +82,16 @@ trait ReadSeek: std::io::Read + std::io::Seek {}
 impl<T: std::io::Read + std::io::Seek> ReadSeek for T {}
 
 pub fn decode(opts: DecodeOptions) -> Result<()> {
-    // Validate --gain before opening any files. NaN or ±∞ would saturate to 0
-    // when cast to the Q8 i32 later, silently ignoring the flag; surface that
-    // as a clean error instead.
-    if !opts.gain_db.is_finite() {
-        bail!("--gain must be finite, got {}", opts.gain_db);
+    // Validate all public option values before opening the input or creating
+    // the output. This keeps GUI/plugin callers on the same safe boundary as
+    // the Clap wrapper and prevents invalid options from consuming a stream.
+    let user_gain_q8 =
+        gain_db_to_q8(opts.gain_db).map_err(|e| anyhow!("--gain validation failed: {e}"))?;
+    if opts.packet_loss_pct > 100 {
+        bail!(
+            "--packet-loss {} out of range (accepted: 0..=100)",
+            opts.packet_loss_pct
+        );
     }
 
     // Validate --rate before opening any files.
@@ -202,10 +208,16 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
         .map_err(|e| anyhow!("decoder init failed: {e}"))?;
 
     // Combine header's Q8 output_gain with --gain DB (also Q8 after conversion)
-    // and apply via set_gain. libopus range-checks the sum ([-32768, 32767])
-    // which translates to ±128 dB; out of range surfaces as a clean error.
-    let user_gain_q8 = (opts.gain_db * 256.0).round() as i32;
-    let total_gain_q8 = head.output_gain as i32 + user_gain_q8;
+    // and apply via set_gain. libopus range-checks the sum ([-32768, 32767]);
+    // the positive endpoint is one Q8 step below +128 dB.
+    let total_gain_q8 = (head.output_gain as i32)
+        .checked_add(user_gain_q8)
+        .ok_or_else(|| anyhow!("header and user gain overflow in Q8"))?;
+    if !(-32_768..=32_767).contains(&total_gain_q8) {
+        bail!(
+            "header and user gain total {total_gain_q8} Q8 is outside decoder range [-32768, 32767]"
+        );
+    }
     if total_gain_q8 != 0 {
         decoder
             .set_gain(total_gain_q8)
@@ -601,5 +613,55 @@ mod tests {
         assert!(packet_duration_samples(&[0x03], 5_760).is_err());
         assert!(packet_duration_samples(&[0x03, 0x00], 5_760).is_err());
         assert!(packet_duration_samples(&[0x03, 0x3f], 5_760).is_err());
+    }
+
+    #[test]
+    fn public_decode_options_reject_invalid_loss_before_io() {
+        let output = std::env::temp_dir().join(format!(
+            "ropus_invalid_loss_{}_{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let err = decode(DecodeOptions {
+            input: "missing-input.opus".into(),
+            output: Some(output.clone()),
+            float: false,
+            raw: false,
+            rate: None,
+            gain_db: 0.0,
+            dither: true,
+            packet_loss_pct: 101,
+        })
+        .expect_err("loss above 100 must fail before opening input");
+        assert!(format!("{err:#}").contains("packet-loss"));
+        assert!(!output.exists(), "invalid options must not create output");
+    }
+
+    #[test]
+    fn public_decode_options_reject_unrepresentable_gain_before_io() {
+        let output = std::env::temp_dir().join(format!(
+            "ropus_invalid_gain_{}_{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let err = decode(DecodeOptions {
+            input: "missing-input.opus".into(),
+            output: Some(output.clone()),
+            float: false,
+            raw: false,
+            rate: None,
+            gain_db: 128.0,
+            dither: true,
+            packet_loss_pct: 0,
+        })
+        .expect_err("+128 dB cannot fit decoder Q8");
+        assert!(format!("{err:#}").contains("gain"));
+        assert!(!output.exists(), "invalid options must not create output");
     }
 }

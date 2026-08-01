@@ -52,6 +52,9 @@ enum CodecPipeline {
     Opus(Box<OpusState>),
 }
 
+pub(crate) const MIN_GAIN_DB: f32 = -128.0;
+pub(crate) const MAX_GAIN_DB: f32 = 32_767.0 / 256.0;
+
 pub fn decode_to_f32(path: &Path) -> Result<DecodedAudio> {
     decode_to_f32_with_gain(path, 0.0)
 }
@@ -291,17 +294,17 @@ pub fn decode_reader_with_gain(
     })
 }
 
-fn validate_gain_db(gain_db: f32) -> Result<()> {
+pub(crate) fn validate_gain_db(gain_db: f32) -> Result<()> {
     if !gain_db.is_finite() {
         bail!("gain must be a finite dB value (got {gain_db})");
     }
-    if !(-128.0..=128.0).contains(&gain_db) {
-        bail!("gain {gain_db} dB out of range [-128.0, 128.0]");
+    if !(MIN_GAIN_DB..=MAX_GAIN_DB).contains(&gain_db) {
+        bail!("gain {gain_db} dB out of range [{MIN_GAIN_DB}, {MAX_GAIN_DB}]");
     }
     Ok(())
 }
 
-fn gain_db_to_q8(gain_db: f32) -> Result<i32> {
+pub(crate) fn gain_db_to_q8(gain_db: f32) -> Result<i32> {
     validate_gain_db(gain_db)?;
     let q8 = (f64::from(gain_db) * 256.0).round();
     if !(i32::MIN as f64..=i32::MAX as f64).contains(&q8) {

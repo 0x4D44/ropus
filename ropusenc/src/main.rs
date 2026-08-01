@@ -38,12 +38,12 @@ struct Cli {
     /// edge Opus has over MP3). The mono tier kicks in only when `--downmix
     /// mono` is set; mono inputs without `--downmix` get the stereo-tier
     /// default since channel count isn't known until decode.
-    #[arg(long)]
+    #[arg(long, value_parser = parse_bitrate)]
     bitrate: Option<u32>,
 
     /// Encoder complexity 0..=10 (higher = better quality, more CPU).
     /// `--comp` is a shorter alias matching opus-tools' opusenc.
-    #[arg(long, alias = "comp")]
+    #[arg(long, alias = "comp", value_parser = parse_complexity)]
     complexity: Option<u8>,
 
     /// Application hint.
@@ -241,6 +241,33 @@ fn parse_nonzero_serial(raw: &str) -> Result<u32, String> {
     Ok(v)
 }
 
+fn parse_bitrate(raw: &str) -> Result<u32, String> {
+    let value = raw
+        .parse::<u32>()
+        .map_err(|e| format!("bitrate must be a non-negative integer ({e})"))?;
+    if value == 0 {
+        return Err("bitrate must be greater than zero".to_string());
+    }
+    if value > i32::MAX as u32 {
+        return Err(format!(
+            "bitrate {value} bps exceeds the libopus i32::MAX limit"
+        ));
+    }
+    Ok(value)
+}
+
+fn parse_complexity(raw: &str) -> Result<u8, String> {
+    let value = raw
+        .parse::<u8>()
+        .map_err(|e| format!("complexity must be an integer 0..=10 ({e})"))?;
+    if value > 10 {
+        return Err(format!(
+            "complexity {value} out of range (accepted: 0..=10)"
+        ));
+    }
+    Ok(value)
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     prelude::configure_color(cli.no_color);
@@ -387,5 +414,13 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn invalid_bitrate_and_complexity_are_rejected_at_cli_boundary() {
+        assert!(parse_bitrate("0").is_err());
+        assert!(parse_bitrate("2147483648").is_err());
+        assert!(parse_complexity("11").is_err());
+        assert!(parse_complexity("255").is_err());
     }
 }

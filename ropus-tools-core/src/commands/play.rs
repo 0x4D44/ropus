@@ -21,7 +21,7 @@ use crossterm::tty::IsTty;
 use ogg::reading::PacketReader;
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
-use crate::audio::decode::{DecodedAudio, decode_to_f32_with_gain};
+use crate::audio::decode::{DecodedAudio, MAX_GAIN_DB, MIN_GAIN_DB, decode_to_f32_with_gain};
 use crate::container::ogg::OpusTags;
 use crate::options::{LoopMode, PlayOptions};
 use crate::ui::heading;
@@ -58,20 +58,20 @@ impl Drop for RawModeGuard {
 }
 
 pub fn play(opts: PlayOptions) -> Result<()> {
+    validate_volume(opts.volume)?;
+    // Validate gain before even the device-list shortcut. Direct library
+    // callers must not be able to bypass the same option boundary as Clap.
+    validate_and_compute_gain(opts.gain_db)?;
+
     // `--list-devices` short-circuits before the banner, any file I/O, and any
     // audio-output initialisation: we only need a host to walk for names.
     if opts.list_devices {
         return list_output_devices();
     }
 
-    // Validate gain and resolve the audio device *before* touching the
-    // filesystem. A bogus gain or an unknown device name should surface as
-    // "wrong config" without first reporting a "file not found" error for
-    // an input the user may not have meant to supply yet — fail fast on the
-    // config knobs the user actually set on the command line.
-    // Validate before opening the audio device. The decoder receives the same
-    // dB value so Opus can combine it with OpusHead.output_gain in Q8.
-    validate_and_compute_gain(opts.gain_db)?;
+    // Resolve the audio device *before* touching the filesystem. A bogus
+    // device name should surface as "wrong config" without first reporting a
+    // missing input file.
     let (_stream, handle) = match &opts.device {
         Some(name) => open_named_output_stream(name)?,
         None => rodio::OutputStream::try_default()
@@ -222,20 +222,28 @@ pub fn play(opts: PlayOptions) -> Result<()> {
 /// Validate `--gain DB` and convert it to a linear multiplier. Returns 1.0 for
 /// the common `db == 0.0` case so callers can branch on "no-op" without a
 /// floating-point equality check of their own. NaN / ±∞ and values outside
-/// `[-128.0, 128.0]` dB both surface as a user-visible error — the range
-/// matches libopus `OPUS_SET_GAIN` so parity with `opusdec --gain` is exact
-/// (e.g. `--gain -80` fully mutes a loud track).
+/// `[MIN_GAIN_DB, MAX_GAIN_DB]` dB both surface as a user-visible error. The
+/// positive bound is the largest Q8 gain accepted by libopus.
 pub(crate) fn validate_and_compute_gain(db: f32) -> Result<f32> {
     if !db.is_finite() {
         bail!("--gain must be a finite dB value (got {db})");
     }
-    if !(-128.0..=128.0).contains(&db) {
-        bail!("--gain {db} dB out of range [-128.0, 128.0]");
+    if !(MIN_GAIN_DB..=MAX_GAIN_DB).contains(&db) {
+        bail!("--gain {db} dB out of range [{MIN_GAIN_DB}, {MAX_GAIN_DB}]");
     }
     if db == 0.0 {
         return Ok(1.0);
     }
     Ok(10f32.powf(db / 20.0))
+}
+
+fn validate_volume(volume: Option<f32>) -> Result<()> {
+    if let Some(volume) = volume
+        && !volume.is_finite()
+    {
+        bail!("--volume must be a finite value (got {volume})");
+    }
+    Ok(())
 }
 
 /// Legacy post-decode multiplier oracle retained for the gain unit tests. The
@@ -1253,11 +1261,11 @@ mod tests {
 
     #[test]
     fn gain_db_out_of_range_rejected() {
-        // 128 dB is the upper clamp (matches libopus OPUS_SET_GAIN); anything
-        // strictly outside [-128, 128] must trip the guard. Use 200 / -200 so
-        // the test is obviously out-of-range and decoupled from the exact
-        // boundary arithmetic.
-        assert!(validate_and_compute_gain(128.0).is_ok());
+        // +128 dB converts to Q8 32768, one above libopus's maximum. Keep the
+        // upper boundary representable rather than allowing a later setter
+        // error after input decoding has already started.
+        assert!(validate_and_compute_gain(127.9).is_ok());
+        assert!(validate_and_compute_gain(128.0).is_err());
         assert!(validate_and_compute_gain(-128.0).is_ok());
         let err_hi = validate_and_compute_gain(200.0).expect_err("200 dB above clamp must error");
         let err_lo = validate_and_compute_gain(-200.0).expect_err("-200 dB below clamp must error");
@@ -1270,6 +1278,24 @@ mod tests {
         assert!(
             msg_lo.contains("range") || msg_lo.contains("out of"),
             "low-side error should mention range: {msg_lo}"
+        );
+    }
+
+    #[test]
+    fn play_rejects_nonfinite_volume_before_device_or_input() {
+        let err = play(PlayOptions {
+            input: PathBuf::from("does-not-exist.opus"),
+            volume: Some(f32::NAN),
+            loop_mode: LoopMode::Off,
+            quiet: true,
+            device: None,
+            list_devices: true,
+            gain_db: 0.0,
+        })
+        .expect_err("NaN volume must fail before --list-devices");
+        assert!(
+            format!("{err:#}").contains("volume"),
+            "error should mention volume: {err:#}"
         );
     }
 

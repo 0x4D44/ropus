@@ -1,3 +1,7 @@
+- Public command options need validation before any input/output work (`commands/{encode,decode,play}.rs`); Clap checks alone miss GUI/plugin callers and invalid Q8 casts can panic.
+
+  Reject sentinel frame durations, complexity/bitrate/loss bounds, non-finite volume, and gains above Q8 32767 before opening files or devices.
+
 - Reverse Ogg duration scans must validate full CRC-checked EOS pages (`container/ogg.rs:parse_duration_page`), not `OggS` bytes.
 
   Skip malformed, non-EOS, and unknown-granule candidates so payload data cannot fabricate duration or bitrate.

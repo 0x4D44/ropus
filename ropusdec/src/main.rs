@@ -41,12 +41,14 @@ struct Args {
 
     /// User gain in dB. Added on top of the header `output_gain` and applied
     /// through the decoder's `set_gain` (fixed-point, pre-clamp). Total
-    /// range is ±128 dB; out of range surfaces as a clean error.
+    /// range is -128 dB..=32767/256 dB; out of range surfaces as a clean
+    /// error.
     #[arg(
         long,
         value_name = "DB",
         default_value_t = 0.0,
-        allow_negative_numbers = true
+        allow_negative_numbers = true,
+        value_parser = parse_gain_db
     )]
     gain: f32,
 
@@ -61,7 +63,12 @@ struct Args {
 
     /// Simulate random packet loss (0..=100 %) to exercise PLC. Deterministic
     /// seed — the same value reproduces the same dropped-packet pattern.
-    #[arg(long = "packet-loss", value_name = "PCT", default_value_t = 0)]
+    #[arg(
+        long = "packet-loss",
+        value_name = "PCT",
+        default_value_t = 0,
+        value_parser = clap::value_parser!(u8).range(0..=100)
+    )]
     packet_loss: u8,
 
     #[arg(short, long, action = ArgAction::SetTrue)]
@@ -95,13 +102,6 @@ fn main() -> ExitCode {
             );
         }
     }
-    if args.packet_loss > 100 {
-        eprintln!(
-            "error: --packet-loss {} is out of range (accepted: 0..=100)",
-            args.packet_loss
-        );
-        return ExitCode::from(1);
-    }
     let opts = DecodeOptions {
         input: args.input,
         output: args.output,
@@ -113,6 +113,22 @@ fn main() -> ExitCode {
         packet_loss_pct: args.packet_loss,
     };
     prelude::run(commands::decode(opts))
+}
+
+fn parse_gain_db(raw: &str) -> Result<f32, String> {
+    let value = raw
+        .parse::<f32>()
+        .map_err(|e| format!("gain must be a number ({e})"))?;
+    const MAX_GAIN_DB: f32 = 32_767.0 / 256.0;
+    if !value.is_finite() {
+        return Err("gain must be finite".to_string());
+    }
+    if !(-128.0..=MAX_GAIN_DB).contains(&value) {
+        return Err(format!(
+            "gain {value} dB out of range [-128.0, {MAX_GAIN_DB}]"
+        ));
+    }
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -140,5 +156,13 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn invalid_packet_loss_and_gain_are_rejected_at_cli_boundary() {
+        assert!(Args::try_parse_from(["ropusdec", "input.opus", "--packet-loss", "101"]).is_err());
+        assert!(parse_gain_db("128").is_err());
+        assert!(parse_gain_db("NaN").is_err());
+        assert!(parse_gain_db("-128").is_ok());
     }
 }

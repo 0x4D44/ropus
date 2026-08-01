@@ -69,8 +69,8 @@ pub struct DecodeOptions {
     pub rate: Option<u32>,
     /// User gain in dB, summed with `OpusHead.output_gain` and pushed through
     /// `Decoder::set_gain` before any samples emerge. Sum is range-checked by
-    /// libopus (`±128 dB`); out-of-range surfaces as a clean error, not a
-    /// panic.
+    /// libopus (`-128 dB..=32767/256 dB`); out-of-range surfaces as a clean
+    /// error, not a panic.
     pub gain_db: f32,
     /// Apply TPDF dither to i16 output. Default `true` matches `opusdec`.
     /// Ignored for the float path — nothing to dither when bit depth is 32.
@@ -121,8 +121,8 @@ pub struct PlayOptions {
     /// User gain in dB. For Opus, this is summed with `OpusHead.output_gain`
     /// and applied by the decoder in Q8 before f32 conversion. Other codecs
     /// receive the equivalent linear multiplier after native decoding. 0 is
-    /// a no-op. Values outside `[-128.0, 128.0]` dB and NaN / ±∞ surface as a
-    /// clean error.
+    /// a no-op. Values outside `[-128.0, 32767/256]` dB and NaN / ±∞ surface
+    /// as a clean error.
     ///
     /// Gain reaches decoded PCM before the rodio sink; sink volume (via
     /// `--volume`) applies on top. Effective scale is

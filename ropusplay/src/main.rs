@@ -41,7 +41,7 @@ struct Args {
     input: Option<PathBuf>,
 
     /// Playback volume in [0.0, 1.0]. Defaults to 1.0.
-    #[arg(long)]
+    #[arg(long, value_parser = parse_volume)]
     volume: Option<f32>,
 
     /// Repeat mode when input is a directory.
@@ -66,15 +66,45 @@ struct Args {
     /// dB gain applied during decode before playback. Opus combines it with
     /// OpusHead.output_gain in the decoder; other codecs use a linear f32
     /// multiplier.
-    /// Range `[-128.0, 128.0]` (matches libopus `OPUS_SET_GAIN`);
+    /// Range `[-128.0, 32767/256]` (the representable decoder Q8 range);
     /// 0.0 is a no-op. NaN / ±∞ are rejected.
     #[arg(
         long,
         value_name = "DB",
         default_value_t = 0.0,
-        allow_hyphen_values = true
+        allow_hyphen_values = true,
+        value_parser = parse_gain_db
     )]
     gain: f32,
+}
+
+fn parse_volume(raw: &str) -> Result<f32, String> {
+    let value = raw
+        .parse::<f32>()
+        .map_err(|e| format!("volume must be a number ({e})"))?;
+    if !value.is_finite() {
+        return Err("volume must be finite".to_string());
+    }
+    if !(0.0..=1.0).contains(&value) {
+        return Err(format!("volume {value} out of range [0.0, 1.0]"));
+    }
+    Ok(value)
+}
+
+fn parse_gain_db(raw: &str) -> Result<f32, String> {
+    let value = raw
+        .parse::<f32>()
+        .map_err(|e| format!("gain must be a number ({e})"))?;
+    const MAX_GAIN_DB: f32 = 32_767.0 / 256.0;
+    if !value.is_finite() {
+        return Err("gain must be finite".to_string());
+    }
+    if !(-128.0..=MAX_GAIN_DB).contains(&value) {
+        return Err(format!(
+            "gain {value} dB out of range [-128.0, {MAX_GAIN_DB}]"
+        ));
+    }
+    Ok(value)
 }
 
 fn main() -> ExitCode {
@@ -103,4 +133,24 @@ fn main() -> ExitCode {
         gain_db: args.gain,
     };
     prelude::run(commands::play(opts))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_rejects_nonfinite_or_out_of_range_volume() {
+        assert!(parse_volume("NaN").is_err());
+        assert!(parse_volume("-0.1").is_err());
+        assert!(parse_volume("1.1").is_err());
+        assert_eq!(parse_volume("0.5").unwrap(), 0.5);
+    }
+
+    #[test]
+    fn cli_rejects_unrepresentable_gain() {
+        assert!(parse_gain_db("128").is_err());
+        assert!(parse_gain_db("Infinity").is_err());
+        assert!(parse_gain_db("-128").is_ok());
+    }
 }

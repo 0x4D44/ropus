@@ -28,8 +28,8 @@ use ropus::FrameDuration;
 /// `2.5 ms * 48 = 120` samples (exact). Kept as a function rather than a table
 /// so adding a new FrameDuration variant upstream fails loudly at compile
 /// time via an unmatched arm.
-fn frame_samples_per_ch(d: FrameDuration) -> usize {
-    match d {
+fn frame_samples_per_ch(d: FrameDuration) -> Result<usize> {
+    Ok(match d {
         FrameDuration::Ms2_5 => 120,
         FrameDuration::Ms5 => 240,
         FrameDuration::Ms10 => 480,
@@ -44,13 +44,39 @@ fn frame_samples_per_ch(d: FrameDuration) -> usize {
         // (FrameSizeArg → FrameDuration skips this variant), so reaching
         // this arm means a library caller constructed an invalid
         // EncodeOptions.
-        FrameDuration::Argument => {
-            unreachable!("CLI never emits FrameDuration::Argument — only explicit durations")
+        FrameDuration::Argument => bail!(
+            "frame duration Argument is not supported; choose an explicit duration from 2.5 to 120 ms"
+        ),
+    })
+}
+
+fn validate_encode_options(opts: &EncodeOptions) -> Result<()> {
+    frame_samples_per_ch(opts.frame_duration)?;
+    if let Some(complexity) = opts.complexity
+        && complexity > 10
+    {
+        bail!("complexity {complexity} out of range (accepted: 0..=10)");
+    }
+    if let Some(bitrate) = opts.bitrate {
+        if bitrate == 0 {
+            bail!("bitrate must be greater than zero");
+        }
+        if bitrate > i32::MAX as u32 {
+            bail!("bitrate {bitrate} bps exceeds the libopus i32::MAX limit");
         }
     }
+    if opts.expect_loss > 100 {
+        bail!(
+            "expected packet loss {} out of range (accepted: 0..=100)",
+            opts.expect_loss
+        );
+    }
+    Ok(())
 }
 
 pub fn encode(opts: EncodeOptions) -> Result<()> {
+    validate_encode_options(&opts)?;
+
     // Guard the encoder's output buffer sizing. At `--framesize` ≥ 40 ms,
     // libopus packs 2..6 sub-frames into a code-3 packet and uses the full
     // output buffer as its repacketise budget, so sizing the buffer for just
@@ -279,7 +305,7 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
     // silence, otherwise exact-frame inputs decode short. Packet rounding may
     // add more silence, but the EOS granule trims that padding by declaring the
     // exact endpoint: source samples + pre_skip, in the fixed 48 kHz clock.
-    let frame_samples_ch = frame_samples_per_ch(opts.frame_duration);
+    let frame_samples_ch = frame_samples_per_ch(opts.frame_duration)?;
     let frame_interleaved = frame_samples_ch * channels;
     let final_granule = source_samples_ch_u64
         .checked_add(u64::from(pre_skip))
@@ -366,4 +392,49 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         ok(&format!("encoded -> {dest}"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Application, Signal};
+
+    fn valid_options() -> EncodeOptions {
+        EncodeOptions {
+            input: "missing-input.wav".into(),
+            output: Some("missing-output.opus".into()),
+            bitrate: Some(64_000),
+            complexity: Some(10),
+            application: Application::Audio,
+            vbr: true,
+            vbr_constraint: false,
+            signal: Signal::Auto,
+            frame_duration: FrameDuration::Ms20,
+            expect_loss: 0,
+            downmix_to_mono: false,
+            serial: None,
+            picture_path: None,
+            vendor: "test".to_string(),
+            comments: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn public_encode_options_reject_invalid_values_before_io() {
+        let mut opts = valid_options();
+        opts.frame_duration = FrameDuration::Argument;
+        assert!(validate_encode_options(&opts).is_err());
+
+        let mut opts = valid_options();
+        opts.complexity = Some(11);
+        assert!(validate_encode_options(&opts).is_err());
+
+        let mut opts = valid_options();
+        opts.bitrate = Some(u32::MAX);
+        assert!(validate_encode_options(&opts).is_err());
+
+        let mut opts = valid_options();
+        opts.expect_loss = 101;
+        assert!(validate_encode_options(&opts).is_err());
+    }
 }
