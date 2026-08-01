@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** harness-deep-plc/arm
 - **Raised:** 2026-07-30
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T045808Z-p81818-n066143000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00004-run-fix-20260801T045808Z-p81818-n066143000-c1
+- **Owner base:** 1f23a752184feed4029a98505a3c227f353d4325
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T04:58:08Z
+- **Owner until:** 2026-08-01T06:58:08Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
