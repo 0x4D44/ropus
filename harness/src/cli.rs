@@ -2665,6 +2665,37 @@ fn assert_benchmark_build_is_uninstrumented() {
     }
 }
 
+/// Run one C benchmark's construct/configure/work/destroy lifecycle.
+///
+/// The timer callbacks are injected so the lifecycle ordering can be tested
+/// without constructing a real codec. Production callers pass `Instant::now`
+/// and `Instant::elapsed`; construction, configuration, and destruction stay
+/// outside the measured interval by construction.
+fn timed_c_lifecycle<State, Stamp, Create, Configure, Work, Destroy, Start, Elapsed>(
+    create: Create,
+    configure: Configure,
+    work: Work,
+    destroy: Destroy,
+    start_timer: Start,
+    elapsed_timer: Elapsed,
+) -> f64
+where
+    Create: FnOnce() -> State,
+    Configure: FnOnce(&mut State),
+    Work: FnOnce(&mut State),
+    Destroy: FnOnce(State),
+    Start: FnOnce() -> Stamp,
+    Elapsed: FnOnce(Stamp) -> f64,
+{
+    let mut state = create();
+    configure(&mut state);
+    let started = start_timer();
+    work(&mut state);
+    let elapsed = elapsed_timer(started);
+    destroy(state);
+    elapsed
+}
+
 impl BenchResult {
     fn per_iter_ms(&self) -> f64 {
         (self.total_secs * 1000.0) / self.iters as f64
@@ -2688,38 +2719,61 @@ fn bench_encode_c(
     let mut packet = vec![0u8; max_packet];
     let num_frames = pcm.len() / samples_per_frame;
 
-    // Construct the encoder once outside the timed loop; see bench_decode_c for
-    // the rationale (matches real-caller construct-once / encode-many usage).
-    let start = std::time::Instant::now();
-    unsafe {
-        let mut error: i32 = 0;
-        let enc = bindings::opus_encoder_create(
-            sample_rate,
-            channels,
-            bindings::OPUS_APPLICATION_AUDIO,
-            &mut error,
-        );
-        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_BITRATE_REQUEST, bitrate);
-        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_COMPLEXITY_REQUEST, complexity);
-        bindings::opus_encoder_ctl(enc, bindings::OPUS_SET_VBR_REQUEST, 0i32);
-
-        for _ in 0..iters {
-            let mut pos = 0;
-            while pos + samples_per_frame <= pcm.len() {
-                let ret = bindings::opus_encode(
-                    enc,
-                    pcm[pos..].as_ptr(),
-                    frame_size as i32,
-                    packet.as_mut_ptr(),
-                    max_packet as i32,
+    // Construct and configure the encoder once outside the timed loop; see
+    // bench_decode_c for the rationale (matches real-caller usage).
+    let elapsed = timed_c_lifecycle(
+        || unsafe {
+            let mut error: i32 = 0;
+            let enc = bindings::opus_encoder_create(
+                sample_rate,
+                channels,
+                bindings::OPUS_APPLICATION_AUDIO,
+                &mut error,
+            );
+            assert!(
+                !enc.is_null() && error == bindings::OPUS_OK,
+                "C opus_encoder_create failed: {}",
+                bindings::error_string(error)
+            );
+            enc
+        },
+        |enc| unsafe {
+            for (request, value) in [
+                (bindings::OPUS_SET_BITRATE_REQUEST, bitrate),
+                (bindings::OPUS_SET_COMPLEXITY_REQUEST, complexity),
+                (bindings::OPUS_SET_VBR_REQUEST, 0),
+            ] {
+                let ret = bindings::opus_encoder_ctl(*enc, request, value);
+                assert_eq!(
+                    ret,
+                    bindings::OPUS_OK,
+                    "C opus_encoder_ctl({}, {}) failed: {}",
+                    request,
+                    value,
+                    bindings::error_string(ret)
                 );
-                let _ = std::hint::black_box(ret);
-                pos += samples_per_frame;
             }
-        }
-        bindings::opus_encoder_destroy(enc);
-    }
-    let elapsed = start.elapsed().as_secs_f64();
+        },
+        |enc| unsafe {
+            for _ in 0..iters {
+                let mut pos = 0;
+                while pos + samples_per_frame <= pcm.len() {
+                    let ret = bindings::opus_encode(
+                        *enc,
+                        pcm[pos..].as_ptr(),
+                        frame_size as i32,
+                        packet.as_mut_ptr(),
+                        max_packet as i32,
+                    );
+                    let _ = std::hint::black_box(ret);
+                    pos += samples_per_frame;
+                }
+            }
+        },
+        |enc| unsafe { bindings::opus_encoder_destroy(enc) },
+        std::time::Instant::now,
+        |started| started.elapsed().as_secs_f64(),
+    );
     BenchResult {
         label: "C encode".to_string(),
         iters,
@@ -2789,36 +2843,45 @@ fn bench_decode_c(encoded: &[u8], sample_rate: i32, channels: i32, iters: u32) -
 
     // Construct the decoder once outside the timed loop. Real callers create
     // a decoder per stream and decode many packets through it; recreating per
-    // iter measured constructor cost (which for Rust includes loading the DNN
-    // weights blob) instead of steady-state decode throughput.
-    let start = std::time::Instant::now();
-    unsafe {
-        let mut error: i32 = 0;
-        let dec = bindings::opus_decoder_create(sample_rate, channels, &mut error);
-
-        for _ in 0..iters {
-            let mut pos = 0;
-            while pos + 2 <= encoded.len() {
-                let pkt_len = u16::from_le_bytes([encoded[pos], encoded[pos + 1]]) as usize;
-                pos += 2;
-                if pos + pkt_len > encoded.len() {
-                    break;
+    // iter measured constructor cost instead of steady-state decode throughput.
+    let elapsed = timed_c_lifecycle(
+        || unsafe {
+            let mut error: i32 = 0;
+            let dec = bindings::opus_decoder_create(sample_rate, channels, &mut error);
+            assert!(
+                !dec.is_null() && error == bindings::OPUS_OK,
+                "C opus_decoder_create failed: {}",
+                bindings::error_string(error)
+            );
+            dec
+        },
+        |_dec| {},
+        |dec| unsafe {
+            for _ in 0..iters {
+                let mut pos = 0;
+                while pos + 2 <= encoded.len() {
+                    let pkt_len = u16::from_le_bytes([encoded[pos], encoded[pos + 1]]) as usize;
+                    pos += 2;
+                    if pos + pkt_len > encoded.len() {
+                        break;
+                    }
+                    let ret = bindings::opus_decode(
+                        *dec,
+                        encoded[pos..].as_ptr(),
+                        pkt_len as i32,
+                        pcm.as_mut_ptr(),
+                        frame_size as i32,
+                        0,
+                    );
+                    let _ = std::hint::black_box(ret);
+                    pos += pkt_len;
                 }
-                let ret = bindings::opus_decode(
-                    dec,
-                    encoded[pos..].as_ptr(),
-                    pkt_len as i32,
-                    pcm.as_mut_ptr(),
-                    frame_size as i32,
-                    0,
-                );
-                let _ = std::hint::black_box(ret);
-                pos += pkt_len;
             }
-        }
-        bindings::opus_decoder_destroy(dec);
-    }
-    let elapsed = start.elapsed().as_secs_f64();
+        },
+        |dec| unsafe { bindings::opus_decoder_destroy(dec) },
+        std::time::Instant::now,
+        |started| started.elapsed().as_secs_f64(),
+    );
     BenchResult {
         label: "C decode".to_string(),
         iters,
@@ -9052,6 +9115,60 @@ mod coverage_smoke_tests {
     #[should_panic(expected = "benchmark build contract violated")]
     fn benchmark_build_contract_rejects_trace_build() {
         assert_benchmark_build_is_uninstrumented();
+    }
+
+    #[test]
+    fn c_benchmark_lifecycle_times_only_work() {
+        #[derive(Debug, PartialEq, Eq)]
+        enum Event {
+            Create,
+            Configure,
+            TimerStart,
+            Work,
+            TimerStop,
+            Destroy,
+        }
+
+        let events = std::cell::RefCell::new(Vec::new());
+        let elapsed = timed_c_lifecycle(
+            || {
+                events.borrow_mut().push(Event::Create);
+                7_u8
+            },
+            |state| {
+                assert_eq!(*state, 7);
+                events.borrow_mut().push(Event::Configure);
+            },
+            |state| {
+                assert_eq!(*state, 7);
+                events.borrow_mut().push(Event::Work);
+            },
+            |state| {
+                assert_eq!(state, 7);
+                events.borrow_mut().push(Event::Destroy);
+            },
+            || {
+                events.borrow_mut().push(Event::TimerStart);
+                std::time::Instant::now()
+            },
+            |started| {
+                events.borrow_mut().push(Event::TimerStop);
+                started.elapsed().as_secs_f64()
+            },
+        );
+
+        assert!(elapsed >= 0.0);
+        assert_eq!(
+            events.into_inner(),
+            vec![
+                Event::Create,
+                Event::Configure,
+                Event::TimerStart,
+                Event::Work,
+                Event::TimerStop,
+                Event::Destroy,
+            ]
+        );
     }
 
     #[test]

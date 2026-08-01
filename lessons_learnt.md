@@ -1,3 +1,7 @@
+- Benchmark timers must bracket only configured work; centralize C lifecycle ordering (`harness/src/cli.rs:timed_c_lifecycle`).
+
+  Inject timer callbacks in the lifecycle test so construction/configuration and destruction cannot drift back into the measured interval.
+
 - Preserve one-sided fuzz errors; only `(Err, Err)` is ignored (`replay_fuzz_decode.rs:classify_decoder_status`).
 
   A replay oracle must model every status quadrant enforced by the fuzz target, not only the PCM-success path.
