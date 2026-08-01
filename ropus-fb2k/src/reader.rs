@@ -461,8 +461,14 @@ impl<R: Read + Seek> OggOpusReader<R> {
         // library scans that never decode; re-using `decode_scratch` across
         // calls keeps the audio-thread path allocation-free.
         if self.decoder.is_none() {
-            let dec = OpusDecoder::new(OPUS_SAMPLE_RATE_HZ, channels as i32).map_err(|code| {
-                ReaderError::InvalidStream(format!("OpusDecoder init failed (code {code})"))
+            let mut dec =
+                OpusDecoder::new(OPUS_SAMPLE_RATE_HZ, channels as i32).map_err(|code| {
+                    ReaderError::InvalidStream(format!("OpusDecoder init failed (code {code})"))
+                })?;
+            dec.set_gain(self.head.output_gain as i32).map_err(|code| {
+                ReaderError::InvalidStream(format!(
+                    "OpusDecoder output gain setup failed (code {code})"
+                ))
             })?;
             self.decoder = Some(dec);
             self.decode_scratch = vec![0f32; MAX_FRAME_SAMPLES_PER_CH * channels];

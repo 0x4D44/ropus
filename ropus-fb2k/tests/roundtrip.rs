@@ -19,10 +19,10 @@ use ropus::OpusDecoder;
 
 use common::{
     FIXTURE_STREAM_SERIAL, MemIo, build_opus_fixture, build_opus_fixture_audio_source,
-    build_opus_fixture_with_audio_packets, build_opus_fixture_with_final_granule, build_opus_head,
-    last_error_string, minimal_opus_fixture, open_from_bytes, open_from_bytes_info_only,
-    open_from_bytes_without_seek, opus_fixture_with_artist_alice, read_tags_collect,
-    surround_family_fixture,
+    build_opus_fixture_audio_source_with_output_gain, build_opus_fixture_with_audio_packets,
+    build_opus_fixture_with_final_granule, build_opus_head, last_error_string,
+    minimal_opus_fixture, open_from_bytes, open_from_bytes_info_only, open_from_bytes_without_seek,
+    opus_fixture_with_artist_alice, read_tags_collect, surround_family_fixture,
 };
 
 use ropus_fb2k::{
@@ -801,6 +801,101 @@ fn sine_pcm_for_packet(i: usize) -> Vec<i16> {
         pcm[n * 2 + 1] = v;
     }
     pcm
+}
+
+fn rms(samples: &[f32]) -> f32 {
+    let mean_square = samples
+        .iter()
+        .map(|sample| f64::from(*sample) * f64::from(*sample))
+        .sum::<f64>()
+        / samples.len() as f64;
+    mean_square.sqrt() as f32
+}
+
+fn decode_seek_window(bytes: Vec<u8>, sample_pos: u64, samples_per_channel: usize) -> Vec<f32> {
+    let (_io, handle) = open_from_bytes(bytes);
+    assert!(!handle.is_null(), "seek fixture failed to open");
+    let rc_seek = unsafe { ropus_fb2k::ropus_fb2k_seek(handle, sample_pos) };
+    assert_eq!(rc_seek, 0, "seek failed: {}", last_error_string());
+
+    let mut out = Vec::with_capacity(samples_per_channel * 2);
+    let mut buf = vec![0f32; 5760 * 2];
+    while out.len() < samples_per_channel * 2 {
+        let mut bytes_consumed = 0u64;
+        let rc = unsafe {
+            ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bytes_consumed)
+        };
+        assert!(rc > 0, "seek window ended early with {rc}");
+        out.extend_from_slice(&buf[..rc as usize * 2]);
+    }
+    unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+    out.truncate(samples_per_channel * 2);
+    out
+}
+
+#[test]
+fn opus_head_output_gain_applies_before_and_after_seek() {
+    const AUDIO_PACKETS: usize = 30;
+    const PRE_SKIP: u16 = 312;
+    const SEEK_SAMPLE: u64 = 10_000;
+    const WINDOW_SAMPLES: usize = 960;
+    const POSITIVE_GAIN: i16 = 6 * 256;
+    const NEGATIVE_GAIN: i16 = -6 * 256;
+
+    let baseline = build_opus_fixture_audio_source_with_output_gain(
+        "ropus-fb2k-test",
+        &[],
+        AUDIO_PACKETS,
+        Some(PRE_SKIP),
+        0,
+        sine_pcm_for_packet,
+    );
+    let positive = build_opus_fixture_audio_source_with_output_gain(
+        "ropus-fb2k-test",
+        &[],
+        AUDIO_PACKETS,
+        Some(PRE_SKIP),
+        POSITIVE_GAIN,
+        sine_pcm_for_packet,
+    );
+    let negative = build_opus_fixture_audio_source_with_output_gain(
+        "ropus-fb2k-test",
+        &[],
+        AUDIO_PACKETS,
+        Some(PRE_SKIP),
+        NEGATIVE_GAIN,
+        sine_pcm_for_packet,
+    );
+
+    let baseline_full = decode_through_fb2k(baseline.clone());
+    let positive_full = decode_through_fb2k(positive.clone());
+    let negative_full = decode_through_fb2k(negative.clone());
+    let baseline_rms = rms(&baseline_full);
+    assert!(
+        rms(&positive_full) > baseline_rms * 1.35,
+        "+6 dB OpusHead gain did not amplify decoded audio: baseline={baseline_rms}, gained={}",
+        rms(&positive_full)
+    );
+    assert!(
+        rms(&negative_full) < baseline_rms * 0.75,
+        "-6 dB OpusHead gain did not attenuate decoded audio: baseline={baseline_rms}, gained={}",
+        rms(&negative_full)
+    );
+
+    let baseline_seek = decode_seek_window(baseline, SEEK_SAMPLE, WINDOW_SAMPLES);
+    let positive_seek = decode_seek_window(positive, SEEK_SAMPLE, WINDOW_SAMPLES);
+    let negative_seek = decode_seek_window(negative, SEEK_SAMPLE, WINDOW_SAMPLES);
+    let baseline_seek_rms = rms(&baseline_seek);
+    assert!(
+        rms(&positive_seek) > baseline_seek_rms * 1.35,
+        "+6 dB gain was lost after seek reset: baseline={baseline_seek_rms}, gained={}",
+        rms(&positive_seek)
+    );
+    assert!(
+        rms(&negative_seek) < baseline_seek_rms * 0.75,
+        "-6 dB gain was lost after seek reset: baseline={baseline_seek_rms}, gained={}",
+        rms(&negative_seek)
+    );
 }
 
 // ---------------------------------------------------------------------------

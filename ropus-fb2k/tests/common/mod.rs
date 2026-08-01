@@ -112,12 +112,70 @@ pub fn build_opus_fixture_with_final_granule(
     )
 }
 
+/// Build a silence fixture with an OpusHead output gain in Q7.8 dB units.
+pub fn build_opus_fixture_with_output_gain(
+    vendor: &str,
+    comments: &[(&str, &str)],
+    audio_packets: usize,
+    recorded_pre_skip: Option<u16>,
+    output_gain: i16,
+) -> Vec<u8> {
+    build_opus_fixture_audio_source_with_options(
+        vendor,
+        comments,
+        audio_packets,
+        recorded_pre_skip,
+        None,
+        output_gain,
+        |_| vec![0i16; 960 * 2],
+    )
+}
+
 fn build_opus_fixture_audio_source_with_final_granule(
     vendor: &str,
     comments: &[(&str, &str)],
     audio_packets: usize,
     recorded_pre_skip: Option<u16>,
     final_granule: Option<u64>,
+    pcm_for: impl FnMut(usize) -> Vec<i16>,
+) -> Vec<u8> {
+    build_opus_fixture_audio_source_with_options(
+        vendor,
+        comments,
+        audio_packets,
+        recorded_pre_skip,
+        final_granule,
+        0,
+        pcm_for,
+    )
+}
+
+pub fn build_opus_fixture_audio_source_with_output_gain(
+    vendor: &str,
+    comments: &[(&str, &str)],
+    audio_packets: usize,
+    recorded_pre_skip: Option<u16>,
+    output_gain: i16,
+    pcm_for: impl FnMut(usize) -> Vec<i16>,
+) -> Vec<u8> {
+    build_opus_fixture_audio_source_with_options(
+        vendor,
+        comments,
+        audio_packets,
+        recorded_pre_skip,
+        None,
+        output_gain,
+        pcm_for,
+    )
+}
+
+fn build_opus_fixture_audio_source_with_options(
+    vendor: &str,
+    comments: &[(&str, &str)],
+    audio_packets: usize,
+    recorded_pre_skip: Option<u16>,
+    final_granule: Option<u64>,
+    output_gain: i16,
     mut pcm_for: impl FnMut(usize) -> Vec<i16>,
 ) -> Vec<u8> {
     assert!(audio_packets >= 1, "need at least one audio packet");
@@ -147,7 +205,7 @@ fn build_opus_fixture_audio_source_with_final_granule(
 
     writer
         .write_packet(
-            build_opus_head(2, 48_000, pre_skip),
+            build_opus_head_with_gain(2, 48_000, pre_skip, output_gain),
             FIXTURE_STREAM_SERIAL,
             PacketWriteEndInfo::EndPage,
             0,
@@ -186,13 +244,22 @@ fn build_opus_fixture_audio_source_with_final_granule(
 
 /// Hand-roll an `OpusHead` packet body.
 pub fn build_opus_head(channels: u8, input_sample_rate: u32, pre_skip: u16) -> Vec<u8> {
+    build_opus_head_with_gain(channels, input_sample_rate, pre_skip, 0)
+}
+
+pub fn build_opus_head_with_gain(
+    channels: u8,
+    input_sample_rate: u32,
+    pre_skip: u16,
+    output_gain: i16,
+) -> Vec<u8> {
     let mut h = Vec::with_capacity(19);
     h.extend_from_slice(b"OpusHead");
     h.push(1);
     h.push(channels);
     h.extend_from_slice(&pre_skip.to_le_bytes());
     h.extend_from_slice(&input_sample_rate.to_le_bytes());
-    h.extend_from_slice(&0i16.to_le_bytes());
+    h.extend_from_slice(&output_gain.to_le_bytes());
     h.push(0);
     h
 }

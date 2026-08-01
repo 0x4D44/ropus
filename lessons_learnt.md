@@ -1,3 +1,7 @@
+- Apply signed OpusHead Q7.8 output gain during fb2k decoder init (`reader.rs:decode_next`); reset preserves it.
+
+  Set the header gain once on lazy `OpusDecoder` construction; its reset path keeps `decode_gain`, so seek does not drop it.
+
 - Phase-C stereo traces need occurrence keys (`fuzz_repro_diff.rs:keyed_v2_tuples`) or channel-0 mismatches get overwritten.
 
   Rust uses a `-1` channel sentinel, so key V2 records by boundary, iteration, and trace-order occurrence; keep C channel labels in diagnostics.
