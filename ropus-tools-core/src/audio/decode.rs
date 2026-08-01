@@ -53,12 +53,20 @@ enum CodecPipeline {
 }
 
 pub fn decode_to_f32(path: &Path) -> Result<DecodedAudio> {
+    decode_to_f32_with_gain(path, 0.0)
+}
+
+/// Decode a file to interleaved f32 PCM, applying `gain_db` at the codec
+/// boundary. Opus combines the user gain with `OpusHead.output_gain` and calls
+/// `Decoder::set_gain`; other codecs use the same linear dB multiplier after
+/// native decoding.
+pub fn decode_to_f32_with_gain(path: &Path, gain_db: f32) -> Result<DecodedAudio> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let hint_ext = path
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_string);
-    decode_reader(Box::new(file), hint_ext.as_deref())
+    decode_reader_with_gain(Box::new(file), hint_ext.as_deref(), gain_db)
         .with_context(|| format!("decoding {}", path.display()))
 }
 
@@ -72,6 +80,19 @@ pub fn decode_to_f32(path: &Path) -> Result<DecodedAudio> {
 /// `Cursor<Vec<u8>>` (buffered up-front) satisfies that requirement, at the
 /// cost of buffering the whole input in memory.
 pub fn decode_reader(source: Box<dyn MediaSource>, hint_ext: Option<&str>) -> Result<DecodedAudio> {
+    decode_reader_with_gain(source, hint_ext, 0.0)
+}
+
+/// Decode an arbitrary symphonia `MediaSource` with a user-requested dB gain.
+/// Opus applies the gain in the decoder so its i16 saturation semantics match
+/// direct decode; non-Opus codecs retain the f32 post-decode behaviour used by
+/// the player before this gain-aware entry point existed.
+pub fn decode_reader_with_gain(
+    source: Box<dyn MediaSource>,
+    hint_ext: Option<&str>,
+    gain_db: f32,
+) -> Result<DecodedAudio> {
+    validate_gain_db(gain_db)?;
     let mss = MediaSourceStream::new(source, Default::default());
 
     let mut hint = Hint::new();
@@ -117,8 +138,22 @@ pub fn decode_reader(source: Box<dyn MediaSource>, hint_ext: Option<&str>) -> Re
             .transpose()
             .context("parsing OpusHead")?;
         let opus_channels = channel_count_to_ropus(channels)?;
-        let dec = RopusDecoder::new(OPUS_SR, opus_channels)
+        let mut dec = RopusDecoder::new(OPUS_SR, opus_channels)
             .map_err(|e| anyhow!("decoder init failed: {e}"))?;
+        let header_gain_q8 = opus_head.map_or(0, |head| i32::from(head.output_gain));
+        let user_gain_q8 = gain_db_to_q8(gain_db)?;
+        let total_gain_q8 = header_gain_q8
+            .checked_add(user_gain_q8)
+            .ok_or_else(|| anyhow!("Opus header and user gain overflow"))?;
+        if !(-32_768..=32_767).contains(&total_gain_q8) {
+            bail!(
+                "Opus header and user gain total {total_gain_q8} Q8 is outside decoder range [-32768, 32767]"
+            );
+        }
+        if total_gain_q8 != 0 {
+            dec.set_gain(total_gain_q8)
+                .map_err(|e| anyhow!("set_gain({total_gain_q8} Q8) failed: {e}"))?;
+        }
         // Keep the OpusHead delay separate from Symphonia's inferred codec
         // delay. The latter includes page-level padding for some streams,
         // while RFC 7845's audible start is always the OpusHead pre-skip.
@@ -155,6 +190,7 @@ pub fn decode_reader(source: Box<dyn MediaSource>, hint_ext: Option<&str>) -> Re
     let mut sample_buf: Option<SampleBuffer<f32>> = None;
     let max_per_ch = (OPUS_SR / 1000 * 120) as usize;
     let mut opus_scratch: Vec<f32> = Vec::new();
+    let opus_gain_applied = matches!(&pipeline, CodecPipeline::Opus(_));
     let opus_timeline = match &pipeline {
         CodecPipeline::Opus(state) => Some((state.pre_skip, state.end_granule, state.channels)),
         CodecPipeline::Native(_) => None,
@@ -241,9 +277,39 @@ pub fn decode_reader(source: Box<dyn MediaSource>, hint_ext: Option<&str>) -> Re
         interleaved = interleaved[start_samples..end_samples].to_vec();
     }
 
+    if !opus_gain_applied && gain_db != 0.0 {
+        let multiplier = gain_db_to_multiplier(gain_db);
+        for sample in &mut interleaved {
+            *sample *= multiplier;
+        }
+    }
+
     Ok(DecodedAudio {
         samples: interleaved,
         sample_rate,
         channels,
     })
+}
+
+fn validate_gain_db(gain_db: f32) -> Result<()> {
+    if !gain_db.is_finite() {
+        bail!("gain must be a finite dB value (got {gain_db})");
+    }
+    if !(-128.0..=128.0).contains(&gain_db) {
+        bail!("gain {gain_db} dB out of range [-128.0, 128.0]");
+    }
+    Ok(())
+}
+
+fn gain_db_to_q8(gain_db: f32) -> Result<i32> {
+    validate_gain_db(gain_db)?;
+    let q8 = (f64::from(gain_db) * 256.0).round();
+    if !(i32::MIN as f64..=i32::MAX as f64).contains(&q8) {
+        bail!("gain {gain_db} dB does not fit in Q8");
+    }
+    Ok(q8 as i32)
+}
+
+fn gain_db_to_multiplier(gain_db: f32) -> f32 {
+    10.0_f32.powf(gain_db / 20.0)
 }

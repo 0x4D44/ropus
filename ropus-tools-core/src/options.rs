@@ -118,13 +118,14 @@ pub struct PlayOptions {
     /// per line on stdout) and returns immediately — no file is loaded.
     /// Used to back `ropusplay --list-devices`.
     pub list_devices: bool,
-    /// Linear-dB gain applied to the f32 PCM right before it reaches the
-    /// rodio sink. 0 is a no-op (we skip the multiply). Clamped to
-    /// `[-128.0, 128.0]` dB (matching libopus `OPUS_SET_GAIN`); NaN / ±∞
-    /// surface as a clean error.
+    /// User gain in dB. For Opus, this is summed with `OpusHead.output_gain`
+    /// and applied by the decoder in Q8 before f32 conversion. Other codecs
+    /// receive the equivalent linear multiplier after native decoding. 0 is
+    /// a no-op. Values outside `[-128.0, 128.0]` dB and NaN / ±∞ surface as a
+    /// clean error.
     ///
-    /// Gain is applied to decoded PCM before the rodio sink; sink volume
-    /// (via `--volume`) applies on top. Effective scale is
+    /// Gain reaches decoded PCM before the rodio sink; sink volume (via
+    /// `--volume`) applies on top. Effective scale is
     /// `volume × 10^(gain_db/20)`. This ordering is intentional: `--gain`
     /// is a track-level dB adjustment (symmetric, can amplify), while
     /// `--volume` is a sink-level linear attenuation (0..=1, mixer knob).

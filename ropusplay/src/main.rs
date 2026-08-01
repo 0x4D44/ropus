@@ -63,7 +63,9 @@ struct Args {
     #[arg(long, value_name = "NAME")]
     device: Option<String>,
 
-    /// Linear-dB gain applied to f32 PCM samples before playback.
+    /// dB gain applied during decode before playback. Opus combines it with
+    /// OpusHead.output_gain in the decoder; other codecs use a linear f32
+    /// multiplier.
     /// Range `[-128.0, 128.0]` (matches libopus `OPUS_SET_GAIN`);
     /// 0.0 is a no-op. NaN / ±∞ are rejected.
     #[arg(

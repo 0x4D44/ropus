@@ -1,3 +1,5 @@
+- Shared Opus decode must apply `OpusHead.output_gain` in `audio/decode.rs:decode_reader_with_gain`; keep CLI gain in Q8 for Opus and linear post-gain for other codecs.
+
 - Shared OpusHead parsing must reject unsupported versions, channels, mappings, and family-0 trailing bytes (`container/ogg.rs:parse_opus_head`).
 
   Direct decode and info share this boundary; playback/transcode must parse the same header instead of extracting only pre-skip.

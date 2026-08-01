@@ -743,6 +743,155 @@ fn encode_tmp_sine_opus_with_duration(
     opus_path
 }
 
+/// Repack an Ogg Opus stream after changing only the Q8 output gain in its
+/// OpusHead packet. Repacking through the Ogg crate repairs page CRCs while
+/// preserving packet granules and EOS state.
+fn rewrite_opus_head_gain(input: &std::path::Path, output: &std::path::Path, gain_q8: i16) {
+    use std::io::Write;
+
+    use ogg::reading::PacketReader;
+    use ogg::writing::{PacketWriteEndInfo, PacketWriter};
+
+    let input_file = std::fs::File::open(input).expect("open Opus input");
+    let mut reader = PacketReader::new(std::io::BufReader::new(input_file));
+    let head_packet = reader
+        .read_packet()
+        .expect("read OpusHead")
+        .expect("OpusHead packet");
+    let serial = head_packet.stream_serial();
+    let head_absgp = head_packet.absgp_page();
+    let mut head = head_packet.data;
+    assert_eq!(&head[..8], b"OpusHead", "fixture must contain OpusHead");
+    head[16..18].copy_from_slice(&gain_q8.to_le_bytes());
+
+    let tags_packet = reader
+        .read_packet()
+        .expect("read OpusTags")
+        .expect("OpusTags packet");
+    let tags_absgp = tags_packet.absgp_page();
+    let tags = tags_packet.data;
+
+    let output_file = std::fs::File::create(output).expect("create rewritten Opus");
+    let mut writer = PacketWriter::new(std::io::BufWriter::new(output_file));
+    writer
+        .write_packet(head, serial, PacketWriteEndInfo::EndPage, head_absgp)
+        .expect("write OpusHead");
+    writer
+        .write_packet(tags, serial, PacketWriteEndInfo::EndPage, tags_absgp)
+        .expect("write OpusTags");
+
+    while let Some(packet) = reader.read_packet().expect("read Opus audio") {
+        let end_info = if packet.last_in_stream() {
+            PacketWriteEndInfo::EndStream
+        } else if packet.last_in_page() {
+            PacketWriteEndInfo::EndPage
+        } else {
+            PacketWriteEndInfo::NormalPacket
+        };
+        let absgp_page = packet.absgp_page();
+        writer
+            .write_packet(packet.data, serial, end_info, absgp_page)
+            .expect("write Opus audio");
+        if end_info == PacketWriteEndInfo::EndStream {
+            break;
+        }
+    }
+    let mut output_file = writer.into_inner();
+    output_file.flush().expect("flush rewritten Opus");
+}
+
+fn rms(samples: &[f32]) -> f64 {
+    assert!(!samples.is_empty(), "RMS requires samples");
+    (samples
+        .iter()
+        .map(|&sample| f64::from(sample).powi(2))
+        .sum::<f64>()
+        / samples.len() as f64)
+        .sqrt()
+}
+
+#[test]
+fn shared_decode_applies_header_and_user_gain_for_playback_and_transcode() {
+    const POSITIVE_GAIN_Q8: i16 = 6 * 256;
+    const NEGATIVE_GAIN_Q8: i16 = -6 * 256;
+
+    let base = encode_tmp_sine_opus("shared_gain_base");
+    let positive = base.with_file_name(format!(
+        "ropus_shared_gain_positive_{}_{}.opus",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let negative = base.with_file_name(format!(
+        "ropus_shared_gain_negative_{}_{}.opus",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let transcoded = base.with_file_name(format!(
+        "ropus_shared_gain_transcoded_{}_{}.opus",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    rewrite_opus_head_gain(&base, &positive, POSITIVE_GAIN_Q8);
+    rewrite_opus_head_gain(&base, &negative, NEGATIVE_GAIN_Q8);
+
+    let baseline = ropus_tools_core::audio::decode::decode_to_f32(&base).expect("decode base");
+    let positive_audio = ropus_tools_core::audio::decode::decode_to_f32(&positive)
+        .expect("decode positive header gain");
+    let negative_audio = ropus_tools_core::audio::decode::decode_to_f32(&negative)
+        .expect("decode negative header gain");
+    let baseline_rms = rms(&baseline.samples);
+    assert!(
+        rms(&positive_audio.samples) > baseline_rms * 1.25,
+        "+6 dB OpusHead gain did not amplify shared decode: baseline={baseline_rms}, gained={}",
+        rms(&positive_audio.samples)
+    );
+    assert!(
+        positive_audio
+            .samples
+            .iter()
+            .any(|&sample| sample.abs() > 0.99),
+        "positive decoder gain should exercise i16 saturation before f32 conversion"
+    );
+    assert!(
+        rms(&negative_audio.samples) < baseline_rms * 0.75,
+        "-6 dB OpusHead gain did not attenuate shared decode: baseline={baseline_rms}, gained={}",
+        rms(&negative_audio.samples)
+    );
+
+    let user_gain = ropus_tools_core::audio::decode::decode_to_f32_with_gain(&base, 6.0)
+        .expect("decode user gain");
+    assert!(
+        rms(&user_gain.samples) > baseline_rms * 1.25,
+        "+6 dB user gain did not reach the shared Opus decoder"
+    );
+
+    commands::encode(timeline_encode_options(
+        positive.clone(),
+        transcoded.clone(),
+    ))
+    .expect("transcode header-gained Opus through shared decode");
+    let transcoded_audio = ropus_tools_core::audio::decode::decode_to_f32(&transcoded)
+        .expect("decode transcoded Opus");
+    assert!(
+        rms(&transcoded_audio.samples) > baseline_rms * 1.20,
+        "Opus-to-Opus transcode lost header gain: baseline={baseline_rms}, gained={}",
+        rms(&transcoded_audio.samples)
+    );
+
+    for path in [base, positive, negative, transcoded] {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 fn build_duration_switch_stream(
     first: &std::path::Path,
     second: &std::path::Path,

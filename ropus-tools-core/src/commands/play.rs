@@ -2,7 +2,7 @@
 //!
 //! Top-level flow:
 //! - `build_playlist` expands a file or directory into a sorted list of paths.
-//! - For each entry we decode through `decode_to_f32`, read its `OpusTags`,
+//! - For each entry we decode through `decode_to_f32_with_gain`, read its `OpusTags`,
 //!   hand the samples to a fresh `rodio::Sink`, and enter `run_track_loop`
 //!   (interactive) or `run_track_noninteractive` (piped/quiet) to watch for
 //!   track end + keyboard input.
@@ -21,7 +21,7 @@ use crossterm::tty::IsTty;
 use ogg::reading::PacketReader;
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
-use crate::audio::decode::{DecodedAudio, decode_to_f32};
+use crate::audio::decode::{DecodedAudio, decode_to_f32_with_gain};
 use crate::container::ogg::OpusTags;
 use crate::options::{LoopMode, PlayOptions};
 use crate::ui::heading;
@@ -69,7 +69,9 @@ pub fn play(opts: PlayOptions) -> Result<()> {
     // "wrong config" without first reporting a "file not found" error for
     // an input the user may not have meant to supply yet — fail fast on the
     // config knobs the user actually set on the command line.
-    let gain_multiplier = validate_and_compute_gain(opts.gain_db)?;
+    // Validate before opening the audio device. The decoder receives the same
+    // dB value so Opus can combine it with OpusHead.output_gain in Q8.
+    validate_and_compute_gain(opts.gain_db)?;
     let (_stream, handle) = match &opts.device {
         Some(name) => open_named_output_stream(name)?,
         None => rodio::OutputStream::try_default()
@@ -129,7 +131,7 @@ pub fn play(opts: PlayOptions) -> Result<()> {
             let _ = std::io::stdout().flush();
         }
 
-        let (mut decoded, tags) = match decode_track(path) {
+        let (decoded, tags) = match decode_track(path, opts.gain_db) {
             Ok(ok) => ok,
             Err(e) => {
                 // Clear the ephemeral decoding line; the warning goes to
@@ -149,13 +151,6 @@ pub fn play(opts: PlayOptions) -> Result<()> {
             }
         };
         consecutive_errors = 0;
-
-        // Gain is applied to the f32 PCM right before it reaches the sink.
-        // A `gain_multiplier` of exactly 1.0 (i.e. `gain_db == 0.0`) is a
-        // no-op — `validate_and_compute_gain` returned 1.0 in that case and
-        // we skip the per-sample multiply to avoid pointless iteration on
-        // the hot path.
-        apply_gain(&mut decoded.samples, gain_multiplier);
 
         let channels_u16 =
             u16::try_from(decoded.channels).map_err(|_| anyhow!("channel count overflow"))?;
@@ -243,9 +238,10 @@ pub(crate) fn validate_and_compute_gain(db: f32) -> Result<f32> {
     Ok(10f32.powf(db / 20.0))
 }
 
-/// Multiply every sample by `multiplier` in place. Exactly 1.0 is a no-op —
-/// the main loop already skips this call via `gain_db == 0.0`, but the guard
-/// is cheap and protects direct callers (e.g. unit tests).
+/// Legacy post-decode multiplier oracle retained for the gain unit tests. The
+/// playback path now passes dB gain into the shared decoder, which applies
+/// Opus gain before f32 conversion and keeps non-Opus policy in one place.
+#[cfg(test)]
 fn apply_gain(samples: &mut [f32], multiplier: f32) {
     if multiplier == 1.0 {
         return;
@@ -485,8 +481,8 @@ fn compute_avg_kbps(file_len_bytes: u64, duration_secs: f64) -> f64 {
 /// are optional — non-Opus inputs and tag-read failures both yield
 /// `OpusTags::default()` rather than failing the whole track. A failed decode
 /// is a hard error; callers map it into a per-track warning + skip.
-fn decode_track(path: &Path) -> Result<(DecodedAudio, OpusTags)> {
-    let decoded = decode_to_f32(path)?;
+fn decode_track(path: &Path, gain_db: f32) -> Result<(DecodedAudio, OpusTags)> {
+    let decoded = decode_to_f32_with_gain(path, gain_db)?;
     let tags = read_opus_tags_from_file(path).unwrap_or_default();
     Ok((decoded, tags))
 }
@@ -1298,11 +1294,10 @@ mod tests {
 
     #[test]
     fn gain_and_volume_compose_multiplicatively() {
-        // Pipeline: apply_gain(&mut buf, mult) happens *before* sink.set_volume(v),
-        // so the effective scaling applied to each sample is `v * mult`. Here we
-        // pick +6 dB (≈ ×1.995) and a sink-volume equivalent of 0.5, and assert
-        // the composed scale matches the input to within a small tolerance (the
-        // textbook answer is 1.995 × 0.5 ≈ 0.9977, i.e. within ~0.25% of unity).
+        // Decoder gain happens before sink.set_volume(v), so the effective
+        // scaling is still `v * mult`. Here we pick +6 dB (≈ ×1.995) and a
+        // sink-volume equivalent of 0.5, and assert the composed scale matches
+        // the input to within a small tolerance.
         let mult = validate_and_compute_gain(6.0).expect("+6 dB is valid");
         let sink_volume = 0.5f32;
 
