@@ -20,7 +20,7 @@ use ogg::reading::PacketReader;
 use crate::consts::OPUS_SR;
 use crate::container::ogg::{
     GranuleGap, OpusHead, OpusTags, detect_granule_gaps, parse_opus_head, read_last_granule,
-    read_page_granules,
+    read_page_granules, validate_opus_audio_packet,
 };
 use crate::container::toc::decode_toc;
 use crate::options::InfoOptions;
@@ -194,6 +194,8 @@ fn collect_summary(input: &std::path::Path, retain_packets: bool) -> Result<Info
 
     let mut packet_idx: u64 = 0;
     while let Some(pkt) = reader.read_packet()? {
+        validate_opus_audio_packet(&pkt.data)
+            .with_context(|| format!("validating Opus audio packet {packet_idx}"))?;
         let b0 = pkt.data.first().copied().unwrap_or(0);
         let b1 = pkt.data.get(1).copied();
         if let Some(tocs) = packets.as_mut() {
@@ -446,6 +448,8 @@ fn decode_sample_count(input: &std::path::Path, head: OpusHead) -> Result<u64> {
     let mut decoder = RopusDecoder::new(OPUS_SR, opus_channels)
         .map_err(|e| anyhow!("decoder init failed: {e}"))?;
     while let Some(pkt) = reader.read_packet()? {
+        validate_opus_audio_packet(&pkt.data)
+            .with_context(|| format!("validating Opus audio packet {packet_idx}"))?;
         match decoder.decode(&pkt.data, &mut decoded, DecodeMode::Normal) {
             Ok(n) => sample_count += n as u64,
             Err(e) => {

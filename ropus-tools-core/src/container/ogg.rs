@@ -213,6 +213,19 @@ pub fn parse_opus_head(data: &[u8]) -> Result<OpusHead> {
     })
 }
 
+/// Validate an Opus data packet before it reaches the codec or TOC parser.
+///
+/// An empty Opus packet is not a packet-loss marker. Passing an empty slice to
+/// the decoder requests packet-loss concealment, which would fabricate audio
+/// for malformed Ogg input. Callers reserve empty slices for deliberate PLC
+/// and reject empty container packets at their packet boundary instead.
+pub fn validate_opus_audio_packet(data: &[u8]) -> Result<()> {
+    if data.is_empty() {
+        bail!("empty Opus audio packet");
+    }
+    Ok(())
+}
+
 /// Sentinel value meaning "unknown granule position" per RFC 3533 §6. Pages
 /// with this granule are excluded from `read_page_granules` so they don't
 /// masquerade as a huge backwards jump from a real absgp.
@@ -755,6 +768,13 @@ mod tests {
             parse_opus_head(&trailing).is_err(),
             "trailing family zero bytes must reject"
         );
+    }
+
+    #[test]
+    fn empty_opus_audio_packet_is_rejected_before_codec_use() {
+        let error = validate_opus_audio_packet(&[]).expect_err("empty packet must be malformed");
+        assert!(error.to_string().contains("empty Opus audio packet"));
+        validate_opus_audio_packet(&[0x00]).expect("a packet with a TOC byte is non-empty");
     }
 
     #[test]

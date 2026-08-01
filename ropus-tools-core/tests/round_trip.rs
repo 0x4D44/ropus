@@ -506,6 +506,137 @@ fn decode_and_play_reject_physical_eof_before_eos() {
     let _ = std::fs::remove_file(output);
 }
 
+#[test]
+fn empty_ogg_audio_packet_is_rejected_without_plc_or_toc_fabrication() {
+    use ogg::reading::PacketReader;
+    use ogg::writing::{PacketWriteEndInfo, PacketWriter};
+    use ropus_tools_core::options::InfoOptions;
+
+    let nonce = format!(
+        "{}_{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos()
+    );
+    let opus = std::env::temp_dir().join(format!("ropus_empty_audio_{nonce}.opus"));
+    let source_wav = std::env::temp_dir().join(format!("ropus_empty_audio_{nonce}_source.wav"));
+    let source_opus = std::env::temp_dir().join(format!("ropus_empty_audio_{nonce}_source.opus"));
+    let output = std::env::temp_dir().join(format!("ropus_empty_audio_{nonce}.wav"));
+    write_sine_wav_samples(&source_wav, 1_001, 1_000.0);
+    commands::encode(timeline_encode_options(
+        source_wav.clone(),
+        source_opus.clone(),
+    ))
+    .expect("encode valid source fixture");
+
+    let source_file = std::fs::File::open(&source_opus).expect("open valid source fixture");
+    let mut source_reader = PacketReader::new(std::io::BufReader::new(source_file));
+    let head = source_reader
+        .read_packet()
+        .expect("read source OpusHead")
+        .expect("source OpusHead");
+    let serial = head.stream_serial();
+    let tags = source_reader
+        .read_packet()
+        .expect("read source OpusTags")
+        .expect("source OpusTags");
+    let mut audio_packets = Vec::new();
+    while let Some(packet) = source_reader.read_packet().expect("read source audio") {
+        let granule = packet.absgp_page();
+        audio_packets.push((packet.data, granule));
+    }
+    let final_granule = audio_packets
+        .last()
+        .map(|(_, granule)| *granule)
+        .expect("source must contain audio");
+
+    {
+        let file = std::fs::File::create(&opus).expect("create malformed Opus fixture");
+        let mut writer = PacketWriter::new(file);
+        writer
+            .write_packet(head.data, serial, PacketWriteEndInfo::EndPage, 0)
+            .expect("write OpusHead");
+        writer
+            .write_packet(tags.data, serial, PacketWriteEndInfo::EndPage, 0)
+            .expect("write OpusTags");
+        for (data, granule) in audio_packets {
+            writer
+                .write_packet(data, serial, PacketWriteEndInfo::NormalPacket, granule)
+                .expect("write valid audio packet");
+        }
+        writer
+            .write_packet(
+                Vec::<u8>::new(),
+                serial,
+                PacketWriteEndInfo::EndStream,
+                final_granule,
+            )
+            .expect("write empty audio packet");
+    }
+
+    // Prove the fixture contains a real zero-length packet rather than merely
+    // relying on the writer call above to exercise the malformed shape.
+    let file = std::fs::File::open(&opus).expect("open malformed Opus fixture");
+    let mut reader = PacketReader::new(std::io::BufReader::new(file));
+    reader
+        .read_packet()
+        .expect("read OpusHead")
+        .expect("OpusHead");
+    reader
+        .read_packet()
+        .expect("read OpusTags")
+        .expect("OpusTags");
+    let mut saw_empty = false;
+    while let Some(packet) = reader.read_packet().expect("read malformed audio") {
+        saw_empty |= packet.data.is_empty();
+    }
+    assert!(saw_empty, "fixture must carry an empty payload");
+
+    let decode_error = commands::decode(DecodeOptions {
+        input: opus.clone(),
+        output: Some(output.clone()),
+        float: false,
+        raw: false,
+        rate: None,
+        gain_db: 0.0,
+        dither: false,
+        packet_loss_pct: 0,
+    })
+    .expect_err("container decode must reject empty Opus audio");
+    assert!(
+        format!("{decode_error:#}").contains("empty Opus audio packet"),
+        "unexpected decode error: {decode_error:#}"
+    );
+    assert!(!output.exists(), "failed decode must not publish output");
+
+    let play_error = match ropus_tools_core::audio::decode::decode_to_f32(&opus) {
+        Ok(_) => panic!("playback decode must reject empty Opus audio"),
+        Err(error) => error,
+    };
+    assert!(
+        format!("{play_error:#}").contains("empty Opus audio packet"),
+        "unexpected playback error: {play_error:#}"
+    );
+
+    let info_error = commands::info(InfoOptions {
+        input: opus.clone(),
+        extended: true,
+        query: None,
+    })
+    .expect_err("info must reject empty Opus audio before TOC formatting");
+    assert!(
+        format!("{info_error:#}").contains("empty Opus audio packet"),
+        "unexpected info error: {info_error:#}"
+    );
+
+    let _ = std::fs::remove_file(opus);
+    let _ = std::fs::remove_file(source_wav);
+    let _ = std::fs::remove_file(source_opus);
+    let _ = std::fs::remove_file(output);
+}
+
 /// Decode every audio packet, then apply the OpusHead/EOS timeline trims from
 /// RFC 7845. This deliberately does not use `commands::decode`: end-trim
 /// handling there is tracked separately, while this regression proves the

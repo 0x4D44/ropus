@@ -22,7 +22,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
 use crate::consts::OPUS_SR;
-use crate::container::ogg::parse_opus_head;
+use crate::container::ogg::{parse_opus_head, validate_opus_audio_packet};
 use crate::ui::escape_terminal_path;
 use crate::util::channel_count_to_ropus;
 
@@ -241,6 +241,7 @@ pub fn decode_reader_with_gain(
                 let OpusState {
                     dec, channels: ch, ..
                 } = state.as_mut();
+                validate_opus_audio_packet(&packet.data).context("validating Opus audio packet")?;
                 if opus_scratch.len() != max_per_ch * *ch {
                     opus_scratch = vec![0f32; max_per_ch * *ch];
                 }

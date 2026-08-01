@@ -1,3 +1,7 @@
+- Empty Ogg Opus packets are malformed, not PLC (`container/ogg.rs:validate_opus_audio_packet`); reject before decode or TOC parsing.
+
+  The decoder's empty-slice contract deliberately means packet-loss concealment. Validate every container audio packet first so malformed zero-length payloads cannot fabricate audio, duration, or extended info.
+
 - Never create a derived output before comparing filesystem identity (`util.rs:reject_input_output_alias`); metadata catches links.
 
   Compare lexical paths plus platform file identities before decoding or opening a writer. If a default extension equals the source, select a suffixed destination; explicit aliases must fail.

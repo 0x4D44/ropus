@@ -30,7 +30,9 @@ use crate::audio::wav::{
     write_wav_float32, write_wav_float32_to, write_wav_pcm16, write_wav_pcm16_to,
 };
 use crate::consts::OPUS_SR;
-use crate::container::ogg::{OpusTags, UNKNOWN_GRANULE, parse_opus_head};
+use crate::container::ogg::{
+    OpusTags, UNKNOWN_GRANULE, parse_opus_head, validate_opus_audio_packet,
+};
 use crate::container::toc::decode_toc;
 use crate::options::DecodeOptions;
 use crate::ui::{escape_terminal_path, escape_terminal_text, format_num, heading, ok};
@@ -301,6 +303,8 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
             if pkt.stream_serial() != stream_serial {
                 continue;
             }
+            validate_opus_audio_packet(&pkt.data)
+                .with_context(|| format!("validating Opus audio packet {packet_count}"))?;
             let lost = opts.packet_loss_pct > 0
                 && (loss_rng.next_u32() % 100) < u32::from(opts.packet_loss_pct);
             let n = if lost {
@@ -337,6 +341,8 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
             if pkt.stream_serial() != stream_serial {
                 continue;
             }
+            validate_opus_audio_packet(&pkt.data)
+                .with_context(|| format!("validating Opus audio packet {packet_count}"))?;
             let lost = opts.packet_loss_pct > 0
                 && (loss_rng.next_u32() % 100) < u32::from(opts.packet_loss_pct);
             let n = if lost {
