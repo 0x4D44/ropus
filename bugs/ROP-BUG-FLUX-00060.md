@@ -5,15 +5,15 @@
 - **Severity:** High
 - **Area:** ropusenc/picture-output-safety
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T233850Z-p80645-n650518000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00060-run-fix-20260801T233850Z-p80645-n650518000-c1
+- **Owner base:** b10c472c8d60289502fbe0f548840c96f0898135
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T23:38:50Z
+- **Owner until:** 2026-08-02T01:38:50Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
