@@ -5,15 +5,15 @@
 - **Severity:** Low
 - **Area:** ropus-tools-core/ogg-scan
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T220951Z-p81763-n296538000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00047-run-fix-20260801T220951Z-p81763-n296538000-c1
+- **Owner base:** c9aad8472913cbd955318275d096e7c689ebb469
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T22:09:51Z
+- **Owner until:** 2026-08-02T00:09:51Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
