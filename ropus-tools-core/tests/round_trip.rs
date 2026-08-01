@@ -339,6 +339,173 @@ fn timeline_encode_options(input: PathBuf, output: PathBuf) -> EncodeOptions {
     }
 }
 
+/// Clear the final page's EOS flag and repair its CRC. The resulting stream
+/// ends at a physical EOF after a complete non-EOS page, which is distinct from
+/// a truncated page or a corrupt checksum.
+fn without_eos_flag(path: &std::path::Path) -> Vec<u8> {
+    let mut bytes = std::fs::read(path).expect("read Ogg stream");
+    let mut page_starts = Vec::new();
+    let mut pos = 0usize;
+    while pos + 27 <= bytes.len() {
+        assert_eq!(
+            &bytes[pos..pos + 4],
+            b"OggS",
+            "expected a complete Ogg page"
+        );
+        let segment_count = bytes[pos + 26] as usize;
+        let lacing_end = pos + 27 + segment_count;
+        assert!(lacing_end <= bytes.len(), "Ogg lacing table is truncated");
+        let payload_len: usize = bytes[pos + 27..lacing_end]
+            .iter()
+            .map(|&segment| segment as usize)
+            .sum();
+        let page_end = lacing_end + payload_len;
+        assert!(page_end <= bytes.len(), "Ogg page payload is truncated");
+        page_starts.push(pos);
+        pos = page_end;
+    }
+    assert_eq!(pos, bytes.len(), "fixture must end on an Ogg page boundary");
+    assert!(
+        page_starts.len() >= 3,
+        "fixture needs headers and an audio page"
+    );
+    let last = *page_starts.last().expect("last Ogg page");
+    assert_ne!(bytes[last + 5] & 0x04, 0, "fixture must end with EOS");
+    bytes[last + 5] &= !0x04;
+    bytes[last + 22..last + 26].fill(0);
+    let crc = ogg_crc32(&bytes[last..]);
+    bytes[last + 22..last + 26].copy_from_slice(&crc.to_le_bytes());
+    bytes
+}
+
+fn ogg_crc32(page: &[u8]) -> u32 {
+    let mut crc = 0u32;
+    for &byte in page {
+        crc ^= u32::from(byte) << 24;
+        for _ in 0..8 {
+            crc = if crc & 0x8000_0000 != 0 {
+                (crc << 1) ^ 0x04C1_1DB7
+            } else {
+                crc << 1
+            };
+        }
+    }
+    crc
+}
+
+#[test]
+fn decode_play_and_transcode_trim_to_eos_granule() {
+    let nonce = format!(
+        "{}_{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let source_samples = 1_001u32;
+    let wav = std::env::temp_dir().join(format!("ropus_eos_trim_{nonce}.wav"));
+    let opus = std::env::temp_dir().join(format!("ropus_eos_trim_{nonce}.opus"));
+    let transcoded = std::env::temp_dir().join(format!("ropus_eos_trim_{nonce}_transcoded.opus"));
+    let raw_i16 = std::env::temp_dir().join(format!("ropus_eos_trim_{nonce}.pcm"));
+    let raw_f32 = std::env::temp_dir().join(format!("ropus_eos_trim_{nonce}.f32"));
+    write_sine_wav_samples(&wav, source_samples, 1_000.0);
+
+    commands::encode(timeline_encode_options(wav.clone(), opus.clone())).expect("encode fixture");
+
+    let decoded = ropus_tools_core::audio::decode::decode_to_f32(&opus)
+        .expect("decode fixture for playback/transcode");
+    assert_eq!(decoded.channels, 1);
+    assert_eq!(decoded.samples.len(), source_samples as usize);
+
+    commands::encode(timeline_encode_options(opus.clone(), transcoded.clone()))
+        .expect("transcode fixture");
+    let transcoded_audio = ropus_tools_core::audio::decode::decode_to_f32(&transcoded)
+        .expect("decode transcoded fixture");
+    assert_eq!(transcoded_audio.samples.len(), source_samples as usize);
+
+    for (output, float, bytes_per_sample) in [
+        (raw_i16.clone(), false, 2usize),
+        (raw_f32.clone(), true, 4usize),
+    ] {
+        commands::decode(DecodeOptions {
+            input: opus.clone(),
+            output: Some(output.clone()),
+            float,
+            raw: true,
+            rate: None,
+            gain_db: 0.0,
+            dither: false,
+            packet_loss_pct: 0,
+        })
+        .expect("decode exact EOS fixture");
+        assert_eq!(
+            std::fs::metadata(&output).expect("stat raw output").len() as usize,
+            source_samples as usize * bytes_per_sample,
+            "raw output must stop at the EOS granule"
+        );
+    }
+
+    let _ = std::fs::remove_file(wav);
+    let _ = std::fs::remove_file(opus);
+    let _ = std::fs::remove_file(transcoded);
+    let _ = std::fs::remove_file(raw_i16);
+    let _ = std::fs::remove_file(raw_f32);
+}
+
+#[test]
+fn decode_and_play_reject_physical_eof_before_eos() {
+    let nonce = format!(
+        "{}_{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let wav = std::env::temp_dir().join(format!("ropus_no_eos_{nonce}.wav"));
+    let opus = std::env::temp_dir().join(format!("ropus_no_eos_{nonce}.opus"));
+    let truncated = std::env::temp_dir().join(format!("ropus_no_eos_{nonce}_truncated.opus"));
+    let output = std::env::temp_dir().join(format!("ropus_no_eos_{nonce}_out.wav"));
+    write_sine_wav_samples(&wav, 1_001, 1_000.0);
+    commands::encode(timeline_encode_options(wav.clone(), opus.clone())).expect("encode fixture");
+    std::fs::write(&truncated, without_eos_flag(&opus)).expect("write non-EOS Ogg");
+
+    let decode_error = commands::decode(DecodeOptions {
+        input: truncated.clone(),
+        output: Some(output.clone()),
+        float: false,
+        raw: false,
+        rate: None,
+        gain_db: 0.0,
+        dither: false,
+        packet_loss_pct: 0,
+    })
+    .expect_err("decode must reject a stream without EOS");
+    assert!(
+        format!("{decode_error:#}").contains("EOS"),
+        "error should explain the missing EOS: {decode_error:#}"
+    );
+    assert!(
+        !output.exists(),
+        "failed decode must not publish an output file"
+    );
+
+    let play_error = match ropus_tools_core::audio::decode::decode_to_f32(&truncated) {
+        Ok(_) => panic!("playback decode must reject a stream without EOS"),
+        Err(error) => error,
+    };
+    assert!(
+        format!("{play_error:#}").contains("EOS"),
+        "error should explain the missing EOS: {play_error:#}"
+    );
+
+    let _ = std::fs::remove_file(wav);
+    let _ = std::fs::remove_file(opus);
+    let _ = std::fs::remove_file(truncated);
+    let _ = std::fs::remove_file(output);
+}
+
 /// Decode every audio packet, then apply the OpusHead/EOS timeline trims from
 /// RFC 7845. This deliberately does not use `commands::decode`: end-trim
 /// handling there is tracked separately, while this regression proves the

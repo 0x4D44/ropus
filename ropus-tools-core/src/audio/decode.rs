@@ -41,11 +41,9 @@ pub struct DecodedAudio {
 /// would otherwise trip `clippy::large_enum_variant`.
 struct OpusState {
     dec: RopusDecoder,
-    pre_skip: usize,
     channels: usize,
-    /// Samples already trimmed off the head. `commands::play` does not seek,
-    /// so this only ever monotonically increases until pre_skip is consumed.
-    skipped: usize,
+    pre_skip: usize,
+    end_granule: usize,
 }
 
 enum CodecPipeline {
@@ -80,13 +78,12 @@ pub fn decode_reader(source: Box<dyn MediaSource>, hint_ext: Option<&str>) -> Re
         hint.with_extension(ext);
     }
 
+    let format_options = FormatOptions {
+        enable_gapless: true,
+        ..FormatOptions::default()
+    };
     let probed = symphonia::default::get_probe()
-        .format(
-            &hint,
-            mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
-        )
+        .format(&hint, mss, &format_options, &MetadataOptions::default())
         .context("probing input")?;
 
     let mut format = probed.format;
@@ -115,35 +112,35 @@ pub fn decode_reader(source: Box<dyn MediaSource>, hint_ext: Option<&str>) -> Re
         let opus_channels = channel_count_to_ropus(channels)?;
         let dec = RopusDecoder::new(OPUS_SR, opus_channels)
             .map_err(|e| anyhow!("decoder init failed: {e}"))?;
-        // Resolve OpusHead.pre_skip without falling back to a magic constant.
-        // Symphonia's Ogg demuxer surfaces it as `codec_params.delay`; failing
-        // that, we parse it directly out of the OpusHead bytes that the
-        // demuxer hands us in `codec_params.extra_data`. If neither is
-        // present the file is malformed (every valid Ogg Opus stream begins
-        // with an OpusHead packet), so we bail rather than silently inserting
-        // a guess that would shift playback.
-        let pre_skip = if let Some(d) = codec_params.delay {
-            d as usize
-        } else if let Some(buf) = codec_params.extra_data.as_deref() {
-            if buf.len() >= 19 && &buf[..8] == b"OpusHead" {
-                u16::from_le_bytes([buf[10], buf[11]]) as usize
-            } else {
-                bail!(
-                    "opus track has no pre_skip metadata (no codec delay and \
-                     no OpusHead extra_data)"
-                );
-            }
-        } else {
-            bail!(
-                "opus track has no pre_skip metadata (no codec delay and \
-                 no OpusHead extra_data)"
-            );
-        };
+        // Keep the OpusHead delay separate from Symphonia's inferred codec
+        // delay. The latter includes page-level padding for some streams,
+        // while RFC 7845's audible start is always the OpusHead pre-skip.
+        let pre_skip = codec_params
+            .extra_data
+            .as_deref()
+            .and_then(|buf| {
+                (buf.len() >= 19 && &buf[..8] == b"OpusHead")
+                    .then(|| u16::from_le_bytes([buf[10], buf[11]]) as usize)
+            })
+            .or_else(|| codec_params.delay.map(|d| d as usize))
+            .ok_or_else(|| {
+                anyhow!(
+                    "opus track has no pre_skip metadata (no OpusHead extra_data or codec delay)"
+                )
+            })?;
+        let end_granule = codec_params
+            .n_frames
+            .ok_or_else(|| anyhow!("opus track ended before an Ogg EOS granule was established"))?;
+        let end_granule = usize::try_from(end_granule)
+            .map_err(|_| anyhow!("Opus EOS granule does not fit in this platform's usize"))?;
+        if end_granule < pre_skip {
+            bail!("Opus EOS granule {end_granule} is smaller than pre-skip {pre_skip}");
+        }
         CodecPipeline::Opus(Box::new(OpusState {
             dec,
-            pre_skip,
             channels,
-            skipped: 0,
+            pre_skip,
+            end_granule,
         }))
     } else {
         let dec = symphonia::default::get_codecs()
@@ -156,6 +153,10 @@ pub fn decode_reader(source: Box<dyn MediaSource>, hint_ext: Option<&str>) -> Re
     let mut sample_buf: Option<SampleBuffer<f32>> = None;
     let max_per_ch = (OPUS_SR / 1000 * 120) as usize;
     let mut opus_scratch: Vec<f32> = Vec::new();
+    let opus_timeline = match &pipeline {
+        CodecPipeline::Opus(state) => Some((state.pre_skip, state.end_granule, state.channels)),
+        CodecPipeline::Native(_) => None,
+    };
 
     loop {
         let packet = match format.next_packet() {
@@ -195,10 +196,7 @@ pub fn decode_reader(source: Box<dyn MediaSource>, hint_ext: Option<&str>) -> Re
             },
             CodecPipeline::Opus(state) => {
                 let OpusState {
-                    dec,
-                    pre_skip,
-                    channels: ch,
-                    skipped,
+                    dec, channels: ch, ..
                 } = state.as_mut();
                 if opus_scratch.len() != max_per_ch * *ch {
                     opus_scratch = vec![0f32; max_per_ch * *ch];
@@ -215,17 +213,30 @@ pub fn decode_reader(source: Box<dyn MediaSource>, hint_ext: Option<&str>) -> Re
                 };
                 let total = n * *ch;
                 let frame = &opus_scratch[..total];
-                // Trim the leading pre_skip samples (in interleaved units)
-                // before they reach the output buffer.
-                let want_trim = pre_skip.saturating_mul(*ch).saturating_sub(*skipped);
-                if want_trim >= total {
-                    *skipped += total;
-                } else {
-                    interleaved.extend_from_slice(&frame[want_trim..]);
-                    *skipped += want_trim;
-                }
+                // Symphonia exposes the packet timeline and EOS granule, but
+                // its Ogg probe queues packets before the final page's trim
+                // metadata is known. Apply the RFC 7845 endpoint explicitly
+                // after decoding so every caller gets the same exact range.
+                interleaved.extend_from_slice(frame);
             }
         }
+    }
+
+    if let Some((pre_skip, end_granule, channels)) = opus_timeline {
+        let start_samples = pre_skip
+            .checked_mul(channels)
+            .ok_or_else(|| anyhow!("Opus pre-skip sample count overflows"))?;
+        let end_samples = end_granule
+            .checked_mul(channels)
+            .ok_or_else(|| anyhow!("Opus EOS sample count overflows"))?;
+        if interleaved.len() < end_samples {
+            bail!(
+                "decoded {} samples, but Opus EOS granule requires {} samples",
+                interleaved.len(),
+                end_samples
+            );
+        }
+        interleaved = interleaved[start_samples..end_samples].to_vec();
     }
 
     Ok(DecodedAudio {

@@ -29,7 +29,7 @@ use crate::audio::wav::{
     write_wav_float32, write_wav_float32_to, write_wav_pcm16, write_wav_pcm16_to,
 };
 use crate::consts::OPUS_SR;
-use crate::container::ogg::{OpusTags, parse_opus_head};
+use crate::container::ogg::{OpusTags, UNKNOWN_GRANULE, parse_opus_head};
 use crate::options::DecodeOptions;
 use crate::ui::{format_num, heading, ok};
 use crate::util::{channel_count_to_ropus, is_stdio_sentinel, with_extension};
@@ -137,6 +137,7 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
     let head_pkt = reader
         .read_packet()?
         .ok_or_else(|| anyhow!("no packets found in input"))?;
+    let stream_serial = head_pkt.stream_serial();
     let head = parse_opus_head(&head_pkt.data)?;
     report!(
         "header   ch={} input_sr={} pre_skip={}",
@@ -151,6 +152,9 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
     let tags_pkt = reader
         .read_packet()?
         .ok_or_else(|| anyhow!("expected OpusTags packet, got end of stream"))?;
+    if tags_pkt.stream_serial() != stream_serial {
+        bail!("OpusTags packet belongs to a different Ogg stream");
+    }
     let tags = OpusTags::parse(&tags_pkt.data).context("parsing OpusTags packet")?;
     report!(
         "tags     vendor={}, {} comments",
@@ -236,6 +240,7 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
 
     let mut packet_count: u64 = 0;
     let mut dropped_count: u64 = 0;
+    let mut eos_granule: Option<u64> = None;
 
     // Per-channel frame size of the last successfully-decoded real packet.
     // Used to size the PLC output buffer on simulated loss — libopus' PLC
@@ -253,6 +258,9 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
         let mut scratch = vec![0.0f32; max_per_ch * ch_count];
         let mut acc: Vec<f32> = Vec::with_capacity(1 << 20);
         while let Some(pkt) = reader.read_packet()? {
+            if pkt.stream_serial() != stream_serial {
+                continue;
+            }
             let lost = opts.packet_loss_pct > 0
                 && (loss_rng.next_u32() % 100) < u32::from(opts.packet_loss_pct);
             let n = if lost {
@@ -271,12 +279,19 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
             let total = n * ch_count;
             acc.extend_from_slice(&scratch[..total]);
             packet_count += 1;
+            if pkt.last_in_stream() {
+                eos_granule = Some(pkt.absgp_page());
+                break;
+            }
         }
         (Vec::new(), acc)
     } else {
         let mut scratch = vec![0i16; max_per_ch * ch_count];
         let mut acc: Vec<i16> = Vec::with_capacity(1 << 20);
         while let Some(pkt) = reader.read_packet()? {
+            if pkt.stream_serial() != stream_serial {
+                continue;
+            }
             let lost = opts.packet_loss_pct > 0
                 && (loss_rng.next_u32() % 100) < u32::from(opts.packet_loss_pct);
             let n = if lost {
@@ -295,9 +310,25 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
             let total = n * ch_count;
             acc.extend_from_slice(&scratch[..total]);
             packet_count += 1;
+            if pkt.last_in_stream() {
+                eos_granule = Some(pkt.absgp_page());
+                break;
+            }
         }
         (acc, Vec::new())
     };
+
+    let eos_granule =
+        eos_granule.ok_or_else(|| anyhow!("selected Opus stream ended before an Ogg EOS page"))?;
+    if eos_granule == UNKNOWN_GRANULE {
+        bail!("selected Opus stream has an unknown EOS granule position");
+    }
+    let eos_granule = usize::try_from(eos_granule)
+        .map_err(|_| anyhow!("EOS granule position does not fit in this platform's usize"))?;
+    let pre_skip_ch = usize::from(head.pre_skip);
+    if eos_granule < pre_skip_ch {
+        bail!("EOS granule {eos_granule} is smaller than OpusHead pre-skip {pre_skip_ch}");
+    }
 
     // Trim the leading pre-skip samples. Applied at 48 kHz *before* any
     // resample (see module docstring).
@@ -307,7 +338,17 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
     } else {
         all_pcm_i16.len()
     };
-    let pre_skip = pre_skip_samples.min(total_before_trim);
+    let eos_samples = eos_granule
+        .checked_mul(ch_count)
+        .ok_or_else(|| anyhow!("EOS granule sample count overflows"))?;
+    if total_before_trim < eos_samples {
+        bail!(
+            "decoded {} samples, but EOS granule requires {} samples",
+            total_before_trim,
+            eos_samples
+        );
+    }
+    let pre_skip = pre_skip_samples;
 
     // If --rate was requested, resample after pre-skip and before dither/write.
     // Resample always happens on f32 (rubato's native unit); reaching this
@@ -316,7 +357,7 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
     let need_resample = output_rate != OPUS_SR;
 
     if use_float_decode {
-        let trimmed_f32: &[f32] = &all_pcm_f32[pre_skip..];
+        let trimmed_f32: &[f32] = &all_pcm_f32[pre_skip..eos_samples];
         let resampled: Vec<f32> = if need_resample {
             resample(trimmed_f32, OPUS_SR, output_rate, ch_count)
                 .context("resampling decoded PCM")?
@@ -367,7 +408,7 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
         // Pure i16 path: no resample, no dither, no float request. Pass the
         // decoder's i16 output straight to the writer — no f32 round-trip,
         // so every sample survives bit-identical to what ropus emitted.
-        let trimmed_i16: &[i16] = &all_pcm_i16[pre_skip..];
+        let trimmed_i16: &[i16] = &all_pcm_i16[pre_skip..eos_samples];
         write_output_samples(
             &output_path,
             output_is_stdout,

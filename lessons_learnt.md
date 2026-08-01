@@ -1,3 +1,8 @@
+- Ogg Opus decode must clamp to the absolute EOS granule (`audio/decode.rs:decode_reader`), not packet padding.
+
+  The direct reader gets the endpoint from `Packet::last_in_stream`; Symphonia exposes it as `codec_params.n_frames`.
+  Reject a selected stream that reaches physical EOF without EOS before publishing playback, transcode, or WAV output.
+
 - Clear fb2k last-error state with `Option<CString>` plus a static NUL pointer (`error.rs:clear_last_error`), not a new empty allocation.
 
   Successful decode calls can drop stale error text and reset the code without touching the heap; test the static pointer as the steady-state oracle.
