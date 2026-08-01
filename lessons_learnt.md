@@ -1,3 +1,7 @@
+- Build provenance must validate Git top-level ownership and watch HEAD plus its resolved ref (`ropus-tools-core/src/build_provenance.rs:discover`).
+
+  A linked worktree stores `.git` as a file and branch commits move `refs/heads/*`, while vendored crates can inherit a consumer repository. Resolve Git paths through Git itself, compare the top-level to the package workspace, and emit `unknown` outside it.
+
 - Validate auxiliary files before opening destinations, then atomically rename temp output (`commands/encode.rs:prepare_picture`).
 
   Read a cover image once through a `MAX+1` limit, reject output aliases, and keep regular-file writes in a same-directory temporary until the final flush succeeds. This preserves sentinels when the picture is missing, malformed, oversized, or replaced mid-read.
