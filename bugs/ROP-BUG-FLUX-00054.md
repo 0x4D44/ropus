@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00054 — Info library command exits the embedding process on unknown query
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/info-api
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T230021Z-p56272-n121291000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00054-run-fix-20260801T230021Z-p56272-n121291000-c1
-- **Owner base:** edb9c26a6674718b2fb612b21e3fb27cbab5b62a
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T23:00:21Z
-- **Owner until:** 2026-08-02T01:00:21Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260801T230021Z-p56272-n121291000-c1 branch=task/bug-ROP-BUG-FLUX-00054-run-fix-20260801T230021Z-p56272-n121291000-c1 code=3400cf5 gate=manual)
 
 ## Observation
 
