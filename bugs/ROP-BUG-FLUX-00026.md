@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00026 — Benchmark measures Rust with unbounded trace instrumentation
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** harness/benchmark-tracing
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T075011Z-p48083-n853583000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00026-run-fix-20260801T075011Z-p48083-n853583000-c1
-- **Owner base:** 47242ec8d0fdac4dddf8f9f9dadf25f1bd29e54e
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T07:50:11Z
-- **Owner until:** 2026-08-01T09:50:11Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T075011Z-p48083-n853583000-c1 branch=task/bug-ROP-BUG-FLUX-00026-run-fix-20260801T075011Z-p48083-n853583000-c1 code=a7dc551f0248eac8b617022fe69b460df405a5e1 gate=manual)
 
 ## Observation
 
