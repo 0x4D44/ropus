@@ -1,3 +1,7 @@
+- Route multistream decoder CTLs through validated OpusDecoder setters (`ropus/src/opus/multistream.rs:OpusMSDecoder::set_complexity`).
+
+  Internal fan-out helpers must preserve public range checks and side effects. Calling raw field assignments can accept invalid values and leave the CELT decoder's complexity out of sync.
+
 - Guard projection frame sizes before buffer allocation (`ropus/src/opus/multistream.rs:OpusProjectionEncoder::encode`).
 
   Wrapper methods must reject non-positive frame sizes before converting them to `usize`; delegating validation to the underlying multistream codec is too late when the wrapper sizes a temporary buffer first.

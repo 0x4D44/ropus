@@ -1481,6 +1481,11 @@ impl OpusDecoder {
         )
     }
 
+    #[cfg(test)]
+    pub(crate) fn debug_get_celt_complexity(&self) -> i32 {
+        self.celt_dec.get_complexity()
+    }
+
     /// Debug: borrow the SILK decoder (read-only) for state inspection.
     pub fn debug_silk_dec(&self) -> &crate::silk::decoder::SilkDecoder {
         &self.silk_dec
@@ -1579,24 +1584,28 @@ impl OpusDecoder {
         self.decode_gain
     }
     #[allow(dead_code)]
-    pub(crate) fn ms_set_gain(&mut self, gain: i32) {
-        self.decode_gain = gain;
+    pub(crate) fn ms_set_gain(&mut self, gain: i32) -> Result<(), i32> {
+        self.set_gain(gain)
     }
     #[allow(dead_code)]
     pub(crate) fn ms_get_complexity(&self) -> i32 {
         self.complexity
     }
     #[allow(dead_code)]
-    pub(crate) fn ms_set_complexity(&mut self, v: i32) {
-        self.complexity = v;
+    pub(crate) fn ms_set_complexity(&mut self, v: i32) -> Result<(), i32> {
+        self.set_complexity(v)
     }
     #[allow(dead_code)]
     pub(crate) fn ms_get_phase_inversion_disabled(&self) -> i32 {
         if self.celt_dec.disable_inv { 1 } else { 0 }
     }
     #[allow(dead_code)]
-    pub(crate) fn ms_set_phase_inversion_disabled(&mut self, v: i32) {
-        self.celt_dec.disable_inv = v != 0;
+    pub(crate) fn ms_set_phase_inversion_disabled(&mut self, v: i32) -> Result<(), i32> {
+        if !(0..=1).contains(&v) {
+            return Err(OPUS_BAD_ARG);
+        }
+        self.set_phase_inversion_disabled(v != 0);
+        Ok(())
     }
     #[allow(dead_code)]
     pub(crate) fn ms_reset(&mut self) {
@@ -2111,7 +2120,7 @@ mod tests {
         dec.set_phase_inversion_disabled(true);
         assert!(dec.get_phase_inversion_disabled());
         assert_eq!(dec.ms_get_phase_inversion_disabled(), 1);
-        dec.ms_set_phase_inversion_disabled(0);
+        dec.ms_set_phase_inversion_disabled(0).unwrap();
         assert!(!dec.get_phase_inversion_disabled());
         assert_eq!(dec.ms_get_phase_inversion_disabled(), 0);
 
@@ -2119,9 +2128,9 @@ mod tests {
         dec.set_ignore_extensions(true);
         assert!(dec.get_ignore_extensions());
 
-        dec.ms_set_gain(123);
+        dec.ms_set_gain(123).unwrap();
         assert_eq!(dec.ms_get_gain(), 123);
-        dec.ms_set_complexity(7);
+        dec.ms_set_complexity(7).unwrap();
         assert_eq!(dec.ms_get_complexity(), 7);
         assert_eq!(dec.get_complexity(), 7);
 

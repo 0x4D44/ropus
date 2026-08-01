@@ -1971,7 +1971,9 @@ impl OpusMSDecoder {
 
     pub fn set_gain(&mut self, gain: i32) -> i32 {
         for dec in &mut self.decoders {
-            dec.ms_set_gain(gain);
+            if let Err(err) = dec.ms_set_gain(gain) {
+                return err;
+            }
         }
         OPUS_OK
     }
@@ -1982,7 +1984,9 @@ impl OpusMSDecoder {
 
     pub fn set_phase_inversion_disabled(&mut self, v: i32) -> i32 {
         for dec in &mut self.decoders {
-            dec.ms_set_phase_inversion_disabled(v);
+            if let Err(err) = dec.ms_set_phase_inversion_disabled(v) {
+                return err;
+            }
         }
         OPUS_OK
     }
@@ -1993,7 +1997,9 @@ impl OpusMSDecoder {
 
     pub fn set_complexity(&mut self, v: i32) -> i32 {
         for dec in &mut self.decoders {
-            dec.ms_set_complexity(v);
+            if let Err(err) = dec.ms_set_complexity(v) {
+                return err;
+            }
         }
         OPUS_OK
     }
@@ -4078,6 +4084,24 @@ mod tests {
             assert!(dec.get_decoder_mut(0).is_some());
             assert!(dec.get_decoder(99).is_none());
             dec.reset();
+        }
+
+        #[test]
+        fn decoder_setters_validate_and_update_celt() {
+            let mut dec = OpusMSDecoder::new(48000, 2, 1, 1, &[0, 1]).unwrap();
+            assert_eq!(dec.set_gain(32768), OPUS_BAD_ARG);
+            assert_eq!(dec.set_gain(-32769), OPUS_BAD_ARG);
+            assert_eq!(dec.get_gain(), 0);
+            assert_eq!(dec.set_phase_inversion_disabled(-1), OPUS_BAD_ARG);
+            assert_eq!(dec.set_phase_inversion_disabled(2), OPUS_BAD_ARG);
+            assert_eq!(dec.get_phase_inversion_disabled(), 0);
+            assert_eq!(dec.set_complexity(-1), OPUS_BAD_ARG);
+            assert_eq!(dec.set_complexity(11), OPUS_BAD_ARG);
+            assert_eq!(dec.set_complexity(7), OPUS_OK);
+
+            let child = dec.get_decoder(0).unwrap();
+            assert_eq!(child.get_complexity(), 7);
+            assert_eq!(child.debug_get_celt_complexity(), 7);
         }
 
         #[test]
