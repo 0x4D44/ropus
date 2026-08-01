@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00004 — Apple Silicon neural PLC SNR misses tier-2 threshold
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Must
 - **Severity:** Medium
 - **Area:** harness-deep-plc/arm
 - **Raised:** 2026-07-30
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T045808Z-p81818-n066143000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00004-run-fix-20260801T045808Z-p81818-n066143000-c1
-- **Owner base:** 1f23a752184feed4029a98505a3c227f353d4325
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T04:58:08Z
-- **Owner until:** 2026-08-01T06:58:08Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-30, raised via `deltic bugs new`)
+- **State history:** Open (2026-07-30, raised via `deltic bugs new`) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T045808Z-p81818-n066143000-c1 branch=task/bug-ROP-BUG-FLUX-00004-run-fix-20260801T045808Z-p81818-n066143000-c1 code=1c8b95c9144570a9dab887b12b58963e45752734 gate=manual)
 
 ## Observation
 
