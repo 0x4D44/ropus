@@ -1,3 +1,7 @@
+- Shared OpusHead parsing must reject unsupported versions, channels, mappings, and family-0 trailing bytes (`container/ogg.rs:parse_opus_head`).
+
+  Direct decode and info share this boundary; playback/transcode must parse the same header instead of extracting only pre-skip.
+
 - PLC simulation must derive every lost packet's duration from its own TOC (`commands/decode.rs:packet_duration_samples`).
 
   A previous-packet fallback makes first-loss and duration-switch streams drift; validate code-3 counts and the 120 ms cap.

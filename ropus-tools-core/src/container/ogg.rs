@@ -179,13 +179,34 @@ pub fn parse_opus_head(data: &[u8]) -> Result<OpusHead> {
     if &data[..8] != b"OpusHead" {
         bail!("not an OpusHead packet");
     }
+    let version = data[8];
+    if version == 0 || (version & 0xF0) != 0 {
+        bail!("unsupported OpusHead version 0x{version:02x}");
+    }
+
+    let channels = data[9];
+    if !matches!(channels, 1 | 2) {
+        bail!("unsupported OpusHead channel count {channels} (need 1 or 2)");
+    }
+
+    let channel_mapping = data[18];
+    if channel_mapping != 0 {
+        bail!("unsupported OpusHead channel mapping family {channel_mapping} (need family 0)");
+    }
+    if data.len() != 19 {
+        bail!(
+            "OpusHead family 0 packet has {} bytes (need exactly 19)",
+            data.len()
+        );
+    }
+
     Ok(OpusHead {
-        version: data[8],
-        channels: data[9],
+        version,
+        channels,
         pre_skip: u16::from_le_bytes([data[10], data[11]]),
         input_sample_rate: u32::from_le_bytes([data[12], data[13], data[14], data[15]]),
         output_gain: i16::from_le_bytes([data[16], data[17]]),
-        channel_mapping: data[18],
+        channel_mapping,
     })
 }
 
@@ -553,6 +574,59 @@ mod tests {
             comments: vec!["KEY=a=b=c".to_string()],
         };
         assert_eq!(tags.get("key"), Some("a=b=c"));
+    }
+
+    // -- OpusHead ----------------------------------------------------------
+
+    fn valid_opus_head() -> Vec<u8> {
+        build_opus_head(2, 48_000, 312)
+    }
+
+    #[test]
+    fn opus_head_parse_accepts_supported_family_zero_shape() {
+        let head = parse_opus_head(&valid_opus_head()).expect("valid OpusHead");
+        assert_eq!(head.version, 1);
+        assert_eq!(head.channels, 2);
+        assert_eq!(head.pre_skip, 312);
+        assert_eq!(head.input_sample_rate, 48_000);
+        assert_eq!(head.channel_mapping, 0);
+
+        let mut compatible_minor = valid_opus_head();
+        compatible_minor[8] = 0x0F;
+        assert_eq!(
+            parse_opus_head(&compatible_minor)
+                .expect("compatible OpusHead minor version")
+                .version,
+            0x0F
+        );
+    }
+
+    #[test]
+    fn opus_head_parse_rejects_malformed_header_matrix() {
+        for (name, index, value) in [
+            ("bad magic", 0, b'X'),
+            ("zero version", 8, 0),
+            ("future major version", 8, 0x10),
+            ("zero channels", 9, 0),
+            ("unsupported channel count", 9, 3),
+            ("unsupported mapping family", 18, 1),
+        ] {
+            let mut head = valid_opus_head();
+            head[index] = value;
+            assert!(parse_opus_head(&head).is_err(), "case {name} must reject");
+        }
+
+        let mut trailing = valid_opus_head();
+        trailing.push(0);
+        assert!(
+            parse_opus_head(&trailing).is_err(),
+            "trailing family zero bytes must reject"
+        );
+    }
+
+    #[test]
+    fn opus_head_parse_rejects_short_packet() {
+        assert!(parse_opus_head(b"OpusHead").is_err());
     }
 
     // -- Granule-gap detection --------------------------------------------

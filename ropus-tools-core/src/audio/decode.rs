@@ -22,6 +22,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
 use crate::consts::OPUS_SR;
+use crate::container::ogg::parse_opus_head;
 use crate::util::channel_count_to_ropus;
 
 pub struct DecodedAudio {
@@ -109,19 +110,20 @@ pub fn decode_reader(source: Box<dyn MediaSource>, hint_ext: Option<&str>) -> Re
     // symphonia's stub Opus decoder). Everything else uses the native
     // symphonia decoder for that codec.
     let mut pipeline = if codec_params.codec == CODEC_TYPE_OPUS {
+        let opus_head = codec_params
+            .extra_data
+            .as_deref()
+            .map(parse_opus_head)
+            .transpose()
+            .context("parsing OpusHead")?;
         let opus_channels = channel_count_to_ropus(channels)?;
         let dec = RopusDecoder::new(OPUS_SR, opus_channels)
             .map_err(|e| anyhow!("decoder init failed: {e}"))?;
         // Keep the OpusHead delay separate from Symphonia's inferred codec
         // delay. The latter includes page-level padding for some streams,
         // while RFC 7845's audible start is always the OpusHead pre-skip.
-        let pre_skip = codec_params
-            .extra_data
-            .as_deref()
-            .and_then(|buf| {
-                (buf.len() >= 19 && &buf[..8] == b"OpusHead")
-                    .then(|| u16::from_le_bytes([buf[10], buf[11]]) as usize)
-            })
+        let pre_skip = opus_head
+            .map(|head| head.pre_skip as usize)
             .or_else(|| codec_params.delay.map(|d| d as usize))
             .ok_or_else(|| {
                 anyhow!(
