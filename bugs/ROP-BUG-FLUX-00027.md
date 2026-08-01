@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00027 — Benchmark times C construction but excludes Rust construction
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness/benchmark-timing
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T194222Z-p62871-n068892000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00027-run-fix-20260801T194222Z-p62871-n068892000-c1
-- **Owner base:** 743ad7a6c1b10a97efeaf00e00c2bf6840e329ad
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T19:42:22Z
-- **Owner until:** 2026-08-01T21:42:22Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T194222Z-p62871-n068892000-c1 branch=task/bug-ROP-BUG-FLUX-00027-run-fix-20260801T194222Z-p62871-n068892000-c1 code=45d119e gate=manual)
 
 ## Observation
 
