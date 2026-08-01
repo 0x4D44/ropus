@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** ropus-tools-core/options-validation
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T221503Z-p96641-n943371000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00048-run-fix-20260801T221503Z-p96641-n943371000-c1
+- **Owner base:** af4e348c67b9605e79bb54509ec14b40dba5126c
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T22:15:03Z
+- **Owner until:** 2026-08-02T00:15:03Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
