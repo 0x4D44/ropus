@@ -1,3 +1,7 @@
+- Stop fb2k decode at `Packet::last_in_stream()` before reading a chained OpusHead (`reader.rs:decode_next`).
+
+  PacketReader spans physical pages and logical chains; track sticky selected-stream EOS so later headers never reach OpusDecoder.
+
 - Reverse Ogg duration scans must validate complete CRC-checked EOS pages (`reader.rs:parse_duration_page`), not `OggS` bytes.
 
   Check lacing extent, reserved flags, stream serial, and checksum before trusting a granule; payloads can contain header-shaped bytes.

@@ -18,11 +18,12 @@ use ogg::reading::PacketReader;
 use ropus::OpusDecoder;
 
 use common::{
-    FIXTURE_STREAM_SERIAL, MemIo, build_opus_fixture, build_opus_fixture_audio_source,
-    build_opus_fixture_audio_source_with_output_gain, build_opus_fixture_with_audio_packets,
-    build_opus_fixture_with_final_granule, build_opus_head, last_error_string,
-    minimal_opus_fixture, open_from_bytes, open_from_bytes_info_only, open_from_bytes_without_seek,
-    opus_fixture_with_artist_alice, read_tags_collect, surround_family_fixture,
+    FIXTURE_STREAM_SERIAL, MemIo, build_chained_opus_fixture, build_opus_fixture,
+    build_opus_fixture_audio_source, build_opus_fixture_audio_source_with_output_gain,
+    build_opus_fixture_with_audio_packets, build_opus_fixture_with_final_granule, build_opus_head,
+    last_error_string, minimal_opus_fixture, open_from_bytes, open_from_bytes_info_only,
+    open_from_bytes_without_seek, opus_fixture_with_artist_alice, read_tags_collect,
+    surround_family_fixture,
 };
 
 use ropus_fb2k::{
@@ -398,6 +399,20 @@ fn decode_wiring_matches_direct_ogg_path() {
     assert!(
         !path_a.is_empty(),
         "fixture must produce some decoded samples"
+    );
+}
+
+#[test]
+fn chained_stream_stops_at_first_logical_eos() {
+    const FIRST_CHAIN_PACKETS: usize = 2;
+    const PRE_SKIP: u16 = 312;
+    let bytes = build_chained_opus_fixture();
+
+    let decoded = decode_through_fb2k(bytes);
+    assert_eq!(
+        decoded.len(),
+        (FIRST_CHAIN_PACKETS * 960 - PRE_SKIP as usize) * 2,
+        "decoder must expose only the first logical chain"
     );
 }
 

@@ -260,6 +260,11 @@ pub(crate) struct OggOpusReader<R: Read + Seek> {
     /// Initialised to `pre_skip` on open; set to `sample_pos + pre_skip` on
     /// seek.
     target_abs_pos: u64,
+    /// Set once the selected logical stream's EOS packet is returned, or
+    /// when the next packet belongs to a later chained stream. Subsequent
+    /// decode calls return sticky EOF without feeding another OpusHead into
+    /// the decoder.
+    selected_stream_eos: bool,
     /// Page index for seek — built lazily on the first seek call to keep
     /// `open()` cheap (fb2k's library-scan path never needs it). `None`
     /// between open and first seek; `Some(empty)` is a legal degenerate
@@ -389,6 +394,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
             // samples before returning anything to the caller.
             next_sample_abs_pos: 0,
             target_abs_pos: head.pre_skip as u64,
+            selected_stream_eos: false,
             page_index: None,
             pending_seek_restore: None,
         })
@@ -460,6 +466,10 @@ impl<R: Read + Seek> OggOpusReader<R> {
     ) -> Result<(i32, u64), ReaderError> {
         self.restore_pending_seek()?;
 
+        if self.selected_stream_eos {
+            return Ok((0, 0));
+        }
+
         // Test-only panic injection. Compiled out unless the `test-panic`
         // feature is on; see `lib.rs::ropus_fb2k_test_set_panic_flag` for
         // the sibling FFI hook the integration test uses to arm it.
@@ -530,6 +540,15 @@ impl<R: Read + Seek> OggOpusReader<R> {
                 return Ok((0, 0));
             };
 
+            // PacketReader spans all physical pages and logical chains. The
+            // component owns only the first Opus stream, so never feed a
+            // later chain's OpusHead/OpusTags into the selected decoder.
+            if pkt.stream_serial() != self.stream_serial {
+                self.selected_stream_eos = true;
+                return Ok((0, 0));
+            }
+            let packet_is_last_in_stream = pkt.last_in_stream();
+
             let decoded = decoder
                 .decode_float(
                     Some(&pkt.data),
@@ -551,6 +570,10 @@ impl<R: Read + Seek> OggOpusReader<R> {
                 return Err(ReaderError::InvalidStream(
                     "decoder returned 0 samples for a live packet".into(),
                 ));
+            }
+
+            if packet_is_last_in_stream {
+                self.selected_stream_eos = true;
             }
 
             // The final Opus packet is commonly a full frame even when its
@@ -602,6 +625,9 @@ impl<R: Read + Seek> OggOpusReader<R> {
                 // ever move the accumulator above the discard logic, the
                 // post-seek bitrate readout will visibly mis-attribute the
                 // pre-roll bytes. See HLD §4.2 (the §4.3 prose was buggy).
+                if packet_is_last_in_stream {
+                    return Ok((0, 0));
+                }
                 continue;
             }
             // This packet produced at least one kept sample, so its payload
@@ -756,6 +782,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
             self.pending_seek_restore = Some(prior_state);
             return Err(err);
         }
+        self.selected_stream_eos = false;
 
         // OPUS_RESET_STATE semantics. If the decoder hasn't been created
         // yet (seek-before-first-decode), there's nothing to reset — the
@@ -793,6 +820,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
             self.pending_seek_restore = Some(prior_state);
             return Err(err);
         }
+        self.selected_stream_eos = false;
 
         // OPUS_RESET_STATE if the decoder exists; otherwise the lazy-init
         // path in `decode_next` will build a fresh one.
@@ -896,6 +924,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
         } else {
             state.target_abs_pos
         };
+        self.selected_stream_eos = false;
         self.pending_seek_restore = None;
         Ok(())
     }

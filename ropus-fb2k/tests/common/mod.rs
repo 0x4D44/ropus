@@ -50,6 +50,48 @@ pub fn build_opus_fixture(vendor: &str, comments: &[(&str, &str)]) -> Vec<u8> {
     build_opus_fixture_with_audio_packets(vendor, comments, 1, None)
 }
 
+/// Build two concatenated Ogg logical streams with different serials. The
+/// fb2k reader owns the first chain and must return EOF at its EOS packet
+/// rather than feeding the second chain's OpusHead to the decoder.
+pub fn build_chained_opus_fixture() -> Vec<u8> {
+    let mut out = build_opus_fixture_with_audio_packets("first", &[], 2, Some(312));
+
+    let serial = FIXTURE_STREAM_SERIAL.wrapping_add(1);
+    let mut encoder = Encoder::builder(48_000, Channels::Stereo, Application::Audio)
+        .build()
+        .expect("encoder builds");
+    let mut packet = vec![0u8; 4000];
+    let n = encoder
+        .encode(&vec![0i16; 960 * 2], &mut packet)
+        .expect("encode chained packet");
+    packet.truncate(n);
+
+    let mut second = Vec::with_capacity(1024);
+    let mut writer = PacketWriter::new(&mut second);
+    writer
+        .write_packet(
+            build_opus_head(2, 48_000, 312),
+            serial,
+            PacketWriteEndInfo::EndPage,
+            0,
+        )
+        .expect("write chained OpusHead");
+    writer
+        .write_packet(
+            build_opus_tags("second", &[]),
+            serial,
+            PacketWriteEndInfo::EndPage,
+            0,
+        )
+        .expect("write chained OpusTags");
+    writer
+        .write_packet(packet, serial, PacketWriteEndInfo::EndStream, 960)
+        .expect("write chained audio");
+    drop(writer);
+    out.extend_from_slice(&second);
+    out
+}
+
 /// Build an Ogg Opus file with a configurable number of 20 ms silence
 /// packets. Every packet has granule stepping of 960 (20 ms × 48 kHz), and
 /// the final packet carries the end-of-stream flag. `recorded_pre_skip`
