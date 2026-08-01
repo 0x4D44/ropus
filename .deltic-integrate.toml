@@ -26,6 +26,46 @@ gate = [
 ]
 
 [[component]]
+name = "ropusenc"
+paths = ["ropusenc/"]
+cargo_packages = ["ropusenc"]
+gate = [
+  { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
+  { program = "cargo", args = ["clippy", "-p", "ropusenc", "--all-targets", "--locked", "--", "-D", "warnings"] },
+  { program = "cargo", args = ["test", "-p", "ropusenc", "--locked"] },
+]
+
+[[component]]
+name = "ropusdec"
+paths = ["ropusdec/"]
+cargo_packages = ["ropusdec"]
+gate = [
+  { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
+  { program = "cargo", args = ["clippy", "-p", "ropusdec", "--all-targets", "--locked", "--", "-D", "warnings"] },
+  { program = "cargo", args = ["test", "-p", "ropusdec", "--locked"] },
+]
+
+[[component]]
+name = "ropusinfo"
+paths = ["ropusinfo/"]
+cargo_packages = ["ropusinfo"]
+gate = [
+  { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
+  { program = "cargo", args = ["clippy", "-p", "ropusinfo", "--all-targets", "--locked", "--", "-D", "warnings"] },
+  { program = "cargo", args = ["test", "-p", "ropusinfo", "--locked"] },
+]
+
+[[component]]
+name = "ropusplay"
+paths = ["ropusplay/"]
+cargo_packages = ["ropusplay"]
+gate = [
+  { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
+  { program = "cargo", args = ["clippy", "-p", "ropusplay", "--all-targets", "--locked", "--", "-D", "warnings"] },
+  { program = "cargo", args = ["test", "-p", "ropusplay", "--locked"] },
+]
+
+[[component]]
 name = "harness"
 paths = ["harness/"]
 cargo_packages = ["ropus-harness"]
