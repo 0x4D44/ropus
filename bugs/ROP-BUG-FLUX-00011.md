@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00011 — Multistream expert frame duration setter accepts invalid values
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus/opus-multistream-ctl
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T153753Z-p44527-n851873000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00011-run-fix-20260801T153753Z-p44527-n851873000-c1
-- **Owner base:** 0d2addf8b61db3e5d9308da8ce7c53e6550d978d
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T15:37:53Z
-- **Owner until:** 2026-08-01T17:37:53Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T153753Z-p44527-n851873000-c1 branch=task/bug-ROP-BUG-FLUX-00011-run-fix-20260801T153753Z-p44527-n851873000-c1 code=11355cdede39e3e904fe42ecbb90322bf75005c2 gate=manual)
 
 ## Observation
 
