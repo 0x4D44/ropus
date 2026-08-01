@@ -211,9 +211,9 @@ fn main() {
     //
     // Authoritative list: `reference/lpcnet_sources.mk` `DEEP_PLC_SOURCES`.
     // Compile-time weights are provided by the `*_data.c` files from the
-    // xiph weights tarball. Platform-specific SIMD under `dnn/x86/` and
-    // `dnn/arm/` is excluded — scalar only, same choice as the sibling
-    // fixed-point harness.
+    // xiph weights tarball. Out-of-line platform-specific SIMD under
+    // `dnn/x86/` and `dnn/arm/` is excluded. Header-only architecture kernels
+    // are handled in the build defines below.
     let dnn_sources = [
         "dnn/burg.c",
         "dnn/freq.c",
@@ -274,6 +274,12 @@ fn main() {
         // Defines
         .define("HAVE_CONFIG_H", "1")
         .define("OPUS_BUILD", None)
+        // Rust's DNN port uses the scalar evaluation order on AArch64.
+        // `dnn/vec.h` otherwise selects inline NEON kernels despite the source
+        // manifest excluding platform-specific DNN translation units. Their
+        // reciprocal/accumulation rounding makes the recurrent oracle
+        // architecture-dependent, so compare the matching scalar C path.
+        .define("DISABLE_NEON", "1")
         // Suppress xiph's `#pragma message "...opus will be very slow."`
         // in opus_decoder.c when compiling without -O. See harness/build.rs
         // for the rationale (cc-rs would otherwise forward the note as a

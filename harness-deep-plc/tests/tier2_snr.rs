@@ -35,13 +35,34 @@ const BITRATE: i32 = 16_000;
 const COMPLEXITY: i32 = 10;
 const SIGNAL_DURATION_MS: i32 = 2_000; // 2 seconds
 const TOTAL_FRAMES: i32 = SIGNAL_DURATION_MS / FRAME_MS;
+const LOSS_INTERVAL_FRAMES: usize = 7;
 
-// Deterministic packet-loss pattern: drop every 7th frame. The first frame
-// is never dropped (decoder needs at least one good packet to have history
-// to PLC from) and consecutive losses are avoided — mirrors the kind of
-// residual burst loss a well-conditioned network sees.
+// Deterministic packet-loss pattern: drop every 7th frame when a complete
+// seven-frame loss/recovery cycle remains. The first frame is never dropped
+// (decoder needs at least one good packet to have history to PLC from) and
+// consecutive losses are avoided — mirrors the kind of residual burst loss
+// a well-conditioned network sees. Requiring the full recovery horizon also
+// prevents the aggregate SNR from ending mid-cycle on a phase-sensitive
+// generative output.
 fn is_lost(frame_idx: usize) -> bool {
-    frame_idx > 0 && frame_idx.is_multiple_of(7)
+    frame_idx > 0
+        && frame_idx.is_multiple_of(LOSS_INTERVAL_FRAMES)
+        && frame_idx + LOSS_INTERVAL_FRAMES <= TOTAL_FRAMES as usize
+}
+
+#[test]
+fn loss_pattern_contains_only_complete_recovery_cycles() {
+    let losses: Vec<_> = (0..TOTAL_FRAMES as usize).filter(|&i| is_lost(i)).collect();
+
+    assert_eq!(
+        losses,
+        (7..=91).step_by(LOSS_INTERVAL_FRAMES).collect::<Vec<_>>()
+    );
+    assert!(
+        losses
+            .iter()
+            .all(|&i| i + LOSS_INTERVAL_FRAMES <= TOTAL_FRAMES as usize)
+    );
 }
 
 /// Deterministic synthetic speech-like PCM: mix of two tones at different
