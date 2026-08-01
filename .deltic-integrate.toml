@@ -16,6 +16,16 @@ gate = [
 ]
 
 [[component]]
+name = "tools-core"
+paths = ["ropus-tools-core/"]
+cargo_packages = ["ropus-tools-core"]
+gate = [
+  { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
+  { program = "cargo", args = ["clippy", "-p", "ropus-tools-core", "--all-targets", "--locked", "--", "-D", "warnings"] },
+  { program = "cargo", args = ["test", "-p", "ropus-tools-core", "--locked"] },
+]
+
+[[component]]
 name = "harness"
 paths = ["harness/"]
 cargo_packages = ["ropus-harness"]
