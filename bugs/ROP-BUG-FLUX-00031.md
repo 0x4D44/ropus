@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** harness/cli-validation
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T201842Z-p6993-n992405000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00031-run-fix-20260801T201842Z-p6993-n992405000-c1
+- **Owner base:** 3aaf0a38663ec2fd4ad97da8f2437501ed2fc162
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T20:18:42Z
+- **Owner until:** 2026-08-01T22:18:42Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
