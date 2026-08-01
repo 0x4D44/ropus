@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00046 — Play and Opus transcode ignore OpusHead output gain
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/shared-decode-gain
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T215919Z-p58759-n146521000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00046-run-fix-20260801T215919Z-p58759-n146521000-c1
-- **Owner base:** 300e77a0adfd8eb0f743aa0f4c7129f998b8ce24
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T21:59:19Z
-- **Owner until:** 2026-08-01T23:59:19Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T215919Z-p58759-n146521000-c1 branch=task/bug-ROP-BUG-FLUX-00046-run-fix-20260801T215919Z-p58759-n146521000-c1 code=127a7c07c7a70040154057ea800e9b0de2073b61 gate=manual)
 
 ## Observation
 
