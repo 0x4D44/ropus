@@ -2,6 +2,10 @@
 
   Rust uses a `-1` channel sentinel, so key V2 records by boundary, iteration, and trace-order occurrence; keep C channel labels in diagnostics.
 
+- Decode framing must be validated once before comparison (`harness/src/cli.rs:parse_framed_packets`).
+
+  A partial length or payload can leave both decoders with the same prefix; require exact EOF and return `Fail` before comparing that prefix.
+
 - Validate numeric CLI values before dispatch (`harness/src/cli.rs:parse_bitrate`).
 
   Typed range checks stop negative casts, modulo-zero intervals, unsupported rates, and unbounded duration/iteration work; keep zero as an explicit disable only where the command documents it.

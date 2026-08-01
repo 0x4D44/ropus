@@ -682,6 +682,98 @@ fn rust_decode_cfg(encoded: &[u8], cfg: &EncodeConfig) -> Vec<i16> {
     output
 }
 
+fn c_decode_packets(packets: &[&[u8]], cfg: &EncodeConfig) -> Result<Vec<i16>, String> {
+    unsafe {
+        let mut error: i32 = 0;
+        let dec = bindings::opus_decoder_create(cfg.sample_rate, cfg.channels, &mut error);
+        if dec.is_null() || error != bindings::OPUS_OK {
+            return Err(format!(
+                "C opus_decoder_create failed: {}",
+                bindings::error_string(error)
+            ));
+        }
+
+        let frame_size = cfg.frame_size();
+        let channels = cfg.channels as usize;
+        let mut pcm = vec![0i16; frame_size * channels];
+        let mut output = Vec::new();
+
+        for (packet_index, packet) in packets.iter().enumerate() {
+            let ret = bindings::opus_decode(
+                dec,
+                packet.as_ptr(),
+                packet.len() as i32,
+                pcm.as_mut_ptr(),
+                frame_size as i32,
+                0,
+            );
+            if ret < 0 {
+                let message = format!(
+                    "C opus_decode failed for packet {}: {}",
+                    packet_index,
+                    bindings::error_string(ret)
+                );
+                bindings::opus_decoder_destroy(dec);
+                return Err(message);
+            }
+
+            let sample_count = (ret as usize).checked_mul(channels).ok_or_else(|| {
+                format!("C decoded sample count overflow for packet {packet_index}")
+            });
+            let sample_count = match sample_count {
+                Ok(count) if count <= pcm.len() => count,
+                Ok(count) => {
+                    bindings::opus_decoder_destroy(dec);
+                    return Err(format!(
+                        "C decoder returned {} samples for packet {}, buffer holds {}",
+                        count,
+                        packet_index,
+                        pcm.len()
+                    ));
+                }
+                Err(message) => {
+                    bindings::opus_decoder_destroy(dec);
+                    return Err(message);
+                }
+            };
+            output.extend_from_slice(&pcm[..sample_count]);
+        }
+
+        bindings::opus_decoder_destroy(dec);
+        Ok(output)
+    }
+}
+
+fn rust_decode_packets(packets: &[&[u8]], cfg: &EncodeConfig) -> Result<Vec<i16>, String> {
+    use ropus::opus::decoder::OpusDecoder;
+
+    let mut dec = OpusDecoder::new(cfg.sample_rate, cfg.channels)
+        .map_err(|code| format!("Rust OpusDecoder::new failed: {code}"))?;
+    let frame_size = cfg.frame_size();
+    let channels = cfg.channels as usize;
+    let mut pcm = vec![0i16; frame_size * channels];
+    let mut output = Vec::new();
+
+    for (packet_index, packet) in packets.iter().enumerate() {
+        let ret = dec
+            .decode(Some(*packet), &mut pcm, frame_size as i32, false)
+            .map_err(|code| format!("Rust decode failed for packet {packet_index}: {code}"))?;
+        let sample_count = (ret as usize).checked_mul(channels).ok_or_else(|| {
+            format!("Rust decoded sample count overflow for packet {packet_index}")
+        })?;
+        if sample_count > pcm.len() {
+            return Err(format!(
+                "Rust decoder returned {} samples for packet {}, buffer holds {}",
+                sample_count,
+                packet_index,
+                pcm.len()
+            ));
+        }
+        output.extend_from_slice(&pcm[..sample_count]);
+    }
+    Ok(output)
+}
+
 fn rust_decode(encoded: &[u8], sample_rate: i32, channels: i32) -> Vec<i16> {
     let cfg = EncodeConfig::new(sample_rate, channels);
     rust_decode_cfg(encoded, &cfg)
@@ -1041,6 +1133,71 @@ fn cmd_encode_framecompare(
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum FramedInputError {
+    TruncatedLength {
+        offset: usize,
+        remaining: usize,
+    },
+    TruncatedPacket {
+        offset: usize,
+        declared: usize,
+        available: usize,
+    },
+}
+
+impl std::fmt::Display for FramedInputError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TruncatedLength { offset, remaining } => write!(
+                f,
+                "truncated packet length at byte {offset} ({remaining} trailing byte(s))"
+            ),
+            Self::TruncatedPacket {
+                offset,
+                declared,
+                available,
+            } => write!(
+                f,
+                "truncated packet at byte {offset}: declared {declared} byte(s), only {available} available"
+            ),
+        }
+    }
+}
+
+/// Parse the CLI's two-byte little-endian packet framing and require exact EOF.
+/// The borrowed packet slices let both decoders consume one validated list.
+fn parse_framed_packets(data: &[u8]) -> Result<Vec<&[u8]>, FramedInputError> {
+    let mut packets = Vec::new();
+    let mut pos = 0;
+    while pos < data.len() {
+        let remaining = data.len() - pos;
+        if remaining < 2 {
+            return Err(FramedInputError::TruncatedLength {
+                offset: pos,
+                remaining,
+            });
+        }
+
+        let pkt_len = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
+        pos += 2;
+        let available = data.len() - pos;
+        if pkt_len > available {
+            return Err(FramedInputError::TruncatedPacket {
+                offset: pos - 2,
+                declared: pkt_len,
+                available,
+            });
+        }
+
+        packets.push(&data[pos..pos + pkt_len]);
+        pos += pkt_len;
+    }
+    Ok(packets)
+}
+
+/// Parse packets for diagnostic commands that intentionally tolerate a partial
+/// tail. The `decode` command uses `parse_framed_packets` instead.
 fn parse_packets(data: &[u8]) -> Vec<Vec<u8>> {
     let mut packets = Vec::new();
     let mut pos = 0;
@@ -1062,16 +1219,41 @@ fn cmd_decode(opus_path: &str) -> CompareCommandOutcome {
         process::exit(1);
     });
 
+    let packets = match parse_framed_packets(&data) {
+        Ok(packets) => packets,
+        Err(error) => {
+            eprintln!("ERROR: invalid framed input: {error}");
+            println!("\ndecode: FAIL (invalid framing: {error})");
+            return CompareCommandOutcome::Fail;
+        }
+    };
+
     // Assume our simple framing format (length-prefixed packets) at 48kHz stereo
     let sample_rate = 48000i32;
     let channels = 2i32;
+    let cfg = EncodeConfig::new(sample_rate, channels);
+    println!("  Parsed {} framed packet(s)", packets.len());
 
     println!("Decoding {} with C reference...", opus_path);
-    let c_pcm = c_decode(&data, sample_rate, channels);
+    let c_pcm = match c_decode_packets(&packets, &cfg) {
+        Ok(pcm) => pcm,
+        Err(error) => {
+            eprintln!("ERROR: {error}");
+            println!("\ndecode: FAIL ({error})");
+            return CompareCommandOutcome::Fail;
+        }
+    };
     println!("  C decoded: {} samples", c_pcm.len());
 
     println!("Decoding with Rust implementation...");
-    let rust_pcm = rust_decode(&data, sample_rate, channels);
+    let rust_pcm = match rust_decode_packets(&packets, &cfg) {
+        Ok(pcm) => pcm,
+        Err(error) => {
+            eprintln!("ERROR: {error}");
+            println!("\ndecode: FAIL ({error})");
+            return CompareCommandOutcome::Fail;
+        }
+    };
     println!("  Rust decoded: {} samples", rust_pcm.len());
 
     if rust_pcm.is_empty() {
@@ -9685,6 +9867,41 @@ mod cli_validation_tests {
         assert_eq!(
             checked_sample_count(1, 48_000, 2, MAX_TORTURE_SAMPLES).unwrap(),
             96_000
+        );
+    }
+
+    #[test]
+    fn framed_decode_rejects_truncated_length_after_valid_prefix() {
+        let data = [1, 0, 0xaa, 1];
+        assert_eq!(
+            parse_framed_packets(&data),
+            Err(FramedInputError::TruncatedLength {
+                offset: 3,
+                remaining: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn framed_decode_rejects_truncated_payload_after_valid_prefix() {
+        let data = [1, 0, 0xaa, 3, 0, 0xbb];
+        assert_eq!(
+            parse_framed_packets(&data),
+            Err(FramedInputError::TruncatedPacket {
+                offset: 3,
+                declared: 3,
+                available: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn decode_command_fails_before_comparing_a_truncated_stream() {
+        let input = tempfile::NamedTempFile::new().unwrap();
+        fs::write(input.path(), [1, 0, 0xaa, 1]).unwrap();
+        assert_eq!(
+            cmd_decode(input.path().to_str().unwrap()),
+            CompareCommandOutcome::Fail
         );
     }
 }
