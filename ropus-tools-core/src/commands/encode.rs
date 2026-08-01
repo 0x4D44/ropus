@@ -1,7 +1,9 @@
 //! Encode: any symphonia-supported input → Ogg Opus.
 
-use std::fs::File;
+use std::ffi::OsString;
+use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Cursor, Read, Write};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use colored::*;
@@ -16,7 +18,7 @@ use crate::audio::resample::resample;
 use crate::consts::{MAX_OPUS_FRAME_BYTES, MAX_PACKET_BYTES, MAX_SUBFRAMES_PER_PACKET, OPUS_SR};
 use crate::container::ogg::{OGG_STREAM_SERIAL, OpusTags, build_opus_head};
 use crate::container::picture::{
-    MAX_PICTURE_BYTES, base64_encode, build_picture_block, detect_format,
+    MAX_PICTURE_BYTES, PictureFormat, base64_encode, build_picture_block, detect_format,
 };
 use crate::options::EncodeOptions;
 use crate::ui::{escape_terminal_path, format_num, heading, ok};
@@ -51,6 +53,176 @@ fn frame_samples_per_ch(d: FrameDuration) -> Result<usize> {
             "frame duration Argument is not supported; choose an explicit duration from 2.5 to 120 ms"
         ),
     })
+}
+
+struct PreparedPicture {
+    byte_len: usize,
+    format: PictureFormat,
+    comment: String,
+}
+
+/// Read and validate a picture before touching the destination.
+///
+/// The one bounded read is deliberate: a separate metadata query can race
+/// with replacement or growth, while `take(MAX_PICTURE_BYTES + 1)` makes the
+/// cap hold even when the file changes during the read.
+fn prepare_picture(path: &Path) -> Result<PreparedPicture> {
+    let file = File::open(path)
+        .with_context(|| format!("reading picture file {}", escape_terminal_path(path)))?;
+    let mut data = Vec::new();
+    file.take(MAX_PICTURE_BYTES.saturating_add(1))
+        .read_to_end(&mut data)
+        .with_context(|| format!("reading picture file {}", escape_terminal_path(path)))?;
+    if data.len() as u64 > MAX_PICTURE_BYTES {
+        bail!(
+            "picture file {} is at least {} bytes; refusing > {} bytes (use a smaller cover image)",
+            escape_terminal_path(path),
+            data.len(),
+            MAX_PICTURE_BYTES,
+        );
+    }
+    if data.is_empty() {
+        bail!("picture file {} is empty", escape_terminal_path(path));
+    }
+    let format = detect_format(&data).with_context(|| {
+        format!(
+            "detecting picture format for {}",
+            escape_terminal_path(path)
+        )
+    })?;
+    let block = build_picture_block(format, &data)
+        .with_context(|| format!("building picture block for {}", escape_terminal_path(path)))?;
+    let comment = format!("METADATA_BLOCK_PICTURE={}", base64_encode(&block));
+    Ok(PreparedPicture {
+        byte_len: data.len(),
+        format,
+        comment,
+    })
+}
+
+/// A regular-file destination that is committed only after the complete Ogg
+/// stream has flushed successfully. The temporary lives beside the final path
+/// so the final rename is atomic on the same filesystem.
+struct AtomicOutput {
+    output_path: PathBuf,
+    temp_path: PathBuf,
+    committed: bool,
+}
+
+impl AtomicOutput {
+    fn create(output_path: &Path) -> Result<(Self, File)> {
+        let parent = output_path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let file_name = output_path
+            .file_name()
+            .ok_or_else(|| anyhow!("output path {} has no file name", output_path.display()))?;
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let pid = std::process::id();
+
+        for attempt in 0..100u32 {
+            let mut temp_name = OsString::from(".");
+            temp_name.push(file_name);
+            temp_name.push(format!(".ropus-tmp-{pid}-{timestamp}-{attempt}"));
+            let temp_path = parent.join(temp_name);
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp_path)
+            {
+                Ok(file) => {
+                    return Ok((
+                        Self {
+                            output_path: output_path.to_path_buf(),
+                            temp_path,
+                            committed: false,
+                        },
+                        file,
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "creating temporary output beside {}",
+                            escape_terminal_path(output_path)
+                        )
+                    });
+                }
+            }
+        }
+        bail!(
+            "could not create a unique temporary output beside {}",
+            escape_terminal_path(output_path)
+        )
+    }
+
+    fn commit(mut self) -> Result<()> {
+        atomic_replace(&self.temp_path, &self.output_path)?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for AtomicOutput {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_file(&self.temp_path);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn atomic_replace(temp_path: &Path, output_path: &Path) -> Result<()> {
+    std::fs::rename(temp_path, output_path).with_context(|| {
+        format!(
+            "replacing output {} with flushed temporary",
+            escape_terminal_path(output_path)
+        )
+    })
+}
+
+#[cfg(windows)]
+fn atomic_replace(temp_path: &Path, output_path: &Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    unsafe extern "system" {
+        #[link_name = "MoveFileExW"]
+        fn move_file_ex_w(from: *const u16, to: *const u16, flags: u32) -> i32;
+    }
+
+    let from: Vec<u16> = temp_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let to: Vec<u16> = output_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+    let replaced = unsafe {
+        move_file_ex_w(
+            from.as_ptr(),
+            to.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if replaced == 0 {
+        return Err(std::io::Error::last_os_error()).with_context(|| {
+            format!(
+                "replacing output {} with flushed temporary",
+                escape_terminal_path(output_path)
+            )
+        });
+    }
+    Ok(())
 }
 
 fn validate_encode_options(opts: &EncodeOptions) -> Result<()> {
@@ -105,6 +277,18 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
     };
     let output_is_stdout = is_stdio_sentinel(&output_path);
     reject_input_output_alias(&opts.input, &output_path)?;
+    if let Some(pic_path) = opts.picture_path.as_ref() {
+        reject_input_output_alias(pic_path, &output_path)?;
+    }
+    // Prepare auxiliary metadata before decoding or opening the destination.
+    // An invalid/missing picture must leave an existing output untouched, and
+    // the bounded read must observe one file handle rather than a racy
+    // metadata-then-read pair.
+    let prepared_picture = opts
+        .picture_path
+        .as_ref()
+        .map(|path| prepare_picture(path))
+        .transpose()?;
 
     // Print progress/banner lines. Gated on output-sink: stdout gets the
     // bitstream, so progress must go to stderr in that case.
@@ -236,18 +420,31 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         )
     })?;
 
+    // Optional --picture was validated and packed before the destination was
+    // opened. "Prepend" is deliberate: opus-tools emits it before user
+    // comments, and matching that order keeps differential testing clean.
+    let mut comments = opts.comments.clone();
+    if let (Some(pic_path), Some(picture)) = (opts.picture_path.as_ref(), prepared_picture.as_ref())
+    {
+        comments.insert(0, picture.comment.clone());
+        report!(
+            "picture  {} ({} bytes, {})",
+            escape_terminal_path(pic_path).cyan(),
+            format_num(picture.byte_len as u64).bright_white(),
+            picture.format.mime(),
+        );
+    }
+
     // 5. Open Ogg writer. For `-` we route to locked stdout; for everything
-    //    else we create the file. `PacketWriter` is generic over any
-    //    `Write` so both sinks plug in identically.
+    //    else write beside the destination and atomically replace it only
+    //    after the complete stream has flushed. `PacketWriter` is generic
+    //    over any `Write` so both sinks plug in identically.
+    let mut atomic_output = None;
     let sink: Box<dyn Write> = if output_is_stdout {
         Box::new(BufWriter::new(std::io::stdout().lock()))
     } else {
-        let file = File::create(&output_path).with_context(|| {
-            format!(
-                "creating output file {}",
-                escape_terminal_path(&output_path)
-            )
-        })?;
+        let (output, file) = AtomicOutput::create(&output_path)?;
+        atomic_output = Some(output);
         Box::new(BufWriter::new(file))
     };
     let mut writer = PacketWriter::new(sink);
@@ -260,56 +457,6 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
     writer
         .write_packet(head, serial, PacketWriteEndInfo::EndPage, 0)
         .context("writing OpusHead page")?;
-
-    // Optional --picture: read bytes, detect format, build METADATA_BLOCK_PICTURE,
-    // base64-encode, and prepend to the user comments. "Prepend" is a deliberate
-    // choice — opus-tools emits it before user-supplied comments, and keeping
-    // the same order means differential testing against opus-tools stays clean.
-    let mut comments = opts.comments.clone();
-    if let Some(pic_path) = opts.picture_path.as_ref() {
-        // Stat first and reject oversize files *before* reading them into
-        // memory. Avoids a 5 GiB allocation on obvious user error (dropped-in
-        // video file, etc.) and gives a clear message instead of OOM.
-        let meta = std::fs::metadata(pic_path).with_context(|| {
-            format!(
-                "reading picture metadata {}",
-                escape_terminal_path(pic_path)
-            )
-        })?;
-        if meta.len() > MAX_PICTURE_BYTES {
-            bail!(
-                "picture file {} is {} bytes; refusing > {} bytes (use a smaller cover image)",
-                escape_terminal_path(pic_path),
-                meta.len(),
-                MAX_PICTURE_BYTES,
-            );
-        }
-        let data = std::fs::read(pic_path)
-            .with_context(|| format!("reading picture file {}", escape_terminal_path(pic_path)))?;
-        if data.is_empty() {
-            bail!("picture file {} is empty", escape_terminal_path(pic_path));
-        }
-        let format = detect_format(&data).with_context(|| {
-            format!(
-                "detecting picture format for {}",
-                escape_terminal_path(pic_path)
-            )
-        })?;
-        let block = build_picture_block(format, &data).with_context(|| {
-            format!(
-                "building picture block for {}",
-                escape_terminal_path(pic_path)
-            )
-        })?;
-        let b64 = base64_encode(&block);
-        comments.insert(0, format!("METADATA_BLOCK_PICTURE={b64}"));
-        report!(
-            "picture  {} ({} bytes, {})",
-            escape_terminal_path(pic_path).cyan(),
-            format_num(data.len() as u64).bright_white(),
-            format.mime(),
-        );
-    }
 
     let tags = OpusTags {
         vendor: opts.vendor.clone(),
@@ -383,6 +530,10 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
     // error via `?` instead.
     let mut sink = writer.into_inner();
     sink.flush().context("flushing Ogg output")?;
+    drop(sink);
+    if let Some(output) = atomic_output {
+        output.commit()?;
+    }
 
     report!(
         "wrote    {} packets, {} samples (granule)",
@@ -418,6 +569,44 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
 mod tests {
     use super::*;
     use crate::{Application, Signal};
+
+    fn test_path(label: &str, extension: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "ropus_encode_{label}_{}_{}.{}",
+            std::process::id(),
+            nonce,
+            extension
+        ))
+    }
+
+    fn write_test_input(path: &Path) {
+        crate::audio::wav::write_wav_pcm16(path, &[0; 960], 48_000, 1)
+            .expect("write tiny WAV input");
+    }
+
+    fn picture_options(input: PathBuf, output: PathBuf, picture: PathBuf) -> EncodeOptions {
+        EncodeOptions {
+            input,
+            output: Some(output),
+            bitrate: Some(64_000),
+            complexity: None,
+            application: Application::Audio,
+            vbr: true,
+            vbr_constraint: false,
+            signal: Signal::Auto,
+            frame_duration: FrameDuration::Ms20,
+            expect_loss: 0,
+            downmix_to_mono: false,
+            serial: None,
+            picture_path: Some(picture),
+            vendor: "encode-tests".to_string(),
+            comments: Vec::new(),
+        }
+    }
 
     fn valid_options() -> EncodeOptions {
         EncodeOptions {
@@ -478,5 +667,145 @@ mod tests {
         assert!(error.to_string().contains("same file"));
         assert_eq!(std::fs::read(&path).expect("read input"), original);
         std::fs::remove_file(path).expect("remove input");
+    }
+
+    #[test]
+    fn picture_failures_preserve_existing_output() {
+        let input = test_path("picture-errors-input", "wav");
+        write_test_input(&input);
+        let cases = [
+            ("missing", None, "reading picture file"),
+            ("empty", Some(Vec::new()), "is empty"),
+            (
+                "invalid",
+                Some(b"not an image".to_vec()),
+                "unrecognised picture format",
+            ),
+        ];
+
+        for (label, bytes, expected_error) in cases {
+            let picture = test_path(&format!("picture-errors-{label}"), "bin");
+            if let Some(bytes) = bytes {
+                std::fs::write(&picture, bytes).expect("write picture fixture");
+            }
+            let output = test_path(&format!("picture-errors-{label}"), "opus");
+            let sentinel = format!("sentinel-{label}").into_bytes();
+            std::fs::write(&output, &sentinel).expect("write output sentinel");
+
+            let error = encode(picture_options(
+                input.clone(),
+                output.clone(),
+                picture.clone(),
+            ))
+            .expect_err("invalid picture must fail");
+            assert!(
+                format!("{error:#}").contains(expected_error),
+                "unexpected {label} error: {error:#}"
+            );
+            assert_eq!(
+                std::fs::read(&output).expect("read preserved output"),
+                sentinel,
+                "{label} picture failure must not truncate output"
+            );
+
+            let _ = std::fs::remove_file(picture);
+            let _ = std::fs::remove_file(output);
+        }
+
+        let oversized = test_path("picture-errors-oversized", "bin");
+        let oversized_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&oversized)
+            .expect("create oversized picture fixture");
+        oversized_file
+            .set_len(MAX_PICTURE_BYTES + 1)
+            .expect("sparsely extend oversized picture fixture");
+        drop(oversized_file);
+        let output = test_path("picture-errors-oversized", "opus");
+        let sentinel = b"sentinel-oversized";
+        std::fs::write(&output, sentinel).expect("write oversized output sentinel");
+        let error = encode(picture_options(
+            input.clone(),
+            output.clone(),
+            oversized.clone(),
+        ))
+        .expect_err("oversized picture must fail");
+        assert!(
+            format!("{error:#}").contains("refusing >"),
+            "unexpected oversized error: {error:#}"
+        );
+        assert_eq!(
+            std::fs::read(&output).expect("read preserved oversized output"),
+            sentinel,
+            "oversized picture failure must not truncate output"
+        );
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(oversized);
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn picture_output_direct_alias_is_rejected_without_destroying_picture() {
+        let input = test_path("picture-direct-alias-input", "wav");
+        let picture = test_path("picture-direct-alias", "png");
+        write_test_input(&input);
+        let mut png = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        png.extend_from_slice(b"valid-picture-fixture");
+        std::fs::write(&picture, &png).expect("write PNG fixture");
+
+        let error = encode(picture_options(
+            input.clone(),
+            picture.clone(),
+            picture.clone(),
+        ))
+        .expect_err("picture/output direct alias must fail");
+        assert!(error.to_string().contains("same file"));
+        assert_eq!(
+            std::fs::read(&picture).expect("read preserved picture"),
+            png
+        );
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(picture);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn picture_output_link_aliases_are_rejected_without_destroying_picture() {
+        use std::os::unix::fs::symlink;
+
+        let input = test_path("picture-link-alias-input", "wav");
+        let picture = test_path("picture-link-alias", "png");
+        write_test_input(&input);
+        let mut png = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        png.extend_from_slice(b"valid-picture-fixture");
+        std::fs::write(&picture, &png).expect("write PNG fixture");
+
+        for (label, hard_link) in [("hard", true), ("symlink", false)] {
+            let output = test_path(&format!("picture-link-alias-{label}"), "opus");
+            if hard_link {
+                std::fs::hard_link(&picture, &output).expect("create hard-link alias");
+            } else {
+                symlink(&picture, &output).expect("create symlink alias");
+            }
+            let error = encode(picture_options(
+                input.clone(),
+                output.clone(),
+                picture.clone(),
+            ))
+            .expect_err("picture/output link alias must fail");
+            assert!(error.to_string().contains("same file"));
+            assert_eq!(
+                std::fs::read(&picture).expect("read preserved picture"),
+                png
+            );
+            assert_eq!(std::fs::read(&output).expect("read preserved alias"), png);
+            let _ = std::fs::remove_file(output);
+        }
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(picture);
     }
 }

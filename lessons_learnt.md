@@ -1,3 +1,7 @@
+- Validate auxiliary files before opening destinations, then atomically rename temp output (`commands/encode.rs:prepare_picture`).
+
+  Read a cover image once through a `MAX+1` limit, reject output aliases, and keep regular-file writes in a same-directory temporary until the final flush succeeds. This preserves sentinels when the picture is missing, malformed, oversized, or replaced mid-read.
+
 - Required behavior tests must synthesize small fixtures, not return success when checkout assets are absent (`tests/round_trip.rs`).
 
   Keep large/reference vectors optional, but make core CLI and library oracles deterministic in-test. If an external differential truly needs optional assets, mark it ignored and fail clearly when run manually; never print a skip and pass.

@@ -1637,6 +1637,8 @@ fn encode_with_picture_flag_embeds_metadata_block_picture() {
     ];
     png_bytes.extend_from_slice(&[0xAAu8; 24]); // 24 bytes of filler -> 32 total
     std::fs::write(&tmp_png, &png_bytes).expect("write fake PNG fixture");
+    std::fs::write(&tmp_opus, b"pre-existing output sentinel")
+        .expect("write pre-existing output sentinel");
 
     let enc_opts = EncodeOptions {
         input: input_wav.clone(),
