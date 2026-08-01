@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00039 — fb2k OpusTags parser accepts invalid Vorbis field names
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** ropus-fb2k/tags
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T211851Z-p19786-n399480000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00039-run-fix-20260801T211851Z-p19786-n399480000-c1
-- **Owner base:** 263675259150c0edd99865f84bb515f997d7b8c8
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T21:18:51Z
-- **Owner until:** 2026-08-01T23:18:51Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T211851Z-p19786-n399480000-c1 branch=task/bug-ROP-BUG-FLUX-00039-run-fix-20260801T211851Z-p19786-n399480000-c1 code=2f8c07a7376d54ef8f2b4e0f1affee51b2dc710f gate=manual)
 
 ## Observation
 
