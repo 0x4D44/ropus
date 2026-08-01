@@ -1,3 +1,7 @@
+- Phase-C stereo traces need occurrence keys (`fuzz_repro_diff.rs:keyed_v2_tuples`) or channel-0 mismatches get overwritten.
+
+  Rust uses a `-1` channel sentinel, so key V2 records by boundary, iteration, and trace-order occurrence; keep C channel labels in diagnostics.
+
 - Validate numeric CLI values before dispatch (`harness/src/cli.rs:parse_bitrate`).
 
   Typed range checks stop negative casts, modulo-zero intervals, unsupported rates, and unbounded duration/iteration work; keep zero as an explicit disable only where the command documents it.

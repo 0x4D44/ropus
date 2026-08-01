@@ -1232,12 +1232,12 @@ fn print_phase_b_trace_diff(
 // schema differs per boundary (HLD V2 §4.1, mirrored in
 // `harness/silk_encode_frame_FIX_traced.c` boundaries 100..=109). The diff
 // strategy:
-//   1. Match Rust against C using `(boundary_id, iter)` as the key. Channel
-//      is ignored for V2 because Rust emits `channel = -1` (sentinel) while
-//      C emits the per-channel global; aligning by channel would create
-//      false negatives (per HLD V2 §4 spec for stage 4).
-//   2. For setup boundaries (100..=105), iter is `-1` on both sides; one
-//      tuple per encode per boundary.
+//   1. Match Rust against C using `(boundary_id, iter, occurrence)` as the
+//      key. Rust emits `channel = -1` for V2 while C emits the per-channel
+//      global, so the occurrence ordinal preserves each channel record
+//      without requiring a signature change in the Rust encoder.
+//   2. For setup boundaries (100..=105), iter is `-1` on both sides and the
+//      occurrence ordinal distinguishes the per-channel calls.
 //   3. For per-iter boundaries (106..=109), the rate-control loop may take
 //      different iter counts on each side (G8 candidate). A tuple present
 //      on one side but not the other IS a divergence finding.
@@ -1625,20 +1625,76 @@ fn print_payload_divergence(boundary_id: i32, rust_payload: &[i32], c_payload: &
     );
 }
 
-/// Match key for V2 tuples. Channel is intentionally omitted (Rust emits
-/// `-1` sentinel; C emits the per-channel global). Boundaries 100..=105
-/// fire once per encode (`iter = -1`); boundaries 106..=109 fire per
-/// rate-control iter (`iter` 0..maxIter).
-type V2Key = (i32, i32); // (boundary_id, iter)
+/// Match key for V2 tuples. The occurrence ordinal is assigned in trace order
+/// for each `(boundary_id, iter)` group. This keeps stereo records distinct
+/// even while Rust uses `channel = -1` for the inner-function boundaries.
+type V2BaseKey = (i32, i32); // (boundary_id, iter)
+type V2Key = (i32, i32, usize); // (boundary_id, iter, occurrence)
 
-fn v2_key(t: &ropus::silk_trace::Tuple) -> V2Key {
+fn v2_base_key(t: &ropus::silk_trace::Tuple) -> V2BaseKey {
     (t.boundary_id, t.iter)
 }
 
+fn keyed_v2_tuples<'a>(
+    tuples: &[&'a ropus::silk_trace::Tuple],
+) -> std::collections::BTreeMap<V2Key, &'a ropus::silk_trace::Tuple> {
+    use std::collections::BTreeMap;
+
+    let mut occurrences = BTreeMap::<V2BaseKey, usize>::new();
+    tuples
+        .iter()
+        .map(|tuple| {
+            let base = v2_base_key(tuple);
+            let occurrence = occurrences.entry(base).or_insert(0);
+            let key = (base.0, base.1, *occurrence);
+            *occurrence += 1;
+            (key, *tuple)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod phase_c_key_tests {
+    use super::*;
+
+    fn tuple(channel: i32, payload: &[i32]) -> ropus::silk_trace::Tuple {
+        ropus::silk_trace::Tuple {
+            boundary_id: 106,
+            channel,
+            iter: 0,
+            payload: payload.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn occurrence_keys_preserve_stereo_records_and_first_divergence() {
+        let rust_ch0 = tuple(-1, &[10]);
+        let rust_ch1 = tuple(-1, &[20]);
+        let c_ch0 = tuple(0, &[11]);
+        let c_ch1 = tuple(1, &[20]);
+
+        let rust_map = keyed_v2_tuples(&[&rust_ch0, &rust_ch1]);
+        let c_map = keyed_v2_tuples(&[&c_ch0, &c_ch1]);
+
+        assert_eq!(rust_map.len(), 2);
+        assert_eq!(c_map.len(), 2);
+        assert_ne!(
+            rust_map.get(&(106, 0, 0)).unwrap().payload,
+            c_map.get(&(106, 0, 0)).unwrap().payload
+        );
+        assert_eq!(
+            rust_map.get(&(106, 0, 1)).unwrap().payload,
+            c_map.get(&(106, 0, 1)).unwrap().payload
+        );
+        assert_eq!(c_map.get(&(106, 0, 0)).unwrap().channel, 0);
+        assert_eq!(c_map.get(&(106, 0, 1)).unwrap().channel, 1);
+    }
+}
+
 /// Print the Phase C (HLD V2) trace diff for boundaries 100..=109.
-/// Returns the `(boundary_id, iter)` of the first divergent tuple, if any,
-/// and a free-form descriptor — used by the caller to print a top-level
-/// "FIRST DIVERGENT V2 BOUNDARY" call-out.
+/// Reports the `(boundary_id, iter, occurrence)` of the first divergent tuple
+/// in its top-level call-out, along with a free-form descriptor.
 fn print_phase_c_trace_diff(
     rust_trace: &[ropus::silk_trace::Tuple],
     c_trace: &[ropus::silk_trace::Tuple],
@@ -1660,14 +1716,11 @@ fn print_phase_c_trace_diff(
         return;
     }
 
-    // Build keyed maps. V2 setup boundaries (100..=105) are unique by
-    // boundary_id alone (iter=-1). V2 per-iter boundaries (106..=109) may
-    // appear multiple times per encode (one per rate-control iter).
-    use std::collections::BTreeMap;
-    let rust_map: BTreeMap<V2Key, &ropus::silk_trace::Tuple> =
-        rust_v2.iter().map(|t| (v2_key(t), *t)).collect();
-    let c_map: BTreeMap<V2Key, &ropus::silk_trace::Tuple> =
-        c_v2.iter().map(|t| (v2_key(t), *t)).collect();
+    // Build keyed maps. V2 setup boundaries (100..=105) and per-iter
+    // boundaries (106..=109) may both repeat for stereo; the occurrence
+    // ordinal prevents one channel from overwriting the other.
+    let rust_map = keyed_v2_tuples(&rust_v2);
+    let c_map = keyed_v2_tuples(&c_v2);
 
     // Union of keys, sorted: setup boundaries first (100..=105 with iter=-1),
     // then per-iter (106..=109 with iter 0, 1, 2 ...). BTreeMap natural
@@ -1684,26 +1737,27 @@ fn print_phase_c_trace_diff(
         .into_iter()
         .collect();
     all_keys.sort_by(|a, b| {
-        let (ba, ia) = *a;
-        let (bb, ib) = *b;
+        let (ba, ia, oa) = *a;
+        let (bb, ib, ob) = *b;
         // Setup boundaries first (sorted by id), then per-iter (sorted by
         // iter, then id).
         let setup_a = ba < 106;
         let setup_b = bb < 106;
         match (setup_a, setup_b) {
-            (true, true) => ba.cmp(&bb),
+            (true, true) => ba.cmp(&bb).then(oa.cmp(&ob)),
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
-            (false, false) => ia.cmp(&ib).then(ba.cmp(&bb)),
+            (false, false) => ia.cmp(&ib).then(ba.cmp(&bb)).then(oa.cmp(&ob)),
         }
     });
 
-    // (boundary, channel, iter, first_divergent_index, payload_len, kind).
+    // (boundary, channel, iter, occurrence, first_divergent_index, payload_len,
+    // kind).
     // `first_divergent_index` and `payload_len` are used to disambiguate
     // hypothesis territory at boundaries whose payload spans hypotheses
     // (b103: G4 pred_coef vs G5 ar_q13). For Rust-only / C-only cases
     // we record the index as 0 and the available payload length.
-    let mut first_divergent: Option<(i32, i32, i32, usize, usize, String)> = None;
+    let mut first_divergent: Option<(i32, i32, i32, usize, usize, usize, String)> = None;
 
     // Rate-control loop iter-count summary (per HLD V2 §3 G8 hypothesis).
     let mut rust_iter_max: i32 = -1;
@@ -1730,7 +1784,7 @@ fn print_phase_c_trace_diff(
     }
 
     for key in all_keys {
-        let (bid, iter) = key;
+        let (bid, iter, occurrence) = key;
         let r = rust_map.get(&key);
         let c = c_map.get(&key);
         let (label, hyp) = v2_boundary_label(bid);
@@ -1744,8 +1798,8 @@ fn print_phase_c_trace_diff(
                 let same = r.payload == c.payload;
                 let marker = if same { " " } else { "*" };
                 println!(
-                    "  {marker} b{:3} ({})  [{:>5}]  ({})",
-                    bid, label, iter_label, hyp
+                    "  {marker} b{:3} ({})  [{:>5}]  occurrence={}  channels R={} C={}  ({})",
+                    bid, label, iter_label, occurrence, r.channel, c.channel, hyp
                 );
                 println!("        R: {}", format_v2_payload(bid, &r.payload));
                 if !same {
@@ -1754,10 +1808,12 @@ fn print_phase_c_trace_diff(
                     if first_divergent.is_none() {
                         let idx = first_divergent_index(&r.payload, &c.payload);
                         let plen = r.payload.len().max(c.payload.len());
+                        let channel = if r.channel >= 0 { r.channel } else { c.channel };
                         first_divergent = Some((
                             bid,
-                            r.channel,
+                            channel,
                             iter,
+                            occurrence,
                             idx,
                             plen,
                             "payload-mismatch".to_string(),
@@ -1767,8 +1823,8 @@ fn print_phase_c_trace_diff(
             }
             (Some(r), None) => {
                 println!(
-                    "  * b{:3} ({})  [{:>5}]  ({})  Rust-only (C did not emit)",
-                    bid, label, iter_label, hyp
+                    "  * b{:3} ({})  [{:>5}]  occurrence={}  channel R={}  ({})  Rust-only (C did not emit)",
+                    bid, label, iter_label, occurrence, r.channel, hyp
                 );
                 println!("        R: {}", format_v2_payload(bid, &r.payload));
                 if first_divergent.is_none() {
@@ -1776,6 +1832,7 @@ fn print_phase_c_trace_diff(
                         bid,
                         r.channel,
                         iter,
+                        occurrence,
                         0,
                         r.payload.len(),
                         "Rust emitted but C did not (rate-control iter-count divergence?)"
@@ -1785,8 +1842,8 @@ fn print_phase_c_trace_diff(
             }
             (None, Some(c)) => {
                 println!(
-                    "  * b{:3} ({})  [{:>5}]  ({})  C-only (Rust did not emit)",
-                    bid, label, iter_label, hyp
+                    "  * b{:3} ({})  [{:>5}]  occurrence={}  channel C={}  ({})  C-only (Rust did not emit)",
+                    bid, label, iter_label, occurrence, c.channel, hyp
                 );
                 println!("        C: {}", format_v2_payload(bid, &c.payload));
                 if first_divergent.is_none() {
@@ -1794,6 +1851,7 @@ fn print_phase_c_trace_diff(
                         bid,
                         c.channel,
                         iter,
+                        occurrence,
                         0,
                         c.payload.len(),
                         "C emitted but Rust did not (rate-control iter-count divergence?)"
@@ -1805,7 +1863,7 @@ fn print_phase_c_trace_diff(
         }
     }
 
-    if let Some((bid, channel, iter, first_idx, payload_len, kind)) = first_divergent {
+    if let Some((bid, channel, iter, occurrence, first_idx, payload_len, kind)) = first_divergent {
         let (label, hyp) = v2_boundary_label_for_index(bid, first_idx, payload_len);
         let iter_label = if iter < 0 {
             "setup".to_string()
@@ -1813,8 +1871,8 @@ fn print_phase_c_trace_diff(
             format!("{}", iter)
         };
         println!(
-            "\n  >>> FIRST DIVERGENT V2 BOUNDARY: b{} (channel={}, iter={}) → hypothesis {} ({}) <<<",
-            bid, channel, iter_label, hyp, label
+            "\n  >>> FIRST DIVERGENT V2 BOUNDARY: b{} (channel={}, iter={}, occurrence={}) → hypothesis {} ({}) <<<",
+            bid, channel, iter_label, occurrence, hyp, label
         );
         println!("      kind: {}", kind);
         if bid == 106 && rust_iter_count != c_iter_count {
