@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** ropus-tools-core/decode-timeline
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T212437Z-p40235-n096674000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00043-run-fix-20260801T212437Z-p40235-n096674000-c1
+- **Owner base:** a8449cfdbff0be89c9716f8520863fbc343132ab
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T21:24:37Z
+- **Owner until:** 2026-08-01T23:24:37Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
