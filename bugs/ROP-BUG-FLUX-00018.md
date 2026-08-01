@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00018 — C ABI version string reports stale package version
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** capi/version-metadata
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T184952Z-p9388-n274066000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00018-run-fix-20260801T184952Z-p9388-n274066000-c1
-- **Owner base:** d9aba8a74e4bcb28dc16d815a71c31114d0b9c05
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T18:49:52Z
-- **Owner until:** 2026-08-01T20:49:52Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new`)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new`) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T184952Z-p9388-n274066000-c1 branch=task/bug-ROP-BUG-FLUX-00018-run-fix-20260801T184952Z-p9388-n274066000-c1 code=21e119ce43dbe3e6db1e5db91d3ae57e5901701a gate=manual)
 
 ## Observation
 
