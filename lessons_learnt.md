@@ -1,3 +1,7 @@
+- Clear fb2k last-error state with `Option<CString>` plus a static NUL pointer (`error.rs:clear_last_error`), not a new empty allocation.
+
+  Successful decode calls can drop stale error text and reset the code without touching the heap; test the static pointer as the steady-state oracle.
+
 - Validate OpusTags field-name bytes before ASCII uppercasing (`tags.rs:parse`); UTF-8 validity alone permits illegal keys.
 
   Vorbis keys must stay in ASCII `0x20..=0x7D` excluding `=`; reject controls and non-ASCII bytes with a typed error.

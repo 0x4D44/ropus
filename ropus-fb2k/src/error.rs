@@ -1,11 +1,12 @@
 //! Thread-local last-error slot for the C ABI.
 //!
 //! Each calling thread gets its own buffer. `set_last_error` stores a
-//! freshly-allocated `CString`; `last_error_ptr` returns a pointer that
-//! stays valid until the next `set_last_error` call on the same thread.
+//! `CString`; a successful call drops the owned message and returns a static
+//! empty pointer without allocating.
 //!
 //! The empty-string default means `ropus_fb2k_last_error()` never returns a
-//! null pointer, per the header contract.
+//! null pointer, per the header contract. The static empty value also keeps
+//! successful decode calls allocation-free after initialization.
 //!
 //! Matches the spirit of `capi/src/lib.rs` in keeping the FFI surface panic-
 //! and null-proof while leaving heap ownership inside the Rust side.
@@ -14,11 +15,13 @@ use std::cell::{Cell, RefCell};
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int};
 
+static EMPTY_ERROR: [u8; 1] = [0];
+
 thread_local! {
-    /// Per-thread last-error slot. The `CString` owns the bytes the returned
-    /// `*const c_char` points into; replacing it invalidates any prior pointer,
-    /// which is the same rule as C `errno` / `strerror` per thread.
-    static LAST_ERROR: RefCell<CString> = RefCell::new(CString::new("").expect("empty CString"));
+    /// Per-thread last-error slot. `None` means the static empty C string;
+    /// `Some` owns the bytes the returned pointer references. Replacing or
+    /// clearing it invalidates any prior pointer, matching C `strerror`.
+    static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
 
     /// Per-thread last-error status code. Paired with `LAST_ERROR`: each
     /// `set_last_error_with_code` writes both; `clear_last_error` resets to 0
@@ -51,7 +54,7 @@ pub(crate) fn set_last_error_with_code(msg: impl Into<String>, code: c_int) {
     }
     // Safe to unwrap: we stripped interior NULs above.
     let c = CString::new(s).expect("interior NULs already stripped");
-    LAST_ERROR.with(|slot| *slot.borrow_mut() = c);
+    LAST_ERROR.with(|slot| *slot.borrow_mut() = Some(c));
     LAST_ERROR_CODE.with(|slot| slot.set(code));
 }
 
@@ -59,16 +62,18 @@ pub(crate) fn set_last_error_with_code(msg: impl Into<String>, code: c_int) {
 /// stale message from a previous call isn't surfaced to a user asking "why
 /// did this open succeed but `last_error()` still says 'aborted'?".
 pub(crate) fn clear_last_error() {
-    LAST_ERROR.with(|slot| {
-        *slot.borrow_mut() = CString::new("").expect("empty CString");
-    });
+    LAST_ERROR.with(|slot| slot.borrow_mut().take());
     LAST_ERROR_CODE.with(|slot| slot.set(0));
 }
 
 /// Return a pointer to the current thread's last-error C string. The pointer
 /// is valid until the next `set_last_error` on this thread. Never NULL.
 pub(crate) fn last_error_ptr() -> *const c_char {
-    LAST_ERROR.with(|slot| slot.borrow().as_ptr())
+    LAST_ERROR.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .map_or(EMPTY_ERROR.as_ptr().cast(), |value| value.as_ptr())
+    })
 }
 
 /// Return the last-error code stored on this thread. 0 when the last
@@ -118,6 +123,17 @@ mod tests {
         let p = last_error_ptr();
         let s = unsafe { CStr::from_ptr(p) };
         assert_eq!(s.to_bytes(), b"");
+    }
+
+    #[test]
+    fn clear_reuses_static_empty_pointer() {
+        set_last_error("transient");
+        clear_last_error();
+        let first = last_error_ptr();
+        clear_last_error();
+        let second = last_error_ptr();
+        assert_eq!(first, second);
+        assert_eq!(first, EMPTY_ERROR.as_ptr().cast());
     }
 
     #[test]
