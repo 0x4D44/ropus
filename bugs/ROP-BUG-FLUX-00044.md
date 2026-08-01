@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** ropus-tools-core/decode-plc
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T214001Z-p1439-n246664000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00044-run-fix-20260801T214001Z-p1439-n246664000-c1
+- **Owner base:** 6cb58d86a74a4eec5b024aeae3dc0200430a24c6
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T21:40:01Z
+- **Owner until:** 2026-08-01T23:40:01Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
