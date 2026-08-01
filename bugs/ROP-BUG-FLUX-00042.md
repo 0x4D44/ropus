@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00042 — Encoder truncates or pads source audio through incorrect granule accounting
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** ropus-tools-core/encode-timeline
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T122622Z-p97016-n207782000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00042-run-fix-20260801T122622Z-p97016-n207782000-c1
-- **Owner base:** 906f143d22189366870c6265b1e6d326d759c066
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T12:26:22Z
-- **Owner until:** 2026-08-01T14:26:22Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T122622Z-p97016-n207782000-c1 branch=task/bug-ROP-BUG-FLUX-00042-run-fix-20260801T122622Z-p97016-n207782000-c1 code=ee82c8bb70c9504f59ae36b477c5d71199d2cbc3 gate=manual)
 
 ## Observation
 
