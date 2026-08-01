@@ -5,15 +5,15 @@
 - **Severity:** Low
 - **Area:** ropus-fb2k/tags
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T211851Z-p19786-n399480000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00039-run-fix-20260801T211851Z-p19786-n399480000-c1
+- **Owner base:** 263675259150c0edd99865f84bb515f997d7b8c8
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T21:18:51Z
+- **Owner until:** 2026-08-01T23:18:51Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
