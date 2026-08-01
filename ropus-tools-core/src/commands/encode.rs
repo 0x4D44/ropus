@@ -156,6 +156,22 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         format_num(pcm_48k.len() as u64).bright_white(),
     );
 
+    // A valid Ogg Opus stream needs at least one audio packet carrying EOS.
+    // Reject empty decoded input before creating the destination so callers
+    // never receive a header-only, unterminated logical stream.
+    if pcm_48k.is_empty() {
+        bail!("decoded input contains no audio samples");
+    }
+    if pcm_48k.len() % channels != 0 {
+        bail!(
+            "decoded input has {} interleaved samples for {} channels",
+            pcm_48k.len(),
+            channels
+        );
+    }
+    let source_samples_ch = pcm_48k.len() / channels;
+    let source_samples_ch_u64 = source_samples_ch as u64;
+
     // 4. Build the encoder.
     let opus_channels = channel_count_to_ropus(channels)?;
     let mut builder = Encoder::builder(OPUS_SR, opus_channels, opts.application);
@@ -259,54 +275,58 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         .context("writing OpusTags page")?;
 
     // 7. Encode and write data packets in chunks of the chosen frame size.
+    // The encoder delay represented by pre_skip must be drained with trailing
+    // silence, otherwise exact-frame inputs decode short. Packet rounding may
+    // add more silence, but the EOS granule trims that padding by declaring the
+    // exact endpoint: source samples + pre_skip, in the fixed 48 kHz clock.
     let frame_samples_ch = frame_samples_per_ch(opts.frame_duration);
     let frame_interleaved = frame_samples_ch * channels;
+    let final_granule = source_samples_ch_u64
+        .checked_add(u64::from(pre_skip))
+        .ok_or_else(|| anyhow!("source duration plus pre-skip overflows the Ogg granule clock"))?;
+    let packet_target_u64 = final_granule.div_ceil(frame_samples_ch as u64);
+    let packet_target = usize::try_from(packet_target_u64)
+        .map_err(|_| anyhow!("required Opus packet count does not fit in usize"))?;
+
     let mut packet_buf = vec![0u8; MAX_PACKET_BYTES];
-    let mut samples_written: u64 = 0;
+    let mut padded_frame = vec![0.0f32; frame_interleaved];
+    let mut submitted_samples_ch: u64 = 0;
     let mut packet_count: u64 = 0;
     let mut payload_bytes: u64 = 0;
-    let total_chunks = pcm_48k.len() / frame_interleaved;
-    let remainder_len = pcm_48k.len() - total_chunks * frame_interleaved;
-    let has_tail = remainder_len > 0;
-    let chunks = pcm_48k.chunks_exact(frame_interleaved);
-    let remainder_owned: Vec<f32> = chunks.remainder().to_vec();
-    for (idx, chunk) in chunks.enumerate() {
+    for idx in 0..packet_target {
+        let start = idx
+            .checked_mul(frame_interleaved)
+            .ok_or_else(|| anyhow!("Opus input frame offset overflow"))?;
+        let source_start = start.min(pcm_48k.len());
+        let source_end = start.saturating_add(frame_interleaved).min(pcm_48k.len());
+        let source_chunk = &pcm_48k[source_start..source_end];
+        let encode_chunk = if source_chunk.len() == frame_interleaved {
+            source_chunk
+        } else {
+            padded_frame.fill(0.0);
+            padded_frame[..source_chunk.len()].copy_from_slice(source_chunk);
+            &padded_frame
+        };
+
         let n = encoder
-            .encode_float(chunk, &mut packet_buf)
+            .encode_float(encode_chunk, &mut packet_buf)
             .map_err(|e| anyhow!("encode failed: {e}"))?;
-        // Advance the granule position by the per-channel frame length;
-        // RFC 7845 sec. 4 mandates granule position is in 48 kHz samples.
-        samples_written += frame_samples_ch as u64;
+        submitted_samples_ch += frame_samples_ch as u64;
         payload_bytes += n as u64;
-        let is_last = idx + 1 == total_chunks && !has_tail;
+        let is_last = idx + 1 == packet_target;
         let end_info = if is_last {
             PacketWriteEndInfo::EndStream
         } else {
             PacketWriteEndInfo::NormalPacket
         };
+        let granule = if is_last {
+            final_granule
+        } else {
+            submitted_samples_ch
+        };
         writer
-            .write_packet(packet_buf[..n].to_vec(), serial, end_info, samples_written)
+            .write_packet(packet_buf[..n].to_vec(), serial, end_info, granule)
             .context("writing Opus data page")?;
-        packet_count += 1;
-    }
-
-    // Pad and encode any tail (silence-pad to the chosen frame size).
-    if has_tail {
-        let mut frame_buf = vec![0.0f32; frame_interleaved];
-        frame_buf[..remainder_owned.len()].copy_from_slice(&remainder_owned);
-        let n = encoder
-            .encode_float(&frame_buf, &mut packet_buf)
-            .map_err(|e| anyhow!("encode failed (tail): {e}"))?;
-        samples_written += frame_samples_ch as u64;
-        payload_bytes += n as u64;
-        writer
-            .write_packet(
-                packet_buf[..n].to_vec(),
-                serial,
-                PacketWriteEndInfo::EndStream,
-                samples_written,
-            )
-            .context("writing tail Opus packet")?;
         packet_count += 1;
     }
 
@@ -321,13 +341,15 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
     report!(
         "wrote    {} packets, {} samples (granule)",
         format_num(packet_count).bright_white(),
-        format_num(samples_written).bright_white(),
+        format_num(final_granule).bright_white(),
     );
     // Average payload bitrate (Opus packets only — excludes Ogg framing
     // overhead, which is what `--bitrate` controls and what users compare
     // against the target). RFC 7845 fixes the granule clock at 48 kHz, so
-    // duration_seconds = samples_written / OPUS_SR.
-    if let Some(avg_bps) = (payload_bytes * 8 * (OPUS_SR as u64)).checked_div(samples_written) {
+    // duration_seconds = source_samples / OPUS_SR (pre-skip and packet padding
+    // are not audible source duration).
+    if let Some(avg_bps) = (payload_bytes * 8 * (OPUS_SR as u64)).checked_div(source_samples_ch_u64)
+    {
         report!(
             "bitrate  {} kbps avg (payload)",
             format!("{:.1}", avg_bps as f64 / 1000.0).bright_white(),

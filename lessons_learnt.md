@@ -1,3 +1,9 @@
+- Drain Opus lookahead, but set EOS to source + pre-skip (`ropus-tools-core/src/commands/encode.rs:encode`).
+
+  Packet input must cover the source plus encoder delay and round up to a full
+  frame. The EOS granule deliberately excludes packet padding, so subtracting
+  `pre_skip` recovers the exact source duration.
+
 - Benchmark guards must inspect dependency features after Cargo unification (`ropus/src/lib.rs:SILK_ENCODE_TRACE_ENABLED`).
 
   A harness-local feature flag is not enough: another selected workspace package

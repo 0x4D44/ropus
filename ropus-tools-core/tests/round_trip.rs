@@ -278,15 +278,14 @@ fn encode_with_custom_serial_writes_that_serial_to_ogg_pages() {
     let _ = std::fs::remove_file(&tmp_opus);
 }
 
-/// Write a canonical 16-bit PCM mono WAV with a 1 kHz sine at 48 kHz. Minimal
-/// RIFF header matching the layout `read_pcm16_wav` above already parses.
-fn write_sine_wav(path: &std::path::Path, seconds: u32, freq_hz: f32) {
+/// Write a canonical 16-bit PCM mono WAV at 48 kHz. Minimal RIFF header
+/// matching the layout `read_pcm16_wav` above already parses.
+fn write_sine_wav_samples(path: &std::path::Path, num_samples: u32, freq_hz: f32) {
     let sr: u32 = 48_000;
     let channels: u16 = 1;
     let bits_per_sample: u16 = 16;
     let byte_rate = sr * u32::from(channels) * u32::from(bits_per_sample) / 8;
     let block_align = channels * bits_per_sample / 8;
-    let num_samples = sr * seconds;
     let data_size = num_samples * u32::from(block_align);
     let riff_size = 36 + data_size;
 
@@ -314,6 +313,142 @@ fn write_sine_wav(path: &std::path::Path, seconds: u32, freq_hz: f32) {
     }
 
     std::fs::write(path, &out).expect("write synthetic WAV");
+}
+
+fn write_sine_wav(path: &std::path::Path, seconds: u32, freq_hz: f32) {
+    write_sine_wav_samples(path, 48_000 * seconds, freq_hz);
+}
+
+fn timeline_encode_options(input: PathBuf, output: PathBuf) -> EncodeOptions {
+    EncodeOptions {
+        input,
+        output: Some(output),
+        bitrate: Some(64_000),
+        complexity: None,
+        application: ropus_tools_core::Application::Audio,
+        vbr: true,
+        vbr_constraint: false,
+        signal: ropus_tools_core::Signal::Auto,
+        frame_duration: ropus_tools_core::FrameDuration::Ms20,
+        expect_loss: 0,
+        downmix_to_mono: false,
+        serial: None,
+        picture_path: None,
+        vendor: "ropus-tools-core-test".to_string(),
+        comments: Vec::new(),
+    }
+}
+
+/// Decode every audio packet, then apply the OpusHead/EOS timeline trims from
+/// RFC 7845. This deliberately does not use `commands::decode`: end-trim
+/// handling there is tracked separately, while this regression proves the
+/// encoder writes a self-consistent stream whose declared playback length is
+/// exactly recoverable.
+fn timeline_decoded_samples(path: &std::path::Path) -> usize {
+    use ogg::reading::PacketReader;
+    use ropus::{DecodeMode, Decoder};
+    use ropus_tools_core::consts::OPUS_SR;
+    use ropus_tools_core::container::ogg::{parse_opus_head, read_last_granule};
+    use ropus_tools_core::util::channel_count_to_ropus;
+
+    let file = std::fs::File::open(path).expect("open encoded stream");
+    let mut packets = PacketReader::new(std::io::BufReader::new(file));
+    let head_packet = packets
+        .read_packet()
+        .expect("read OpusHead")
+        .expect("OpusHead packet");
+    let serial = head_packet.stream_serial();
+    let head = parse_opus_head(&head_packet.data).expect("parse OpusHead");
+    let _tags = packets
+        .read_packet()
+        .expect("read OpusTags")
+        .expect("OpusTags packet");
+
+    let channels = channel_count_to_ropus(head.channels as usize).expect("supported channels");
+    let channel_count = channels.count();
+    let mut decoder = Decoder::new(OPUS_SR, channels).expect("create decoder");
+    let mut scratch = vec![0i16; 5_760 * channel_count];
+    let mut decoded_per_channel = 0usize;
+    let mut saw_eos = false;
+    while let Some(packet) = packets.read_packet().expect("read audio packet") {
+        saw_eos = packet.last_in_stream();
+        decoded_per_channel += decoder
+            .decode(&packet.data, &mut scratch, DecodeMode::Normal)
+            .expect("decode audio packet");
+    }
+    assert!(saw_eos, "last audio packet must close the Ogg stream");
+
+    let mut file = std::fs::File::open(path).expect("reopen for EOS granule");
+    let eos_granule = read_last_granule(&mut file, serial)
+        .expect("scan EOS granule")
+        .expect("known EOS granule");
+    let eos_granule = usize::try_from(eos_granule).expect("granule fits usize");
+    assert!(
+        decoded_per_channel >= eos_granule,
+        "decoder produced {decoded_per_channel} samples but EOS granule requires {eos_granule}"
+    );
+    eos_granule
+        .checked_sub(head.pre_skip as usize)
+        .expect("EOS granule must cover pre-skip")
+}
+
+#[test]
+fn encode_eos_granule_preserves_exact_and_partial_source_lengths() {
+    let nonce = format!(
+        "{}_{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+
+    for source_samples in [960u32, 1_001u32] {
+        let input =
+            std::env::temp_dir().join(format!("ropus_timeline_{source_samples}_{nonce}.wav"));
+        let output =
+            std::env::temp_dir().join(format!("ropus_timeline_{source_samples}_{nonce}.opus"));
+        write_sine_wav_samples(&input, source_samples, 1_000.0);
+
+        commands::encode(timeline_encode_options(input.clone(), output.clone()))
+            .expect("encode timeline fixture");
+        assert_eq!(
+            timeline_decoded_samples(&output),
+            source_samples as usize,
+            "declared playback length must preserve source samples"
+        );
+
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
+    }
+}
+
+#[test]
+fn encode_rejects_empty_audio_without_creating_an_ogg_stream() {
+    let nonce = format!(
+        "{}_{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let input = std::env::temp_dir().join(format!("ropus_empty_{nonce}.wav"));
+    let output = std::env::temp_dir().join(format!("ropus_empty_{nonce}.opus"));
+    write_sine_wav_samples(&input, 0, 1_000.0);
+
+    let error = commands::encode(timeline_encode_options(input.clone(), output.clone()))
+        .expect_err("empty audio must be rejected");
+    assert!(
+        error.to_string().contains("no audio samples"),
+        "unexpected error: {error:#}"
+    );
+    assert!(
+        !output.exists(),
+        "rejecting empty audio must not leave a header-only Ogg stream"
+    );
+
+    let _ = std::fs::remove_file(input);
 }
 
 /// Regression test for the packet-buffer blocker: encode 5 s of 1 kHz sine at
