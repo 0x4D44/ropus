@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00020 — Primary HTML report write failure still exits successfully
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** full-test/reporting
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T190442Z-p27224-n474403000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00020-run-fix-20260801T190442Z-p27224-n474403000-c1
-- **Owner base:** 15205f922bf09eafa042578407d6c39362a71bbf
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T19:04:42Z
-- **Owner until:** 2026-08-01T21:04:42Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T190442Z-p27224-n474403000-c1 branch=task/bug-ROP-BUG-FLUX-00020-run-fix-20260801T190442Z-p27224-n474403000-c1 code=acd764f9a547b2590df887461c3d484bbfe52377 gate=manual)
 
 ## Observation
 
