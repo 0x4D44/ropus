@@ -60,6 +60,19 @@ fn main() -> ExitCode {
         extended: args.extended,
         query: args.query,
     };
+
+    // Keep the command-line contract's distinct exit code for an unknown
+    // query, while the library command itself remains a normal Result-returning
+    // function for embedders and tests.
+    if let Some(query) = opts.query.as_deref()
+        && let Err(error) = commands::validate_query_key(query)
+    {
+        eprintln!(
+            "ropusinfo: {}",
+            ui::escape_terminal_text(&error.to_string())
+        );
+        return ExitCode::from(2);
+    }
     prelude::run(commands::info(opts))
 }
 

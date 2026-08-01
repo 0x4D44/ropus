@@ -1,7 +1,7 @@
 //! Ogg + OpusHead/OpusTags packet helpers and a reverse-scan for the last
 //! granule position of a target stream serial.
 
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Error, ErrorKind, Read, Seek, SeekFrom};
 
 use anyhow::{Result, anyhow, bail};
 
@@ -239,54 +239,68 @@ pub const UNKNOWN_GRANULE: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 /// sequences anyway, which is arguably the right signal. Keeping the walker
 /// tight avoids the dependency on `ogg::reading::PageHeader` internals that
 /// the crate doesn't expose publicly.
+///
+/// The scan is page-streamed. It retains only the 27-byte header, the bounded
+/// 255-byte lacing table, and one page payload at a time; it never buffers the
+/// complete input file just to find granule positions.
 pub fn read_page_granules<R: Read + Seek>(
     src: &mut R,
     target_serial: u32,
 ) -> std::io::Result<Vec<u64>> {
     // Reset to start of file; the function contract is "walk the whole stream".
     src.seek(SeekFrom::Start(0))?;
-    let mut buf = Vec::new();
-    src.read_to_end(&mut buf)?;
-
     let mut granules = Vec::new();
-    let mut pos = 0usize;
-    while pos + 27 <= buf.len() {
-        if &buf[pos..pos + 4] != b"OggS" || buf[pos + 4] != 0 {
-            pos += 1;
+    let mut pos = 0u64;
+    loop {
+        src.seek(SeekFrom::Start(pos))?;
+        let mut header = [0u8; OGG_HEADER_LEN];
+        match src.read_exact(&mut header) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::UnexpectedEof => break,
+            Err(error) => return Err(error),
+        }
+        if &header[..4] != OGG_CAPTURE || header[4] != 0 {
+            pos = pos.saturating_add(1);
             continue;
         }
         let absgp = u64::from_le_bytes([
-            buf[pos + 6],
-            buf[pos + 7],
-            buf[pos + 8],
-            buf[pos + 9],
-            buf[pos + 10],
-            buf[pos + 11],
-            buf[pos + 12],
-            buf[pos + 13],
+            header[6], header[7], header[8], header[9], header[10], header[11], header[12],
+            header[13],
         ]);
-        let serial =
-            u32::from_le_bytes([buf[pos + 14], buf[pos + 15], buf[pos + 16], buf[pos + 17]]);
-        let nseg = buf[pos + 26] as usize;
-        let lacing_end = pos + 27 + nseg;
-        if lacing_end > buf.len() {
-            // Truncated page header (file ends mid-lacing). Nothing more to
-            // extract; stop cleanly.
-            break;
+        let serial = u32::from_le_bytes([header[14], header[15], header[16], header[17]]);
+        let segment_count = header[26] as usize;
+        let mut lacing = [0u8; 255];
+        if let Err(error) = src.read_exact(&mut lacing[..segment_count]) {
+            if error.kind() == ErrorKind::UnexpectedEof {
+                break;
+            }
+            return Err(error);
         }
-        let payload_len: usize = buf[pos + 27..lacing_end].iter().map(|&x| x as usize).sum();
-        let page_end = lacing_end + payload_len;
-        if page_end > buf.len() {
-            // Truncated payload. Same handling as above — the partial page
-            // gives us no usable granule, stop scanning.
-            break;
-        }
+        let payload_len: usize = lacing[..segment_count]
+            .iter()
+            .map(|&segment| segment as usize)
+            .sum();
 
         if serial == target_serial && absgp != UNKNOWN_GRANULE {
             granules.push(absgp);
         }
 
-        pos = page_end;
+        // Consume the page payload without retaining it. A short copy means
+        // the page was truncated, so do not expose its granule position.
+        let copied = std::io::copy(&mut src.take(payload_len as u64), &mut std::io::sink())?;
+        if copied != payload_len as u64 {
+            if serial == target_serial && absgp != UNKNOWN_GRANULE {
+                granules.pop();
+            }
+            break;
+        }
+        let page_len = OGG_HEADER_LEN
+            .checked_add(segment_count)
+            .and_then(|length| length.checked_add(payload_len))
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Ogg page length overflow"))?;
+        pos = pos
+            .checked_add(page_len as u64)
+            .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Ogg stream offset overflow"))?;
     }
     Ok(granules)
 }

@@ -8,7 +8,7 @@
 //!      for shell pipelines; stricter than `--quiet --no-color`.
 
 use std::fs::File;
-use std::io::{BufReader, IsTerminal};
+use std::io::{BufReader, IsTerminal, Read, Seek};
 
 use anyhow::{Context, Result, anyhow};
 use colored::*;
@@ -27,9 +27,54 @@ use crate::options::InfoOptions;
 use crate::ui::{escape_terminal_path, escape_terminal_text, format_query_value, heading};
 use crate::util::channel_count_to_ropus;
 
-/// Parsed summary assembled once and consumed by every output mode. Having all
-/// three modes compute from the same struct guarantees the default block, the
-/// extended output, and `--query` never drift in what they report.
+/// The small, fixed set of values exposed by `--query`.
+///
+/// Parsing this before opening the input is deliberate: an invalid query must
+/// not turn into an input-file error, and a valid scalar query must not fall
+/// through the human-summary collector.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum QueryKey {
+    Channels,
+    SampleRate,
+    PreSkip,
+    Gain,
+    Duration,
+    Bitrate,
+    Vendor,
+    Comment(String),
+}
+
+impl QueryKey {
+    fn parse(raw: &str) -> Result<Self> {
+        let lower = raw.to_ascii_lowercase();
+        if let Some(rest) = lower.strip_prefix("comment:") {
+            return Ok(Self::Comment(rest.to_owned()));
+        }
+
+        match lower.as_str() {
+            "channels" => Ok(Self::Channels),
+            "samplerate" => Ok(Self::SampleRate),
+            "preskip" => Ok(Self::PreSkip),
+            "gain" => Ok(Self::Gain),
+            "duration" => Ok(Self::Duration),
+            "bitrate" => Ok(Self::Bitrate),
+            "vendor" => Ok(Self::Vendor),
+            _ => Err(anyhow!("unknown query key: {raw}")),
+        }
+    }
+}
+
+/// Validate a query key without opening its input file.
+///
+/// The CLI uses this to retain opus-tools' exit code 2 for an unknown key,
+/// while library callers receive a normal `anyhow::Error` from `info`.
+pub fn validate_query_key(raw: &str) -> Result<()> {
+    QueryKey::parse(raw).map(|_| ())
+}
+
+/// Parsed summary shared by the two human-readable output modes. Query mode
+/// deliberately uses smaller plans below so scalar lookups do not assemble
+/// this whole structure.
 struct InfoSummary {
     head: OpusHead,
     tags: OpusTags,
@@ -66,15 +111,17 @@ impl InfoSummary {
 }
 
 pub fn info(opts: InfoOptions) -> Result<()> {
-    let summary = collect_summary(&opts.input)?;
-
     // `--query` is a strict scripting mode: skip the heading, skip the banner,
     // skip any colored text. The main.rs caller already short-circuited the
     // banner when `opts.query.is_some()` (see ropusinfo/src/main.rs), so here
-    // we just emit the bare value and return.
-    if let Some(key) = &opts.query {
-        return emit_query(&summary, key);
+    // we just emit the bare value and return. Parse before opening the input:
+    // an unknown key should not be masked by a missing or unreadable file.
+    if let Some(raw_key) = &opts.query {
+        let key = QueryKey::parse(raw_key)?;
+        return collect_query(&opts.input, &key);
     }
+
+    let summary = collect_summary(&opts.input, opts.extended)?;
 
     heading("info");
     print_default_block(&opts.input, &summary);
@@ -97,7 +144,7 @@ pub fn info(opts: InfoOptions) -> Result<()> {
     Ok(())
 }
 
-fn collect_summary(input: &std::path::Path) -> Result<InfoSummary> {
+fn collect_summary(input: &std::path::Path, retain_packets: bool) -> Result<InfoSummary> {
     let file =
         File::open(input).with_context(|| format!("opening {}", escape_terminal_path(input)))?;
     let file_len = file.metadata().ok().map(|m| m.len()).unwrap_or(0);
@@ -129,7 +176,9 @@ fn collect_summary(input: &std::path::Path) -> Result<InfoSummary> {
     // existing loop, negligible compared to the decode work.
     let max_per_ch = (OPUS_SR / 1000 * 120) as usize;
     let mut decoded = vec![0i16; max_per_ch * opus_channels.count()];
-    let mut packets: Vec<(u8, Option<u8>)> = Vec::new();
+    // Packet TOCs are only retained for `--extended`; default human output
+    // needs neither the bytes nor their per-packet allocation.
+    let mut packets = retain_packets.then(Vec::new);
     let mut slow_sample_count: u64 = 0;
     // We lazily spin up the decoder only when the slow path needs it; on a
     // healthy file (absgp known) we walk packets purely for their TOC bytes.
@@ -147,7 +196,9 @@ fn collect_summary(input: &std::path::Path) -> Result<InfoSummary> {
     while let Some(pkt) = reader.read_packet()? {
         let b0 = pkt.data.first().copied().unwrap_or(0);
         let b1 = pkt.data.get(1).copied();
-        packets.push((b0, b1));
+        if let Some(tocs) = packets.as_mut() {
+            tocs.push((b0, b1));
+        }
 
         if let Some(dec) = decoder.as_mut() {
             match dec.decode(&pkt.data, &mut decoded, DecodeMode::Normal) {
@@ -193,7 +244,7 @@ fn collect_summary(input: &std::path::Path) -> Result<InfoSummary> {
         tags,
         sample_count,
         file_len,
-        packets,
+        packets: packets.unwrap_or_default(),
         page_granules,
     })
 }
@@ -320,65 +371,269 @@ fn format_playback_length(seconds: f64) -> String {
     }
 }
 
-/// Handle `--query KEY`. Prints a bare value to stdout on success; writes to
-/// stderr and returns an error for unknown keys (the caller exits with 2 via
-/// `prelude::run`, preserving our uniform error formatting).
-fn emit_query(s: &InfoSummary, key: &str) -> Result<()> {
-    let lower = key.to_ascii_lowercase();
-    let stdout_is_tty = std::io::stdout().is_terminal();
-    // Special-case `comment:KEY` up front: the colon suffix is variable, so a
-    // match arm that binds the rest is cleaner than a giant lookup table.
-    if let Some(rest) = lower.strip_prefix("comment:") {
-        // Missing comment is not an error — empty stdout + exit 0 keeps the
-        // caller's `if ropusinfo -q comment:artist x.opus | grep -q .; then …`
-        // idiom working.
-        if let Some(v) = s.tags.get(rest) {
-            println!("{}", format_query_value(v, stdout_is_tty));
-        } else {
-            println!();
-        }
-        return Ok(());
-    }
+/// Read just the OpusHead packet and stream serial. Fixed scalar queries use
+/// this path and return before OpusTags or any audio packet is read.
+fn read_head(input: &std::path::Path) -> Result<(OpusHead, u32, u64)> {
+    let file =
+        File::open(input).with_context(|| format!("opening {}", escape_terminal_path(input)))?;
+    let file_len = file.metadata().ok().map(|m| m.len()).unwrap_or(0);
+    let (head, serial) = read_head_from(file)?;
+    Ok((head, serial, file_len))
+}
 
-    match lower.as_str() {
-        "channels" => println!("{}", s.head.channels),
-        "samplerate" => println!("{}", s.head.input_sample_rate),
-        "preskip" => println!("{}", s.head.pre_skip),
-        "gain" => {
+fn read_head_from<R: Read + Seek>(source: R) -> Result<(OpusHead, u32)> {
+    let mut reader = PacketReader::new(BufReader::new(source));
+    let head_pkt = reader.read_packet()?.ok_or_else(|| anyhow!("empty file"))?;
+    let head = parse_opus_head(&head_pkt.data)?;
+    Ok((head, head_pkt.stream_serial()))
+}
+
+/// Read OpusHead and OpusTags, but no audio packets. Tag queries use this
+/// bounded packet plan; scalar queries never call it.
+fn read_head_and_tags(input: &std::path::Path) -> Result<(OpusHead, OpusTags, u32, u64)> {
+    let file =
+        File::open(input).with_context(|| format!("opening {}", escape_terminal_path(input)))?;
+    let file_len = file.metadata().ok().map(|m| m.len()).unwrap_or(0);
+    let mut reader = PacketReader::new(BufReader::new(file));
+    let head_pkt = reader.read_packet()?.ok_or_else(|| anyhow!("empty file"))?;
+    let head = parse_opus_head(&head_pkt.data)?;
+    let target_serial = head_pkt.stream_serial();
+    let tags_pkt = reader
+        .read_packet()?
+        .ok_or_else(|| anyhow!("expected OpusTags packet, got end of stream"))?;
+    let tags = OpusTags::parse(&tags_pkt.data).context("parsing OpusTags packet")?;
+    Ok((head, tags, target_serial, file_len))
+}
+
+/// Derive the sample count for duration/bitrate without building a human
+/// summary. The normal case reads only the bounded trailing Ogg window; the
+/// decoder fallback is reserved for truncated streams whose EOS granule is
+/// unknown.
+fn query_sample_count(input: &std::path::Path, head: OpusHead, target_serial: u32) -> Result<u64> {
+    let mut fast_file = File::open(input)
+        .with_context(|| format!("opening {} for granule scan", escape_terminal_path(input)))?;
+    let absgp_opt =
+        read_last_granule(&mut fast_file, target_serial).context("scanning for last Ogg page")?;
+
+    let sample_count = if let Some(absgp) = absgp_opt {
+        absgp
+            .checked_sub(head.pre_skip as u64)
+            .ok_or_else(|| anyhow!("final granule {absgp} is before pre-skip {}", head.pre_skip))?
+    } else {
+        decode_sample_count(input, head)?
+    };
+    Ok(sample_count)
+}
+
+/// Slow duration fallback for truncated streams. This decodes packets in a
+/// bounded-memory loop and does not retain their TOCs or tag strings.
+fn decode_sample_count(input: &std::path::Path, head: OpusHead) -> Result<u64> {
+    let file =
+        File::open(input).with_context(|| format!("opening {}", escape_terminal_path(input)))?;
+    let mut reader = PacketReader::new(BufReader::new(file));
+    // Skip OpusHead and OpusTags; the first packet is validated against the
+    // caller's head, while the tags payload is intentionally not parsed.
+    reader.read_packet()?.ok_or_else(|| anyhow!("empty file"))?;
+    reader
+        .read_packet()?
+        .ok_or_else(|| anyhow!("expected OpusTags packet, got end of stream"))?;
+
+    let opus_channels = channel_count_to_ropus(head.channels as usize)?;
+    let max_per_ch = (OPUS_SR / 1000 * 120) as usize;
+    let mut decoded = vec![0i16; max_per_ch * opus_channels.count()];
+    let mut sample_count = 0u64;
+    let mut packet_idx = 0u64;
+    let mut decoder = RopusDecoder::new(OPUS_SR, opus_channels)
+        .map_err(|e| anyhow!("decoder init failed: {e}"))?;
+    while let Some(pkt) = reader.read_packet()? {
+        match decoder.decode(&pkt.data, &mut decoded, DecodeMode::Normal) {
+            Ok(n) => sample_count += n as u64,
+            Err(e) => {
+                eprintln!(
+                    "{} packet {}: {}",
+                    "warning:".yellow(),
+                    packet_idx,
+                    escape_terminal_text(&e.to_string())
+                );
+            }
+        }
+        packet_idx += 1;
+    }
+    sample_count
+        .checked_sub(head.pre_skip as u64)
+        .ok_or_else(|| {
+            anyhow!(
+                "decoded sample count {sample_count} is smaller than pre-skip {}",
+                head.pre_skip
+            )
+        })
+}
+
+/// Execute a query-specific collection plan, then reuse the normal formatter.
+fn collect_query(input: &std::path::Path, key: &QueryKey) -> Result<()> {
+    match key {
+        QueryKey::Channels | QueryKey::SampleRate | QueryKey::PreSkip | QueryKey::Gain => {
+            let (head, _serial, file_len) = read_head(input)?;
+            let summary = InfoSummary {
+                head,
+                tags: OpusTags::default(),
+                sample_count: 0,
+                file_len,
+                packets: Vec::new(),
+                page_granules: Vec::new(),
+            };
+            emit_query(&summary, key)
+        }
+        QueryKey::Vendor | QueryKey::Comment(_) => {
+            let (head, tags, _serial, file_len) = read_head_and_tags(input)?;
+            let summary = InfoSummary {
+                head,
+                tags,
+                sample_count: 0,
+                file_len,
+                packets: Vec::new(),
+                page_granules: Vec::new(),
+            };
+            emit_query(&summary, key)
+        }
+        QueryKey::Duration | QueryKey::Bitrate => {
+            let (head, target_serial, file_len) = read_head(input)?;
+            let sample_count = query_sample_count(input, head, target_serial)?;
+            let summary = InfoSummary {
+                head,
+                tags: OpusTags::default(),
+                sample_count,
+                file_len,
+                packets: Vec::new(),
+                page_granules: Vec::new(),
+            };
+            emit_query(&summary, key)
+        }
+    }
+}
+
+/// Handle a validated `--query KEY`. Prints a bare value to stdout on success.
+fn emit_query(s: &InfoSummary, key: &QueryKey) -> Result<()> {
+    let stdout_is_tty = std::io::stdout().is_terminal();
+    match key {
+        QueryKey::Comment(rest) => {
+            // Missing comment is not an error — empty stdout + exit 0 keeps the
+            // caller's `if ropusinfo -q comment:artist x.opus | grep -q .; then …`
+            // idiom working.
+            if let Some(v) = s.tags.get(rest) {
+                println!("{}", format_query_value(v, stdout_is_tty));
+            } else {
+                println!();
+            }
+        }
+        QueryKey::Channels => println!("{}", s.head.channels),
+        QueryKey::SampleRate => println!("{}", s.head.input_sample_rate),
+        QueryKey::PreSkip => println!("{}", s.head.pre_skip),
+        QueryKey::Gain => {
             // Q8 → float dB, same formatter as the default block — but without
             // the " dB" suffix so scripts can feed it straight into bc/awk.
             println!("{:.1}", s.head.output_gain as f32 / 256.0);
         }
-        "duration" => {
+        QueryKey::Duration => {
             // Six decimal places is enough for sub-microsecond precision at
             // 48 kHz and matches the resolution of the sample_count we derive
             // it from.
             println!("{:.6}", s.duration_s());
         }
-        "bitrate" => {
+        QueryKey::Bitrate => {
             // Integer bps, rounded. avg_kbps() returns kb/s as f64; multiply
             // and round to get an integer bps value the user can feed into a
             // `< 128000` kind of test.
             let bps = (s.avg_kbps() * 1000.0).round() as u64;
             println!("{bps}");
         }
-        "vendor" => println!("{}", format_query_value(&s.tags.vendor, stdout_is_tty)),
-        _ => {
-            // `prelude::run` prepends `error:` and the anyhow chain; instead
-            // of that shape we want the exact opus-tools-style message and
-            // exit code 2 (the shell reserves 1 for generic failure).
-            // Print directly, then bail to bubble up ExitCode::FAILURE — and
-            // note the deviation: our `prelude::run` maps errors to
-            // ExitCode::FAILURE (1), not 2. The HLD says exit 2 for unknown
-            // keys; to keep the mapping clean, emit the error message here
-            // and use `std::process::exit(2)` so we don't depend on the
-            // prelude's exit-code behaviour for this one case.
-            eprintln!(
-                "ropusinfo: unknown query key: {}",
-                escape_terminal_text(key)
-            );
-            std::process::exit(2);
-        }
+        QueryKey::Vendor => println!("{}", format_query_value(&s.tags.vendor, stdout_is_tty)),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{self, Cursor};
+
+    use ogg::writing::{PacketWriteEndInfo, PacketWriter};
+
+    struct BoundedReader {
+        inner: Cursor<Vec<u8>>,
+        limit: usize,
+    }
+
+    impl Read for BoundedReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let pos = self.inner.position() as usize;
+            if pos >= self.limit {
+                return Err(io::Error::other("bounded-reader limit exceeded"));
+            }
+            let remaining = self.limit - pos;
+            let read_len = buf.len().min(remaining);
+            self.inner.read(&mut buf[..read_len])
+        }
+    }
+
+    impl Seek for BoundedReader {
+        fn seek(&mut self, position: io::SeekFrom) -> io::Result<u64> {
+            self.inner.seek(position)
+        }
+    }
+
+    fn stream_with_large_tags() -> (Vec<u8>, usize) {
+        let serial = 0xC0DE_C0DE;
+        let head = [
+            b'O', b'p', b'u', b's', b'H', b'e', b'a', b'd', 1, 1, 0, 0, 0x80, 0xbb, 0, 0, 0, 0, 0,
+        ];
+        let tags = OpusTags {
+            vendor: "vendor".to_owned(),
+            comments: vec![format!("COMMENT={}", "x".repeat(128 * 1024))],
+        };
+        let mut output = Cursor::new(Vec::new());
+        {
+            let mut writer = PacketWriter::new(&mut output);
+            writer
+                .write_packet(&head[..], serial, PacketWriteEndInfo::EndPage, 0)
+                .expect("write head");
+            writer
+                .write_packet(tags.encode(), serial, PacketWriteEndInfo::EndPage, 0)
+                .expect("write tags");
+            writer
+                .write_packet(&[0u8], serial, PacketWriteEndInfo::EndStream, 960)
+                .expect("write data");
+        }
+        // The first page consists of a 27-byte header, one lacing byte, and
+        // the 19-byte OpusHead packet. A scalar query may stop at this bound;
+        // attempting to read the large OpusTags page is a regression.
+        (output.into_inner(), 27 + 1 + head.len())
+    }
+
+    #[test]
+    fn query_key_is_validated_without_opening_input() {
+        let error = validate_query_key("gargle").expect_err("unknown key must fail");
+        assert!(error.to_string().contains("unknown query key"));
+
+        let error = info(InfoOptions {
+            input: std::path::PathBuf::from("definitely-missing.opus"),
+            extended: false,
+            query: Some("gargle".to_owned()),
+        })
+        .expect_err("unknown key must win before file open");
+        assert!(error.to_string().contains("unknown query key"));
+    }
+
+    #[test]
+    fn fixed_header_plan_stops_before_large_tags_packet() {
+        let (bytes, first_page_len) = stream_with_large_tags();
+        let mut reader = BoundedReader {
+            inner: Cursor::new(bytes),
+            limit: first_page_len,
+        };
+        let (head, serial) = read_head_from(&mut reader).expect("head fits in bound");
+        assert_eq!(head.channels, 1);
+        assert_eq!(serial, 0xC0DE_C0DE);
+        assert_eq!(reader.inner.position() as usize, first_page_len);
+    }
 }

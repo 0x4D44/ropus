@@ -1,3 +1,7 @@
+- Info scalar queries must select a bounded plan before opening payload (`commands/info.rs:QueryKey`); skip tags and TOCs.
+
+  Parse the query first, read only OpusHead for fixed metadata, read OpusTags only for tag lookups, and stream raw Ogg pages rather than loading the whole file. Keep packet TOCs only for extended human output.
+
 - Terminal-facing text needs one reversible control-escaping policy (`ui::escape_terminal_text`); raw metadata is safe only for non-TTY queries.
 
   Escape C0/C1, line separators, and bidi overrides in paths, tags, status lines, device listings, and error chains before printing.

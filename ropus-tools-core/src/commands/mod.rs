@@ -8,5 +8,5 @@ mod play;
 
 pub use decode::decode;
 pub use encode::encode;
-pub use info::info;
+pub use info::{info, validate_query_key};
 pub use play::play;
