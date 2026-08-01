@@ -676,6 +676,75 @@ fn info_populates_total_samples() {
     unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
 }
 
+#[test]
+fn duration_ignores_fake_eos_header_inside_payload() {
+    const PACKETS: usize = 20;
+    const PRE_SKIP: u16 = 312;
+    const FAKE_GRANULE: u64 = 9_999_999;
+
+    let mut bytes =
+        build_opus_fixture_with_audio_packets("ropus-fb2k-test", &[], PACKETS, Some(PRE_SKIP));
+
+    // This has the right capture/version/serial and an EOS flag, but its
+    // zero checksum is invalid. Embed it in the real final page payload after
+    // updating that page's lacing and CRC; the old byte-by-byte scan trusted
+    // the payload bytes as a new final page.
+    let mut fake = Vec::with_capacity(27);
+    fake.extend_from_slice(b"OggS");
+    fake.push(0);
+    fake.push(0x04);
+    fake.extend_from_slice(&FAKE_GRANULE.to_le_bytes());
+    fake.extend_from_slice(&FIXTURE_STREAM_SERIAL.to_le_bytes());
+    fake.extend_from_slice(&0u32.to_le_bytes());
+    fake.extend_from_slice(&0u32.to_le_bytes());
+    fake.push(0);
+    let page_start = bytes
+        .windows(4)
+        .rposition(|window| window == b"OggS")
+        .expect("fixture has a final Ogg page");
+    let segment_count = bytes[page_start + 26] as usize;
+    assert!(segment_count > 0);
+    let last_lacing = page_start + 27 + segment_count - 1;
+    assert!(bytes[last_lacing] as usize + fake.len() <= u8::MAX as usize);
+    bytes[last_lacing] += fake.len() as u8;
+    bytes.extend_from_slice(&fake);
+    set_ogg_page_crc(&mut bytes, page_start);
+
+    let (_io, handle) = open_from_bytes(bytes);
+    assert!(
+        !handle.is_null(),
+        "fixture must parse: {}",
+        last_error_string()
+    );
+    let mut info = zeroed_info();
+    assert_eq!(
+        unsafe { ropus_fb2k::ropus_fb2k_get_info(handle, &mut info) },
+        0
+    );
+    assert_eq!(
+        info.total_samples,
+        PACKETS as u64 * 960 - PRE_SKIP as u64,
+        "invalid trailing page must not replace the real EOS granule"
+    );
+    unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+}
+
+fn set_ogg_page_crc(bytes: &mut [u8], page_start: usize) {
+    bytes[page_start + 22..page_start + 26].fill(0);
+    let mut crc = 0u32;
+    for &byte in &bytes[page_start..] {
+        crc ^= (byte as u32) << 24;
+        for _ in 0..8 {
+            crc = if crc & 0x8000_0000 != 0 {
+                (crc << 1) ^ 0x04C1_1DB7
+            } else {
+                crc << 1
+            };
+        }
+    }
+    bytes[page_start + 22..page_start + 26].copy_from_slice(&crc.to_le_bytes());
+}
+
 // ---------------------------------------------------------------------------
 // info populates nominal_bitrate within a tight window around the
 // computed-from-fixture expected value.

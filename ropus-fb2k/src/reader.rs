@@ -1095,39 +1095,109 @@ fn read_last_granule<R: Read + Seek>(
     let mut buf = vec![0u8; read_len as usize];
     reader.read_exact(&mut buf)?;
 
-    // Walk back byte-by-byte for the b"OggS" capture pattern, validating
-    // the fixed-layout header fields before trusting the granule. Matches
-    // the reference helper in `ropus-cli/src/container/ogg.rs`.
+    // Walk back byte-by-byte for the b"OggS" capture pattern. A candidate is
+    // trusted only after its complete page extent, flags, stream serial, and
+    // CRC validate; this prevents header-shaped bytes in packet/trailing data
+    // from becoming a fabricated duration.
     let mut i = buf.len().saturating_sub(4);
     loop {
-        if i + HEADER_LEN <= buf.len()
-            && &buf[i..i + 4] == b"OggS"
-            // stream_structure_version must be 0 per RFC 3533 §6.
-            && buf[i + 4] == 0
+        if let Some((absgp, is_eos)) = parse_duration_page(&buf, i, target_serial)
+            && is_eos
         {
-            let absgp = u64::from_le_bytes([
-                buf[i + 6],
-                buf[i + 7],
-                buf[i + 8],
-                buf[i + 9],
-                buf[i + 10],
-                buf[i + 11],
-                buf[i + 12],
-                buf[i + 13],
-            ]);
-            let serial = u32::from_le_bytes([buf[i + 14], buf[i + 15], buf[i + 16], buf[i + 17]]);
-            if serial == target_serial {
-                if absgp == UNKNOWN_GRANULE {
-                    return Ok(None);
-                }
-                return Ok(Some(absgp));
+            if absgp == UNKNOWN_GRANULE {
+                return Ok(None);
             }
+            return Ok(Some(absgp));
         }
         if i == 0 {
             return Ok(None);
         }
         i -= 1;
     }
+}
+
+/// Validate an Ogg page candidate from the reverse duration window. Returning
+/// only selected-stream pages keeps the scan's caller small; `is_eos` lets the
+/// caller enforce the rule that duration comes from a complete EOS page.
+fn parse_duration_page(buf: &[u8], start: usize, target_serial: u32) -> Option<(u64, bool)> {
+    if start.checked_add(27)? > buf.len()
+        || &buf[start..start + 4] != OGG_CAPTURE
+        || buf[start + 4] != 0
+    {
+        return None;
+    }
+
+    let header_type = buf[start + 5];
+    // RFC 3533 defines only continued/BOS/EOS bits; reserved bits must be 0.
+    if header_type & !0x07 != 0 {
+        return None;
+    }
+
+    let serial = u32::from_le_bytes([
+        buf[start + 14],
+        buf[start + 15],
+        buf[start + 16],
+        buf[start + 17],
+    ]);
+    if serial != target_serial {
+        return None;
+    }
+
+    let absgp = u64::from_le_bytes([
+        buf[start + 6],
+        buf[start + 7],
+        buf[start + 8],
+        buf[start + 9],
+        buf[start + 10],
+        buf[start + 11],
+        buf[start + 12],
+        buf[start + 13],
+    ]);
+    let segment_count = buf[start + 26] as usize;
+    let lacing_start = start + 27;
+    let lacing_end = lacing_start.checked_add(segment_count)?;
+    if lacing_end > buf.len() {
+        return None;
+    }
+    let payload_len: usize = buf[lacing_start..lacing_end]
+        .iter()
+        .map(|&segment| segment as usize)
+        .sum();
+    let page_end = lacing_end.checked_add(payload_len)?;
+    if page_end > buf.len() {
+        return None;
+    }
+
+    let expected_crc = u32::from_le_bytes([
+        buf[start + 22],
+        buf[start + 23],
+        buf[start + 24],
+        buf[start + 25],
+    ]);
+    if ogg_page_crc32(&buf[start..page_end]) != expected_crc {
+        return None;
+    }
+
+    Some((absgp, header_type & 0x04 != 0))
+}
+
+/// Compute the RFC 3533 Ogg CRC. The checksum field is treated as zero while
+/// calculating, matching the writer and the `ogg` crate's page parser.
+fn ogg_page_crc32(page: &[u8]) -> u32 {
+    const POLY: u32 = 0x04C1_1DB7;
+    let mut crc = 0u32;
+    for (idx, &byte) in page.iter().enumerate() {
+        let byte = if (22..26).contains(&idx) { 0 } else { byte };
+        crc ^= (byte as u32) << 24;
+        for _ in 0..8 {
+            crc = if crc & 0x8000_0000 != 0 {
+                (crc << 1) ^ POLY
+            } else {
+                crc << 1
+            };
+        }
+    }
+    crc
 }
 
 /// Parse the first 19 bytes of an OpusHead packet. Deliberately accepts any

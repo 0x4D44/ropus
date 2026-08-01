@@ -1,3 +1,7 @@
+- Reverse Ogg duration scans must validate complete CRC-checked EOS pages (`reader.rs:parse_duration_page`), not `OggS` bytes.
+
+  Check lacing extent, reserved flags, stream serial, and checksum before trusting a granule; payloads can contain header-shaped bytes.
+
 - Transactional fb2k seek rollback must restore logical samples, not a raw Ogg cursor (`reader.rs:restore_pending_seek`).
 
   `PacketReader` can buffer a whole page, so replay from the audio start and discard to the saved absolute sample after cancellation.
