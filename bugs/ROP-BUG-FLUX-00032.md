@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** harness/phase-c-trace
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T202848Z-p16523-n343500000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00032-run-fix-20260801T202848Z-p16523-n343500000-c1
+- **Owner base:** 73866941dec1bd94f33287b00bf84058a8617442
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T20:28:48Z
+- **Owner until:** 2026-08-01T22:28:48Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
