@@ -30,6 +30,7 @@ use crate::audio::wav::{
 };
 use crate::consts::OPUS_SR;
 use crate::container::ogg::{OpusTags, UNKNOWN_GRANULE, parse_opus_head};
+use crate::container::toc::decode_toc;
 use crate::options::DecodeOptions;
 use crate::ui::{format_num, heading, ok};
 use crate::util::{channel_count_to_ropus, is_stdio_sentinel, with_extension};
@@ -41,6 +42,38 @@ use crate::util::{channel_count_to_ropus, is_stdio_sentinel, with_extension};
 /// tools.
 const MIN_OUTPUT_RATE: u32 = 8_000;
 const MAX_OUTPUT_RATE: u32 = 192_000;
+
+/// Return the per-channel decoded duration advertised by an Opus packet's
+/// TOC. Simulated loss must size PLC from the packet being skipped, not from a
+/// previous packet: Opus streams may change duration between packets and the
+/// first packet has no previous duration at all.
+fn packet_duration_samples(packet: &[u8], max_per_ch: usize) -> Result<usize> {
+    let toc = decode_toc(packet).ok_or_else(|| anyhow!("lost Opus packet has no TOC byte"))?;
+    let frame_count = usize::from(
+        toc.frames
+            .ok_or_else(|| anyhow!("lost Opus packet has an incomplete code-3 TOC"))?,
+    );
+    if frame_count == 0 {
+        bail!("lost Opus packet advertises zero frames");
+    }
+    let frame_samples = usize::try_from(
+        u64::from(toc.frame_size_cms)
+            .checked_mul(u64::from(OPUS_SR))
+            .ok_or_else(|| anyhow!("Opus TOC frame duration overflows"))?
+            / 100_000,
+    )
+    .map_err(|_| anyhow!("Opus TOC frame duration does not fit in usize"))?;
+    if frame_samples == 0 {
+        bail!("lost Opus packet advertises a zero-duration frame");
+    }
+    let duration = frame_samples
+        .checked_mul(frame_count)
+        .ok_or_else(|| anyhow!("Opus packet duration overflows"))?;
+    if duration > max_per_ch {
+        bail!("lost Opus packet duration {duration} exceeds decoder maximum {max_per_ch} samples");
+    }
+    Ok(duration)
+}
 
 /// Type-erased `Read + Seek` bound used to plumb both `File`-backed and
 /// `Cursor<Vec<u8>>`-backed (stdin) sources through the same `PacketReader`.
@@ -242,15 +275,6 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
     let mut dropped_count: u64 = 0;
     let mut eos_granule: Option<u64> = None;
 
-    // Per-channel frame size of the last successfully-decoded real packet.
-    // Used to size the PLC output buffer on simulated loss — libopus' PLC
-    // fills whatever buffer it's given, so handing it a 120 ms scratch for a
-    // 20 ms stream inflates the output 6× per drop. When no real packet has
-    // decoded yet (first-packet loss), fall back to 960 samples (20 ms at
-    // 48 kHz) — matches libopus `opusdec`'s behaviour and is the modal Opus
-    // frame duration on the wire.
-    let mut last_frame_samples: usize = 960;
-
     // We accumulate decoded samples and write a single output when finished.
     // Branch on the decode precision once; the inner loops are otherwise
     // identical.
@@ -265,16 +289,21 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
                 && (loss_rng.next_u32() % 100) < u32::from(opts.packet_loss_pct);
             let n = if lost {
                 dropped_count += 1;
-                let plc_len = last_frame_samples * ch_count;
-                decoder
-                    .decode_float(&[], &mut scratch[..plc_len], DecodeMode::Normal)
-                    .map_err(|e| anyhow!("decode_float PLC failed: {e}"))?
-            } else {
+                let frame_samples = packet_duration_samples(&pkt.data, max_per_ch)?;
+                let plc_len = frame_samples
+                    .checked_mul(ch_count)
+                    .ok_or_else(|| anyhow!("PLC output sample count overflows"))?;
                 let n = decoder
-                    .decode_float(&pkt.data, &mut scratch, DecodeMode::Normal)
-                    .map_err(|e| anyhow!("decode_float failed: {e}"))?;
-                last_frame_samples = n;
+                    .decode_float(&[], &mut scratch[..plc_len], DecodeMode::Normal)
+                    .map_err(|e| anyhow!("decode_float PLC failed: {e}"))?;
+                if n != frame_samples {
+                    bail!("PLC decoded {n} samples for a {frame_samples}-sample lost packet");
+                }
                 n
+            } else {
+                decoder
+                    .decode_float(&pkt.data, &mut scratch, DecodeMode::Normal)
+                    .map_err(|e| anyhow!("decode_float failed: {e}"))?
             };
             let total = n * ch_count;
             acc.extend_from_slice(&scratch[..total]);
@@ -296,16 +325,21 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
                 && (loss_rng.next_u32() % 100) < u32::from(opts.packet_loss_pct);
             let n = if lost {
                 dropped_count += 1;
-                let plc_len = last_frame_samples * ch_count;
-                decoder
-                    .decode(&[], &mut scratch[..plc_len], DecodeMode::Normal)
-                    .map_err(|e| anyhow!("decode PLC failed: {e}"))?
-            } else {
+                let frame_samples = packet_duration_samples(&pkt.data, max_per_ch)?;
+                let plc_len = frame_samples
+                    .checked_mul(ch_count)
+                    .ok_or_else(|| anyhow!("PLC output sample count overflows"))?;
                 let n = decoder
-                    .decode(&pkt.data, &mut scratch, DecodeMode::Normal)
-                    .map_err(|e| anyhow!("decode failed: {e}"))?;
-                last_frame_samples = n;
+                    .decode(&[], &mut scratch[..plc_len], DecodeMode::Normal)
+                    .map_err(|e| anyhow!("decode PLC failed: {e}"))?;
+                if n != frame_samples {
+                    bail!("PLC decoded {n} samples for a {frame_samples}-sample lost packet");
+                }
                 n
+            } else {
+                decoder
+                    .decode(&pkt.data, &mut scratch, DecodeMode::Normal)
+                    .map_err(|e| anyhow!("decode failed: {e}"))?
             };
             let total = n * ch_count;
             acc.extend_from_slice(&scratch[..total]);
@@ -534,4 +568,38 @@ fn report_and_return(
         ok(&format!("decoded -> {dest}"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packet_duration_samples_reads_single_frame_duration() {
+        assert_eq!(packet_duration_samples(&[0x00], 5_760).unwrap(), 480);
+        assert_eq!(packet_duration_samples(&[0x18], 5_760).unwrap(), 2_880);
+    }
+
+    #[test]
+    fn packet_duration_samples_reads_code_three_frame_count() {
+        assert_eq!(packet_duration_samples(&[0x03, 0x02], 5_760).unwrap(), 960);
+    }
+
+    #[test]
+    fn packet_duration_samples_does_not_carry_duration_between_packets() {
+        let packets = [[0x00], [0x18], [0x00]];
+        let durations: Vec<_> = packets
+            .iter()
+            .map(|packet| packet_duration_samples(packet, 5_760).unwrap())
+            .collect();
+        assert_eq!(durations, [480, 2_880, 480]);
+    }
+
+    #[test]
+    fn packet_duration_samples_rejects_incomplete_or_oversized_toc() {
+        assert!(packet_duration_samples(&[], 5_760).is_err());
+        assert!(packet_duration_samples(&[0x03], 5_760).is_err());
+        assert!(packet_duration_samples(&[0x03, 0x00], 5_760).is_err());
+        assert!(packet_duration_samples(&[0x03, 0x3f], 5_760).is_err());
+    }
 }

@@ -1,3 +1,7 @@
+- PLC simulation must derive every lost packet's duration from its own TOC (`commands/decode.rs:packet_duration_samples`).
+
+  A previous-packet fallback makes first-loss and duration-switch streams drift; validate code-3 counts and the 120 ms cap.
+
 - Ogg Opus decode must clamp to the absolute EOS granule (`audio/decode.rs:decode_reader`), not packet padding.
 
   The direct reader gets the endpoint from `Packet::last_in_stream`; Symphonia exposes it as `codec_params.n_frames`.

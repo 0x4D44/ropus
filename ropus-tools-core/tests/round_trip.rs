@@ -699,6 +699,13 @@ fn encode_framesize_120_hard_cbr_128k_fills_packet_buffer() {
 /// the Opus path. Callers own cleanup of that path. Keeps every decode-flag
 /// test from re-duplicating the 20 lines of `EncodeOptions` boilerplate.
 fn encode_tmp_sine_opus(tag: &str) -> PathBuf {
+    encode_tmp_sine_opus_with_duration(tag, ropus_tools_core::FrameDuration::Ms20)
+}
+
+fn encode_tmp_sine_opus_with_duration(
+    tag: &str,
+    frame_duration: ropus_tools_core::FrameDuration,
+) -> PathBuf {
     let nonce = format!(
         "{}_{}_{}",
         tag,
@@ -722,7 +729,7 @@ fn encode_tmp_sine_opus(tag: &str) -> PathBuf {
         vbr: true,
         vbr_constraint: false,
         signal: ropus_tools_core::Signal::Auto,
-        frame_duration: ropus_tools_core::FrameDuration::Ms20,
+        frame_duration,
         expect_loss: 0,
         downmix_to_mono: false,
         serial: None,
@@ -734,6 +741,85 @@ fn encode_tmp_sine_opus(tag: &str) -> PathBuf {
     let _ = std::fs::remove_file(&wav_in);
 
     opus_path
+}
+
+fn build_duration_switch_stream(
+    first: &std::path::Path,
+    second: &std::path::Path,
+    output: &std::path::Path,
+) -> usize {
+    use std::io::Write;
+
+    use ogg::reading::PacketReader;
+    use ogg::writing::{PacketWriteEndInfo, PacketWriter};
+    use ropus_tools_core::container::ogg::parse_opus_head;
+    use ropus_tools_core::container::toc::decode_toc;
+
+    let read_audio = |path: &std::path::Path| {
+        let file = std::fs::File::open(path).expect("open duration stream");
+        let mut reader = PacketReader::new(std::io::BufReader::new(file));
+        let head = reader
+            .read_packet()
+            .expect("read duration OpusHead")
+            .expect("duration OpusHead")
+            .data;
+        let tags = reader
+            .read_packet()
+            .expect("read duration OpusTags")
+            .expect("duration OpusTags")
+            .data;
+        let mut audio = Vec::new();
+        while let Some(packet) = reader.read_packet().expect("read duration audio") {
+            let last_in_stream = packet.last_in_stream();
+            audio.push(packet.data);
+            if last_in_stream {
+                break;
+            }
+        }
+        (head, tags, audio)
+    };
+
+    let (head, tags, mut audio) = read_audio(first);
+    let (_, _, second_audio) = read_audio(second);
+    audio.extend(second_audio);
+
+    let head_info = parse_opus_head(&head).expect("parse switch OpusHead");
+    let serial = 0x51_17_44_u32;
+    let file = std::fs::File::create(output).expect("create duration-switch stream");
+    let mut writer = PacketWriter::new(std::io::BufWriter::new(file));
+    writer
+        .write_packet(head, serial, PacketWriteEndInfo::EndPage, 0)
+        .expect("write switch OpusHead");
+    writer
+        .write_packet(tags, serial, PacketWriteEndInfo::EndPage, 0)
+        .expect("write switch OpusTags");
+
+    // This synthetic stream contains two encoder packet sequences but only one
+    // OpusHead. Keep its granules in the decoder's raw-sample coordinate system
+    // so the single pre-skip is applied once at the end.
+    let mut granule = 0_u64;
+    let mut audible_samples = 0usize;
+    let packet_count = audio.len();
+    for (index, packet) in audio.into_iter().enumerate() {
+        let toc = decode_toc(&packet).expect("switch packet TOC");
+        let frames = usize::from(toc.frames.expect("switch packet frame count"));
+        let per_frame = usize::try_from(u64::from(toc.frame_size_cms) * 48_000 / 100_000)
+            .expect("switch frame duration");
+        let duration = per_frame * frames;
+        audible_samples += duration;
+        granule += duration as u64;
+        let end_info = if index + 1 == packet_count {
+            PacketWriteEndInfo::EndStream
+        } else {
+            PacketWriteEndInfo::NormalPacket
+        };
+        writer
+            .write_packet(packet, serial, end_info, granule)
+            .expect("write switch audio");
+    }
+    let mut sink = writer.into_inner();
+    sink.flush().expect("flush duration-switch stream");
+    audible_samples.saturating_sub(usize::from(head_info.pre_skip))
 }
 
 #[test]
@@ -1005,6 +1091,94 @@ fn decode_packet_loss_nonzero_produces_valid_output() {
 
     let _ = std::fs::remove_file(&opus_path);
     let _ = std::fs::remove_file(&wav_out);
+}
+
+#[test]
+fn decode_packet_loss_preserves_10ms_and_60ms_timelines() {
+    for (tag, frame_duration) in [
+        ("loss10ms", ropus_tools_core::FrameDuration::Ms10),
+        ("loss60ms", ropus_tools_core::FrameDuration::Ms60),
+    ] {
+        let opus_path = encode_tmp_sine_opus_with_duration(tag, frame_duration);
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let no_loss = std::env::temp_dir().join(format!("ropus_{tag}_no_loss_{nonce}.wav"));
+        let all_loss = std::env::temp_dir().join(format!("ropus_{tag}_all_loss_{nonce}.wav"));
+
+        for (output, packet_loss_pct) in [(no_loss.clone(), 0), (all_loss.clone(), 100)] {
+            commands::decode(DecodeOptions {
+                input: opus_path.clone(),
+                output: Some(output),
+                float: false,
+                raw: false,
+                rate: None,
+                gain_db: 0.0,
+                dither: false,
+                packet_loss_pct,
+            })
+            .expect("decode duration-specific loss fixture");
+        }
+
+        let (no_loss_samples, no_loss_sr, _) = read_pcm16_wav(&no_loss);
+        let (all_loss_samples, all_loss_sr, _) = read_pcm16_wav(&all_loss);
+        assert_eq!(no_loss_sr, 48_000);
+        assert_eq!(all_loss_sr, 48_000);
+        assert_eq!(no_loss_samples.len(), 48_000);
+        assert_eq!(all_loss_samples.len(), no_loss_samples.len());
+
+        let _ = std::fs::remove_file(opus_path);
+        let _ = std::fs::remove_file(no_loss);
+        let _ = std::fs::remove_file(all_loss);
+    }
+}
+
+#[test]
+fn decode_packet_loss_preserves_duration_switch_timeline() {
+    let first = encode_tmp_sine_opus_with_duration(
+        "loss_switch10ms",
+        ropus_tools_core::FrameDuration::Ms10,
+    );
+    let second = encode_tmp_sine_opus_with_duration(
+        "loss_switch60ms",
+        ropus_tools_core::FrameDuration::Ms60,
+    );
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let switch = std::env::temp_dir().join(format!("ropus_loss_switch_{nonce}.opus"));
+    let no_loss = std::env::temp_dir().join(format!("ropus_loss_switch_no_{nonce}.wav"));
+    let all_loss = std::env::temp_dir().join(format!("ropus_loss_switch_all_{nonce}.wav"));
+    let expected_samples = build_duration_switch_stream(&first, &second, &switch);
+
+    for (output, packet_loss_pct) in [(no_loss.clone(), 0), (all_loss.clone(), 100)] {
+        commands::decode(DecodeOptions {
+            input: switch.clone(),
+            output: Some(output),
+            float: false,
+            raw: false,
+            rate: None,
+            gain_db: 0.0,
+            dither: false,
+            packet_loss_pct,
+        })
+        .expect("decode duration-switch loss fixture");
+    }
+
+    let (no_loss_samples, no_loss_sr, _) = read_pcm16_wav(&no_loss);
+    let (all_loss_samples, all_loss_sr, _) = read_pcm16_wav(&all_loss);
+    assert_eq!(no_loss_sr, 48_000);
+    assert_eq!(all_loss_sr, 48_000);
+    assert_eq!(no_loss_samples.len(), expected_samples);
+    assert_eq!(all_loss_samples.len(), expected_samples);
+
+    let _ = std::fs::remove_file(first);
+    let _ = std::fs::remove_file(second);
+    let _ = std::fs::remove_file(switch);
+    let _ = std::fs::remove_file(no_loss);
+    let _ = std::fs::remove_file(all_loss);
 }
 
 /// Pull the raw OpusHead packet bytes from a freshly-encoded Ogg Opus file.
