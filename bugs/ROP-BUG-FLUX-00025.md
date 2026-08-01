@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00025 — C reference build can stay stale after source changes
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** harness/build-invalidation
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T042107Z-p26455-n773376000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00025-run-fix-20260801T042107Z-p26455-n773376000-c1
-- **Owner base:** 48499a983943963ef69fb9ef0f6651fa7585b23d
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T04:21:07Z
-- **Owner until:** 2026-08-01T06:21:07Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T042107Z-p26455-n773376000-c1 branch=task/bug-ROP-BUG-FLUX-00025-run-fix-20260801T042107Z-p26455-n773376000-c1 code=a575cf3cd3a10d6be820e37df734b25b71887ee1 gate=manual)
 
 ## Observation
 
