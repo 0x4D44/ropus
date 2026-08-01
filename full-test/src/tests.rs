@@ -25,7 +25,7 @@
 //! outcome lines to stdout and build progress / diagnostics to stderr;
 //! `cargo_parse::parse` needs both.
 
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::Instant;
 
 use colored::Colorize;
@@ -97,6 +97,78 @@ impl Stage2Profile {
             ],
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CargoTermination {
+    Success,
+    ExitCode(i32),
+    Signal(i32),
+    Other,
+}
+
+impl CargoTermination {
+    fn from_status(status: ExitStatus) -> Self {
+        if status.success() {
+            return Self::Success;
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            if let Some(signal) = status.signal() {
+                return Self::Signal(signal);
+            }
+        }
+
+        match status.code() {
+            Some(code) => Self::ExitCode(code),
+            None => Self::Other,
+        }
+    }
+
+    fn unexplained_failure(self) -> Option<String> {
+        match self {
+            Self::Success => None,
+            Self::ExitCode(code) => Some(format!(
+                "cargo exited with status {code} without a recognized test or build failure"
+            )),
+            Self::Signal(signal) => Some(format!(
+                "cargo terminated by signal {signal} without a recognized test or build failure"
+            )),
+            Self::Other => Some(
+                "cargo terminated without an exit code or a recognized test or build failure"
+                    .to_string(),
+            ),
+        }
+    }
+}
+
+fn parse_cargo_execution(
+    stdout: &str,
+    stderr: &str,
+    termination: Option<CargoTermination>,
+    spawn_err: Option<String>,
+    duration_ms: u64,
+    skip_reason: Option<String>,
+) -> TestsResult {
+    let mut tests = cargo_parse::parse(stdout, stderr);
+    tests.duration_ms = duration_ms;
+    tests.skip_reason = skip_reason;
+    if let Some(e) = spawn_err {
+        tests.build_failed = true;
+        tests.skip_reason = Some(format!("failed to spawn cargo: {e}"));
+    } else if !tests.build_failed
+        && tests.total_failed == 0
+        && let Some(reason) = termination.and_then(CargoTermination::unexplained_failure)
+    {
+        tests.build_failed = true;
+        tests.skip_reason = Some(match tests.skip_reason.take() {
+            Some(existing) => format!("{reason}; {existing}"),
+            None => reason,
+        });
+    }
+    tests
 }
 
 /// Build the cargo argument vector for Stage 2. Factored out so the
@@ -257,13 +329,19 @@ pub fn run(
 
     let duration_ms = start.elapsed().as_millis() as u64;
 
-    let (stdout, stderr, spawn_err): (String, String, Option<String>) = match output {
+    let (stdout, stderr, termination, spawn_err): (
+        String,
+        String,
+        Option<CargoTermination>,
+        Option<String>,
+    ) = match output {
         Ok(o) => (
             String::from_utf8_lossy(&o.stdout).into_owned(),
             String::from_utf8_lossy(&o.stderr).into_owned(),
+            Some(CargoTermination::from_status(o.status)),
             None,
         ),
-        Err(e) => (String::new(), String::new(), Some(e.to_string())),
+        Err(e) => (String::new(), String::new(), None, Some(e.to_string())),
     };
 
     // Bound memory use before parsing. A ~45 min run can emit many MiB of
@@ -274,13 +352,14 @@ pub fn run(
     let (stdout, _) = issues::cap_stderr(&stdout);
     let (stderr, _) = issues::cap_stderr(&stderr);
 
-    let mut tests = cargo_parse::parse(&stdout, &stderr);
-    tests.duration_ms = duration_ms;
-    tests.skip_reason = skip_reason;
-    if let Some(e) = spawn_err {
-        tests.build_failed = true;
-        tests.skip_reason = Some(format!("failed to spawn cargo: {e}"));
-    }
+    let mut tests = parse_cargo_execution(
+        &stdout,
+        &stderr,
+        termination,
+        spawn_err,
+        duration_ms,
+        skip_reason,
+    );
     if skip_ietf_vectors {
         append_ietf_provisioning_failure(&mut tests, ietf_vectors);
     }
@@ -628,6 +707,100 @@ mod unit_tests {
             ..TestsResult::default()
         };
         assert!(outcome_with(t).all_passed());
+    }
+
+    #[test]
+    fn nonzero_cargo_with_empty_output_fails_stage() {
+        let tests = parse_cargo_execution(
+            "",
+            "",
+            Some(CargoTermination::ExitCode(101)),
+            None,
+            12,
+            None,
+        );
+
+        assert!(tests.build_failed);
+        assert_eq!(
+            tests.skip_reason.as_deref(),
+            Some("cargo exited with status 101 without a recognized test or build failure")
+        );
+    }
+
+    #[test]
+    fn nonzero_cargo_with_unrecognized_output_fails_stage() {
+        let tests = parse_cargo_execution(
+            "runner stopped early\n",
+            "opaque tool error\n",
+            Some(CargoTermination::ExitCode(2)),
+            None,
+            34,
+            None,
+        );
+
+        assert!(tests.build_failed);
+        assert_eq!(
+            tests.skip_reason.as_deref(),
+            Some("cargo exited with status 2 without a recognized test or build failure")
+        );
+    }
+
+    #[test]
+    fn signal_terminated_cargo_fails_stage() {
+        let tests =
+            parse_cargo_execution("", "", Some(CargoTermination::Signal(9)), None, 56, None);
+
+        assert!(tests.build_failed);
+        assert_eq!(
+            tests.skip_reason.as_deref(),
+            Some("cargo terminated by signal 9 without a recognized test or build failure")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signal_exit_status_maps_to_signal_termination() {
+        use std::os::unix::process::ExitStatusExt;
+
+        assert_eq!(
+            CargoTermination::from_status(ExitStatus::from_raw(9)),
+            CargoTermination::Signal(9)
+        );
+    }
+
+    #[test]
+    fn recognized_test_failure_explains_nonzero_cargo_status() {
+        let tests = parse_cargo_execution(
+            "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n",
+            "Running unittests src/lib.rs (target/debug/deps/full_test-0123456789abcdef)\n",
+            Some(CargoTermination::ExitCode(101)),
+            None,
+            67,
+            None,
+        );
+
+        assert!(!tests.build_failed);
+        assert_eq!(tests.total_failed, 1);
+        assert!(tests.skip_reason.is_none());
+        assert!(!outcome_with(tests).all_passed());
+    }
+
+    #[test]
+    fn successful_cargo_with_valid_summary_remains_green() {
+        let tests = parse_cargo_execution(
+            "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s\n",
+            "Running unittests src/lib.rs (target/debug/deps/full_test-0123456789abcdef)\n",
+            Some(CargoTermination::Success),
+            None,
+            78,
+            None,
+        );
+
+        assert!(!tests.build_failed);
+        assert_eq!(tests.total_passed, 3);
+        assert_eq!(tests.total_failed, 0);
+        assert_eq!(tests.total_ignored, 1);
+        assert!(tests.skip_reason.is_none());
     }
 
     #[test]
