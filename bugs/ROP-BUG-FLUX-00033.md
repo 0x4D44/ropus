@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** harness/decode-framing
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T203738Z-p28582-n845844000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00033-run-fix-20260801T203738Z-p28582-n845844000-c1
+- **Owner base:** ed1439090fe60d539aa9069749fe124f74268430
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T20:37:38Z
+- **Owner until:** 2026-08-01T22:37:38Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
