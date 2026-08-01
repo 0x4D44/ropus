@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00052 — Info performs full packet and page scans for every query
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/info-scale
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T224659Z-p8638-n131126000-c1 branch=task/bug-ROP-BUG-FLUX-00052-run-fix-20260801T224659Z-p8638-n131126000-c1 code=3400cf5 gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T224659Z-p8638-n131126000-c1 branch=task/bug-ROP-BUG-FLUX-00052-run-fix-20260801T224659Z-p8638-n131126000-c1 code=3400cf5 gate=manual) -> Closed (2026-08-02, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main 3528b9e; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,6 +29,26 @@ Static review at origin/main ac7ff8a. /Users/md/language/ropus/ropus-tools-core/
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-02, independent two-eyes, host flux)
+
+Covers the main observation plus the query-specific collection acceptance note. Fixed by
+the same commit as `ROP-BUG-FLUX-00054`; see that bug's closure note for the shared
+unknown-query evidence.
+
+- Fix commit `3400cf5` rewrites `ropus-tools-core/src/commands/info.rs` to parse the query
+  key before opening the input, select a query-specific collection plan (header/tag plan vs.
+  streaming page-scan plan), and stream raw Ogg page scans instead of reading the whole file
+  and retaining every packet TOC.
+- Regression re-verified by construction: the fix's new tests
+  (`query_key_is_validated_without_opening_input`,
+  `fixed_header_plan_stops_before_large_tags_packet`) reference `validate_query_key` and
+  `read_head_from`, neither of which existed pre-fix at `3400cf5~1` (compile error),
+  confirming there was no query-specific plan and no early-validation boundary before this
+  fix. Both tests pass at the current tree.
+- `cargo clippy -p ropus-tools-core --all-targets --locked -- -D warnings` clean; `cargo test
+  -p ropus-tools-core -p ropusinfo --locked`: 129 passed, 0 failed (plus the 2 named tests
+  individually confirmed passing).
 
 ### Query-specific collection acceptance (2026-07-31)
 

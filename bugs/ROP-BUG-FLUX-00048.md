@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00048 — Public command options permit panics and invalid loss semantics
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/options-validation
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T221503Z-p96641-n943371000-c1 branch=task/bug-ROP-BUG-FLUX-00048-run-fix-20260801T221503Z-p96641-n943371000-c1 code=39f955467fc65a7af104eebf0bd345dade7a8152 gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T221503Z-p96641-n943371000-c1 branch=task/bug-ROP-BUG-FLUX-00048-run-fix-20260801T221503Z-p96641-n943371000-c1 code=39f955467fc65a7af104eebf0bd345dade7a8152 gate=manual) -> Closed (2026-08-02, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main 3528b9e; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,6 +29,29 @@ Static review at origin/main ac7ff8a. Public options are intended for GUI/plugin
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-02, independent two-eyes, host flux)
+
+Covers the main observation plus the `ropusenc`, `ropusdec`, and `ropusplay` boundary notes.
+
+- Fix commit `39f9554` adds boundary validation to the public core (`commands/decode.rs`,
+  `commands/encode.rs`, `commands/play.rs`, `options.rs`) plus new CLI parsers
+  (`parse_bitrate`, `parse_complexity`, `parse_gain_db`, `parse_volume`) in
+  `ropusdec`/`ropusenc`/`ropusplay`.
+- Regression re-verified by construction across the affected areas at `39f95546~1`:
+  - `commands::decode::tests::public_decode_options_reject_invalid_loss_before_io` and
+    `..._reject_unrepresentable_gain_before_io` failed pre-fix — the assertions on the typed
+    error message failed because the code instead tried (and failed) to open a missing
+    input file, proving loss/gain validation ran after I/O, not before.
+  - `commands::play::tests::play_rejects_nonfinite_volume_before_device_or_input` failed
+    pre-fix — it enumerated real audio devices instead of rejecting NaN volume first.
+  - `parse_bitrate`/`parse_complexity` (and the encode-options equivalent
+    `validate_encode_options`) did not exist pre-fix at all (compile error), confirming the
+    CLI accepted unranged values with no boundary check.
+  - All corresponding tests pass at the current tree.
+- `cargo clippy -p ropus-tools-core --all-targets --locked -- -D warnings` clean; `cargo test
+  -p ropus-tools-core -p ropusdec -p ropusenc -p ropusplay`: 129+22+2+4+2+8+2 passed, 0
+  failed.
 
 ### Additional `ropusenc` boundary cases (2026-07-31)
 

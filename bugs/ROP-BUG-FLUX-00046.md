@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00046 — Play and Opus transcode ignore OpusHead output gain
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/shared-decode-gain
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T215919Z-p58759-n146521000-c1 branch=task/bug-ROP-BUG-FLUX-00046-run-fix-20260801T215919Z-p58759-n146521000-c1 code=127a7c07c7a70040154057ea800e9b0de2073b61 gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T215919Z-p58759-n146521000-c1 branch=task/bug-ROP-BUG-FLUX-00046-run-fix-20260801T215919Z-p58759-n146521000-c1 code=127a7c07c7a70040154057ea800e9b0de2073b61 gate=manual) -> Closed (2026-08-02, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main 3528b9e; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,6 +29,19 @@ Static review at origin/main ac7ff8a. Direct decode applies OpusHead output_gain
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-02, independent two-eyes, host flux)
+
+- Fix commit `127a7c0` adds `decode_to_f32_with_gain` (Opus header + user gain applied via
+  `Decoder::set_gain`) to `ropus-tools-core/src/audio/decode.rs` and wires it into
+  `commands/play.rs`.
+- Regression re-verified by construction: the fix's new test
+  `shared_decode_applies_header_and_user_gain_for_playback_and_transcode` was spliced onto
+  the pre-fix tree at `127a7c07~1` — it failed to compile (`cannot find function
+  decode_to_f32_with_gain`), confirming the shared decode path had no gain-application
+  capability at all before this fix. The test passes at the current tree.
+- `cargo clippy -p ropus-tools-core --all-targets --locked -- -D warnings` clean; `cargo test
+  -p ropus-tools-core --locked`: 129 lib + 22 integration passed, 0 failed.
 
 ### `ropusplay --gain` is not decoder gain (2026-07-31)
 

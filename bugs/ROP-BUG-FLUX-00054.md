@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00054 — Info library command exits the embedding process on unknown query
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/info-api
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260801T230021Z-p56272-n121291000-c1 branch=task/bug-ROP-BUG-FLUX-00054-run-fix-20260801T230021Z-p56272-n121291000-c1 code=3400cf5 gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260801T230021Z-p56272-n121291000-c1 branch=task/bug-ROP-BUG-FLUX-00054-run-fix-20260801T230021Z-p56272-n121291000-c1 code=3400cf5 gate=manual) -> Closed (2026-08-02, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main 3528b9e; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,6 +29,28 @@ Static review at origin/main ac7ff8a. The crate advertises GUI/plugin use at /Us
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-02, independent two-eyes, host flux)
+
+Covers the main observation plus the `ropusinfo` validation-order note. Fixed by the same
+commit as `ROP-BUG-FLUX-00052` (`3400cf5`) — the query-collection-plan rework and the
+exit-code fix were one change: `info()` now returns `Result` and only `ropusinfo/src/main.rs`
+maps an unknown-query error to exit code 2, via the new `commands::validate_query_key`
+export.
+
+- Confirmed by reading the current tree: `grep -n process::exit
+  ropus-tools-core/src/commands/info.rs` returns no matches — the library function no longer
+  calls `std::process::exit`. `ropusinfo/src/main.rs` now calls
+  `commands::validate_query_key(query)` before `commands::info(opts)` and only the CLI's
+  `main` returns `ExitCode::from(2)`.
+- Regression re-verified: `query_key_is_validated_without_opening_input` in
+  `ropus-tools-core/src/commands/info.rs` asserts `info(...)` returns
+  `Err` (not a process exit) for an unknown query against a nonexistent file, and that the
+  error is available before any file I/O. `validate_query_key` did not exist pre-fix at
+  `3400cf5~1` (compile error against the fix's own test), confirming the library previously
+  had no typed-error path for this case. The test passes at the current tree.
+- `cargo clippy -p ropus-tools-core --all-targets --locked -- -D warnings` clean; `cargo test
+  -p ropus-tools-core -p ropusinfo --locked`: 129 passed, 0 failed.
 
 ### `ropusinfo` validation order (2026-07-31)
 

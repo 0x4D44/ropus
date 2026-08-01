@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00050 — Public interleaved-audio helpers silently truncate malformed frames
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** ropus-tools-core/audio-shape
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T223058Z-p54209-n151716000-c1 branch=task/bug-ROP-BUG-FLUX-00050-run-fix-20260801T223058Z-p54209-n151716000-c1 code=c8300e1 gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T223058Z-p54209-n151716000-c1 branch=task/bug-ROP-BUG-FLUX-00050-run-fix-20260801T223058Z-p54209-n151716000-c1 code=c8300e1 gate=manual) -> Closed (2026-08-02, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main 3528b9e; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,3 +29,19 @@ Static review at origin/main ac7ff8a. /Users/md/language/ropus/ropus-tools-core/
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-02, independent two-eyes, host flux)
+
+- Fix commit `c8300e1` adds shape validation to `audio/downmix.rs`, `audio/resample.rs`, and
+  `audio/wav.rs` (reject zero/unaligned channel counts, zero sample rates, and unaligned
+  interleaved lengths before doing checked header/frame-count arithmetic).
+- Regression re-verified by construction: the fix's 4 new tests were spliced onto the
+  pre-fix versions of these 3 files at `c8300e1~1` — all 4 failed
+  (`downmix_rejects_incomplete_stereo_frame`,
+  `resample_rejects_incomplete_interleaved_frame`,
+  `pcm_wav_rejects_invalid_shape_and_header_arithmetic_before_writing`,
+  `float_wav_rejects_invalid_shape_before_writing`), each panicking on the missing
+  validation (e.g. "odd stereo input must error", "zero channels"). All 4 pass at the
+  current tree.
+- `cargo clippy -p ropus-tools-core --all-targets --locked -- -D warnings` clean; `cargo test
+  -p ropus-tools-core --locked`: 129 lib + 22 integration passed, 0 failed.

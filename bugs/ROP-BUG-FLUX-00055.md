@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00055 — Encode and decode can overwrite their own input
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** ropus-tools-core/path-safety
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260801T230202Z-p61873-n904081000-c1 branch=task/bug-ROP-BUG-FLUX-00055-run-fix-20260801T230202Z-p61873-n904081000-c1 code=5b63404714043ac391bcb58a459374fadac79861 gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260801T230202Z-p61873-n904081000-c1 branch=task/bug-ROP-BUG-FLUX-00055-run-fix-20260801T230202Z-p61873-n904081000-c1 code=5b63404714043ac391bcb58a459374fadac79861 gate=manual) -> Closed (2026-08-02, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main 3528b9e; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,6 +29,35 @@ Static review at origin/main ac7ff8a. /Users/md/language/ropus/ropus-tools-core/
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-02, independent two-eyes, host flux)
+
+Covers the main observation plus the additional default-output-alias note. The float
+control-decoder note's own alias check (`ctrl_decode_float.rs`) could not be independently
+re-executed in this environment — see below.
+
+- Fix commit `5b63404` adds `reject_input_output_alias`, `paths_refer_to_same_file`,
+  `metadata_identity`, and `noncolliding_default_output` to `ropus-tools-core/src/util.rs`
+  (entirely new; the module previously had no identity-aliasing checks at all) and wires
+  them into `commands/decode.rs` and `commands/encode.rs` before any output is created.
+- Confirmed by reading the pre-fix tree at `5b63404~1`: `commands/encode.rs` and
+  `commands/decode.rs` called `File::create` unconditionally with no alias check
+  (`grep -n 'File::create\|reject_input_output_alias'` found the create calls and no guard).
+  The fix's new tests (`direct_and_lexical_aliases_are_rejected`,
+  `symlink_and_hard_link_aliases_are_rejected`, `default_extension_collision_gets_a_safe_suffix`,
+  `decode_rejects_direct_input_output_alias_before_reading`,
+  `encode_rejects_direct_input_output_alias_before_decode`) all fail to compile against the
+  pre-fix tree (`reject_input_output_alias`/`noncolliding_default_output` not found),
+  confirming the capability was entirely absent. All 5 tests pass at the current tree.
+- The float control-decoder's own alias guard (`harness-deep-plc/src/bin_inner/ctrl_decode_float.rs`)
+  is present in the current tree (`reject_input_output_alias` called before `File::create`,
+  confirmed by reading the code) but its test (`output_aliases_are_rejected_before_decode`)
+  is compiled only under `#[cfg(not(no_reference))]`, gated on the xiph/opus C reference
+  sources that are git-ignored and not fetched in this environment
+  (`cargo run -p fetch-assets -- all`) — I did not independently re-execute that one test.
+  This does not affect the `ropus-tools-core` fix, which is fully verified above.
+- `cargo clippy -p ropus-tools-core --all-targets --locked -- -D warnings` clean; `cargo test
+  -p ropus-tools-core --locked`: 129 lib + 22 integration passed, 0 failed.
 
 ### Additional default-output aliases (2026-07-31)
 
