@@ -26,16 +26,14 @@ impl PictureFormat {
 
 /// Detect image format from the first handful of bytes.
 ///
-/// JPEG variants we accept: `FF D8 FF E0` (JFIF), `FF D8 FF E1` (EXIF),
-/// `FF D8 FF DB` (raw quantisation table — rare but valid).
+/// JPEG detection intentionally uses the three-byte SOI signature `FF D8 FF`.
+/// The marker after SOI may be any valid APPn, COM, table, frame, or other
+/// JPEG marker; restricting it to JFIF/EXIF/DQT rejects valid images such as
+/// ICC-profile (`APP2`) and Adobe (`APP14`) files. This is MIME sniffing, not a
+/// complete JPEG parser, so later bytes are left to the image consumer.
 /// PNG: the 8-byte signature `89 50 4E 47 0D 0A 1A 0A`.
 pub fn detect_format(data: &[u8]) -> Result<PictureFormat> {
-    if data.len() >= 4
-        && data[0] == 0xFF
-        && data[1] == 0xD8
-        && data[2] == 0xFF
-        && matches!(data[3], 0xE0 | 0xE1 | 0xDB)
-    {
+    if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
         return Ok(PictureFormat::Jpeg);
     }
     if data.len() >= 8 && data[..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
@@ -193,6 +191,18 @@ mod tests {
     }
 
     #[test]
+    fn detect_format_recognises_jpeg_app2_icc_profile() {
+        let data = [0xFF, 0xD8, 0xFF, 0xE2, 0x00, 0x00];
+        assert_eq!(detect_format(&data).unwrap(), PictureFormat::Jpeg);
+    }
+
+    #[test]
+    fn detect_format_recognises_jpeg_app14_adobe() {
+        let data = [0xFF, 0xD8, 0xFF, 0xEE, 0x00, 0x00];
+        assert_eq!(detect_format(&data).unwrap(), PictureFormat::Jpeg);
+    }
+
+    #[test]
     fn detect_format_recognises_png() {
         let data = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0xDE, 0xAD];
         assert_eq!(detect_format(&data).unwrap(), PictureFormat::Png);
@@ -212,7 +222,10 @@ mod tests {
     fn detect_format_rejects_too_short() {
         assert!(detect_format(&[]).is_err());
         assert!(detect_format(&[0xFF]).is_err());
-        assert!(detect_format(&[0xFF, 0xD8, 0xFF]).is_err()); // 3 bytes — JPEG needs 4
+        assert_eq!(
+            detect_format(&[0xFF, 0xD8, 0xFF]).unwrap(),
+            PictureFormat::Jpeg
+        );
     }
 
     // ---- picture block layout -------------------------------------------

@@ -1,3 +1,7 @@
+- JPEG MIME sniffing must match the SOI signature, not one marker layout (`container/picture.rs:detect_format`); APP2/APP14 are valid.
+
+  Keep format detection deliberately shallow: accept `FF D8 FF` and leave full image parsing to the eventual consumer.
+
 - Public command options need validation before any input/output work (`commands/{encode,decode,play}.rs`); Clap checks alone miss GUI/plugin callers and invalid Q8 casts can panic.
 
   Reject sentinel frame durations, complexity/bitrate/loss bounds, non-finite volume, and gains above Q8 32767 before opening files or devices.
