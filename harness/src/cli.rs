@@ -5432,8 +5432,19 @@ fn cmd_decode_formats(wav_path: &str) {
 // ---------------------------------------------------------------------------
 
 fn cmd_longsoak(duration_secs: i32, sample_rate: i32) {
-    let ch = 1; // mono for simplicity
+    let ch: i32 = 1; // mono for simplicity
+    let expected_samples = checked_sample_count(
+        i64::from(duration_secs),
+        i64::from(sample_rate),
+        i64::from(ch),
+        MAX_LONGSOAK_SAMPLES,
+    )
+    .unwrap_or_else(|error| {
+        eprintln!("ERROR: longsoak: {error}");
+        process::exit(1);
+    });
     let pcm = generate_noise(sample_rate, ch, duration_secs as f64, 12345);
+    debug_assert_eq!(pcm.len(), expected_samples);
     let frame_size = (sample_rate / 50) as usize; // 20ms frames
     let frame_samples = frame_size * ch as usize;
     let num_frames = pcm.len() / frame_samples;
@@ -6792,13 +6803,16 @@ fn cmd_torture(
     );
     println!();
 
-    let total_samples = (duration_secs.max(0) as usize)
-        .checked_mul(sample_rate.max(0) as usize)
-        .and_then(|samples| samples.checked_mul(channels.max(0) as usize))
-        .unwrap_or_else(|| {
-            eprintln!("ERROR: torture duration exceeds the addressable sample count");
-            process::exit(1);
-        });
+    let total_samples = checked_sample_count(
+        i64::from(duration_secs),
+        i64::from(sample_rate),
+        i64::from(channels),
+        MAX_TORTURE_SAMPLES,
+    )
+    .unwrap_or_else(|error| {
+        eprintln!("ERROR: torture: {error}");
+        process::exit(1);
+    });
 
     // --- Create C encoder + decoder ---
     let c_enc = unsafe {
@@ -9404,8 +9418,12 @@ fn usage() {
     eprintln!("  --complexity N   Encoder complexity 0-10 (default: 10)");
     eprintln!("  --iters N        Benchmark iterations (default: 10)");
     eprintln!("  --loss-pct N     Packet loss percentage for FEC (default: 20)");
-    eprintln!("  --duration N     Longsoak duration in seconds (default: 30)");
-    eprintln!("  --sample-rate N  Sample rate for longsoak (default: 48000)");
+    eprintln!("  --duration N     Positive bounded duration in seconds (default: 30)");
+    eprintln!("  --sample-rate N  Opus rate: 8000/12000/16000/24000/48000");
+    eprintln!("  --channels N     Torture channels: 1 or 2 (default: 1)");
+    eprintln!("  --change-interval N  Torture config interval, 1..=1000000");
+    eprintln!("  --burst-interval N   Torture burst interval; 0 disables bursts");
+    eprintln!("  --state-check-interval N  Torture state interval; 0 disables checks");
     eprintln!("  --stop-on-fail   (sweep) Stop after first failing configuration");
     eprintln!();
     eprintln!("SWEEP FILTER EXAMPLES:");
@@ -9415,18 +9433,260 @@ fn usage() {
     eprintln!("  ropus-compare sweep VBR           Only VBR configurations");
 }
 
-fn parse_option(args: &[String], flag: &str, default: i32) -> i32 {
-    for i in 0..args.len() {
-        if args[i] == flag {
-            if i + 1 < args.len() {
-                return args[i + 1].parse().unwrap_or_else(|_| {
-                    eprintln!("ERROR: invalid value for {}", flag);
-                    process::exit(1);
-                });
-            }
+const MIN_OPUS_BITRATE: i64 = 500;
+const MAX_OPUS_BITRATE: i64 = 1_500_000;
+const MAX_BENCH_ITERS: i64 = 10_000;
+const MAX_LONGSOAK_DURATION_SECS: i64 = 600;
+const MAX_TORTURE_DURATION_SECS: i64 = 3_600;
+const MAX_INTERVAL_FRAMES: i64 = 1_000_000;
+const MAX_LONGSOAK_SAMPLES: usize = 50_000_000;
+const MAX_TORTURE_SAMPLES: usize = 200_000_000;
+
+fn fail_option(flag: &str, message: impl std::fmt::Display) -> ! {
+    eprintln!("ERROR: {flag}: {message}");
+    process::exit(1);
+}
+
+fn parse_option<T>(args: &[String], flag: &str, default: T) -> T
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    for (index, argument) in args.iter().enumerate() {
+        if argument == flag {
+            let raw = args
+                .get(index + 1)
+                .unwrap_or_else(|| fail_option(flag, "expected a value"));
+            return raw
+                .parse::<T>()
+                .unwrap_or_else(|error| fail_option(flag, format!("invalid value ({error})")));
         }
     }
     default
+}
+
+fn validate_bitrate(value: i64) -> Result<i32, String> {
+    if value == bindings::OPUS_AUTO as i64
+        || value == -1
+        || (MIN_OPUS_BITRATE..=MAX_OPUS_BITRATE).contains(&value)
+    {
+        Ok(value as i32)
+    } else {
+        Err(format!(
+            "must be -1000 (auto), -1 (max), or {MIN_OPUS_BITRATE}..={MAX_OPUS_BITRATE}"
+        ))
+    }
+}
+
+fn parse_bitrate(args: &[String], default: i32) -> i32 {
+    validate_bitrate(parse_option(args, "--bitrate", i64::from(default)))
+        .unwrap_or_else(|error| fail_option("--bitrate", error))
+}
+
+fn validate_complexity(value: i64) -> Result<i32, String> {
+    i32::try_from(value)
+        .ok()
+        .filter(|value| (0..=10).contains(value))
+        .ok_or_else(|| "must be between 0 and 10".to_string())
+}
+
+fn parse_complexity(args: &[String]) -> i32 {
+    validate_complexity(parse_option(args, "--complexity", 10_i64))
+        .unwrap_or_else(|error| fail_option("--complexity", error))
+}
+
+fn validate_application(value: i64) -> Result<i32, String> {
+    let value = i32::try_from(value).map_err(|_| "is outside the i32 range".to_string())?;
+    if matches!(
+        value,
+        bindings::OPUS_APPLICATION_VOIP
+            | bindings::OPUS_APPLICATION_AUDIO
+            | bindings::OPUS_APPLICATION_RESTRICTED_LOWDELAY
+    ) {
+        Ok(value)
+    } else {
+        Err("must be an Opus application value (2048, 2049, or 2051)".to_string())
+    }
+}
+
+fn parse_application(args: &[String]) -> i32 {
+    validate_application(parse_option(
+        args,
+        "--application",
+        i64::from(bindings::OPUS_APPLICATION_AUDIO),
+    ))
+    .unwrap_or_else(|error| fail_option("--application", error))
+}
+
+fn validate_signal(value: i64) -> Result<i32, String> {
+    let value = i32::try_from(value).map_err(|_| "is outside the i32 range".to_string())?;
+    if matches!(
+        value,
+        bindings::OPUS_AUTO | bindings::OPUS_SIGNAL_VOICE | bindings::OPUS_SIGNAL_MUSIC
+    ) {
+        Ok(value)
+    } else {
+        Err("must be auto (-1000), voice (3001), or music (3002)".to_string())
+    }
+}
+
+fn parse_signal(args: &[String]) -> i32 {
+    validate_signal(parse_option(
+        args,
+        "--signal",
+        i64::from(bindings::OPUS_AUTO),
+    ))
+    .unwrap_or_else(|error| fail_option("--signal", error))
+}
+
+fn validate_loss_pct(value: i64) -> Result<i32, String> {
+    i32::try_from(value)
+        .ok()
+        .filter(|value| (0..=100).contains(value))
+        .ok_or_else(|| "must be between 0 and 100".to_string())
+}
+
+fn parse_loss_pct(args: &[String]) -> i32 {
+    validate_loss_pct(parse_option(args, "--loss-pct", 20_i64))
+        .unwrap_or_else(|error| fail_option("--loss-pct", error))
+}
+
+fn validate_bounded_positive(value: i64, max: i64) -> Result<i32, String> {
+    if (1..=max).contains(&value) {
+        i32::try_from(value).map_err(|_| format!("must be between 1 and {max}"))
+    } else {
+        Err(format!("must be between 1 and {max}"))
+    }
+}
+
+fn parse_duration(args: &[String], flag: &str, default: i64, max: i64) -> i32 {
+    validate_bounded_positive(parse_option(args, flag, default), max)
+        .unwrap_or_else(|error| fail_option(flag, error))
+}
+
+fn validate_iterations(value: i64) -> Result<u32, String> {
+    u32::try_from(value)
+        .ok()
+        .filter(|value| (1..=MAX_BENCH_ITERS as u32).contains(value))
+        .ok_or_else(|| format!("must be between 1 and {MAX_BENCH_ITERS}"))
+}
+
+fn parse_iterations(args: &[String]) -> u32 {
+    validate_iterations(parse_option(args, "--iters", 10_i64))
+        .unwrap_or_else(|error| fail_option("--iters", error))
+}
+
+fn validate_sample_rate(value: i64) -> Result<i32, String> {
+    let value = i32::try_from(value).map_err(|_| "is outside the i32 range".to_string())?;
+    if matches!(value, 8_000 | 12_000 | 16_000 | 24_000 | 48_000) {
+        Ok(value)
+    } else {
+        Err("must be one of 8000, 12000, 16000, 24000, or 48000".to_string())
+    }
+}
+
+fn parse_sample_rate(args: &[String]) -> i32 {
+    validate_sample_rate(parse_option(args, "--sample-rate", 48_000_i64))
+        .unwrap_or_else(|error| fail_option("--sample-rate", error))
+}
+
+fn validate_channels(value: i64) -> Result<i32, String> {
+    i32::try_from(value)
+        .ok()
+        .filter(|value| (1..=2).contains(value))
+        .ok_or_else(|| "must be 1 (mono) or 2 (stereo)".to_string())
+}
+
+fn parse_channels(args: &[String]) -> i32 {
+    validate_channels(parse_option(args, "--channels", 1_i64))
+        .unwrap_or_else(|error| fail_option("--channels", error))
+}
+
+fn validate_required_interval(value: i64) -> Result<usize, String> {
+    usize::try_from(value)
+        .ok()
+        .filter(|value| (1..=MAX_INTERVAL_FRAMES as usize).contains(value))
+        .ok_or_else(|| format!("must be between 1 and {MAX_INTERVAL_FRAMES}"))
+}
+
+fn parse_required_interval(args: &[String], flag: &str, default: i64) -> usize {
+    validate_required_interval(parse_option(args, flag, default))
+        .unwrap_or_else(|error| fail_option(flag, error))
+}
+
+fn validate_optional_interval(value: i64) -> Result<usize, String> {
+    if value == 0 {
+        return Ok(0);
+    }
+    validate_required_interval(value)
+}
+
+fn parse_optional_interval(args: &[String], flag: &str, default: i64) -> usize {
+    validate_optional_interval(parse_option(args, flag, default))
+        .unwrap_or_else(|error| fail_option(flag, error))
+}
+
+fn checked_sample_count(
+    duration_secs: i64,
+    sample_rate: i64,
+    channels: i64,
+    max_samples: usize,
+) -> Result<usize, String> {
+    let duration =
+        usize::try_from(duration_secs).map_err(|_| "duration must be nonnegative".to_string())?;
+    let sample_rate =
+        usize::try_from(sample_rate).map_err(|_| "sample rate must be nonnegative".to_string())?;
+    let channels =
+        usize::try_from(channels).map_err(|_| "channels must be nonnegative".to_string())?;
+    let samples = duration
+        .checked_mul(sample_rate)
+        .and_then(|samples| samples.checked_mul(channels))
+        .ok_or_else(|| "sample count overflows usize".to_string())?;
+    if samples > max_samples {
+        return Err(format!(
+            "sample count {samples} exceeds maximum {max_samples}"
+        ));
+    }
+    Ok(samples)
+}
+
+#[cfg(test)]
+mod cli_validation_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_invalid_numeric_ranges() {
+        assert!(validate_bitrate(0).is_err());
+        assert!(validate_bitrate(i64::MAX).is_err());
+        assert!(validate_complexity(-1).is_err());
+        assert!(validate_complexity(11).is_err());
+        assert!(validate_application(-1).is_err());
+        assert!(validate_signal(0).is_err());
+        assert!(validate_loss_pct(-1).is_err());
+        assert!(validate_loss_pct(101).is_err());
+        assert!(validate_iterations(0).is_err());
+        assert!(validate_iterations(-1).is_err());
+        assert!(validate_iterations(MAX_BENCH_ITERS + 1).is_err());
+        assert!(validate_sample_rate(0).is_err());
+        assert!(validate_sample_rate(44_100).is_err());
+        assert!(validate_channels(0).is_err());
+        assert!(validate_channels(3).is_err());
+        assert!(validate_required_interval(0).is_err());
+        assert!(validate_required_interval(-1).is_err());
+        assert!(validate_optional_interval(-1).is_err());
+        assert_eq!(validate_optional_interval(0).unwrap(), 0);
+    }
+
+    #[test]
+    fn checked_sample_count_handles_negative_overflow_and_cap() {
+        assert!(checked_sample_count(-1, 48_000, 1, MAX_TORTURE_SAMPLES).is_err());
+        assert!(checked_sample_count(i64::MAX, 48_000, 1, MAX_TORTURE_SAMPLES).is_err());
+        assert!(checked_sample_count(3_000, 48_000, 2, MAX_TORTURE_SAMPLES).is_err());
+        assert_eq!(
+            checked_sample_count(1, 48_000, 2, MAX_TORTURE_SAMPLES).unwrap(),
+            96_000
+        );
+    }
 }
 
 fn cmd_hp_cutoff_compare() {
@@ -10669,8 +10929,8 @@ pub fn run() {
                 eprintln!("ERROR: encode requires an input WAV file");
                 process::exit(1);
             }
-            let bitrate = parse_option(&args, "--bitrate", 64000);
-            let complexity = parse_option(&args, "--complexity", 10);
+            let bitrate = parse_bitrate(&args, 64000);
+            let complexity = parse_complexity(&args);
             let outcome = cmd_encode(&args[2], bitrate, complexity);
             if exit_code_for_compare_outcome(outcome) != 0 {
                 process::exit(1);
@@ -10691,7 +10951,7 @@ pub fn run() {
                 eprintln!("ERROR: roundtrip requires an input WAV file");
                 process::exit(1);
             }
-            let bitrate = parse_option(&args, "--bitrate", 64000);
+            let bitrate = parse_bitrate(&args, 64000);
             let outcome = cmd_roundtrip(&args[2], bitrate);
             if exit_code_for_compare_outcome(outcome) != 0 {
                 process::exit(1);
@@ -10702,11 +10962,10 @@ pub fn run() {
                 eprintln!("ERROR: framecompare requires an input WAV file");
                 process::exit(1);
             }
-            let bitrate = parse_option(&args, "--bitrate", 64000);
-            let complexity = parse_option(&args, "--complexity", 10);
-            let application =
-                parse_option(&args, "--application", bindings::OPUS_APPLICATION_AUDIO);
-            let signal = parse_option(&args, "--signal", -1000);
+            let bitrate = parse_bitrate(&args, 64000);
+            let complexity = parse_complexity(&args);
+            let application = parse_application(&args);
+            let signal = parse_signal(&args);
             cmd_encode_framecompare(&args[2], bitrate, complexity, application, signal);
         }
         "unit" => {
@@ -10730,9 +10989,9 @@ pub fn run() {
                 eprintln!("ERROR: bench requires an input WAV file");
                 process::exit(1);
             }
-            let bitrate = parse_option(&args, "--bitrate", 64000);
-            let complexity = parse_option(&args, "--complexity", 10);
-            let iters = parse_option(&args, "--iters", 10) as u32;
+            let bitrate = parse_bitrate(&args, 64000);
+            let complexity = parse_complexity(&args);
+            let iters = parse_iterations(&args);
             cmd_bench(&args[2], bitrate, complexity, iters);
         }
         "decodecompare" => {
@@ -10740,9 +10999,8 @@ pub fn run() {
                 eprintln!("ERROR: decodecompare requires an input WAV file");
                 process::exit(1);
             }
-            let bitrate = parse_option(&args, "--bitrate", 64000);
-            let application =
-                parse_option(&args, "--application", bindings::OPUS_APPLICATION_AUDIO);
+            let bitrate = parse_bitrate(&args, 64000);
+            let application = parse_application(&args);
             cmd_decode_framecompare(&args[2], bitrate, application);
         }
         "plc" => {
@@ -10750,7 +11008,7 @@ pub fn run() {
                 eprintln!("ERROR: plc requires an input WAV file");
                 process::exit(1);
             }
-            let bitrate = parse_option(&args, "--bitrate", 64000);
+            let bitrate = parse_bitrate(&args, 64000);
             cmd_plc(&args[2], bitrate);
         }
         "fec" => {
@@ -10758,8 +11016,8 @@ pub fn run() {
                 eprintln!("ERROR: fec requires an input WAV file");
                 process::exit(1);
             }
-            let bitrate = parse_option(&args, "--bitrate", 64000);
-            let loss_pct = parse_option(&args, "--loss-pct", 20);
+            let bitrate = parse_bitrate(&args, 64000);
+            let loss_pct = parse_loss_pct(&args);
             cmd_fec(&args[2], bitrate, loss_pct);
         }
         "dtx" => {
@@ -10767,7 +11025,7 @@ pub fn run() {
                 eprintln!("ERROR: dtx requires an input WAV file or 'generate'");
                 process::exit(1);
             }
-            let bitrate = parse_option(&args, "--bitrate", 24000);
+            let bitrate = parse_bitrate(&args, 24000);
             cmd_dtx(&args[2], bitrate);
         }
         "sweep" => {
@@ -10800,16 +11058,16 @@ pub fn run() {
             cmd_decode_formats(&args[2]);
         }
         "longsoak" => {
-            let duration = parse_option(&args, "--duration", 30);
-            let sr = parse_option(&args, "--sample-rate", 48000);
+            let duration = parse_duration(&args, "--duration", 30, MAX_LONGSOAK_DURATION_SECS);
+            let sr = parse_sample_rate(&args);
             cmd_longsoak(duration, sr);
         }
         "torture" => {
-            let duration = parse_option(&args, "--duration", 1800); // 30 min default
-            let seed_i = parse_option(&args, "--seed", 42);
-            let interval = parse_option(&args, "--change-interval", 50);
-            let sr = parse_option(&args, "--sample-rate", 48000);
-            let ch = parse_option(&args, "--channels", 1);
+            let duration = parse_duration(&args, "--duration", 1800, MAX_TORTURE_DURATION_SECS);
+            let seed = parse_option(&args, "--seed", 42_u64);
+            let interval = parse_required_interval(&args, "--change-interval", 50);
+            let sr = parse_sample_rate(&args);
+            let ch = parse_channels(&args);
             // Section 2: --cross-decode enables the 2x2 decoder matrix
             // Section 3: --burst-interval controls the deterministic burst
             //            scheduler (0 disables; default 200 = ~4s between
@@ -10819,13 +11077,14 @@ pub fn run() {
             //            --state-check-loose downgrades state mismatches to
             //            warnings. Strict-by-default per HLD Decision 5.
             let cross_decode = args.iter().any(|a| a == "--cross-decode");
-            let burst_interval = parse_option(&args, "--burst-interval", 200) as usize;
-            let state_check_interval = parse_option(&args, "--state-check-interval", 1000) as usize;
+            let burst_interval = parse_optional_interval(&args, "--burst-interval", 200);
+            let state_check_interval =
+                parse_optional_interval(&args, "--state-check-interval", 1000);
             let state_check_strict = !args.iter().any(|a| a == "--state-check-loose");
             cmd_torture(
                 duration,
-                seed_i as u64,
-                interval as usize,
+                seed,
+                interval,
                 sr,
                 ch,
                 cross_decode,

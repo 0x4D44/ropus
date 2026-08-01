@@ -1,3 +1,7 @@
+- Validate numeric CLI values before dispatch (`harness/src/cli.rs:parse_bitrate`).
+
+  Typed range checks stop negative casts, modulo-zero intervals, unsupported rates, and unbounded duration/iteration work; keep zero as an explicit disable only where the command documents it.
+
 - Keep RIFF parsing fallible and shared (`harness/src/wav.rs:parse_pcm16_wav`).
 
   Check the container and every padded chunk extent before slicing, then validate PCM format and sample alignment once for all harness callers.
