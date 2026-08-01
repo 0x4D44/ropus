@@ -9,10 +9,10 @@
 //! is the cheapest sanity check that the producer side actually
 //! populates the ring — independent of the diff tool.
 //!
-//! It runs entirely against the Rust codec (no FFI), and is gated on
-//! `trace-silk-encode` being enabled (which `ropus-harness` does
-//! unconditionally — see `harness/Cargo.toml`).
+//! It runs entirely against the Rust codec (no FFI). Enable the harness
+//! `trace-silk-encode` feature to compile and run this diagnostic test.
 
+#![cfg(feature = "trace-silk-encode")]
 #![cfg(not(no_reference))]
 
 use ropus::opus::encoder::{OPUS_APPLICATION_VOIP, OpusEncoder};

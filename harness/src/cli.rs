@@ -2656,6 +2656,15 @@ struct BenchResult {
     frames: usize,
 }
 
+fn assert_benchmark_build_is_uninstrumented() {
+    if cfg!(feature = "trace-silk-encode") || ropus::SILK_ENCODE_TRACE_ENABLED {
+        panic!(
+            "benchmark build contract violated: rebuild ropus-compare without the \
+             trace-silk-encode feature"
+        );
+    }
+}
+
 impl BenchResult {
     fn per_iter_ms(&self) -> f64 {
         (self.total_secs * 1000.0) / self.iters as f64
@@ -3305,6 +3314,8 @@ fn cmd_fec(wav_path: &str, bitrate: i32, loss_pct: i32) {
 }
 
 fn cmd_bench(wav_path: &str, bitrate: i32, complexity: i32, iters: u32) {
+    assert_benchmark_build_is_uninstrumented();
+
     let wav = read_wav(Path::new(wav_path));
     let sr = wav.sample_rate as i32;
     let ch = wav.channels as i32;
@@ -9028,6 +9039,19 @@ mod coverage_smoke_tests {
     /// `tests/vectors/` directory lives at `../tests/vectors/` from here.
     fn vector_path(name: &str) -> String {
         format!("{}/../tests/vectors/{}", env!("CARGO_MANIFEST_DIR"), name)
+    }
+
+    #[test]
+    #[cfg(not(feature = "trace-silk-encode"))]
+    fn benchmark_build_contract_accepts_default_build() {
+        assert_benchmark_build_is_uninstrumented();
+    }
+
+    #[test]
+    #[cfg(feature = "trace-silk-encode")]
+    #[should_panic(expected = "benchmark build contract violated")]
+    fn benchmark_build_contract_rejects_trace_build() {
+        assert_benchmark_build_is_uninstrumented();
     }
 
     #[test]

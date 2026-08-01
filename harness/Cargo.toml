@@ -5,13 +5,13 @@ edition = "2024"
 license = "BSD-3-Clause"
 publish = false
 
+[features]
+default = []
+# Enables the Rust and C SILK encode traces used only by diagnostic targets.
+trace-silk-encode = ["ropus/trace-silk-encode"]
+
 [dependencies]
-# `trace-silk-encode` enables the Phase B encode-side trace tuples used
-# by the `fuzz_repro_diff` Cluster A diagnostic. Off-by-default in
-# ropus; the harness opts in unconditionally because the trace push
-# is cheap (one Mutex-guarded Vec push) and uniformly available means
-# the diagnostic never has to maintain a feature-toggle build matrix.
-ropus = { path = "../ropus", features = ["trace-silk-encode"] }
+ropus = { path = "../ropus" }
 ogg = "0.9"
 
 [build-dependencies]
@@ -43,6 +43,12 @@ path = "src/bin/repro_fuzz_roundtrip.rs"
 [[bin]]
 name = "trace_silk_wb"
 path = "src/bin/trace_silk_wb.rs"
+required-features = ["trace-silk-encode"]
+
+[[bin]]
+name = "fuzz_repro_diff"
+path = "src/bin/fuzz_repro_diff.rs"
+required-features = ["trace-silk-encode"]
 
 [[bin]]
 name = "projection_roundtrip"

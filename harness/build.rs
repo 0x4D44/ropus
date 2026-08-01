@@ -50,8 +50,10 @@ fn main() {
         .expect("Cargo must set CARGO_CFG_TARGET_OS for build scripts");
     let target_is_x86 = matches!(target_arch.as_str(), "x86" | "x86_64");
     let target_is_apple_aarch64 = target_arch == "aarch64" && target_os == "macos";
+    let trace_silk_encode = std::env::var_os("CARGO_FEATURE_TRACE_SILK_ENCODE").is_some();
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_ARCH");
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_TRACE_SILK_ENCODE");
 
     // Declare `no_reference` for cfg-checking regardless of which branch we take.
     println!("cargo:rustc-check-cfg=cfg(no_reference)");
@@ -100,7 +102,7 @@ fn main() {
     ];
 
     // --- SILK common sources ---
-    let silk_sources = [
+    let mut silk_sources = vec![
         "silk/CNG.c",
         "silk/code_signs.c",
         "silk/init_decoder.c",
@@ -111,11 +113,6 @@ fn main() {
         "silk/decode_pulses.c",
         "silk/decoder_set_fs.c",
         "silk/dec_API.c",
-        // "silk/enc_API.c" — replaced by our trace-instrumented copy
-        // `harness/silk_enc_api_traced.c`. Defines `silk_Encode` (same
-        // name) so opus_encoder.c links against the traced variant.
-        // Cluster A stage 2b (Phase B); revert by re-enabling this
-        // entry and removing the harness file from the build.
         "silk/encode_indices.c",
         "silk/encode_pulses.c",
         "silk/gain_quant.c",
@@ -183,6 +180,9 @@ fn main() {
         "silk/stereo_quant_pred.c",
         "silk/LPC_fit.c",
     ];
+    if !trace_silk_encode {
+        silk_sources.push("silk/enc_API.c");
+    }
 
     // --- SILK fixed-point sources ---
     let silk_fixed_sources = [
@@ -432,20 +432,17 @@ fn main() {
     //     build.file(ref_dir.join(src));
     // }
 
-    // Debug helper for direct function comparisons.
-    //
-    // `debug_silk_trace.c` provides the SILK decode trace and encode-side trace
-    // FIFO. `silk_enc_api_traced.c` replaces xiph's enc_API.c and emits
-    // per-boundary tuples. `silk_encode_frame_FIX_traced.c` exposes renamed
-    // traced entry points without colliding with the unmodified xiph copy.
-    // All local helpers use the same compile/watch path; the Apple shim remains
-    // target-specific.
-    let mut local_sources = vec![
-        "debug_helper.c",
-        "debug_silk_trace.c",
-        "silk_enc_api_traced.c",
-        "silk_encode_frame_FIX_traced.c",
-    ];
+    // Debug helpers are isolated from normal comparison and benchmark builds.
+    // With the trace feature enabled, `silk_enc_api_traced.c` replaces Xiph's
+    // `silk/enc_API.c`; the fixed-point trace file exposes renamed entry points.
+    let mut local_sources = vec!["debug_helper.c"];
+    if trace_silk_encode {
+        local_sources.extend([
+            "debug_silk_trace.c",
+            "silk_enc_api_traced.c",
+            "silk_encode_frame_FIX_traced.c",
+        ]);
+    }
     if target_is_apple_aarch64 {
         local_sources.push("warped_autocorrelation_FIX_neon_shim.c");
     }

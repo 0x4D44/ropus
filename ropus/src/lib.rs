@@ -113,6 +113,13 @@ pub mod opus;
 pub mod silk;
 pub mod types;
 
+/// Whether this codec build contains SILK encode trace instrumentation.
+///
+/// This is public so benchmark consumers can reject an instrumented dependency,
+/// including when Cargo enables the dependency feature through feature unification.
+#[doc(hidden)]
+pub const SILK_ENCODE_TRACE_ENABLED: bool = cfg!(feature = "trace-silk-encode");
+
 #[cfg(feature = "trace-silk-encode")]
 pub mod silk_trace {
     //! Phase B encode-side trace tuples (Cluster A stage 2b). Gated
