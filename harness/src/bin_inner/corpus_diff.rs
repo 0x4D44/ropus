@@ -33,9 +33,9 @@
 //! Exit codes (stable contract — CI should gate on these).
 //!   0 — at least one supported file decoded nonzero audio and every decoded
 //!       file matched sample-for-sample.
-//!   1 — one or more files mismatched or panicked, the directory argument was
-//!       missing / unreadable, OR candidate files existed but none decoded
-//!       nonzero audio for comparison.
+//!   1 — one or more files were malformed, mismatched, or panicked, the
+//!       directory argument was missing / unreadable, OR candidate files
+//!       existed but none decoded nonzero audio for comparison.
 //!   2 — directory exists but contains no candidate files. Distinct from 0
 //!       so a CI pipeline cannot silently pass against an unpopulated
 //!       corpus; gate the step on `fetch_corpus.sh` or a manual populate
@@ -50,7 +50,7 @@ use ropus_harness::bindings;
 
 use std::ffi::OsStr;
 use std::fs::{self, File};
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::os::raw::{c_int, c_uchar};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -119,9 +119,64 @@ fn parse_opus_head(data: &[u8]) -> Result<OpusHead, String> {
     })
 }
 
+fn validate_opus_tags(data: &[u8]) -> Result<(), String> {
+    if data.len() < 8 {
+        return Err(format!("OpusTags too short ({} bytes, need 8)", data.len()));
+    }
+    if &data[..8] != b"OpusTags" {
+        return Err("OpusTags magic missing".into());
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // File-level decode + diff
 // ---------------------------------------------------------------------------
+
+/// Validate Ogg page framing before handing the stream to `PacketReader`.
+///
+/// `PacketReader` deliberately treats incomplete trailing bytes as clean EOF
+/// while searching for the next page. That is useful for seeking, but a
+/// corpus comparator must reject a file that ends in a partial page instead
+/// of counting the already-decoded prefix as a complete match.
+fn validate_ogg_container(path: &Path) -> Result<(), String> {
+    let mut file = File::open(path).map_err(|e| format!("open failed: {e}"))?;
+    let mut page_index = 0usize;
+    let mut header = [0u8; 27];
+
+    loop {
+        let first_len = file
+            .read(&mut header[..1])
+            .map_err(|e| format!("read Ogg page {page_index}: {e}"))?;
+        if first_len == 0 {
+            if page_index == 0 {
+                return Err("empty stream (no pages)".into());
+            }
+            return Ok(());
+        }
+        file.read_exact(&mut header[1..])
+            .map_err(|e| format!("truncated Ogg page header at page {page_index}: {e}"))?;
+        if &header[..4] != b"OggS" {
+            return Err(format!("missing OggS capture pattern at page {page_index}"));
+        }
+        if header[4] != 0 {
+            return Err(format!(
+                "unsupported Ogg stream structure version {} at page {page_index}",
+                header[4]
+            ));
+        }
+
+        let segment_count = header[26] as usize;
+        let mut segments = vec![0u8; segment_count];
+        file.read_exact(&mut segments)
+            .map_err(|e| format!("truncated Ogg segment table at page {page_index}: {e}"))?;
+        let payload_len: usize = segments.iter().map(|&segment| segment as usize).sum();
+        let mut payload = vec![0u8; payload_len];
+        file.read_exact(&mut payload)
+            .map_err(|e| format!("truncated Ogg payload at page {page_index}: {e}"))?;
+        page_index += 1;
+    }
+}
 
 /// Outcome of comparing one file's output from both decoders.
 enum FileOutcome {
@@ -130,13 +185,18 @@ enum FileOutcome {
         packets: usize,
         samples_per_ch: usize,
     },
-    /// Container or header parse failed — file is malformed. Not a ropus bug.
+    /// The container or stream is malformed. This is always non-green, but is
+    /// distinct from a decoder mismatch so corpus reports can identify bad
+    /// input rather than blaming ropus.
+    Malformed(String),
+    /// A valid but unsupported stream family or channel layout. This is an
+    /// exploratory skip and does not fail a run that has a supported match.
     Skipped(String),
     /// Decoders disagreed. Includes first-diff context.
     Mismatch(Mismatch),
-    /// Either decoder returned an error on the same packet. We treat matching
-    /// errors as a pass (both implementations agreed the file is bad at the
-    /// same point) and mismatched errors as a real mismatch.
+    /// Either decoder returned an error on the same packet. Matching errors
+    /// are classified as malformed input; mismatched errors remain a real
+    /// decoder mismatch.
     DecoderError(Mismatch),
 }
 
@@ -150,23 +210,27 @@ struct Mismatch {
 }
 
 fn diff_file(path: &Path) -> FileOutcome {
+    if let Err(e) = validate_ogg_container(path) {
+        return FileOutcome::Malformed(e);
+    }
+
     // Open and wrap in a buffered reader. `ogg::PacketReader` needs `Read +
     // Seek`; `BufReader<File>` satisfies both.
     let file = match File::open(path) {
         Ok(f) => f,
-        Err(e) => return FileOutcome::Skipped(format!("open failed: {e}")),
+        Err(e) => return FileOutcome::Malformed(format!("open failed: {e}")),
     };
     let mut reader = PacketReader::new(BufReader::new(file));
 
     // Page 1: OpusHead.
     let head_pkt = match reader.read_packet() {
         Ok(Some(pkt)) => pkt,
-        Ok(None) => return FileOutcome::Skipped("empty stream (no pages)".into()),
-        Err(e) => return FileOutcome::Skipped(format!("read OpusHead page: {e}")),
+        Ok(None) => return FileOutcome::Malformed("empty stream (no pages)".into()),
+        Err(e) => return FileOutcome::Malformed(format!("read OpusHead page: {e}")),
     };
     let head = match parse_opus_head(&head_pkt.data) {
         Ok(h) => h,
-        Err(e) => return FileOutcome::Skipped(e),
+        Err(e) => return FileOutcome::Malformed(e),
     };
     if head.channel_mapping != 0 {
         return FileOutcome::Skipped(format!(
@@ -182,13 +246,17 @@ fn diff_file(path: &Path) -> FileOutcome {
     }
     let channels = head.channels as i32;
 
-    // Page 2: OpusTags. Read and discard; we only need to consume the page so
-    // the next `read_packet()` call lands on the first audio packet.
-    match reader.read_packet() {
-        Ok(Some(_)) => {}
-        Ok(None) => return FileOutcome::Skipped("stream ended before OpusTags".into()),
-        Err(e) => return FileOutcome::Skipped(format!("read OpusTags page: {e}")),
+    // Page 2: OpusTags. Consume it so the next `read_packet()` call lands on
+    // the first audio packet, but validate the packet before doing so. Without
+    // this check an audio packet in the tags slot is silently discarded.
+    let tags_pkt = match reader.read_packet() {
+        Ok(Some(pkt)) => pkt,
+        Ok(None) => return FileOutcome::Malformed("stream ended before OpusTags".into()),
+        Err(e) => return FileOutcome::Malformed(format!("read OpusTags page: {e}")),
     };
+    if let Err(e) = validate_opus_tags(&tags_pkt.data) {
+        return FileOutcome::Malformed(e);
+    }
 
     // Spin up both decoders.
     let mut ropus_dec = match OpusDecoder::new(OPUS_SAMPLE_RATE_HZ, channels) {
@@ -216,7 +284,7 @@ fn diff_file(path: &Path) -> FileOutcome {
             Ok(Some(p)) => p,
             Ok(None) => break, // clean EOF
             Err(e) => {
-                return FileOutcome::Skipped(format!(
+                return FileOutcome::Malformed(format!(
                     "Ogg read error after {packets_decoded} packets: {e}"
                 ));
             }
@@ -263,10 +331,9 @@ fn diff_file(path: &Path) -> FileOutcome {
                 total_samples_per_ch += n;
             }
             (Err(r_code), Err(c_code)) => {
-                // Both decoders rejected the same packet. Treat this as a
-                // "matched error" — the file is likely truncated or the
-                // packet is malformed; both implementations agree, which is
-                // what we care about. Bail cleanly; the corpus run continues.
+                // Both decoders rejected the same packet. A matching decoder
+                // error still means the file was not completely decoded, so
+                // it must not be reported as a successful prefix match.
                 if r_code != c_code {
                     return FileOutcome::DecoderError(Mismatch {
                         packet_index: packets_decoded,
@@ -277,7 +344,9 @@ fn diff_file(path: &Path) -> FileOutcome {
                         note: "both decoders errored but with different codes".into(),
                     });
                 }
-                break;
+                return FileOutcome::Malformed(format!(
+                    "both decoders rejected packet {packets_decoded}: ropus={r_code}, cref={c_code}"
+                ));
             }
             (Ok(r_n), Err(c_code)) => {
                 return FileOutcome::DecoderError(Mismatch {
@@ -365,6 +434,7 @@ struct RunStats {
     zero_audio: usize,
     skipped: usize,
     deferred: usize,
+    malformed: usize,
     mismatched: usize,
     panicked: usize,
 }
@@ -377,7 +447,11 @@ impl RunStats {
         if self.deferred == self.candidates {
             return 3;
         }
-        if self.mismatched > 0 || self.panicked > 0 || self.decoded_and_compared == 0 {
+        if self.malformed > 0
+            || self.mismatched > 0
+            || self.panicked > 0
+            || self.decoded_and_compared == 0
+        {
             return 1;
         }
         0
@@ -393,12 +467,13 @@ impl RunStats {
 
     fn summary_line(&self) -> String {
         format!(
-            "CORPUS_DIFF_SUMMARY candidates={} decoded_and_compared={} zero_audio={} skipped={} deferred={} mismatched={} panicked={}",
+            "CORPUS_DIFF_SUMMARY candidates={} decoded_and_compared={} zero_audio={} skipped={} deferred={} malformed={} mismatched={} panicked={}",
             self.candidates,
             self.decoded_and_compared,
             self.zero_audio,
             self.skipped,
             self.deferred,
+            self.malformed,
             self.mismatched,
             self.panicked
         )
@@ -530,6 +605,10 @@ pub fn main() {
                 println!("  SKIP {display} ({reason})");
                 stats.skipped += 1;
             }
+            Ok(FileOutcome::Malformed(reason)) => {
+                println!("  FAIL {display} — malformed: {reason}");
+                stats.malformed += 1;
+            }
             Ok(FileOutcome::Mismatch(m)) => {
                 println!(
                     "  FAIL {display} — packet {} sample {} ch {}: ropus={} cref={} ({})",
@@ -559,11 +638,12 @@ pub fn main() {
     }
 
     println!(
-        "---\n{} decoded-and-compared, {} zero-audio, {} skipped, {} deferred, {} mismatched, {} panicked (of {} total)",
+        "---\n{} decoded-and-compared, {} zero-audio, {} skipped, {} deferred, {} malformed, {} mismatched, {} panicked (of {} total)",
         stats.decoded_and_compared,
         stats.zero_audio,
         stats.skipped,
         stats.deferred,
+        stats.malformed,
         stats.mismatched,
         stats.panicked,
         stats.candidates
@@ -576,6 +656,11 @@ pub fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+
+    use ogg::writing::{PacketWriteEndInfo, PacketWriter};
+    use ropus::opus::encoder::{OPUS_APPLICATION_AUDIO, OpusEncoder};
+    use tempfile::NamedTempFile;
 
     #[test]
     fn corpus_all_deferred_set_returns_exit_three() {
@@ -607,6 +692,7 @@ mod tests {
             candidates: 5,
             deferred: 3,
             skipped: 1,
+            malformed: 3,
             decoded_and_compared: 1,
             ..RunStats::default()
         };
@@ -615,12 +701,19 @@ mod tests {
             line.contains("deferred=3"),
             "missing deferred= field: {line}"
         );
+        assert!(
+            line.contains("malformed=3"),
+            "missing malformed= field: {line}"
+        );
         let skipped_pos = line.find("skipped=").expect("skipped= present");
         let deferred_pos = line.find("deferred=").expect("deferred= present");
+        let malformed_pos = line.find("malformed=").expect("malformed= present");
         let mismatched_pos = line.find("mismatched=").expect("mismatched= present");
         assert!(
-            skipped_pos < deferred_pos && deferred_pos < mismatched_pos,
-            "expected order skipped<deferred<mismatched: {line}"
+            skipped_pos < deferred_pos
+                && deferred_pos < malformed_pos
+                && malformed_pos < mismatched_pos,
+            "expected order skipped<deferred<malformed<mismatched: {line}"
         );
     }
 
@@ -701,6 +794,140 @@ mod tests {
         };
         panic.record_match(960);
         assert_eq!(panic.exit_code(), 1);
+    }
+
+    #[test]
+    fn corpus_malformed_is_non_green_even_with_a_valid_prefix() {
+        let mut stats = RunStats {
+            candidates: 2,
+            malformed: 1,
+            ..RunStats::default()
+        };
+        stats.record_match(960);
+
+        assert_eq!(stats.decoded_and_compared, 1);
+        assert_eq!(stats.exit_code(), 1);
+        assert!(stats.summary_line().contains("malformed=1"));
+    }
+
+    #[test]
+    fn opus_tags_magic_is_required() {
+        assert!(validate_opus_tags(b"OpusTags").is_ok());
+        assert!(
+            validate_opus_tags(b"NotTags!")
+                .expect_err("wrong magic must be rejected")
+                .contains("magic")
+        );
+        assert!(
+            validate_opus_tags(b"short")
+                .expect_err("short tags must be rejected")
+                .contains("too short")
+        );
+    }
+
+    #[test]
+    fn missing_opus_tags_is_malformed() {
+        let file = write_test_ogg(b"NotTags!", &test_audio_packet());
+
+        match diff_file(file.path()) {
+            FileOutcome::Malformed(reason) => assert!(
+                reason.contains("OpusTags"),
+                "unexpected malformed reason: {reason}"
+            ),
+            _ => panic!("missing OpusTags must not be treated as a match or skip"),
+        }
+    }
+
+    #[test]
+    fn valid_prefix_with_malformed_tail_is_not_a_match() {
+        let file = write_test_ogg(b"OpusTags", &test_audio_packet());
+        let mut bytes = std::fs::read(file.path()).expect("read generated Ogg");
+        bytes.extend_from_slice(b"OggS\x00");
+        std::fs::write(file.path(), bytes).expect("append malformed Ogg tail");
+
+        match diff_file(file.path()) {
+            FileOutcome::Malformed(reason) => assert!(
+                reason.contains("truncated Ogg page header"),
+                "expected a trailing-page framing error, got: {reason}"
+            ),
+            FileOutcome::Match {
+                packets,
+                samples_per_ch,
+            } => panic!("unexpected match: packets={packets}, samples_per_ch={samples_per_ch}"),
+            FileOutcome::Skipped(reason) => panic!("unexpected skip: {reason}"),
+            FileOutcome::Mismatch(_) => panic!("unexpected PCM mismatch"),
+            FileOutcome::DecoderError(_) => panic!("unexpected decoder error"),
+        }
+    }
+
+    #[test]
+    fn matching_decoder_error_after_valid_prefix_is_malformed() {
+        let valid_audio = test_audio_packet();
+        let invalid_audio = [0xff];
+        let file = write_test_ogg_packets(b"OpusTags", &[&valid_audio, &invalid_audio]);
+
+        match diff_file(file.path()) {
+            FileOutcome::Malformed(reason) => assert!(
+                reason.contains("both decoders rejected packet 1"),
+                "expected a matching decoder error, got: {reason}"
+            ),
+            FileOutcome::Match {
+                packets,
+                samples_per_ch,
+            } => panic!("unexpected match: packets={packets}, samples_per_ch={samples_per_ch}"),
+            FileOutcome::Skipped(reason) => panic!("unexpected skip: {reason}"),
+            FileOutcome::Mismatch(_) => panic!("unexpected PCM mismatch"),
+            FileOutcome::DecoderError(_) => panic!("unexpected decoder error mismatch"),
+        }
+    }
+
+    fn test_audio_packet() -> Vec<u8> {
+        let mut encoder = OpusEncoder::new(OPUS_SAMPLE_RATE_HZ, 1, OPUS_APPLICATION_AUDIO)
+            .expect("create test encoder");
+        let pcm = vec![0i16; 960];
+        let mut packet = vec![0u8; 4000];
+        let max_packet_bytes = packet.len() as i32;
+        let length = encoder
+            .encode(&pcm, 960, &mut packet, max_packet_bytes)
+            .expect("encode test packet");
+        packet.truncate(length as usize);
+        packet
+    }
+
+    fn write_test_ogg(tags: &[u8], audio: &[u8]) -> NamedTempFile {
+        write_test_ogg_packets(tags, &[audio])
+    }
+
+    fn write_test_ogg_packets(tags: &[u8], audio_packets: &[&[u8]]) -> NamedTempFile {
+        let mut cursor = Cursor::new(Vec::new());
+        {
+            let mut writer = PacketWriter::new(&mut cursor);
+            writer
+                .write_packet(
+                    b"OpusHead\x01\x01\x00\x00\x80\xbb\x00\x00\x00\x00\x00".to_vec(),
+                    0x524f5055,
+                    PacketWriteEndInfo::EndPage,
+                    0,
+                )
+                .expect("write OpusHead");
+            writer
+                .write_packet(tags.to_vec(), 0x524f5055, PacketWriteEndInfo::EndPage, 0)
+                .expect("write OpusTags");
+            for (index, audio) in audio_packets.iter().enumerate() {
+                writer
+                    .write_packet(
+                        audio.to_vec(),
+                        0x524f5055,
+                        PacketWriteEndInfo::EndPage,
+                        960 * (index as u64 + 1),
+                    )
+                    .expect("write audio");
+            }
+        }
+
+        let file = NamedTempFile::new().expect("create Ogg temp file");
+        std::fs::write(file.path(), cursor.into_inner()).expect("write Ogg temp file");
+        file
     }
 
     #[test]

@@ -1,3 +1,7 @@
+- Validate Ogg pages before corpus diff; `PacketReader` hides truncated tails (`corpus_diff.rs:validate_ogg_container`).
+
+  A valid decoded prefix is not a complete corpus match. Validate `OpusTags`, classify structural errors separately from exploratory skips, and require clean EOF before recording a match.
+
 - `Command::output()` buffers untrusted child output before any cap; drain stdout/stderr concurrently into bounded prefix+tail buffers (`full-test/src/process_capture.rs:output`).
 
   Apply the helper to every runner subprocess, bound coverage JSON by file size, and read temp-file logs through the same bounded reader.

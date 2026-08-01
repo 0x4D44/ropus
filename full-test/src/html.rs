@@ -771,12 +771,13 @@ fn render_corpus_gate(out: &mut String, corpus: &CorpusOutcome) {
     }
     if let Some(summary) = &corpus.corpus_diff_summary {
         out.push_str(&format!(
-            "<p class=\"meta\">corpus_diff: {} candidate(s), {} decoded-and-compared, {} zero-audio, {} skipped, {} deferred, {} mismatched, {} panicked.</p>\n",
+            "<p class=\"meta\">corpus_diff: {} candidate(s), {} decoded-and-compared, {} zero-audio, {} skipped, {} deferred, {} malformed, {} mismatched, {} panicked.</p>\n",
             summary.candidates,
             summary.decoded_and_compared,
             summary.zero_audio,
             summary.skipped,
             summary.deferred,
+            summary.malformed,
             summary.mismatched,
             summary.panicked,
         ));
@@ -1514,6 +1515,7 @@ mod tests {
             zero_audio: 0,
             skipped: 1,
             deferred: 1,
+            malformed: 0,
             mismatched: 0,
             panicked: 0,
         });

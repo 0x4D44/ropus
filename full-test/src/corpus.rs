@@ -102,6 +102,7 @@ pub struct CorpusDiffSummary {
     pub zero_audio: usize,
     pub skipped: usize,
     pub deferred: usize,
+    pub malformed: usize,
     pub mismatched: usize,
     pub panicked: usize,
 }
@@ -581,6 +582,14 @@ fn run_generated_smoke_with_runner(
                     "corpus_diff terminated by signal (ffmpeg={ffmpeg_label})"
                 )),
             }
+            if let Some(summary) = &summary
+                && summary.malformed > 0
+            {
+                issues.push(format!(
+                    "corpus_diff reported {} malformed candidate file(s) (ffmpeg={ffmpeg_label})",
+                    summary.malformed
+                ));
+            }
             match &summary {
                 Some(summary) if summary.decoded_and_compared >= required.len() => {}
                 Some(summary) => issues.push(format!(
@@ -965,6 +974,7 @@ fn parse_corpus_diff_summary(stdout: &str) -> Option<CorpusDiffSummary> {
         zero_audio: 0,
         skipped: 0,
         deferred: 0,
+        malformed: 0,
         mismatched: 0,
         panicked: 0,
     };
@@ -977,6 +987,7 @@ fn parse_corpus_diff_summary(stdout: &str) -> Option<CorpusDiffSummary> {
             "zero_audio" => summary.zero_audio = value,
             "skipped" => summary.skipped = value,
             "deferred" => summary.deferred = value,
+            "malformed" => summary.malformed = value,
             "mismatched" => summary.mismatched = value,
             "panicked" => summary.panicked = value,
             _ => return None,
@@ -1307,6 +1318,7 @@ channels = 1
                 zero_audio: 0,
                 skipped: 0,
                 deferred: 0,
+                malformed: 0,
                 mismatched: 0,
                 panicked: 0,
             }
@@ -1316,10 +1328,11 @@ channels = 1
     #[test]
     fn parse_corpus_diff_summary_reads_deferred_key() {
         let summary = parse_corpus_diff_summary(
-            "CORPUS_DIFF_SUMMARY candidates=4 decoded_and_compared=1 zero_audio=0 skipped=0 deferred=2 mismatched=1 panicked=0\n",
+            "CORPUS_DIFF_SUMMARY candidates=4 decoded_and_compared=1 zero_audio=0 skipped=0 deferred=2 malformed=3 mismatched=1 panicked=0\n",
         )
         .expect("summary");
         assert_eq!(summary.deferred, 2);
+        assert_eq!(summary.malformed, 3);
         assert_eq!(summary.candidates, 4);
         assert_eq!(summary.mismatched, 1);
 
@@ -1328,6 +1341,7 @@ channels = 1
         )
         .expect("legacy summary");
         assert_eq!(older.deferred, 0);
+        assert_eq!(older.malformed, 0);
     }
 
     #[test]
@@ -1617,6 +1631,35 @@ expected_sha256 = "{pinned_digest}"
         assert_eq!(outcome.status, Status::Fail);
         assert!(
             outcome.issues.iter().any(|i| i.contains("no candidates")),
+            "issues: {:?}",
+            outcome.issues
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn corpus_diff_reported_malformed_is_fail_even_with_zero_status() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write(tmp.path(), "tests/vectors/48k_sine1k_loud.wav", "fake wav");
+        write(tmp.path(), MANIFEST_REL, &unpinned_manifest());
+        let runner = ScriptedRunner::new(
+            &synthetic_ogg_stream(b"audio"),
+            b"CORPUS_DIFF_SUMMARY candidates=1 decoded_and_compared=1 zero_audio=0 skipped=0 deferred=0 malformed=1 mismatched=0 panicked=0\n",
+        );
+        let outcome = run_generated_smoke_with_runner(
+            tmp.path(),
+            FfmpegProbe::Available {
+                version: "ffmpeg version test".to_string(),
+            },
+            &runner,
+        );
+
+        assert_eq!(outcome.status, Status::Fail);
+        assert!(
+            outcome
+                .issues
+                .iter()
+                .any(|issue| issue.contains("1 malformed candidate file")),
             "issues: {:?}",
             outcome.issues
         );
