@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00022 — Projection gate passes fixtures without processing a frame
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** harness/projection-gate
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T041534Z-p18394-n733330000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00022-run-fix-20260801T041534Z-p18394-n733330000-c1
-- **Owner base:** 970262d59daa199e346ab3ec1cf0dd55ac47b512
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T04:15:34Z
-- **Owner until:** 2026-08-01T06:15:34Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T041534Z-p18394-n733330000-c1 branch=task/bug-ROP-BUG-FLUX-00022-run-fix-20260801T041534Z-p18394-n733330000-c1 code=de372258083ab0b5c42eaf84d0d95f76c7962553 gate=manual)
 
 ## Observation
 
