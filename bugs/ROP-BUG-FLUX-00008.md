@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00008 — Multistream constructors panic on undersized mapping and matrix slices
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus/opus-multistream
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T152126Z-p90074-n005769000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00008-run-fix-20260801T152126Z-p90074-n005769000-c1
-- **Owner base:** 5b655a3deab55d87a0b73c25006c6a0c26bb5a3c
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T15:21:26Z
-- **Owner until:** 2026-08-01T17:21:26Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T152126Z-p90074-n005769000-c1 branch=task/bug-ROP-BUG-FLUX-00008-run-fix-20260801T152126Z-p90074-n005769000-c1 code=cfc23f68f1543c8f37d121621874fcebdc26a3c1 gate=manual)
 
 ## Observation
 
