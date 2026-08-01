@@ -5,15 +5,15 @@
 - **Severity:** High
 - **Area:** ropus/silk-celt-api
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T035908Z-p73731-n642592000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00007-run-fix-20260801T035908Z-p73731-n642592000-c1
+- **Owner base:** 0d82e07b7706709da42f36d323ac515cf5da1688
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T03:59:08Z
+- **Owner until:** 2026-08-01T05:59:08Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
