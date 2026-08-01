@@ -5,15 +5,15 @@
 - **Severity:** Low
 - **Area:** ropus-tools-core/picture-detection
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T222739Z-p40717-n324296000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00049-run-fix-20260801T222739Z-p40717-n324296000-c1
+- **Owner base:** 7394d6bbcf248745b2ad35caa7257903ec9ba981
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T22:27:39Z
+- **Owner until:** 2026-08-02T00:27:39Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
