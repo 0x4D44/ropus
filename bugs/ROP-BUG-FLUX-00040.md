@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00040 — fb2k clears last error with a heap allocation after every decode
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** ropus-fb2k/realtime
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T212130Z-p28184-n533764000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00040-run-fix-20260801T212130Z-p28184-n533764000-c1
-- **Owner base:** d04b92346d4ec8e5e959b38803ceccbe54b6fd04
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T21:21:30Z
-- **Owner until:** 2026-08-01T23:21:30Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T212130Z-p28184-n533764000-c1 branch=task/bug-ROP-BUG-FLUX-00040-run-fix-20260801T212130Z-p28184-n533764000-c1 code=f00e3d262a4da68e1981b5303c5ee7dcab7371b8 gate=manual)
 
 ## Observation
 
