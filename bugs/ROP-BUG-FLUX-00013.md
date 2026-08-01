@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** ropus/opus-extensions
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T170535Z-p74388-n441287000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00013-run-fix-20260801T170535Z-p74388-n441287000-c1
+- **Owner base:** 07f9e7e31b3ff12df76e06d062da794dbe8c8377
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T17:05:35Z
+- **Owner until:** 2026-08-01T19:05:35Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
