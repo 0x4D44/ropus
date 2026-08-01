@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00053 — Prelude can print banners into implicit stdout binary streams
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** ropus-tools-core/prelude-routing
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T122743Z-p98923-n509169000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00053-run-fix-20260801T122743Z-p98923-n509169000-c1
-- **Owner base:** 37096076d022a92d1f816e89d69d0d568c32d0a0
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T12:27:43Z
-- **Owner until:** 2026-08-01T14:27:43Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T122743Z-p98923-n509169000-c1 branch=task/bug-ROP-BUG-FLUX-00053-run-fix-20260801T122743Z-p98923-n509169000-c1 code=7201b5a gate=manual)
 
 ## Observation
 
