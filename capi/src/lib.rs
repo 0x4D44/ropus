@@ -21,6 +21,7 @@
 #![allow(clippy::missing_safety_doc)]
 
 // Public API surface organised like the reference headers.
+mod alloc;
 pub mod ctl;
 pub mod decoder;
 pub mod encoder;
@@ -155,4 +156,88 @@ pub unsafe extern "C" fn opus_get_version_string() -> *const std::os::raw::c_cha
     ffi_guard!(VERSION_STRING.as_ptr() as *const _, {
         VERSION_STRING.as_ptr() as *const _
     })
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+    use ropus::opus::encoder::OPUS_APPLICATION_AUDIO;
+    use std::sync::Mutex;
+
+    static ALLOCATION_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct FailpointReset;
+
+    impl Drop for FailpointReset {
+        fn drop(&mut self) {
+            alloc::clear_failpoint();
+        }
+    }
+
+    #[test]
+    fn encoder_create_reports_inner_allocation_failure() {
+        let _lock = ALLOCATION_TEST_LOCK.lock().unwrap();
+        alloc::fail_after(0);
+        let _reset = FailpointReset;
+
+        let mut error = OPUS_OK;
+        let encoder =
+            unsafe { encoder::opus_encoder_create(48000, 1, OPUS_APPLICATION_AUDIO, &mut error) };
+
+        assert!(encoder.is_null());
+        assert_eq!(error, OPUS_ALLOC_FAIL);
+    }
+
+    #[test]
+    fn multistream_create_reports_substate_allocation_failure() {
+        let _lock = ALLOCATION_TEST_LOCK.lock().unwrap();
+        // The outer state box succeeds; the fallible sub-handle vector then
+        // receives the injected failure before any C-visible handle exists.
+        alloc::fail_after(1);
+        let _reset = FailpointReset;
+
+        let mapping = [0u8, 1u8];
+        let mut error = OPUS_OK;
+        let encoder = unsafe {
+            ms_encoder::opus_multistream_encoder_create(
+                48000,
+                2,
+                2,
+                0,
+                mapping.as_ptr(),
+                OPUS_APPLICATION_AUDIO,
+                &mut error,
+            )
+        };
+
+        assert!(encoder.is_null());
+        assert_eq!(error, OPUS_ALLOC_FAIL);
+    }
+
+    #[test]
+    fn projection_create_commits_output_parameters_only_after_success() {
+        let _lock = ALLOCATION_TEST_LOCK.lock().unwrap();
+        alloc::fail_after(0);
+        let _reset = FailpointReset;
+
+        let mut streams = 111;
+        let mut coupled_streams = 222;
+        let mut error = OPUS_OK;
+        let encoder = unsafe {
+            projection::opus_projection_ambisonics_encoder_create(
+                48000,
+                4,
+                3,
+                &mut streams,
+                &mut coupled_streams,
+                OPUS_APPLICATION_AUDIO,
+                &mut error,
+            )
+        };
+
+        assert!(encoder.is_null());
+        assert_eq!(error, OPUS_ALLOC_FAIL);
+        assert_eq!(streams, 111);
+        assert_eq!(coupled_streams, 222);
+    }
 }

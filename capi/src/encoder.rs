@@ -16,7 +16,9 @@ use std::ptr;
 
 use ropus::opus::encoder::OpusEncoder;
 
-use crate::{OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, OPUS_UNIMPLEMENTED, ffi_guard, state_free};
+use crate::{
+    OPUS_ALLOC_FAIL, OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, OPUS_UNIMPLEMENTED, ffi_guard, state_free,
+};
 
 // ---------------------------------------------------------------------------
 // Handle layout
@@ -46,18 +48,12 @@ const _: () = {
     );
 };
 
-fn alloc_handle_storage() -> *mut OpusEncoderHandle {
+fn alloc_handle_storage() -> Option<*mut OpusEncoderHandle> {
     let size = std::mem::size_of::<OpusEncoder>();
     let align = std::mem::align_of::<OpusEncoder>();
     // SAFETY: size and align are both non-zero, derived from a valid type.
-    unsafe {
-        let layout = std::alloc::Layout::from_size_align_unchecked(size, align);
-        let p = std::alloc::alloc_zeroed(layout);
-        if p.is_null() {
-            std::alloc::handle_alloc_error(layout);
-        }
-        p as *mut OpusEncoderHandle
-    }
+    let layout = unsafe { std::alloc::Layout::from_size_align_unchecked(size, align) };
+    crate::alloc::try_alloc_zeroed_layout(layout).map(|p| p.as_ptr() as *mut OpusEncoderHandle)
 }
 
 unsafe fn resolve_handle<'a>(st: *mut OpusEncoder) -> Option<&'a mut OpusEncoder> {
@@ -144,7 +140,10 @@ pub unsafe extern "C" fn opus_encoder_init(
         }
         match OpusEncoder::new(fs, channels, application) {
             Ok(enc) => {
-                let inner = Box::into_raw(Box::new(enc));
+                let inner = match crate::alloc::try_box(enc) {
+                    Ok(inner) => Box::into_raw(inner),
+                    Err(()) => return OPUS_ALLOC_FAIL,
+                };
                 // SAFETY: caller provided at least size_of::<OpusEncoder>() bytes.
                 unsafe {
                     ptr::write_bytes(st as *mut u8, 0, std::mem::size_of::<OpusEncoder>());
@@ -167,12 +166,28 @@ pub unsafe extern "C" fn opus_encoder_create(
     ffi_guard!(ptr::null_mut(), {
         match OpusEncoder::new(fs, channels, application) {
             Ok(enc) => {
+                let inner = match crate::alloc::try_box(enc) {
+                    Ok(inner) => Box::into_raw(inner),
+                    Err(()) => {
+                        if !error.is_null() {
+                            unsafe { *error = OPUS_ALLOC_FAIL };
+                        }
+                        return ptr::null_mut();
+                    }
+                };
+                let Some(handle) = alloc_handle_storage() else {
+                    // The inner state has not been published. Release it and
+                    // report the constructor allocation failure to C.
+                    unsafe { drop(Box::from_raw(inner)) };
+                    if !error.is_null() {
+                        unsafe { *error = OPUS_ALLOC_FAIL };
+                    }
+                    return ptr::null_mut();
+                };
+                unsafe { install_handle(handle, inner) };
                 if !error.is_null() {
                     unsafe { *error = 0 };
                 }
-                let inner = Box::into_raw(Box::new(enc));
-                let handle = alloc_handle_storage();
-                unsafe { install_handle(handle, inner) };
                 handle as *mut OpusEncoder
             }
             Err(e) => {
@@ -294,9 +309,19 @@ pub(crate) unsafe fn handle_to_encoder_ref<'a>(st: *const OpusEncoder) -> Option
 /// The block is `size_of::<OpusEncoder>()` bytes so it is acceptable to every
 /// `opus_encoder_*` entry point. Returned pointer is leaked (owned by the MS
 /// encoder handle's inner struct).
-pub(crate) fn alloc_sub_handle_for(target: *mut OpusEncoder) -> *mut OpusEncoder {
-    let handle = alloc_handle_storage();
+pub(crate) fn alloc_sub_handle_for(target: *mut OpusEncoder) -> Option<*mut OpusEncoder> {
+    let handle = alloc_handle_storage()?;
     // SAFETY: `handle` points to zero-initialised storage of size_of<OpusEncoder>.
     unsafe { install_handle(handle, target) };
-    handle as *mut OpusEncoder
+    Some(handle as *mut OpusEncoder)
+}
+
+pub(crate) unsafe fn free_sub_handle(handle: *mut OpusEncoder) {
+    let layout = unsafe {
+        std::alloc::Layout::from_size_align_unchecked(
+            std::mem::size_of::<OpusEncoder>(),
+            std::mem::align_of::<OpusEncoder>(),
+        )
+    };
+    unsafe { crate::alloc::dealloc_layout(handle as *mut u8, layout) };
 }

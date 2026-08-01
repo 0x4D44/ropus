@@ -70,16 +70,9 @@ const _: () = assert!(std::mem::size_of::<OpusRepacketizerHandle>() == REPACKETI
 /// directly; if this offset drifts the test fails.
 const _: () = assert!(std::mem::offset_of!(OpusRepacketizerHandle, nb_frames) == 24);
 
-fn alloc_handle_storage() -> *mut OpusRepacketizerHandle {
+fn alloc_handle_storage() -> Option<*mut OpusRepacketizerHandle> {
     let layout = std::alloc::Layout::new::<OpusRepacketizerHandle>();
-    // SAFETY: layout is for a non-zero-sized type.
-    unsafe {
-        let p = std::alloc::alloc_zeroed(layout);
-        if p.is_null() {
-            std::alloc::handle_alloc_error(layout);
-        }
-        p as *mut OpusRepacketizerHandle
-    }
+    crate::alloc::try_alloc_zeroed_layout(layout).map(|p| p.as_ptr() as *mut OpusRepacketizerHandle)
 }
 
 unsafe fn resolve_handle<'a>(
@@ -168,7 +161,10 @@ pub unsafe extern "C" fn opus_repacketizer_init(
         // it would be UB. Any previous inner Box is leaked — the encoder /
         // decoder `_init` entry points use the same leak-on-init policy, and
         // it mirrors `_destroy`'s leak (see `crate::state_free`).
-        let inner = Box::into_raw(Box::new(OpusRepacketizer::new()));
+        let inner = match crate::alloc::try_box(OpusRepacketizer::new()) {
+            Ok(inner) => Box::into_raw(inner),
+            Err(()) => return ptr::null_mut(),
+        };
         unsafe {
             ptr::write_bytes(rp as *mut u8, 0, REPACKETIZER_STORAGE_SIZE);
             install_handle(rp as *mut OpusRepacketizerHandle, inner);
@@ -180,8 +176,14 @@ pub unsafe extern "C" fn opus_repacketizer_init(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn opus_repacketizer_create() -> *mut OpusRepacketizerC {
     ffi_guard!(ptr::null_mut(), {
-        let handle = alloc_handle_storage();
-        let inner = Box::into_raw(Box::new(OpusRepacketizer::new()));
+        let inner = match crate::alloc::try_box(OpusRepacketizer::new()) {
+            Ok(inner) => Box::into_raw(inner),
+            Err(()) => return ptr::null_mut(),
+        };
+        let Some(handle) = alloc_handle_storage() else {
+            unsafe { drop(Box::from_raw(inner)) };
+            return ptr::null_mut();
+        };
         unsafe { install_handle(handle, inner) };
         handle as *mut OpusRepacketizerC
     })

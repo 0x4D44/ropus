@@ -1,3 +1,10 @@
+- C ABI constructors must stage fallible handle/state allocations before publishing outputs (`capi/src/alloc.rs:try_box`).
+
+  `handle_alloc_error`, `Box::new`, and `Vec::with_capacity` can abort instead of
+  returning `OPUS_ALLOC_FAIL`. Allocate through the fallible helpers, release any
+  staged sub-handles on failure, and only write C output parameters after the
+  complete handle is ready.
+
 - Multistream decoder CTLs need matching C varargs cases and typed Rust arms (`capi/src/ctl_shim.c:opus_multistream_decoder_ctl`).
 
   A request can be implemented by `OpusMSDecoder` yet still return `OPUS_UNIMPLEMENTED` when the C switch omits it; test the complete C-to-Rust round trip and reject invalid values before fan-out.

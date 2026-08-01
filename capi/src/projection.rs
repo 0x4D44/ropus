@@ -24,7 +24,8 @@ use std::ptr;
 use ropus::opus::multistream::{OpusProjectionDecoder, OpusProjectionEncoder};
 
 use crate::{
-    OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, OPUS_OK, OPUS_UNIMPLEMENTED, ffi_guard, state_free,
+    OPUS_ALLOC_FAIL, OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, OPUS_OK, OPUS_UNIMPLEMENTED, ffi_guard,
+    state_free,
 };
 
 const PROJ_ENCODER_HANDLE_MAGIC: u64 = 0x4D44_4F50_5553_5045; // "MDOPUSPE"
@@ -56,28 +57,12 @@ fn proj_dec_size_for(streams: c_int) -> c_int {
     16 * 1024 * streams.max(1)
 }
 
-fn alloc_enc_handle_storage() -> *mut OpusProjectionEncoderHandle {
-    let layout = std::alloc::Layout::new::<OpusProjectionEncoderHandle>();
-    // SAFETY: layout is non-zero-sized with valid alignment.
-    unsafe {
-        let p = std::alloc::alloc_zeroed(layout);
-        if p.is_null() {
-            std::alloc::handle_alloc_error(layout);
-        }
-        p as *mut OpusProjectionEncoderHandle
-    }
+fn alloc_enc_handle_storage() -> Option<*mut OpusProjectionEncoderHandle> {
+    crate::alloc::try_alloc_zeroed::<OpusProjectionEncoderHandle>().map(|p| p.as_ptr())
 }
 
-fn alloc_dec_handle_storage() -> *mut OpusProjectionDecoderHandle {
-    let layout = std::alloc::Layout::new::<OpusProjectionDecoderHandle>();
-    // SAFETY: layout is non-zero-sized with valid alignment.
-    unsafe {
-        let p = std::alloc::alloc_zeroed(layout);
-        if p.is_null() {
-            std::alloc::handle_alloc_error(layout);
-        }
-        p as *mut OpusProjectionDecoderHandle
-    }
+fn alloc_dec_handle_storage() -> Option<*mut OpusProjectionDecoderHandle> {
+    crate::alloc::try_alloc_zeroed::<OpusProjectionDecoderHandle>().map(|p| p.as_ptr())
 }
 
 unsafe fn resolve_enc<'a>(st: *mut OpusProjectionEncoder) -> Option<&'a mut OpusProjectionEncoder> {
@@ -264,12 +249,27 @@ pub unsafe extern "C" fn opus_projection_ambisonics_encoder_create(
         }
         match OpusProjectionEncoder::new(fs, channels, mapping_family, application) {
             Ok((enc, s, cs)) => {
+                let inner = match crate::alloc::try_box(enc) {
+                    Ok(inner) => inner,
+                    Err(()) => {
+                        if !error.is_null() {
+                            unsafe { *error = OPUS_ALLOC_FAIL };
+                        }
+                        return ptr::null_mut();
+                    }
+                };
+                let Some(handle) = alloc_enc_handle_storage() else {
+                    drop(inner);
+                    if !error.is_null() {
+                        unsafe { *error = OPUS_ALLOC_FAIL };
+                    }
+                    return ptr::null_mut();
+                };
                 unsafe {
                     *streams = s;
                     *coupled_streams = cs;
                 }
-                let inner = Box::into_raw(Box::new(enc));
-                let handle = alloc_enc_handle_storage();
+                let inner = Box::into_raw(inner);
                 // SAFETY: freshly zero-allocated storage.
                 unsafe { install_enc_handle(handle, inner) };
                 if !error.is_null() {
@@ -303,11 +303,14 @@ pub unsafe extern "C" fn opus_projection_ambisonics_encoder_init(
         }
         match OpusProjectionEncoder::new(fs, channels, mapping_family, application) {
             Ok((enc, s, cs)) => {
+                let inner = match crate::alloc::try_box(enc) {
+                    Ok(inner) => Box::into_raw(inner),
+                    Err(()) => return OPUS_ALLOC_FAIL,
+                };
                 unsafe {
                     *streams = s;
                     *coupled_streams = cs;
                 }
-                let inner = Box::into_raw(Box::new(enc));
                 // SAFETY: caller provided at least our advertised size.
                 unsafe {
                     ptr::write_bytes(
@@ -467,8 +470,23 @@ pub unsafe extern "C" fn opus_projection_decoder_create(
             demixing_matrix_size,
         ) {
             Ok(dec) => {
-                let inner = Box::into_raw(Box::new(dec));
-                let handle = alloc_dec_handle_storage();
+                let inner = match crate::alloc::try_box(dec) {
+                    Ok(inner) => inner,
+                    Err(()) => {
+                        if !error.is_null() {
+                            unsafe { *error = OPUS_ALLOC_FAIL };
+                        }
+                        return ptr::null_mut();
+                    }
+                };
+                let Some(handle) = alloc_dec_handle_storage() else {
+                    drop(inner);
+                    if !error.is_null() {
+                        unsafe { *error = OPUS_ALLOC_FAIL };
+                    }
+                    return ptr::null_mut();
+                };
+                let inner = Box::into_raw(inner);
                 // SAFETY: freshly zero-allocated storage.
                 unsafe { install_dec_handle(handle, inner) };
                 if !error.is_null() {
@@ -511,7 +529,10 @@ pub unsafe extern "C" fn opus_projection_decoder_init(
             demixing_matrix_size,
         ) {
             Ok(dec) => {
-                let inner = Box::into_raw(Box::new(dec));
+                let inner = match crate::alloc::try_box(dec) {
+                    Ok(inner) => Box::into_raw(inner),
+                    Err(()) => return OPUS_ALLOC_FAIL,
+                };
                 // SAFETY: caller provided at least our advertised size.
                 unsafe {
                     ptr::write_bytes(

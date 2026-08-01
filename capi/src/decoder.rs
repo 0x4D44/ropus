@@ -34,7 +34,7 @@ use std::ptr;
 
 use ropus::opus::decoder::OpusDecoder;
 
-use crate::{OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, ffi_guard, state_free};
+use crate::{OPUS_ALLOC_FAIL, OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, ffi_guard, state_free};
 
 // ---------------------------------------------------------------------------
 // Handle layout
@@ -75,18 +75,12 @@ const _: () = {
 
 /// Allocate a zeroed block of `size_of::<OpusDecoder>()` bytes on the Rust
 /// heap, usable as an `OpusDecoderHandle` plus trailing padding.
-fn alloc_handle_storage() -> *mut OpusDecoderHandle {
+fn alloc_handle_storage() -> Option<*mut OpusDecoderHandle> {
     let size = std::mem::size_of::<OpusDecoder>();
     let align = std::mem::align_of::<OpusDecoder>();
     // SAFETY: size and align are both non-zero, derived from a valid type.
-    unsafe {
-        let layout = std::alloc::Layout::from_size_align_unchecked(size, align);
-        let p = std::alloc::alloc_zeroed(layout);
-        if p.is_null() {
-            std::alloc::handle_alloc_error(layout);
-        }
-        p as *mut OpusDecoderHandle
-    }
+    let layout = unsafe { std::alloc::Layout::from_size_align_unchecked(size, align) };
+    crate::alloc::try_alloc_zeroed_layout(layout).map(|p| p.as_ptr() as *mut OpusDecoderHandle)
 }
 
 /// Validate a handle pointer; returns a mutable reference to the inner
@@ -188,7 +182,10 @@ pub unsafe extern "C" fn opus_decoder_init(
             Ok(dec) => {
                 // Leak the real decoder so its Vecs live forever. The caller's
                 // buffer only gets the handle prefix; the rest is zeroed.
-                let inner = Box::into_raw(Box::new(dec));
+                let inner = match crate::alloc::try_box(dec) {
+                    Ok(inner) => Box::into_raw(inner),
+                    Err(()) => return OPUS_ALLOC_FAIL,
+                };
                 // SAFETY: caller provided at least size_of::<OpusDecoder>() bytes.
                 unsafe {
                     // Zero the whole block first so residual garbage can't be
@@ -213,12 +210,26 @@ pub unsafe extern "C" fn opus_decoder_create(
     ffi_guard!(ptr::null_mut(), {
         match OpusDecoder::new(fs, channels) {
             Ok(dec) => {
+                let inner = match crate::alloc::try_box(dec) {
+                    Ok(inner) => Box::into_raw(inner),
+                    Err(()) => {
+                        if !error.is_null() {
+                            unsafe { *error = OPUS_ALLOC_FAIL };
+                        }
+                        return ptr::null_mut();
+                    }
+                };
+                let Some(handle) = alloc_handle_storage() else {
+                    unsafe { drop(Box::from_raw(inner)) };
+                    if !error.is_null() {
+                        unsafe { *error = OPUS_ALLOC_FAIL };
+                    }
+                    return ptr::null_mut();
+                };
+                unsafe { install_handle(handle, inner) };
                 if !error.is_null() {
                     unsafe { *error = 0 };
                 }
-                let inner = Box::into_raw(Box::new(dec));
-                let handle = alloc_handle_storage();
-                unsafe { install_handle(handle, inner) };
                 handle as *mut OpusDecoder
             }
             Err(e) => {
@@ -554,11 +565,21 @@ pub(crate) unsafe fn handle_to_decoder_ref<'a>(st: *const OpusDecoder) -> Option
 /// Build a per-stream decoder handle block whose `inner` points at an existing
 /// `OpusDecoder` (typically one inside `OpusMSDecoder`'s `Vec<OpusDecoder>`).
 /// Returned pointer is leaked; lifetime is managed by the MS decoder handle.
-pub(crate) fn alloc_sub_handle_for(target: *mut OpusDecoder) -> *mut OpusDecoder {
-    let handle = alloc_handle_storage();
+pub(crate) fn alloc_sub_handle_for(target: *mut OpusDecoder) -> Option<*mut OpusDecoder> {
+    let handle = alloc_handle_storage()?;
     // SAFETY: `handle` points to zero-initialised storage of size_of<OpusDecoder>.
     unsafe { install_handle(handle, target) };
-    handle as *mut OpusDecoder
+    Some(handle as *mut OpusDecoder)
+}
+
+pub(crate) unsafe fn free_sub_handle(handle: *mut OpusDecoder) {
+    let layout = unsafe {
+        std::alloc::Layout::from_size_align_unchecked(
+            std::mem::size_of::<OpusDecoder>(),
+            std::mem::align_of::<OpusDecoder>(),
+        )
+    };
+    unsafe { crate::alloc::dealloc_layout(handle as *mut u8, layout) };
 }
 
 // ---------------------------------------------------------------------------

@@ -10,7 +10,7 @@ use std::ptr;
 use ropus::opus::decoder::OpusDecoder;
 use ropus::opus::multistream::OpusMSDecoder;
 
-use crate::{OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, OPUS_OK, ffi_guard, state_free};
+use crate::{OPUS_ALLOC_FAIL, OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, OPUS_OK, ffi_guard, state_free};
 
 const MS_DECODER_HANDLE_MAGIC: u64 = 0x4D44_4F50_5553_4D44; // "MDOPUSMD"
 
@@ -31,16 +31,8 @@ struct Inner {
 // footprint (16KB per stream) rather than the real state size. The C test
 // never memcpys MS decoder state.
 
-fn alloc_handle_storage() -> *mut OpusMSDecoderHandle {
-    let layout = std::alloc::Layout::new::<OpusMSDecoderHandle>();
-    // SAFETY: layout is for a non-zero-sized type with a valid alignment.
-    unsafe {
-        let p = std::alloc::alloc_zeroed(layout);
-        if p.is_null() {
-            std::alloc::handle_alloc_error(layout);
-        }
-        p as *mut OpusMSDecoderHandle
-    }
+fn alloc_handle_storage() -> Option<*mut OpusMSDecoderHandle> {
+    crate::alloc::try_alloc_zeroed::<OpusMSDecoderHandle>().map(|p| p.as_ptr())
 }
 
 unsafe fn resolve_inner<'a>(st: *mut OpusMSDecoder) -> Option<&'a mut Inner> {
@@ -134,9 +126,9 @@ pub(crate) unsafe fn sub_decoder_handle_ptr(
         .unwrap_or(&ptr::null_mut())
 }
 
-fn build_sub_handles(ms: &mut OpusMSDecoder) -> Vec<*mut OpusDecoder> {
+fn build_sub_handles(ms: &mut OpusMSDecoder) -> Result<Vec<*mut OpusDecoder>, ()> {
     let n = ms.nb_streams() as usize;
-    let mut v = Vec::with_capacity(n);
+    let mut v: Vec<*mut OpusDecoder> = crate::alloc::try_vec_with_capacity(n)?;
     for i in 0..n {
         let sub_ptr: *mut OpusDecoder = match ms.get_decoder_mut(i) {
             Some(d) => d as *mut OpusDecoder,
@@ -145,9 +137,28 @@ fn build_sub_handles(ms: &mut OpusMSDecoder) -> Vec<*mut OpusDecoder> {
                 continue;
             }
         };
-        v.push(crate::decoder::alloc_sub_handle_for(sub_ptr));
+        let Some(handle) = crate::decoder::alloc_sub_handle_for(sub_ptr) else {
+            for handle in v.iter().copied().filter(|handle| !handle.is_null()) {
+                unsafe { crate::decoder::free_sub_handle(handle) };
+            }
+            return Err(());
+        };
+        v.push(handle);
     }
-    v
+    Ok(v)
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        for handle in self
+            .sub_handles
+            .iter()
+            .copied()
+            .filter(|handle| !handle.is_null())
+        {
+            unsafe { crate::decoder::free_sub_handle(handle) };
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -198,13 +209,44 @@ pub unsafe extern "C" fn opus_multistream_decoder_create(
         let mapping_slice = unsafe { std::slice::from_raw_parts(mapping, channels as usize) };
         match OpusMSDecoder::new(fs, channels, streams, coupled_streams, mapping_slice) {
             Ok(ms) => {
-                let mut boxed = Box::new(ms);
-                let sub_handles = build_sub_handles(&mut boxed);
-                let inner = Box::into_raw(Box::new(Inner {
+                let mut boxed = match crate::alloc::try_box(ms) {
+                    Ok(boxed) => boxed,
+                    Err(()) => {
+                        if !error.is_null() {
+                            unsafe { *error = OPUS_ALLOC_FAIL };
+                        }
+                        return ptr::null_mut();
+                    }
+                };
+                let sub_handles = match build_sub_handles(&mut boxed) {
+                    Ok(sub_handles) => sub_handles,
+                    Err(()) => {
+                        if !error.is_null() {
+                            unsafe { *error = OPUS_ALLOC_FAIL };
+                        }
+                        return ptr::null_mut();
+                    }
+                };
+                let inner = match crate::alloc::try_box(Inner {
                     ms: boxed,
                     sub_handles,
-                }));
-                let handle = alloc_handle_storage();
+                }) {
+                    Ok(inner) => inner,
+                    Err(()) => {
+                        if !error.is_null() {
+                            unsafe { *error = OPUS_ALLOC_FAIL };
+                        }
+                        return ptr::null_mut();
+                    }
+                };
+                let Some(handle) = alloc_handle_storage() else {
+                    drop(inner);
+                    if !error.is_null() {
+                        unsafe { *error = OPUS_ALLOC_FAIL };
+                    }
+                    return ptr::null_mut();
+                };
+                let inner = Box::into_raw(inner);
                 unsafe { install_handle(handle, inner) };
                 if !error.is_null() {
                     unsafe { *error = OPUS_OK };
@@ -237,12 +279,21 @@ pub unsafe extern "C" fn opus_multistream_decoder_init(
         let mapping_slice = unsafe { std::slice::from_raw_parts(mapping, channels as usize) };
         match OpusMSDecoder::new(fs, channels, streams, coupled_streams, mapping_slice) {
             Ok(ms) => {
-                let mut boxed = Box::new(ms);
-                let sub_handles = build_sub_handles(&mut boxed);
-                let inner = Box::into_raw(Box::new(Inner {
+                let mut boxed = match crate::alloc::try_box(ms) {
+                    Ok(boxed) => boxed,
+                    Err(()) => return OPUS_ALLOC_FAIL,
+                };
+                let sub_handles = match build_sub_handles(&mut boxed) {
+                    Ok(sub_handles) => sub_handles,
+                    Err(()) => return OPUS_ALLOC_FAIL,
+                };
+                let inner = match crate::alloc::try_box(Inner {
                     ms: boxed,
                     sub_handles,
-                }));
+                }) {
+                    Ok(inner) => Box::into_raw(inner),
+                    Err(()) => return OPUS_ALLOC_FAIL,
+                };
                 // SAFETY: caller provided at least our advertised size (16KB
                 // per stream). We only write the 24-byte handle prefix.
                 unsafe {
