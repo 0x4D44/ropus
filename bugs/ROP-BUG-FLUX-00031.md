@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00031 — Numeric CLI options allow huge work and arithmetic panics
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness/cli-validation
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T201842Z-p6993-n992405000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00031-run-fix-20260801T201842Z-p6993-n992405000-c1
-- **Owner base:** 3aaf0a38663ec2fd4ad97da8f2437501ed2fc162
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T20:18:42Z
-- **Owner until:** 2026-08-01T22:18:42Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T201842Z-p6993-n992405000-c1 branch=task/bug-ROP-BUG-FLUX-00031-run-fix-20260801T201842Z-p6993-n992405000-c1 code=2c7fed8 gate=manual)
 
 ## Observation
 
