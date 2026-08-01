@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** ropus-tools-core/empty-packets
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T231813Z-p13207-n706702000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00056-run-fix-20260801T231813Z-p13207-n706702000-c1
+- **Owner base:** 7511b5e7ed97cd8092ed6b22e671ab63b29bb701
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T23:18:13Z
+- **Owner until:** 2026-08-02T01:18:13Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
