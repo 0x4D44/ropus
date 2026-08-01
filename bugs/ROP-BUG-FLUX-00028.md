@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** harness/torture-memory
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T194939Z-p71483-n396912000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00028-run-fix-20260801T194939Z-p71483-n396912000-c1
+- **Owner base:** 40ab3ef97bcde6494970792a8e209eb50fa603c3
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T19:49:39Z
+- **Owner until:** 2026-08-01T21:49:39Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
