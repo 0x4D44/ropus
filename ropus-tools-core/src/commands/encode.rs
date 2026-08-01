@@ -19,7 +19,7 @@ use crate::container::picture::{
     MAX_PICTURE_BYTES, base64_encode, build_picture_block, detect_format,
 };
 use crate::options::EncodeOptions;
-use crate::ui::{format_num, heading, ok};
+use crate::ui::{escape_terminal_path, format_num, heading, ok};
 use crate::util::{channel_count_to_ropus, is_stdio_sentinel, with_extension};
 
 use ropus::FrameDuration;
@@ -123,7 +123,7 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         if input_is_stdin {
             "<stdin>".cyan().to_string()
         } else {
-            opts.input.display().to_string().cyan().to_string()
+            escape_terminal_path(&opts.input).cyan().to_string()
         }
     );
     report!(
@@ -131,7 +131,7 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         if output_is_stdout {
             "<stdout>".cyan().to_string()
         } else {
-            output_path.display().to_string().cyan().to_string()
+            escape_terminal_path(&output_path).cyan().to_string()
         }
     );
 
@@ -238,8 +238,12 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
     let sink: Box<dyn Write> = if output_is_stdout {
         Box::new(BufWriter::new(std::io::stdout().lock()))
     } else {
-        let file = File::create(&output_path)
-            .with_context(|| format!("creating output file {}", output_path.display()))?;
+        let file = File::create(&output_path).with_context(|| {
+            format!(
+                "creating output file {}",
+                escape_terminal_path(&output_path)
+            )
+        })?;
         Box::new(BufWriter::new(file))
     };
     let mut writer = PacketWriter::new(sink);
@@ -262,30 +266,42 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
         // Stat first and reject oversize files *before* reading them into
         // memory. Avoids a 5 GiB allocation on obvious user error (dropped-in
         // video file, etc.) and gives a clear message instead of OOM.
-        let meta = std::fs::metadata(pic_path)
-            .with_context(|| format!("reading picture metadata {}", pic_path.display()))?;
+        let meta = std::fs::metadata(pic_path).with_context(|| {
+            format!(
+                "reading picture metadata {}",
+                escape_terminal_path(pic_path)
+            )
+        })?;
         if meta.len() > MAX_PICTURE_BYTES {
             bail!(
                 "picture file {} is {} bytes; refusing > {} bytes (use a smaller cover image)",
-                pic_path.display(),
+                escape_terminal_path(pic_path),
                 meta.len(),
                 MAX_PICTURE_BYTES,
             );
         }
         let data = std::fs::read(pic_path)
-            .with_context(|| format!("reading picture file {}", pic_path.display()))?;
+            .with_context(|| format!("reading picture file {}", escape_terminal_path(pic_path)))?;
         if data.is_empty() {
-            bail!("picture file {} is empty", pic_path.display());
+            bail!("picture file {} is empty", escape_terminal_path(pic_path));
         }
-        let format = detect_format(&data)
-            .with_context(|| format!("detecting picture format for {}", pic_path.display()))?;
-        let block = build_picture_block(format, &data)
-            .with_context(|| format!("building picture block for {}", pic_path.display()))?;
+        let format = detect_format(&data).with_context(|| {
+            format!(
+                "detecting picture format for {}",
+                escape_terminal_path(pic_path)
+            )
+        })?;
+        let block = build_picture_block(format, &data).with_context(|| {
+            format!(
+                "building picture block for {}",
+                escape_terminal_path(pic_path)
+            )
+        })?;
         let b64 = base64_encode(&block);
         comments.insert(0, format!("METADATA_BLOCK_PICTURE={b64}"));
         report!(
             "picture  {} ({} bytes, {})",
-            pic_path.display().to_string().cyan(),
+            escape_terminal_path(pic_path).cyan(),
             format_num(data.len() as u64).bright_white(),
             format.mime(),
         );
@@ -384,7 +400,7 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
     let dest = if output_is_stdout {
         "<stdout>".to_string()
     } else {
-        output_path.display().to_string()
+        escape_terminal_path(&output_path)
     };
     if output_is_stdout {
         eprintln!("{}", format!("encoded -> {dest}").green());

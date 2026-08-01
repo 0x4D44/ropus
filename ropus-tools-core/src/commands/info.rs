@@ -8,7 +8,7 @@
 //!      for shell pipelines; stricter than `--quiet --no-color`.
 
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, IsTerminal};
 
 use anyhow::{Context, Result, anyhow};
 use colored::*;
@@ -24,7 +24,7 @@ use crate::container::ogg::{
 };
 use crate::container::toc::decode_toc;
 use crate::options::InfoOptions;
-use crate::ui::heading;
+use crate::ui::{escape_terminal_path, escape_terminal_text, format_query_value, heading};
 use crate::util::channel_count_to_ropus;
 
 /// Parsed summary assembled once and consumed by every output mode. Having all
@@ -98,7 +98,8 @@ pub fn info(opts: InfoOptions) -> Result<()> {
 }
 
 fn collect_summary(input: &std::path::Path) -> Result<InfoSummary> {
-    let file = File::open(input).with_context(|| format!("opening {}", input.display()))?;
+    let file =
+        File::open(input).with_context(|| format!("opening {}", escape_terminal_path(input)))?;
     let file_len = file.metadata().ok().map(|m| m.len()).unwrap_or(0);
     let mut reader = PacketReader::new(BufReader::new(file));
 
@@ -118,7 +119,7 @@ fn collect_summary(input: &std::path::Path) -> Result<InfoSummary> {
     // Fast path: last-page granule position. Slow path only kicks in when the
     // last page has the unknown-granule sentinel (truncated files).
     let mut fast_file = File::open(input)
-        .with_context(|| format!("opening {} for granule scan", input.display()))?;
+        .with_context(|| format!("opening {} for granule scan", escape_terminal_path(input)))?;
     let absgp_opt =
         read_last_granule(&mut fast_file, target_serial).context("scanning for last Ogg page")?;
 
@@ -152,7 +153,12 @@ fn collect_summary(input: &std::path::Path) -> Result<InfoSummary> {
             match dec.decode(&pkt.data, &mut decoded, DecodeMode::Normal) {
                 Ok(n) => slow_sample_count += n as u64,
                 Err(e) => {
-                    eprintln!("{} packet {}: {e}", "warning:".yellow(), packet_idx);
+                    eprintln!(
+                        "{} packet {}: {}",
+                        "warning:".yellow(),
+                        packet_idx,
+                        escape_terminal_text(&e.to_string())
+                    );
                 }
             }
         }
@@ -173,8 +179,12 @@ fn collect_summary(input: &std::path::Path) -> Result<InfoSummary> {
     // coalesces packets across pages and doesn't expose per-page absgp, so
     // we re-open the file and walk the raw Ogg frames ourselves. Used only
     // for gap detection — cheap (a single sequential read).
-    let mut gap_file = File::open(input)
-        .with_context(|| format!("opening {} for granule-gap scan", input.display()))?;
+    let mut gap_file = File::open(input).with_context(|| {
+        format!(
+            "opening {} for granule-gap scan",
+            escape_terminal_path(input)
+        )
+    })?;
     let page_granules =
         read_page_granules(&mut gap_file, target_serial).context("scanning page granules")?;
 
@@ -193,7 +203,7 @@ fn collect_summary(input: &std::path::Path) -> Result<InfoSummary> {
 /// their muscle memory; deviations are only where ropus simply doesn't have
 /// the equivalent field.
 fn print_default_block(input: &std::path::Path, s: &InfoSummary) {
-    println!("Input File: {}", input.display().to_string().cyan());
+    println!("Input File: {}", escape_terminal_path(input).cyan());
     println!("Channels: {}", s.head.channels.to_string().bright_white());
     println!(
         "Sample rate (input): {} Hz",
@@ -205,7 +215,10 @@ fn print_default_block(input: &std::path::Path, s: &InfoSummary) {
         "Channel mapping family: {}",
         s.head.channel_mapping.to_string().bright_white()
     );
-    println!("Vendor: {}", s.tags.vendor.bright_white());
+    println!(
+        "Vendor: {}",
+        escape_terminal_text(&s.tags.vendor).bright_white()
+    );
     if s.tags.comments.is_empty() {
         println!("User comments: (none)");
     } else {
@@ -213,7 +226,7 @@ fn print_default_block(input: &std::path::Path, s: &InfoSummary) {
         for c in &s.tags.comments {
             // Two-space indent, bare `KEY=value` text — matches opusinfo and
             // keeps any grep/awk pipeline on the consumer side trivial.
-            println!("  {c}");
+            println!("  {}", escape_terminal_text(c));
         }
     }
     // Raw digits (no thousands commas) for byte-count fields — the HLD
@@ -312,6 +325,7 @@ fn format_playback_length(seconds: f64) -> String {
 /// `prelude::run`, preserving our uniform error formatting).
 fn emit_query(s: &InfoSummary, key: &str) -> Result<()> {
     let lower = key.to_ascii_lowercase();
+    let stdout_is_tty = std::io::stdout().is_terminal();
     // Special-case `comment:KEY` up front: the colon suffix is variable, so a
     // match arm that binds the rest is cleaner than a giant lookup table.
     if let Some(rest) = lower.strip_prefix("comment:") {
@@ -319,7 +333,7 @@ fn emit_query(s: &InfoSummary, key: &str) -> Result<()> {
         // caller's `if ropusinfo -q comment:artist x.opus | grep -q .; then …`
         // idiom working.
         if let Some(v) = s.tags.get(rest) {
-            println!("{v}");
+            println!("{}", format_query_value(v, stdout_is_tty));
         } else {
             println!();
         }
@@ -348,7 +362,7 @@ fn emit_query(s: &InfoSummary, key: &str) -> Result<()> {
             let bps = (s.avg_kbps() * 1000.0).round() as u64;
             println!("{bps}");
         }
-        "vendor" => println!("{}", s.tags.vendor),
+        "vendor" => println!("{}", format_query_value(&s.tags.vendor, stdout_is_tty)),
         _ => {
             // `prelude::run` prepends `error:` and the anyhow chain; instead
             // of that shape we want the exact opus-tools-style message and
@@ -359,7 +373,10 @@ fn emit_query(s: &InfoSummary, key: &str) -> Result<()> {
             // keys; to keep the mapping clean, emit the error message here
             // and use `std::process::exit(2)` so we don't depend on the
             // prelude's exit-code behaviour for this one case.
-            eprintln!("ropusinfo: unknown query key: {key}");
+            eprintln!(
+                "ropusinfo: unknown query key: {}",
+                escape_terminal_text(key)
+            );
             std::process::exit(2);
         }
     }

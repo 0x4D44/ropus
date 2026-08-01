@@ -33,7 +33,7 @@ use crate::consts::OPUS_SR;
 use crate::container::ogg::{OpusTags, UNKNOWN_GRANULE, parse_opus_head};
 use crate::container::toc::decode_toc;
 use crate::options::DecodeOptions;
-use crate::ui::{format_num, heading, ok};
+use crate::ui::{escape_terminal_path, escape_terminal_text, format_num, heading, ok};
 use crate::util::{channel_count_to_ropus, is_stdio_sentinel, with_extension};
 
 /// Accepted output sample-rate range for `--rate`. Mirrors the WAV-supported
@@ -144,7 +144,7 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
         if input_is_stdin {
             "<stdin>".cyan().to_string()
         } else {
-            opts.input.display().to_string().cyan().to_string()
+            escape_terminal_path(&opts.input).cyan().to_string()
         }
     );
     report!(
@@ -152,7 +152,7 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
         if output_is_stdout {
             "<stdout>".cyan().to_string()
         } else {
-            output_path.display().to_string().cyan().to_string()
+            escape_terminal_path(&output_path).cyan().to_string()
         }
     );
 
@@ -167,8 +167,8 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
             .context("reading stdin into buffer")?;
         PacketReader::new(Box::new(Cursor::new(buf)))
     } else {
-        let file =
-            File::open(&opts.input).with_context(|| format!("opening {}", opts.input.display()))?;
+        let file = File::open(&opts.input)
+            .with_context(|| format!("opening {}", escape_terminal_path(&opts.input)))?;
         PacketReader::new(Box::new(BufReader::new(file)))
     };
 
@@ -197,7 +197,7 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
     let tags = OpusTags::parse(&tags_pkt.data).context("parsing OpusTags packet")?;
     report!(
         "tags     vendor={}, {} comments",
-        format!("\"{}\"", tags.vendor).bright_white(),
+        format!("\"{}\"", escape_terminal_text(&tags.vendor)).bright_white(),
         tags.comments.len().to_string().bright_white(),
     );
 
@@ -492,7 +492,8 @@ where
         body(&mut w)?;
         w.flush()?;
     } else {
-        let f = File::create(output).with_context(|| format!("creating {}", output.display()))?;
+        let f = File::create(output)
+            .with_context(|| format!("creating {}", escape_terminal_path(output)))?;
         let mut w = BufWriter::new(f);
         body(&mut w)?;
         w.flush()?;
@@ -570,7 +571,7 @@ fn report_and_return(
     let dest = if output_is_stdout {
         "<stdout>".to_string()
     } else {
-        output.display().to_string()
+        escape_terminal_path(output)
     };
     if output_is_stdout {
         eprintln!("{line}");

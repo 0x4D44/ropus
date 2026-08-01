@@ -6,6 +6,8 @@ use std::process::ExitCode;
 
 use colored::*;
 
+use crate::ui::escape_terminal_text;
+
 /// Apply the colour override from an already-parsed CLI flag.
 pub fn configure_color(no_color: bool) {
     if no_color {
@@ -28,9 +30,17 @@ pub fn run(result: anyhow::Result<()>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("{} {}", "error:".red().bold(), e);
+            eprintln!(
+                "{} {}",
+                "error:".red().bold(),
+                escape_terminal_text(&e.to_string())
+            );
             for cause in e.chain().skip(1) {
-                eprintln!("  {} {}", "caused by:".red(), cause);
+                eprintln!(
+                    "  {} {}",
+                    "caused by:".red(),
+                    escape_terminal_text(&cause.to_string())
+                );
             }
             ExitCode::FAILURE
         }

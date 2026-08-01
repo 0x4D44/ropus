@@ -24,7 +24,7 @@ use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use crate::audio::decode::{DecodedAudio, MAX_GAIN_DB, MIN_GAIN_DB, decode_to_f32_with_gain};
 use crate::container::ogg::OpusTags;
 use crate::options::{LoopMode, PlayOptions};
-use crate::ui::heading;
+use crate::ui::{escape_terminal_path, escape_terminal_text, heading};
 
 /// What ended a track. Drives the index-advancement logic in the main FSM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,12 +82,12 @@ pub fn play(opts: PlayOptions) -> Result<()> {
 
     let playlist = build_playlist(&opts.input)?;
     if playlist.len() == 1 {
-        println!("file     {}", playlist[0].display().to_string().cyan());
+        println!("file     {}", escape_terminal_path(&playlist[0]).cyan());
     } else {
         println!(
             "playlist {} tracks from {}",
             playlist.len().to_string().bright_white(),
-            opts.input.display().to_string().cyan(),
+            escape_terminal_path(&opts.input).cyan(),
         );
     }
 
@@ -120,8 +120,8 @@ pub fn play(opts: PlayOptions) -> Result<()> {
         {
             let stem = path
                 .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| path.display().to_string());
+                .map(|s| escape_terminal_text(&s.to_string_lossy()))
+                .unwrap_or_else(|| escape_terminal_path(path));
             let cols = crossterm::terminal::size()
                 .map(|(w, _)| w as usize)
                 .unwrap_or(80);
@@ -138,7 +138,12 @@ pub fn play(opts: PlayOptions) -> Result<()> {
                 // stderr so it sits above the next status-line repaint.
                 print!("\r\x1b[K");
                 let _ = std::io::stdout().flush();
-                eprintln!("{} skipping {}: {e}", "warning:".yellow(), path.display());
+                eprintln!(
+                    "{} skipping {}: {}",
+                    "warning:".yellow(),
+                    escape_terminal_path(path),
+                    escape_terminal_text(&e.to_string())
+                );
                 consecutive_errors += 1;
                 if consecutive_errors >= playlist_len {
                     bail!("all {playlist_len} tracks failed to decode");
@@ -264,16 +269,18 @@ fn apply_gain(samples: &mut [f32], multiplier: f32) {
 /// the empty-list contract is unit-testable on headless CI where
 /// `cpal::default_host().output_devices()` genuinely returns zero devices.
 ///
-/// Output shape is one name per line with a trailing newline, so downstream
-/// scripts can `ropusplay --list-devices | grep -x "Speakers (Realtek)"`
-/// without worrying about a missing final `\n`.
+/// Output shape is one escaped name per line with a trailing newline, so
+/// downstream scripts can match ordinary names with
+/// `ropusplay --list-devices | grep -x "Speakers (Realtek)"` without worrying
+/// about a missing final `\n`. C0/C1 controls are encoded as `\\u{NNNN}`;
+/// matching in `--device` remains against the raw cpal name.
 fn format_device_list(names: &[String]) -> Result<String> {
     if names.is_empty() {
         bail!("no output devices available on this host");
     }
     let mut out = String::new();
     for name in names {
-        out.push_str(name);
+        out.push_str(&escape_terminal_text(name));
         out.push('\n');
     }
     Ok(out)
@@ -327,19 +334,26 @@ fn open_named_output_stream(
         }
     }
     let device = matched.ok_or_else(|| {
-        let mut msg = format!("ropusplay: device '{name}' not found. Available:");
+        let mut msg = format!(
+            "ropusplay: device '{}' not found. Available:",
+            escape_terminal_text(name)
+        );
         if available.is_empty() {
             msg.push_str("\n  (no cpal output devices)");
         } else {
             for d in &available {
                 msg.push_str("\n  ");
-                msg.push_str(d);
+                msg.push_str(&escape_terminal_text(d));
             }
         }
         anyhow!(msg)
     })?;
-    rodio::OutputStream::try_from_device(&device)
-        .map_err(|e| anyhow!("opening output device '{name}' failed: {e}"))
+    rodio::OutputStream::try_from_device(&device).map_err(|e| {
+        anyhow!(
+            "opening output device '{}' failed: {e}",
+            escape_terminal_text(name)
+        )
+    })
 }
 
 /// Interactive track loop. Polls for key events at 100 ms cadence, repainting
@@ -467,9 +481,10 @@ fn run_track_noninteractive(
         format!("{}:{:02}", total / 60, total % 60)
     };
     println!(
-        "playing {}/{}  {display_name}  ({clock})",
+        "playing {}/{}  {}  ({clock})",
         track_idx + 1,
         playlist_len,
+        escape_terminal_text(display_name),
     );
     sink.sleep_until_end();
 }
@@ -530,7 +545,8 @@ pub(crate) fn build_playlist(input: &Path) -> Result<Vec<PathBuf>> {
     if input.is_file() {
         return Ok(vec![input.to_path_buf()]);
     }
-    let entries = fs::read_dir(input).with_context(|| format!("reading {}", input.display()))?;
+    let entries =
+        fs::read_dir(input).with_context(|| format!("reading {}", escape_terminal_path(input)))?;
     let mut files: Vec<PathBuf> = entries
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -543,7 +559,7 @@ pub(crate) fn build_playlist(input: &Path) -> Result<Vec<PathBuf>> {
         .collect();
     files.sort();
     if files.is_empty() {
-        bail!("no .opus files in {}", input.display());
+        bail!("no .opus files in {}", escape_terminal_path(input));
     }
     Ok(files)
 }
@@ -579,6 +595,7 @@ pub(crate) fn format_status_line(
     dur: Duration,
     avg_kbps: f64,
 ) -> String {
+    let display_name = escape_terminal_text(display_name);
     // Both glyphs are cell-width 1 so chars().count() matches display cells.
     let glyph: char = if paused { '\u{2016}' } else { '\u{25B6}' };
     let track = format_track(track_idx, playlist_len);
@@ -592,7 +609,7 @@ pub(crate) fn format_status_line(
         let prefix = format!("{glyph} {track}  ");
         let suffix = format!("  {pos_str} / {dur_str}");
         let name = truncate_to_fit(
-            display_name,
+            &display_name,
             cols,
             prefix.chars().count(),
             suffix.chars().count(),
@@ -604,7 +621,7 @@ pub(crate) fn format_status_line(
     let prefix = format!("{glyph} {track}{loop_ind}  ");
     let suffix = format!("  [{bar}]  {pos_str} / {dur_str}  {avg_kbps:.0} kbps");
     let name = truncate_to_fit(
-        display_name,
+        &display_name,
         cols,
         prefix.chars().count(),
         suffix.chars().count(),
@@ -1161,6 +1178,24 @@ mod tests {
         assert!(!line.contains("kbps"), "no bitrate: {line}");
     }
 
+    #[test]
+    fn status_line_escapes_untrusted_track_labels() {
+        let line = format_status_line(
+            120,
+            false,
+            LoopMode::Off,
+            "album\n\x1B]0;forged\x07\u{0085}",
+            0,
+            1,
+            Duration::from_secs(0),
+            Duration::from_secs(60),
+            128.0,
+        );
+        assert!(!line.contains('\n'));
+        assert!(!line.contains('\x1B'));
+        assert!(line.contains(r"album\u{000A}\u{001B}]0;forged\u{0007}\u{0085}"));
+    }
+
     // -- advance_on_error --------------------------------------------------
 
     #[test]
@@ -1316,6 +1351,20 @@ mod tests {
         let names = vec!["A".to_string(), "B".to_string(), "C".to_string()];
         let out = format_device_list(&names).expect("non-empty slice formats cleanly");
         assert_eq!(out, "A\nB\nC\n");
+    }
+
+    #[test]
+    fn format_device_list_uses_reversible_control_escaping() {
+        let names = vec![
+            "Speakers\r\nforged".to_string(),
+            "\x1B]0;title\x07".to_string(),
+            "icc\u{0085}profile\u{009B}".to_string(),
+        ];
+        let out = format_device_list(&names).expect("device names format cleanly");
+        assert_eq!(
+            out,
+            "Speakers\\u{000D}\\u{000A}forged\n\\u{001B}]0;title\\u{0007}\nicc\\u{0085}profile\\u{009B}\n"
+        );
     }
 
     #[test]

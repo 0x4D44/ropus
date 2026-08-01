@@ -8,6 +8,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 
+use crate::ui::escape_terminal_path;
+
 /// WAVE format code for integer PCM (1 = WAVE_FORMAT_PCM).
 const WAVE_FORMAT_PCM: u16 = 1;
 /// WAVE format code for IEEE-754 float samples (3 = WAVE_FORMAT_IEEE_FLOAT).
@@ -80,7 +82,8 @@ pub fn write_wav_pcm16(
     channels: u16,
 ) -> Result<()> {
     validate_wav_layout(samples.len(), sample_rate, channels, 2)?;
-    let f = File::create(path).with_context(|| format!("creating {}", path.display()))?;
+    let f =
+        File::create(path).with_context(|| format!("creating {}", escape_terminal_path(path)))?;
     let mut w = BufWriter::new(f);
     write_wav_pcm16_to(&mut w, samples, sample_rate, channels)?;
     w.flush()?;
@@ -137,7 +140,8 @@ pub fn write_wav_float32(
     channels: u16,
 ) -> Result<()> {
     validate_wav_layout(samples.len(), sample_rate, channels, 4)?;
-    let f = File::create(path).with_context(|| format!("creating {}", path.display()))?;
+    let f =
+        File::create(path).with_context(|| format!("creating {}", escape_terminal_path(path)))?;
     let mut w = BufWriter::new(f);
     write_wav_float32_to(&mut w, samples, sample_rate, channels)?;
     w.flush()?;

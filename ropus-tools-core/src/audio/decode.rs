@@ -23,6 +23,7 @@ use symphonia::core::probe::Hint;
 
 use crate::consts::OPUS_SR;
 use crate::container::ogg::parse_opus_head;
+use crate::ui::escape_terminal_path;
 use crate::util::channel_count_to_ropus;
 
 pub struct DecodedAudio {
@@ -64,13 +65,14 @@ pub fn decode_to_f32(path: &Path) -> Result<DecodedAudio> {
 /// `Decoder::set_gain`; other codecs use the same linear dB multiplier after
 /// native decoding.
 pub fn decode_to_f32_with_gain(path: &Path, gain_db: f32) -> Result<DecodedAudio> {
-    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let file =
+        File::open(path).with_context(|| format!("opening {}", escape_terminal_path(path)))?;
     let hint_ext = path
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_string);
     decode_reader_with_gain(Box::new(file), hint_ext.as_deref(), gain_db)
-        .with_context(|| format!("decoding {}", path.display()))
+        .with_context(|| format!("decoding {}", escape_terminal_path(path)))
 }
 
 /// Decode an arbitrary symphonia `MediaSource`. `hint_ext` is an optional file
@@ -248,7 +250,11 @@ pub fn decode_reader_with_gain(
                     Err(e) => {
                         // Match the native path: swallow per-packet decode
                         // failures rather than aborting the whole file.
-                        eprintln!("{} opus packet: {e}", "warning:".yellow());
+                        eprintln!(
+                            "{} opus packet: {}",
+                            "warning:".yellow(),
+                            crate::ui::escape_terminal_text(&e.to_string())
+                        );
                         continue;
                     }
                 };

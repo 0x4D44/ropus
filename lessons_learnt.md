@@ -1,3 +1,7 @@
+- Terminal-facing text needs one reversible control-escaping policy (`ui::escape_terminal_text`); raw metadata is safe only for non-TTY queries.
+
+  Escape C0/C1, line separators, and bidi overrides in paths, tags, status lines, device listings, and error chains before printing.
+
 - Public interleaved audio helpers must reject incomplete frames before `chunks_exact` or WAV header math (`audio/{downmix,resample,wav}.rs`).
 
   Validate channel/rate shape first, then use checked block-align, byte-rate, data-size, and frame-count calculations.
