@@ -420,6 +420,7 @@ int opus_multistream_decoder_ctl(OpusMSDecoder *st, int request, ...)
             break;
 
         case OPUS_SET_GAIN_REQUEST:
+        case OPUS_SET_COMPLEXITY_REQUEST:
         case OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST:
             ret = mdopus_ms_decoder_ctl_set_int(st, request, va_arg(ap, int));
             break;
@@ -427,6 +428,7 @@ int opus_multistream_decoder_ctl(OpusMSDecoder *st, int request, ...)
         case OPUS_GET_BANDWIDTH_REQUEST:
         case OPUS_GET_SAMPLE_RATE_REQUEST:
         case OPUS_GET_GAIN_REQUEST:
+        case OPUS_GET_COMPLEXITY_REQUEST:
         case OPUS_GET_LAST_PACKET_DURATION_REQUEST:
         case OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST: {
             int *out = va_arg(ap, int *);

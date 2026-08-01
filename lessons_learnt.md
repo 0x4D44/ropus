@@ -1,3 +1,7 @@
+- Multistream decoder CTLs need matching C varargs cases and typed Rust arms (`capi/src/ctl_shim.c:opus_multistream_decoder_ctl`).
+
+  A request can be implemented by `OpusMSDecoder` yet still return `OPUS_UNIMPLEMENTED` when the C switch omits it; test the complete C-to-Rust round trip and reject invalid values before fan-out.
+
 - Extension parsers must validate slice capacities and checked frame-count prefixes before indexing (`ropus/src/opus/repacketizer.rs:opus_packet_extensions_parse`).
 
   Safe slices do not make caller-provided counts safe: reject lengths beyond the input, capacities beyond output slices, negative counts, and overflowing frame prefixes before iterating.

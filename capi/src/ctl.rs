@@ -684,6 +684,12 @@ pub unsafe extern "C" fn mdopus_ms_decoder_ctl_set_int(
                 }
                 ms.set_phase_inversion_disabled(value)
             }
+            OPUS_SET_COMPLEXITY_REQUEST => {
+                if !(0..=10).contains(&value) {
+                    return OPUS_BAD_ARG;
+                }
+                ms.set_complexity(value)
+            }
             _ => OPUS_UNIMPLEMENTED,
         }
     })
@@ -708,6 +714,7 @@ pub unsafe extern "C" fn mdopus_ms_decoder_ctl_get_int(
             OPUS_GET_LAST_PACKET_DURATION_REQUEST => ms.get_last_packet_duration(),
             OPUS_GET_GAIN_REQUEST => ms.get_gain(),
             OPUS_GET_PHASE_INVERSION_DISABLED_REQUEST => ms.get_phase_inversion_disabled(),
+            OPUS_GET_COMPLEXITY_REQUEST => ms.get_complexity(),
             _ => return OPUS_UNIMPLEMENTED,
         };
         unsafe { *out = value };
@@ -988,5 +995,60 @@ mod tests {
     fn opus_set_dnn_blob_request_has_canonical_value() {
         // Matches `reference/include/opus_defines.h:174` verbatim.
         assert_eq!(OPUS_SET_DNN_BLOB_REQUEST, 4052);
+    }
+
+    #[test]
+    fn multistream_decoder_complexity_ctl_round_trip_and_validation() {
+        let mapping = [0u8, 1];
+        let mut error = OPUS_INTERNAL_ERROR;
+        let st = unsafe {
+            crate::ms_decoder::opus_multistream_decoder_create(
+                48_000,
+                2,
+                1,
+                1,
+                mapping.as_ptr(),
+                &mut error,
+            )
+        };
+        assert!(!st.is_null());
+        assert_eq!(error, OPUS_OK);
+
+        let mut complexity = -1;
+        assert_eq!(
+            unsafe {
+                mdopus_ms_decoder_ctl_get_int(st, OPUS_GET_COMPLEXITY_REQUEST, &mut complexity)
+            },
+            OPUS_OK
+        );
+        assert!((0..=10).contains(&complexity));
+
+        assert_eq!(
+            unsafe { mdopus_ms_decoder_ctl_set_int(st, OPUS_SET_COMPLEXITY_REQUEST, 7) },
+            OPUS_OK
+        );
+        assert_eq!(
+            unsafe {
+                mdopus_ms_decoder_ctl_get_int(st, OPUS_GET_COMPLEXITY_REQUEST, &mut complexity)
+            },
+            OPUS_OK
+        );
+        assert_eq!(complexity, 7);
+
+        for invalid in [-1, 11] {
+            assert_eq!(
+                unsafe { mdopus_ms_decoder_ctl_set_int(st, OPUS_SET_COMPLEXITY_REQUEST, invalid) },
+                OPUS_BAD_ARG
+            );
+            assert_eq!(
+                unsafe {
+                    mdopus_ms_decoder_ctl_get_int(st, OPUS_GET_COMPLEXITY_REQUEST, &mut complexity)
+                },
+                OPUS_OK
+            );
+            assert_eq!(complexity, 7);
+        }
+
+        unsafe { crate::ms_decoder::opus_multistream_decoder_destroy(st) };
     }
 }
