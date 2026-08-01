@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** ropus-fb2k/decode
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T205144Z-p55683-n378703000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00035-run-fix-20260801T205144Z-p55683-n378703000-c1
+- **Owner base:** 24ec808ceeedde351c591c6d9a4c3346c4689bb9
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T20:51:44Z
+- **Owner until:** 2026-08-01T22:51:44Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
