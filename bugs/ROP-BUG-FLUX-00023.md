@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** harness/corpus-diff
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T192005Z-p39305-n112351000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00023-run-fix-20260801T192005Z-p39305-n112351000-c1
+- **Owner base:** 8dadd242c1baa9ac722d73e44d6f3709bcd3cdfc
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T19:20:05Z
+- **Owner until:** 2026-08-01T21:20:05Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
