@@ -5,15 +5,15 @@
 - **Severity:** High
 - **Area:** harness/build-invalidation
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T042107Z-p26455-n773376000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00025-run-fix-20260801T042107Z-p26455-n773376000-c1
+- **Owner base:** 48499a983943963ef69fb9ef0f6651fa7585b23d
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T04:21:07Z
+- **Owner until:** 2026-08-01T06:21:07Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
