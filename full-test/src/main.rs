@@ -9,6 +9,7 @@
 //! `tests/results/full_test_<YYYYMMDD_HHMMSS>.html`; the JSON envelope is kept
 //! behind `--emit-json` for supervisor log plumbing.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -134,9 +135,9 @@ fn main() -> ExitCode {
     };
 
     // Banner classification centralises the PASS/FAIL/WARN rules per
-    // HLD § PASS / FAIL / WARN. The exit code is derived from the banner —
-    // PASS and WARN both map to 0 so pre-commit `--quick` runs aren't
-    // spuriously blocked on bench ratio noise.
+    // HLD § PASS / FAIL / WARN. PASS and WARN both map to 0 so pre-commit
+    // `--quick` runs aren't spuriously blocked on bench ratio noise; report
+    // delivery is applied as a separate final failure gate below.
     let banner_kind = banner::classify_with_platform(
         &quality_outcome,
         &tests_outcome,
@@ -147,7 +148,7 @@ fn main() -> ExitCode {
         &platform_outcome,
         &setup_info.preflight,
     );
-    let exit_code: u8 = banner_kind.exit_code();
+    let banner_exit_code: u8 = banner_kind.exit_code();
 
     // Stage 5 — HTML report.
     let commit_subject = resolve_commit_subject();
@@ -172,13 +173,10 @@ fn main() -> ExitCode {
         bench: &bench_outcome,
     };
     let html_body = html::render(&report_ctx);
-    let report_path = match write_report(&html_body, timestamp) {
-        Ok(p) => Some(p),
-        Err(e) => {
-            eprintln!("error: failed to write HTML report: {e}");
-            None
-        }
-    };
+    let report = attempt_report(&AtomicReportWriter, &html_body, timestamp, banner_exit_code);
+    if let Some(error) = report.error.as_deref() {
+        eprintln!("error: failed to write HTML report: {error}");
+    }
 
     // Stdout one-liner — makes the terminal output self-evidently useful
     // even when the caller hasn't opened the HTML.
@@ -186,7 +184,8 @@ fn main() -> ExitCode {
         &banner_kind,
         &setup_info,
         &tests_outcome,
-        report_path.as_deref(),
+        report.path.as_deref(),
+        report.error.as_deref(),
     );
 
     // `--emit-json` keeps the envelope available for supervisors that want
@@ -202,7 +201,7 @@ fn main() -> ExitCode {
             platform: &platform_outcome,
             ambisonics: &ambisonics_outcome,
             bench: &bench_outcome,
-            exit_code,
+            exit_code: report.exit_code,
         };
         match serde_json::to_string_pretty(&envelope.to_json()) {
             Ok(s) => println!("{s}"),
@@ -213,7 +212,7 @@ fn main() -> ExitCode {
         }
     }
 
-    ExitCode::from(exit_code)
+    ExitCode::from(report.exit_code)
 }
 
 /// Resolve `git log -1 --format=%s` for the header metadata. Defaults to
@@ -236,17 +235,94 @@ fn resolve_commit_subject() -> String {
     }
 }
 
+/// A seam around report delivery so a write failure can be tested without
+/// running every validation stage or changing the real filesystem.
+trait ReportWriter {
+    fn write(
+        &self,
+        body: &str,
+        timestamp: chrono::DateTime<chrono::Local>,
+    ) -> Result<PathBuf, String>;
+}
+
+struct AtomicReportWriter;
+
+impl ReportWriter for AtomicReportWriter {
+    fn write(
+        &self,
+        body: &str,
+        timestamp: chrono::DateTime<chrono::Local>,
+    ) -> Result<PathBuf, String> {
+        write_report(body, timestamp)
+    }
+}
+
+struct ReportAttempt {
+    path: Option<PathBuf>,
+    error: Option<String>,
+    exit_code: u8,
+}
+
+fn attempt_report<W: ReportWriter>(
+    writer: &W,
+    body: &str,
+    timestamp: chrono::DateTime<chrono::Local>,
+    banner_exit_code: u8,
+) -> ReportAttempt {
+    match writer.write(body, timestamp) {
+        Ok(path) => ReportAttempt {
+            path: Some(path),
+            error: None,
+            exit_code: banner_exit_code,
+        },
+        Err(error) => ReportAttempt {
+            path: None,
+            error: Some(error),
+            // The HTML report is the primary artefact. A missing report is a
+            // hard failure even when the validation banner would be PASS/WARN.
+            exit_code: 1,
+        },
+    }
+}
+
 /// Write the HTML body to `tests/results/full_test_<stamp>.html`. Creates the
-/// parent directory as needed. Returns the full path on success so the
-/// stdout summary line can point at it.
+/// parent directory as needed, writes through a same-directory temporary file,
+/// and atomically renames it into place. Returns the full path on success so
+/// the stdout summary line can point at it.
 fn write_report(body: &str, timestamp: chrono::DateTime<chrono::Local>) -> Result<PathBuf, String> {
     let root = workspace_root();
     let results_dir = root.join("tests").join("results");
-    std::fs::create_dir_all(&results_dir)
+    write_report_to_dir(body, timestamp, &results_dir)
+}
+
+fn write_report_to_dir(
+    body: &str,
+    timestamp: chrono::DateTime<chrono::Local>,
+    results_dir: &Path,
+) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(results_dir)
         .map_err(|e| format!("creating {}: {e}", results_dir.display()))?;
     let stamp = timestamp.format("%Y%m%d_%H%M%S").to_string();
     let path = results_dir.join(format!("full_test_{stamp}.html"));
-    std::fs::write(&path, body).map_err(|e| format!("writing {}: {e}", path.display()))?;
+    let mut temp = tempfile::NamedTempFile::new_in(results_dir).map_err(|e| {
+        format!(
+            "creating temporary report in {}: {e}",
+            results_dir.display()
+        )
+    })?;
+    temp.as_file_mut()
+        .write_all(body.as_bytes())
+        .map_err(|e| format!("writing temporary report for {}: {e}", path.display()))?;
+    temp.as_file()
+        .sync_all()
+        .map_err(|e| format!("flushing temporary report for {}: {e}", path.display()))?;
+    temp.persist(&path).map_err(|e| {
+        format!(
+            "renaming temporary report to {}: {}",
+            path.display(),
+            e.error
+        )
+    })?;
     Ok(path)
 }
 
@@ -267,14 +343,12 @@ fn print_summary_line(
     setup: &setup::SetupInfo,
     tests: &tests::Outcome,
     report_path: Option<&Path>,
+    report_error: Option<&str>,
 ) {
     let passed = tests.tests.total_passed;
     let failed = tests.tests.total_failed;
     let ignored = tests.tests.total_ignored;
-    let report_seg = match report_path {
-        Some(p) => format!(" — report: {}", relpath(p)),
-        None => String::new(),
-    };
+    let report_seg = report_summary_segment(report_path, report_error);
     println!(
         "{label} — ropus {version} @ {branch}/{sha} — {passed} passed, {failed} failed, {ignored} ignored{report}",
         label = banner.label(),
@@ -283,6 +357,14 @@ fn print_summary_line(
         sha = setup.commit,
         report = report_seg,
     );
+}
+
+fn report_summary_segment(report_path: Option<&Path>, report_error: Option<&str>) -> String {
+    match (report_path, report_error) {
+        (Some(p), _) => format!(" — report: {}", relpath(p)),
+        (None, Some(error)) => format!(" — report unavailable: {error}"),
+        (None, None) => " — report unavailable".to_string(),
+    }
 }
 
 /// Render a path relative to the workspace root if it lives under it, else
@@ -337,6 +419,59 @@ mod tests_unit {
         assert_eq!(
             stage2_profile(&options(false, false)),
             tests::Stage2Profile::FullWorkspace
+        );
+    }
+
+    struct FailingReportWriter;
+
+    impl ReportWriter for FailingReportWriter {
+        fn write(
+            &self,
+            _body: &str,
+            _timestamp: chrono::DateTime<chrono::Local>,
+        ) -> Result<PathBuf, String> {
+            Err("simulated disk-full failure".to_string())
+        }
+    }
+
+    #[test]
+    fn report_write_failure_is_fatal_for_pass_and_warn() {
+        let writer = FailingReportWriter;
+        let timestamp = chrono::Local::now();
+
+        for banner in [banner::Banner::Pass, banner::Banner::Warn] {
+            let attempt = attempt_report(&writer, "<html>", timestamp, banner.exit_code());
+
+            assert!(attempt.path.is_none());
+            assert_eq!(
+                attempt.error.as_deref(),
+                Some("simulated disk-full failure")
+            );
+            assert_eq!(
+                attempt.exit_code, 1,
+                "{banner:?} must fail without a report"
+            );
+            assert_eq!(
+                report_summary_segment(None, attempt.error.as_deref()),
+                " — report unavailable: simulated disk-full failure"
+            );
+        }
+    }
+
+    #[test]
+    fn report_writer_replaces_target_atomically() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let timestamp = chrono::Local::now();
+        let path = write_report_to_dir("old", timestamp, temp.path()).expect("first report");
+        std::fs::write(&path, "partial old body").expect("seed target");
+
+        let replaced = write_report_to_dir("new complete body", timestamp, temp.path())
+            .expect("replacement report");
+
+        assert_eq!(path, replaced);
+        assert_eq!(
+            std::fs::read_to_string(replaced).expect("read report"),
+            "new complete body"
         );
     }
 }

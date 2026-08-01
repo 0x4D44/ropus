@@ -71,7 +71,7 @@ pub fn help_text() -> &'static str {
         "    -h, --help          Show this help and exit.\n",
         "\n",
         "Report lands at tests/results/full_test_<YYYYMMDD_HHMMSS>.html.\n",
-        "Exit code: 0 on PASS/WARN, 1 on FAIL (see HLD § PASS / FAIL / WARN).\n",
+        "Exit code: 0 on PASS/WARN when the report is written, 1 on FAIL or report write failure (see HLD § PASS / FAIL / WARN).\n",
     )
 }
 

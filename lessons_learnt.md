@@ -1,3 +1,7 @@
+- The full-test HTML report is a required output: atomically rename a complete temporary file and fail the run if delivery fails (`full-test/src/main.rs:attempt_report`).
+
+  PASS/WARN describes validation only; a missing primary report must still return nonzero and show its write error in the summary.
+
 - C ABI version strings should use `env!("CARGO_PKG_VERSION")` so package bumps cannot leave stale diagnostics (`capi/src/lib.rs:VERSION_STRING`).
 
   Keep the C-compatible NUL terminator in the compile-time string and test the exported pointer against the same package metadata.
