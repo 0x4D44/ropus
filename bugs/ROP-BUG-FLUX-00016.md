@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** capi/multistream-decoder-ctl
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T171344Z-p80782-n124719000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00016-run-fix-20260801T171344Z-p80782-n124719000-c1
+- **Owner base:** 385544151645a63c2dc8b75ccebad118e996cedf
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T17:13:44Z
+- **Owner until:** 2026-08-01T19:13:44Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
