@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** ropusenc/build-provenance
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T235001Z-p20648-n265745000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00061-run-fix-20260801T235001Z-p20648-n265745000-c1
+- **Owner base:** 3c465a5819592cc3e4ceeab6ba65a36b87a7561a
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T23:50:01Z
+- **Owner until:** 2026-08-02T01:50:01Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
