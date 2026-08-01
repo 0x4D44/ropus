@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00047 — Reverse Ogg duration scan trusts header-shaped payload bytes
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Low
 - **Area:** ropus-tools-core/ogg-scan
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T220951Z-p81763-n296538000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00047-run-fix-20260801T220951Z-p81763-n296538000-c1
-- **Owner base:** c9aad8472913cbd955318275d096e7c689ebb469
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T22:09:51Z
-- **Owner until:** 2026-08-02T00:09:51Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T220951Z-p81763-n296538000-c1 branch=task/bug-ROP-BUG-FLUX-00047-run-fix-20260801T220951Z-p81763-n296538000-c1 code=1d39892 gate=manual)
 
 ## Observation
 
