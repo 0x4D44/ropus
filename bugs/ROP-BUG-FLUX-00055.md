@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00055 — Encode and decode can overwrite their own input
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** ropus-tools-core/path-safety
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T230202Z-p61873-n904081000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00055-run-fix-20260801T230202Z-p61873-n904081000-c1
-- **Owner base:** ffc617949559cf6ab41cad7032ced8de589d464c
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T23:02:02Z
-- **Owner until:** 2026-08-02T01:02:02Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260801T230202Z-p61873-n904081000-c1 branch=task/bug-ROP-BUG-FLUX-00055-run-fix-20260801T230202Z-p61873-n904081000-c1 code=5b63404714043ac391bcb58a459374fadac79861 gate=manual)
 
 ## Observation
 
