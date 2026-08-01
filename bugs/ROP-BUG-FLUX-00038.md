@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00038 — fb2k decoder crosses the first chained logical stream boundary
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-fb2k/demux
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T211447Z-p8705-n395922000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00038-run-fix-20260801T211447Z-p8705-n395922000-c1
-- **Owner base:** 11134dd208a01c76458dac2d4e5b839fdea4ad80
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T21:14:47Z
-- **Owner until:** 2026-08-01T23:14:47Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T211447Z-p8705-n395922000-c1 branch=task/bug-ROP-BUG-FLUX-00038-run-fix-20260801T211447Z-p8705-n395922000-c1 code=80ef0e528cf8b077bed9dbe3cee2897241579498 gate=manual)
 
 ## Observation
 
