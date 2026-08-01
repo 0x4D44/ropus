@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00045 — OpusHead parser accepts unsupported mappings and incompatible versions
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/opus-head
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T215213Z-p43735-n092100000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00045-run-fix-20260801T215213Z-p43735-n092100000-c1
-- **Owner base:** 2e9c3af2d2b2718ade75719eb84221733244ea4f
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T21:52:13Z
-- **Owner until:** 2026-08-01T23:52:13Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T215213Z-p43735-n092100000-c1 branch=task/bug-ROP-BUG-FLUX-00045-run-fix-20260801T215213Z-p43735-n092100000-c1 code=3669b4974cb4752b6040731d6a9c1dce00389899 gate=manual)
 
 ## Observation
 
