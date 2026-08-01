@@ -378,16 +378,33 @@ impl EncodeConfig {
 #[allow(dead_code)]
 fn generate_noise(sample_rate: i32, channels: i32, duration_secs: f64, seed: u64) -> Vec<i16> {
     let num_samples = (sample_rate as f64 * duration_secs) as usize * channels as usize;
-    let mut rng = seed;
     let mut samples = Vec::with_capacity(num_samples);
-    for _ in 0..num_samples {
-        rng = rng
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        // Use bits 33-48 directly as i16 — uniform over full i16 range
-        samples.push((rng >> 33) as i16);
-    }
+    let mut generator = NoiseGenerator::new(seed);
+    samples.resize(num_samples, 0);
+    generator.fill(&mut samples);
     samples
+}
+
+/// Incremental form of `generate_noise` for long-running tests.
+struct NoiseGenerator {
+    state: u64,
+}
+
+impl NoiseGenerator {
+    fn new(seed: u64) -> Self {
+        Self { state: seed }
+    }
+
+    fn fill(&mut self, samples: &mut [i16]) {
+        for sample in samples {
+            self.state = self
+                .state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            // Use bits 33-48 directly as i16 — uniform over full i16 range.
+            *sample = (self.state >> 33) as i16;
+        }
+    }
 }
 
 /// Generate alternating noise/silence signal for DTX testing.
@@ -5723,6 +5740,12 @@ fn get_rss_bytes() -> Option<usize> {
     }
 }
 
+const RSS_LEAK_THRESHOLD_BYTES: usize = 50 * 1024 * 1024;
+
+fn rss_growth_exceeds_threshold(start: usize, end: usize) -> bool {
+    end.saturating_sub(start) > RSS_LEAK_THRESHOLD_BYTES
+}
+
 /// Advance PRNG state (LCG, same constants as generate_noise).
 fn torture_rng(state: &mut u64) -> u64 {
     *state = state
@@ -6846,13 +6869,13 @@ fn cmd_torture(
     );
     println!();
 
-    let rss_start = get_rss_bytes();
-    if let Some(rss) = rss_start {
-        println!("RSS at start: {:.1} MB", rss as f64 / 1_048_576.0);
-    }
-
-    // Generate PCM for the full duration
-    let pcm = generate_noise(sample_rate, channels, duration_secs as f64, seed);
+    let total_samples = (duration_secs.max(0) as usize)
+        .checked_mul(sample_rate.max(0) as usize)
+        .and_then(|samples| samples.checked_mul(channels.max(0) as usize))
+        .unwrap_or_else(|| {
+            eprintln!("ERROR: torture duration exceeds the addressable sample count");
+            process::exit(1);
+        });
 
     // --- Create C encoder + decoder ---
     let c_enc = unsafe {
@@ -6956,6 +6979,9 @@ fn cmd_torture(
     } else {
         Vec::new()
     };
+    // Reuse one bounded frame buffer instead of retaining the full duration's
+    // PCM. This keeps RSS independent of the requested soak duration.
+    let mut pcm_frame = vec![0i16; max_frame_samples];
 
     let mut rng = seed.wrapping_add(0xDEAD_BEEF); // Offset from PCM seed
     let mut frame_idx: usize = 0;
@@ -7001,11 +7027,20 @@ fn cmd_torture(
     unsafe { apply_config_to_c_encoder(c_enc, &current_cfg) };
     apply_config_to_rust_encoder(&mut rust_enc, &current_cfg);
 
+    // The baseline includes fixed codec and buffer setup, but not the stream
+    // itself. The end sample is taken after teardown, so only steady-state
+    // growth can trip the leak warning.
+    let rss_baseline = get_rss_bytes();
+    if let Some(rss) = rss_baseline {
+        println!("RSS after setup: {:.1} MB", rss as f64 / 1_048_576.0);
+    }
+
+    let mut pcm_generator = NoiseGenerator::new(seed);
     let start_time = std::time::Instant::now();
 
     loop {
         let frame_samples = current_frame_size * channels as usize;
-        if pcm_pos + frame_samples > pcm.len() {
+        if pcm_pos + frame_samples > total_samples {
             break;
         }
 
@@ -7077,12 +7112,13 @@ fn cmd_torture(
 
             // Re-check PCM availability after frame size change
             let frame_samples = current_frame_size * channels as usize;
-            if pcm_pos + frame_samples > pcm.len() {
+            if pcm_pos + frame_samples > total_samples {
                 break;
             }
         }
 
         let frame_samples = current_frame_size * channels as usize;
+        pcm_generator.fill(&mut pcm_frame[..frame_samples]);
 
         // --- Encode with C ---
         // Once per frame, compute whether we are currently inside a
@@ -7097,7 +7133,7 @@ fn cmd_torture(
         let c_len = unsafe {
             bindings::opus_encode(
                 c_enc,
-                pcm[pcm_pos..].as_ptr(),
+                pcm_frame.as_ptr(),
                 current_frame_size as i32,
                 c_pkt.as_mut_ptr(),
                 c_pkt.len() as i32,
@@ -7107,7 +7143,7 @@ fn cmd_torture(
         // --- Encode with Rust ---
         let rust_pkt_len = rust_pkt.len() as i32;
         let rust_len = match rust_enc.encode(
-            &pcm[pcm_pos..pcm_pos + frame_samples],
+            &pcm_frame[..frame_samples],
             current_frame_size as i32,
             &mut rust_pkt,
             rust_pkt_len,
@@ -7519,7 +7555,11 @@ fn cmd_torture(
         // Progress every 500 frames
         if frame_idx % 500 == 0 {
             let elapsed = start_time.elapsed().as_secs_f64();
-            let pct = pcm_pos as f64 / pcm.len() as f64 * 100.0;
+            let pct = if total_samples == 0 {
+                100.0
+            } else {
+                pcm_pos as f64 / total_samples as f64 * 100.0
+            };
             eprint!(
                 "\r  [{:.0}s] frame {} ({:.1}%), cfgs: {}, bursts: {}, enc_err: {}, dec_err: {}, rng_err: {}, xdec_err: {}, state_err: {}   ",
                 elapsed,
@@ -7563,7 +7603,6 @@ fn cmd_torture(
     }
 
     let elapsed = start_time.elapsed();
-    let rss_end = get_rss_bytes();
 
     unsafe {
         bindings::opus_encoder_destroy(c_enc);
@@ -7573,6 +7612,16 @@ fn cmd_torture(
         }
     }
     drop(rust_dec_rs_opt);
+    drop(rust_enc);
+    drop(rust_dec_cs);
+    drop(c_pkt);
+    drop(rust_pkt);
+    drop(pcm_a);
+    drop(pcm_b);
+    drop(pcm_c);
+    drop(pcm_d);
+    drop(pcm_frame);
+    let rss_end = get_rss_bytes();
 
     println!();
     println!("=== Torture Test Summary ===");
@@ -7592,15 +7641,15 @@ fn cmd_torture(
     if max_pcm_diff > 0 {
         println!("  Max PCM diff:    {}", max_pcm_diff);
     }
-    if let (Some(start), Some(end)) = (rss_start, rss_end) {
+    if let (Some(start), Some(end)) = (rss_baseline, rss_end) {
         let delta = end as i64 - start as i64;
         println!(
-            "  RSS: {:.1} MB -> {:.1} MB ({:+.1} MB)",
+            "  RSS after setup: {:.1} MB -> {:.1} MB ({:+.1} MB)",
             start as f64 / 1_048_576.0,
             end as f64 / 1_048_576.0,
             delta as f64 / 1_048_576.0
         );
-        if delta > 50 * 1024 * 1024 {
+        if rss_growth_exceeds_threshold(start, end) {
             println!("  WARNING: RSS grew >50 MB — possible memory leak");
         }
     }
@@ -9169,6 +9218,34 @@ mod coverage_smoke_tests {
                 Event::Destroy,
             ]
         );
+    }
+
+    #[test]
+    fn incremental_noise_matches_full_buffer() {
+        let expected = generate_noise(8000, 1, 0.125, 1234);
+        let mut actual = vec![0i16; expected.len()];
+        let mut generator = NoiseGenerator::new(1234);
+        for chunk in actual.chunks_mut(17) {
+            generator.fill(chunk);
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn rss_growth_classifier_ignores_fixed_baseline_and_shrink() {
+        let baseline = 100usize;
+        assert!(!rss_growth_exceeds_threshold(
+            baseline,
+            baseline + RSS_LEAK_THRESHOLD_BYTES
+        ));
+        assert!(rss_growth_exceeds_threshold(
+            baseline,
+            baseline + RSS_LEAK_THRESHOLD_BYTES + 1
+        ));
+        assert!(!rss_growth_exceeds_threshold(
+            baseline + RSS_LEAK_THRESHOLD_BYTES + 1,
+            baseline
+        ));
     }
 
     #[test]

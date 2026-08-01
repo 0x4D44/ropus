@@ -1,3 +1,7 @@
+- RSS leak checks must baseline after fixed setup and tear down before sampling (`harness/src/cli.rs:cmd_torture`).
+
+  Stream deterministic input through a bounded frame buffer; otherwise duration-sized PCM dominates the delta and masks real growth.
+
 - Benchmark timers must bracket only configured work; centralize C lifecycle ordering (`harness/src/cli.rs:timed_c_lifecycle`).
 
   Inject timer callbacks in the lifecycle test so construction/configuration and destruction cannot drift back into the measured interval.
