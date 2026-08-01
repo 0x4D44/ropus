@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00060 — Picture preprocessing can destroy output and bypass its size cap
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** ropusenc/picture-output-safety
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T233850Z-p80645-n650518000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00060-run-fix-20260801T233850Z-p80645-n650518000-c1
-- **Owner base:** b10c472c8d60289502fbe0f548840c96f0898135
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T23:38:50Z
-- **Owner until:** 2026-08-02T01:38:50Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260801T233850Z-p80645-n650518000-c1 branch=task/bug-ROP-BUG-FLUX-00060-run-fix-20260801T233850Z-p80645-n650518000-c1 code=62bff7d072c4e55faa4a3a873fb141ad9591d61d gate=manual)
 
 ## Observation
 
