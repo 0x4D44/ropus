@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00043 — Decode, play, and transcode emit samples beyond the EOS granule
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/decode-timeline
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T212437Z-p40235-n096674000-c1 branch=task/bug-ROP-BUG-FLUX-00043-run-fix-20260801T212437Z-p40235-n096674000-c1 code=18d06ac gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T212437Z-p40235-n096674000-c1 branch=task/bug-ROP-BUG-FLUX-00043-run-fix-20260801T212437Z-p40235-n096674000-c1 code=18d06ac gate=manual) -> Closed (2026-08-01, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main aa7d12c; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -56,3 +56,19 @@ from shared-prefix comparison to an independently granulated exact sample-count
 oracle. Wholly undecodable tracks are tracked separately as
 `ROP-BUG-FLUX-00064`. Static review at `origin/main` `e5d7113`; no decoder,
 player, or test ran.
+
+### Verification — Closed (2026-08-01, independent two-eyes, host flux)
+
+Covers the main observation plus both notes (`ropusdec` physical-EOF and `ropusplay`
+completion acceptance).
+
+- Fix commit `18d06ac` makes `ropus-tools-core/src/commands/decode.rs` and
+  `ropus-tools-core/src/audio/decode.rs` use the selected stream's EOS metadata to trim
+  packet padding to the EOS granule minus pre-skip, and reject physical EOF reached before
+  the selected stream's EOS across the direct-decode, playback, and transcode paths.
+- New tests `decode_play_and_transcode_trim_to_eos_granule` and
+  `decode_and_play_reject_physical_eof_before_eos` (`ropus-tools-core/tests/round_trip.rs`)
+  pass, using independently granulated fixtures per the fix's own requirement (not dependent
+  on the `ROP-BUG-FLUX-00042` encoder fix).
+- `cargo clippy -p ropus-tools-core --all-targets --locked -- -D warnings` clean; `cargo test
+  -p ropus-tools-core --locked`: 114 passed, 0 failed.
