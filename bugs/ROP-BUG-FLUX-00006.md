@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** integration/fuzz-assets
 - **Raised:** 2026-07-30
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T151741Z-p75566-n609680000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00006-run-fix-20260801T151741Z-p75566-n609680000-c1
+- **Owner base:** 63f5edc9effcec58ef68878c1aa08b6d7b4ca772
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T15:17:41Z
+- **Owner until:** 2026-08-01T17:17:41Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
