@@ -1,3 +1,9 @@
+- Provision ignored C-reference assets before fuzz checks (`.deltic-integrate.toml:harness/fuzz`).
+
+  A clean task worktree has no tracked `reference/` tree, so the fuzz build
+  script cannot assume a prior manual fetch. Reuse the pinned, idempotent
+  `fetch-assets reference` command in every gate that enters the fuzz crate.
+
 - Check excluded Cargo workspaces with their own manifest (`.deltic-integrate.toml:fuzz`).
 
   Root `cargo fmt --all` can miss a standalone workspace, while shared source
