@@ -907,6 +907,9 @@ impl OpusMSEncoder {
         {
             return Err(OPUS_BAD_ARG);
         }
+        if mapping.len() < channels as usize {
+            return Err(OPUS_BAD_ARG);
+        }
 
         let mut layout = ChannelLayout::new();
         layout.nb_channels = channels;
@@ -1601,6 +1604,9 @@ impl OpusMSDecoder {
             || coupled_streams < 0
             || streams > 255 - coupled_streams
         {
+            return Err(OPUS_BAD_ARG);
+        }
+        if mapping.len() < channels as usize {
             return Err(OPUS_BAD_ARG);
         }
 
@@ -2362,9 +2368,17 @@ impl OpusProjectionDecoder {
         demixing_matrix_bytes: &[u8],
         demixing_matrix_size: i32,
     ) -> Result<Self, i32> {
-        let nb_input_streams = streams + coupled_streams;
-        let expected_size = nb_input_streams * channels * 2;
-        if expected_size != demixing_matrix_size {
+        if channels < 1 || streams < 1 || coupled_streams < 0 || coupled_streams > streams {
+            return Err(OPUS_BAD_ARG);
+        }
+        let nb_input_streams = streams.checked_add(coupled_streams).ok_or(OPUS_BAD_ARG)?;
+        let expected_size = nb_input_streams
+            .checked_mul(channels)
+            .and_then(|size| size.checked_mul(2))
+            .ok_or(OPUS_BAD_ARG)?;
+        if expected_size != demixing_matrix_size
+            || demixing_matrix_bytes.len() < expected_size as usize
+        {
             return Err(OPUS_BAD_ARG);
         }
 
@@ -4115,6 +4129,21 @@ mod tests {
                 OpusMSEncoder::new(48000, 1, 1, 1, &[0], OPUS_APPLICATION_AUDIO),
                 Err(OPUS_BAD_ARG)
             ));
+        }
+
+        #[test]
+        fn constructors_reject_undersized_safe_slices_without_panicking() {
+            let encoder = std::panic::catch_unwind(|| {
+                OpusMSEncoder::new(48000, 2, 1, 1, &[0], OPUS_APPLICATION_AUDIO)
+            });
+            assert!(matches!(encoder, Ok(Err(OPUS_BAD_ARG))));
+
+            let decoder = std::panic::catch_unwind(|| OpusMSDecoder::new(48000, 2, 1, 1, &[0]));
+            assert!(matches!(decoder, Ok(Err(OPUS_BAD_ARG))));
+
+            let projection =
+                std::panic::catch_unwind(|| OpusProjectionDecoder::new(48000, 2, 1, 0, &[0, 0], 4));
+            assert!(matches!(projection, Ok(Err(OPUS_BAD_ARG))));
         }
 
         #[test]

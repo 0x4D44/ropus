@@ -1,3 +1,7 @@
+- Validate safe-slice lengths before fixed-size constructor copies (`ropus/src/opus/multistream.rs:OpusMSEncoder::new_impl`).
+
+  Safe slices prevent memory unsafety, but direct indexing can still panic when a caller passes a short mapping or projection matrix. Return `OPUS_BAD_ARG` before copying, and use checked arithmetic for projection dimensions.
+
 - Provision ignored C-reference assets before fuzz checks (`.deltic-integrate.toml:harness/fuzz`).
 
   A clean task worktree has no tracked `reference/` tree, so the fuzz build
