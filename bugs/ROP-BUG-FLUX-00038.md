@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** ropus-fb2k/demux
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T211447Z-p8705-n395922000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00038-run-fix-20260801T211447Z-p8705-n395922000-c1
+- **Owner base:** 11134dd208a01c76458dac2d4e5b839fdea4ad80
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T21:14:47Z
+- **Owner until:** 2026-08-01T23:14:47Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
