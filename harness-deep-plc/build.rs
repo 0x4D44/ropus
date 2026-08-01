@@ -11,7 +11,63 @@
 //! FIXED_POINT + DEEP_PLC, so we need a second build flavour for the PLC
 //! comparison harness.
 
+#[path = "../harness/reference_build_manifest.rs"]
+mod reference_build_manifest;
+#[path = "../harness/source_block_fingerprint.rs"]
+mod source_block_fingerprint;
+
+use reference_build_manifest::ReferenceBuildManifest;
+use source_block_fingerprint::source_block_fnv1a64;
+use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
+
+const DRED_BITRATE_SOURCE_FNV1A64: u64 = 0x6196_d129_4721_914a;
+
+fn register_reference_sources(
+    build: &mut cc::Build,
+    reference_root: &Path,
+    manifest: &ReferenceBuildManifest,
+) {
+    assert_eq!(manifest.sources(), manifest.watched_sources());
+    for source in manifest.sources() {
+        build.file(reference_root.join(source));
+    }
+    for source in manifest.watched_sources() {
+        println!(
+            "cargo:rerun-if-changed={}",
+            reference_root.join(source).display()
+        );
+    }
+    for directory in manifest.watch_directories() {
+        println!(
+            "cargo:rerun-if-changed={}",
+            reference_root.join(directory).display()
+        );
+    }
+}
+
+fn register_local_sources(build: &mut cc::Build, root: &Path, sources: &[&str]) {
+    for source in sources {
+        let path = root.join(source);
+        build.file(&path);
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+}
+
+fn verify_copied_dred_bitrate_oracle(reference_root: &Path) {
+    let path = reference_root.join("src/opus_encoder.c");
+    let source = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+    let actual = source_block_fnv1a64(&source, "static const float dred_bits_table", "\n#endif")
+        .unwrap_or_else(|error| panic!("failed to fingerprint {}: {error}", path.display()));
+    assert_eq!(
+        actual,
+        DRED_BITRATE_SOURCE_FNV1A64,
+        "the copied DRED bitrate oracle in dred_encode_shim.c is stale against {}; audit and update the copied block before accepting the new fingerprint",
+        path.display()
+    );
+}
 
 fn main() {
     let ref_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../reference");
@@ -292,55 +348,37 @@ fn main() {
     // Silent no-op on MSVC.
     build.flag_if_supported("-ffp-contract=off");
 
-    // Add all source files
-    for src in &celt_sources {
-        build.file(ref_dir.join(src));
-    }
-    for src in &silk_sources {
-        build.file(ref_dir.join(src));
-    }
-    for src in &silk_float_sources {
-        build.file(ref_dir.join(src));
-    }
-    for src in &opus_sources {
-        build.file(ref_dir.join(src));
-    }
-    for src in &dnn_sources {
-        build.file(ref_dir.join(src));
-    }
-    for src in &dred_sources {
-        build.file(ref_dir.join(src));
-    }
+    // One manifest drives both compilation and Cargo invalidation. Recursive
+    // source-directory watches include every reference header and added file.
+    let mut reference_sources = Vec::new();
+    reference_sources.extend(celt_sources);
+    reference_sources.extend(silk_sources);
+    reference_sources.extend(silk_float_sources);
+    reference_sources.extend(opus_sources);
+    reference_sources.extend(dnn_sources);
+    reference_sources.extend(dred_sources);
+    let reference_manifest = ReferenceBuildManifest::try_new(
+        reference_sources,
+        ["include", "celt", "silk", "src", "dnn"],
+    )
+    .expect("float C-reference build manifest must be valid");
+    register_reference_sources(&mut build, &ref_dir, &reference_manifest);
 
-    // Local shim that exposes `dred_rdovae_encode_dframe` via opaque
-    // pointers so the Rust differential test can call it without
-    // replicating the C struct layouts.
-    build.file(harness_dir.join("dred_enc_shim.c"));
-    // Sibling shim for stage 8.5: RDOVAE decoder forward pass + init.
-    build.file(harness_dir.join("dred_dec_shim.c"));
-    // Stage 8.6 shim: full encoder-side pipeline (DREDEnc init, compute
-    // latents, encode silk frame) behind opaque handles.
-    build.file(harness_dir.join("dred_encode_shim.c"));
-    // Stage 7b.3 diagnostic peek — pure-read getters into C-ref private
-    // state. Compiled into the same static lib so they see `config.h`,
-    // `ENABLE_DEEP_PLC=1`, and the internal headers without touching
-    // `reference/`.
-    build.file(harness_dir.join("c/peek.c"));
-    // 2026-05-07 burg-cepstrum-pow-fix: differential-test thunk for
-    // `burg_cepstral_analysis` (HLD wrk_docs/2026.05.07 - HLD - burg-
-    // cepstrum-pow-fix.md). One-line wrapper around the C reference's
-    // public symbol; named to match the `ropus_test_*` convention used
-    // by the other shims in this crate.
-    build.file(harness_dir.join("c/burg_thunk.c"));
+    // Local RDOVAE encoder/decoder and full-pipeline shims expose opaque FFI
+    // entry points. The diagnostic peek reads private C state, while the burg
+    // thunk wraps the live reference's `burg_cepstral_analysis` symbol.
+    let local_sources = [
+        "dred_enc_shim.c",
+        "dred_dec_shim.c",
+        "dred_encode_shim.c",
+        "c/peek.c",
+        "c/burg_thunk.c",
+    ];
+    register_local_sources(&mut build, &harness_dir, &local_sources);
+    verify_copied_dred_bitrate_oracle(&ref_dir);
 
     build.compile("opus_ref_float");
 
     println!("cargo:rustc-link-lib=static=opus_ref_float");
     println!("cargo:rerun-if-changed=config.h");
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=dred_enc_shim.c");
-    println!("cargo:rerun-if-changed=dred_dec_shim.c");
-    println!("cargo:rerun-if-changed=dred_encode_shim.c");
-    println!("cargo:rerun-if-changed=c/peek.c");
-    println!("cargo:rerun-if-changed=c/burg_thunk.c");
 }

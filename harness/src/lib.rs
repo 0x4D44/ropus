@@ -10,6 +10,14 @@
 #[cfg(not(no_reference))]
 pub mod bindings;
 
+#[cfg(test)]
+#[path = "../reference_build_manifest.rs"]
+mod reference_build_manifest;
+
+#[cfg(test)]
+#[path = "../source_block_fingerprint.rs"]
+mod source_block_fingerprint;
+
 #[cfg(all(test, not(no_reference)))]
 mod tests {
     use super::bindings;

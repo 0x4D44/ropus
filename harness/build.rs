@@ -4,7 +4,42 @@
 //! The resulting static library is linked as `opus_ref` so FFI bindings
 //! can call into it.
 
+mod reference_build_manifest;
+
+use reference_build_manifest::ReferenceBuildManifest;
+use std::path::Path;
 use std::path::PathBuf;
+
+fn register_reference_sources(
+    build: &mut cc::Build,
+    reference_root: &Path,
+    manifest: &ReferenceBuildManifest,
+) {
+    assert_eq!(manifest.sources(), manifest.watched_sources());
+    for source in manifest.sources() {
+        build.file(reference_root.join(source));
+    }
+    for source in manifest.watched_sources() {
+        println!(
+            "cargo:rerun-if-changed={}",
+            reference_root.join(source).display()
+        );
+    }
+    for directory in manifest.watch_directories() {
+        println!(
+            "cargo:rerun-if-changed={}",
+            reference_root.join(directory).display()
+        );
+    }
+}
+
+fn register_local_sources(build: &mut cc::Build, root: &Path, sources: &[&str]) {
+    for source in sources {
+        let path = root.join(source);
+        build.file(&path);
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+}
 
 fn main() {
     let ref_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../reference");
@@ -369,29 +404,26 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CARGO_CFG_FUZZING");
     println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
 
-    // Add all source files
-    for src in &celt_sources {
-        build.file(ref_dir.join(src));
-    }
-    for src in &silk_sources {
-        build.file(ref_dir.join(src));
-    }
-    for src in &silk_fixed_sources {
-        build.file(ref_dir.join(src));
-    }
+    // One manifest drives both compilation and Cargo invalidation. Recursive
+    // source-directory watches include every reference header and added file.
+    let mut reference_sources = Vec::new();
+    reference_sources.extend(celt_sources);
+    reference_sources.extend(silk_sources);
+    reference_sources.extend(silk_fixed_sources);
     if target_is_x86 {
-        for src in celt_x86_sources.iter().chain(silk_x86_sources.iter()) {
-            build.file(ref_dir.join(src));
-        }
+        reference_sources.extend(celt_x86_sources);
+        reference_sources.extend(silk_x86_sources);
     } else if target_is_apple_aarch64 {
-        for src in &arm_neon_sources {
-            build.file(ref_dir.join(src));
-        }
-        build.file(harness_dir.join("warped_autocorrelation_FIX_neon_shim.c"));
+        reference_sources.extend(arm_neon_sources);
     }
-    for src in &opus_sources {
-        build.file(ref_dir.join(src));
-    }
+    reference_sources.extend(opus_sources);
+    let reference_manifest = ReferenceBuildManifest::try_new(
+        reference_sources,
+        ["include", "celt", "silk", "src", "dnn"],
+    )
+    .expect("fixed-point C-reference build manifest must be valid");
+    register_reference_sources(&mut build, &ref_dir, &reference_manifest);
+
     // `_dnn_sources` is intentionally left out of the build until the
     // FIXED_POINT vs. DEEP_PLC struct-init incompatibility is resolved
     // (see the commentary on `_dnn_sources` above). Uncomment this loop
@@ -400,40 +432,28 @@ fn main() {
     //     build.file(ref_dir.join(src));
     // }
 
-    // Debug helper for direct function comparisons
-    build.file(harness_dir.join("debug_helper.c"));
-
-    // SILK decode trace helper for Bug #13 investigation, plus the
-    // Phase B encode-side trace FIFO (Cluster A stage 2b).
-    build.file(harness_dir.join("debug_silk_trace.c"));
-
-    // Phase B trace-instrumented copy of enc_API.c. Defines `silk_Encode`
-    // (same name, replacing xiph's enc_API.c which is excluded from the
-    // build above). Each `opus_encode` call now emits per-boundary tuples
-    // to `dbg_silk_trace_push`. The trace buffer is single-instance and
-    // reset between encodes by the diagnostic binary; harmless overhead
-    // for normal comparison runs.
-    build.file(harness_dir.join("silk_enc_api_traced.c"));
-
-    // Phase C trace-instrumented copy of silk/fixed/encode_frame_FIX.c.
-    // Defines `silk_encode_frame_FIX_traced` and `silk_encode_do_VAD_FIX_traced`
-    // (renamed externals to avoid collision with the unmodified xiph copy
-    // that stays in the build). Called from silk_enc_api_traced.c and
-    // emits per-boundary payload tuples for HLD V2 boundaries 100..109
-    // via `dbg_silk_trace_push_payload`.
-    build.file(harness_dir.join("silk_encode_frame_FIX_traced.c"));
+    // Debug helper for direct function comparisons.
+    //
+    // `debug_silk_trace.c` provides the SILK decode trace and encode-side trace
+    // FIFO. `silk_enc_api_traced.c` replaces xiph's enc_API.c and emits
+    // per-boundary tuples. `silk_encode_frame_FIX_traced.c` exposes renamed
+    // traced entry points without colliding with the unmodified xiph copy.
+    // All local helpers use the same compile/watch path; the Apple shim remains
+    // target-specific.
+    let mut local_sources = vec![
+        "debug_helper.c",
+        "debug_silk_trace.c",
+        "silk_enc_api_traced.c",
+        "silk_encode_frame_FIX_traced.c",
+    ];
+    if target_is_apple_aarch64 {
+        local_sources.push("warped_autocorrelation_FIX_neon_shim.c");
+    }
+    register_local_sources(&mut build, &harness_dir, &local_sources);
 
     build.compile("opus_ref");
 
     // Tell cargo to link the static library
     println!("cargo:rustc-link-lib=static=opus_ref");
     println!("cargo:rerun-if-changed=config.h");
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=debug_helper.c");
-    println!("cargo:rerun-if-changed=debug_silk_trace.c");
-    println!("cargo:rerun-if-changed=silk_enc_api_traced.c");
-    println!("cargo:rerun-if-changed=silk_encode_frame_FIX_traced.c");
-    println!("cargo:rerun-if-changed=../reference/celt/celt_decoder.c");
 }
-// force rebuild
-// force rebuild 2

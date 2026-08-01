@@ -369,9 +369,9 @@ int ropus_test_c_dred_parse(
  *
  * VERBATIM COPY of `reference/src/opus_encoder.c` lines 668-730. If the
  * vendor source ever updates either function or the bits table, MIRROR
- * those changes here byte-for-byte; otherwise the FFI fixture silently
- * stops being a true differential. The top of each verbatim block flags
- * the source line range so future grep / diff catches drift.
+ * those changes here byte-for-byte; otherwise the FFI fixture stops being
+ * a true differential. build.rs pins the live vendor block fingerprint so
+ * such a change fails the build until this copy is audited and updated.
  *
  * Headers: ecintrin.h provides `EC_ILOG`; arch.h provides `IMIN`,
  * `IMAX`, `MIN16`; celt.h provides `bitrate_to_bits` / `bits_to_bitrate`
