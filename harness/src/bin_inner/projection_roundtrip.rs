@@ -251,6 +251,7 @@ impl Drop for CDecoder {
 /// Result of running one fixture end-to-end.
 struct FixtureResult {
     total_frames: usize,
+    processed_frames: usize,
     encode_mismatches: usize,
     decode_mismatches: usize,
     encode_first_mismatch: Option<(usize, usize)>,
@@ -259,8 +260,16 @@ struct FixtureResult {
 
 impl FixtureResult {
     fn passed(&self) -> bool {
-        self.encode_mismatches == 0 && self.decode_mismatches == 0
+        self.processed_frames > 0
+            && self.processed_frames == self.total_frames
+            && self.encode_mismatches == 0
+            && self.decode_mismatches == 0
     }
+}
+
+fn complete_frame_count(sample_count: usize, samples_per_frame: usize) -> Option<usize> {
+    let frames = sample_count.checked_div(samples_per_frame)?;
+    (frames > 0).then_some(frames)
 }
 
 fn run_fixture(path: &Path, bitrate: i32) -> FixtureResult {
@@ -276,6 +285,23 @@ fn run_fixture(path: &Path, bitrate: i32) -> FixtureResult {
     let fs: i32 = wav.sample_rate as i32;
     let channels: i32 = wav.channels as i32;
     let frame_size: i32 = fs / 50; // 20 ms
+    let samples_per_frame = (frame_size as usize) * channels as usize;
+    let Some(total_frames) = complete_frame_count(wav.samples.len(), samples_per_frame) else {
+        eprintln!(
+            "ERROR: {} contains no complete 20 ms frame (need {} interleaved samples, found {})",
+            path.display(),
+            samples_per_frame,
+            wav.samples.len()
+        );
+        return FixtureResult {
+            total_frames: 0,
+            processed_frames: 0,
+            encode_mismatches: 0,
+            decode_mismatches: 0,
+            encode_first_mismatch: None,
+            decode_first_mismatch: None,
+        };
+    };
 
     // Build both encoders
     let mut c_enc = CEncoder::new(fs, channels, bitrate);
@@ -342,8 +368,6 @@ fn run_fixture(path: &Path, bitrate: i32) -> FixtureResult {
     .expect("ropus: projection decoder create");
 
     // Encode + decode in 20 ms frames.
-    let samples_per_frame = (frame_size as usize) * channels as usize;
-    let total_frames = wav.samples.len() / samples_per_frame;
     let max_packet = 1500 * c_enc.streams as usize;
     let mut c_buf = vec![0u8; max_packet];
     let mut r_buf = vec![0u8; max_packet];
@@ -352,6 +376,7 @@ fn run_fixture(path: &Path, bitrate: i32) -> FixtureResult {
 
     let mut encode_mismatches = 0usize;
     let mut decode_mismatches = 0usize;
+    let mut processed_frames = 0usize;
     let mut encode_first_mismatch: Option<(usize, usize)> = None;
     let mut decode_first_mismatch: Option<(usize, usize)> = None;
 
@@ -421,21 +446,22 @@ fn run_fixture(path: &Path, bitrate: i32) -> FixtureResult {
                 decode_first_mismatch = Some((frame_idx, off));
             }
         }
+        processed_frames += 1;
     }
 
     println!(
         "  Processed {} frames ({} samples/frame x {} channels)",
-        total_frames, frame_size, channels
+        processed_frames, frame_size, channels
     );
     println!(
         "  Encode: {}/{} frames byte-identical",
-        total_frames - encode_mismatches,
-        total_frames
+        processed_frames - encode_mismatches,
+        processed_frames
     );
     println!(
         "  Decode: {}/{} frames sample-identical",
-        total_frames - decode_mismatches,
-        total_frames
+        processed_frames - decode_mismatches,
+        processed_frames
     );
 
     if let Some((frame, off)) = encode_first_mismatch {
@@ -447,6 +473,7 @@ fn run_fixture(path: &Path, bitrate: i32) -> FixtureResult {
 
     FixtureResult {
         total_frames,
+        processed_frames,
         encode_mismatches,
         decode_mismatches,
         encode_first_mismatch,
@@ -575,5 +602,44 @@ pub fn main() {
     } else {
         println!("PASS: all fixtures byte-exact encode AND sample-exact decode");
         process::exit(0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FixtureResult, complete_frame_count};
+
+    fn clean_result_for_samples(sample_count: usize, samples_per_frame: usize) -> FixtureResult {
+        FixtureResult {
+            total_frames: sample_count / samples_per_frame,
+            processed_frames: sample_count / samples_per_frame,
+            encode_mismatches: 0,
+            decode_mismatches: 0,
+            encode_first_mismatch: None,
+            decode_first_mismatch: None,
+        }
+    }
+
+    #[test]
+    fn empty_fixture_cannot_pass_without_processing_a_frame() {
+        assert_eq!(complete_frame_count(0, 3_840), None);
+    }
+
+    #[test]
+    fn partial_only_fixture_cannot_pass_without_processing_a_frame() {
+        assert_eq!(complete_frame_count(3_839, 3_840), None);
+    }
+
+    #[test]
+    fn fixture_cannot_pass_until_every_planned_frame_is_processed() {
+        let mut result = clean_result_for_samples(3_840, 3_840);
+        result.processed_frames = 0;
+        assert!(!result.passed());
+    }
+
+    #[test]
+    fn clean_fixture_with_one_processed_frame_passes() {
+        assert_eq!(complete_frame_count(3_840, 3_840), Some(1));
+        assert!(clean_result_for_samples(3_840, 3_840).passed());
     }
 }
