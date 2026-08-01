@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00003 — C reference harness compiles x86 CPU probe on Apple Silicon
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Must
 - **Severity:** Medium
 - **Area:** harness/build
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-30, raised via `deltic bugs new`) -> Fixed (2026-07-30, deltic:auto role=fix run=fix-20260730T205358Z-p41959-n128536000-c1 branch=task/bug-ROP-BUG-FLUX-00003-run-fix-20260730T205358Z-p41959-n128536000-c1 code=a08e2fa gate=manual)
+- **State history:** Open (2026-07-30, raised via `deltic bugs new`) -> Fixed (2026-07-30, deltic:auto role=fix run=fix-20260730T205358Z-p41959-n128536000-c1 branch=task/bug-ROP-BUG-FLUX-00003-run-fix-20260730T205358Z-p41959-n128536000-c1 code=a08e2fa gate=manual) -> Closed (2026-08-01, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main dc05a88; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -54,3 +54,18 @@ would be a fabricated closure. What was and was not established:
 - **Next step for closure.** A verifier on Apple Silicon macOS should run the recorded repro —
   `cargo clippy --locked --all-targets -- -D warnings` with the pinned xiph/opus tree
   provisioned via `cargo run -p fetch-assets -- all` — and close on that evidence.
+
+
+### Verification — Closed (2026-08-01, independent two-eyes, host flux / Apple Silicon macOS)
+
+Verified on the exact platform the observation requires (aarch64-apple-darwin), which the
+prior KILN (Windows x86_64) verification pass could not reach.
+
+- `cargo run -p fetch-assets --locked -- reference` provisions the pinned xiph/opus tree.
+- `cargo clippy -p ropus-harness --all-targets --locked -- -D warnings` compiles clean:
+  `reference/celt/x86/x86cpu.c` is never entered; `harness/build.rs` gates the x86 source
+  lists and `-msse4.1` behind `CARGO_CFG_TARGET_ARCH` as recorded in the fix.
+- `cargo check --manifest-path tests/fuzz/Cargo.toml --locked` also compiles clean, confirming
+  `tests/fuzz/build.rs` mirrors the same arch gating.
+- Root cause addressed: Apple Clang never sees the x86 CPU-probe translation unit on this
+  target. This directly satisfies the prior verifier's documented "next step for closure".

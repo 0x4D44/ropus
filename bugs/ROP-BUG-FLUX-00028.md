@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00028 — Torture leak check counts its duration-sized input as leaked memory
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness/torture-memory
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T194939Z-p71483-n396912000-c1 branch=task/bug-ROP-BUG-FLUX-00028-run-fix-20260801T194939Z-p71483-n396912000-c1 code=627fb6d gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T194939Z-p71483-n396912000-c1 branch=task/bug-ROP-BUG-FLUX-00028-run-fix-20260801T194939Z-p71483-n396912000-c1 code=627fb6d gate=manual) -> Closed (2026-08-01, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main dc05a88; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,3 +29,12 @@ Static review at `origin/main` `d0ab87e`. Torture captures its RSS baseline at `
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-01, independent two-eyes, host flux)
+
+- Fix commit `627fb6d` moves the torture RSS baseline to after fixed setup/warmup and
+  reclassifies growth via a steady-state comparison, so the duration-sized PCM buffer no longer
+  dominates the leak delta.
+- New test `rss_growth_classifier_ignores_fixed_baseline_and_shrink` passes.
+- `cargo clippy -p ropus-harness --all-targets --locked -- -D warnings` clean; `cargo test -p
+  ropus-harness --locked`: every suite green, 0 failed.

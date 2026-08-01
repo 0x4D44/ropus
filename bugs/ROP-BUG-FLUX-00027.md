@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00027 — Benchmark times C construction but excludes Rust construction
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness/benchmark-timing
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T194222Z-p62871-n068892000-c1 branch=task/bug-ROP-BUG-FLUX-00027-run-fix-20260801T194222Z-p62871-n068892000-c1 code=45d119e gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T194222Z-p62871-n068892000-c1 branch=task/bug-ROP-BUG-FLUX-00027-run-fix-20260801T194222Z-p62871-n068892000-c1 code=45d119e gate=manual) -> Closed (2026-08-01, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main dc05a88; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,3 +29,14 @@ Static review at `origin/main` `d0ab87e`. The C encode timer starts before `opus
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-01, independent two-eyes, host flux)
+
+- Fix commit `45d119e` centralizes C encode/decode benchmark lifecycle timing so timers start
+  after construction/configuration and stop before destruction, matching the calibrated
+  methodology already used on the Rust side.
+- New test `c_benchmark_lifecycle_times_only_work` (`harness/src/cli.rs`) injects timer
+  callbacks and asserts construction/configuration/destruction never leak into the measured
+  interval; passes.
+- `cargo clippy -p ropus-harness --all-targets --locked -- -D warnings` clean; `cargo test -p
+  ropus-harness --locked`: every suite green, 0 failed.

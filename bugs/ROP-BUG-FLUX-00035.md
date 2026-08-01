@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00035 — fb2k decoder ignores OpusHead output gain
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-fb2k/decode
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T205144Z-p55683-n378703000-c1 branch=task/bug-ROP-BUG-FLUX-00035-run-fix-20260801T205144Z-p55683-n378703000-c1 code=a6154866325a9ada8754a835bfdad185e0e3c93f gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T205144Z-p55683-n378703000-c1 branch=task/bug-ROP-BUG-FLUX-00035-run-fix-20260801T205144Z-p55683-n378703000-c1 code=a6154866325a9ada8754a835bfdad185e0e3c93f gate=manual) -> Closed (2026-08-01, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main dc05a88; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,3 +29,12 @@ Static review at origin/main dcfd694. /Users/md/language/ropus/ropus-fb2k/src/re
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-01, independent two-eyes, host flux)
+
+- Fix commit `a615486` applies the signed Q7.8 `OpusHead` output gain via the existing
+  `OpusDecoder` Q8 gain setter during lazy decoder construction in `ropus-fb2k/src/reader.rs`;
+  the decoder's reset path already preserves `decode_gain`, so it survives seeks unchanged.
+- New test `opus_head_output_gain_applies_before_and_after_seek` passes.
+- `cargo clippy -p ropus-fb2k --all-targets --locked -- -D warnings` clean; `cargo test -p
+  ropus-fb2k --locked`: 75 passed, 0 failed.

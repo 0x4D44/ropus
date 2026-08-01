@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00030 — WAV readers trust chunk extents and panic on malformed input
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** harness/wav-parser
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T200923Z-p96292-n603336000-c1 branch=task/bug-ROP-BUG-FLUX-00030-run-fix-20260801T200923Z-p96292-n603336000-c1 code=bac27b1 gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T200923Z-p96292-n603336000-c1 branch=task/bug-ROP-BUG-FLUX-00030-run-fix-20260801T200923Z-p96292-n603336000-c1 code=bac27b1 gate=manual) -> Closed (2026-08-01, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main dc05a88; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,3 +29,13 @@ Static review at `origin/main` `d0ab87e`. Three duplicated readers at `/Users/md
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-01, independent two-eyes, host flux)
+
+- Fix commit `bac27b1` replaces the three duplicated ad hoc WAV readers with one shared fallible
+  PCM16 RIFF parser (`harness/src/wav.rs`) using checked extent/alignment arithmetic.
+- New tests `parses_valid_pcm16_wav`, `rejects_zero_channels`, `rejects_truncated_fmt_chunk`,
+  `rejects_oversized_data_chunk`, and `rejects_odd_sample_alignment` cover exactly the
+  truncated-`fmt`/oversized-`data`/zero-channel/odd-alignment cases called for.
+- `cargo clippy -p ropus-harness --all-targets --locked -- -D warnings` clean; `cargo test -p
+  ropus-harness --locked`: every suite green, 0 failed.

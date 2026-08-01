@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00053 — Prelude can print banners into implicit stdout binary streams
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** ropus-tools-core/prelude-routing
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T122743Z-p98923-n509169000-c1 branch=task/bug-ROP-BUG-FLUX-00053-run-fix-20260801T122743Z-p98923-n509169000-c1 code=7201b5a gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T122743Z-p98923-n509169000-c1 branch=task/bug-ROP-BUG-FLUX-00053-run-fix-20260801T122743Z-p98923-n509169000-c1 code=7201b5a gate=manual) -> Closed (2026-08-01, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main dc05a88; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -39,3 +39,20 @@ Arguments after `--` are also not separated from options. Derive output routing
 from the authoritative parsed command and add attached-short-query and
 end-of-options cases without injecting `--quiet`. Static review at
 `origin/main` `6a312e1`; no binary or test ran.
+
+
+### Verification — Closed (2026-08-01, independent two-eyes, host flux)
+
+Covers both the original `ropus-tools-core` prelude finding and the `ropusinfo` note.
+
+- Fix derives banner/stdout routing from the authoritative Clap-parsed command instead of a
+  second raw-argv scanner in `ropus-tools-core/src/prelude.rs`; new test
+  `typed_paths_select_stdout_without_reparsing_argv` passes.
+- `ropusinfo/src/main.rs` likewise now derives routing from the parsed command; new tests
+  `typed_query_controls_banner_for_all_value_spellings` and
+  `end_of_options_keeps_query_like_input_positional` pass, plus integration test
+  `info_query_attached_short_form_returns_bare_number_without_quiet` covers the `-q=duration`
+  attached-short-query case called out in the note.
+- `cargo clippy -p ropus-tools-core --all-targets --locked -- -D warnings` and `cargo clippy -p
+  ropusinfo --all-targets --locked -- -D warnings` both clean; `cargo test -p ropus-tools-core
+  --locked` (112 passed) and `cargo test -p ropusinfo --locked` (9 passed) both 0 failed.

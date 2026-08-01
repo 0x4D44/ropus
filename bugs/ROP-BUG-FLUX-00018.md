@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00018 — C ABI version string reports stale package version
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** capi/version-metadata
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new`) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T184952Z-p9388-n274066000-c1 branch=task/bug-ROP-BUG-FLUX-00018-run-fix-20260801T184952Z-p9388-n274066000-c1 code=21e119ce43dbe3e6db1e5db91d3ae57e5901701a gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new`) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T184952Z-p9388-n274066000-c1 branch=task/bug-ROP-BUG-FLUX-00018-run-fix-20260801T184952Z-p9388-n274066000-c1 code=21e119ce43dbe3e6db1e5db91d3ae57e5901701a gate=manual) -> Closed (2026-08-01, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main dc05a88; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,3 +29,12 @@ capi/Cargo.toml:3 declares version 0.2.2, but capi/src/lib.rs:122 hard-codes lib
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-01, independent two-eyes, host flux)
+
+- Commit `21e119c` derives `opus_get_version_string`'s literal from `CARGO_PKG_VERSION` instead
+  of the hard-coded `mdopus-capi-0.1.0-fixed`.
+- New test `version_string_matches_package_version` ties the exported NUL-terminated string to
+  the current manifest version and passes.
+- `cargo clippy -p capi --all-targets --locked -- -D warnings` clean; `cargo test -p capi
+  --locked`: 8 passed, 0 failed.

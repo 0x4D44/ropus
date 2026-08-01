@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00026 — Benchmark measures Rust with unbounded trace instrumentation
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** harness/benchmark-tracing
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T075011Z-p48083-n853583000-c1 branch=task/bug-ROP-BUG-FLUX-00026-run-fix-20260801T075011Z-p48083-n853583000-c1 code=a7dc551f0248eac8b617022fe69b460df405a5e1 gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T075011Z-p48083-n853583000-c1 branch=task/bug-ROP-BUG-FLUX-00026-run-fix-20260801T075011Z-p48083-n853583000-c1 code=a7dc551f0248eac8b617022fe69b460df405a5e1 gate=manual) -> Closed (2026-08-01, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main dc05a88; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,3 +29,15 @@ Static review at `origin/main` `d0ab87e`. `/Users/md/language/ropus/harness/Carg
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-01, independent two-eyes, host flux)
+
+- Fix commit `a7dc551` flips `harness/Cargo.toml`'s `trace-silk-encode` feature to opt-in
+  (`default = []`), and adds a benchmark build-contract oracle
+  (`assert_benchmark_build_is_uninstrumented`) that panics if tracing is compiled in.
+- Verified both directions live: `cargo test -p ropus-harness --locked --bin ropus-compare
+  benchmark_build_contract_accepts_default_build` passes on the default (untraced) build;
+  `cargo test -p ropus-harness --locked --features trace-silk-encode --bin ropus-compare
+  benchmark_build_contract_rejects_trace_build` passes as a `#[should_panic]` case, confirming
+  the contract actually fires when tracing is enabled, not just that it compiles.
+- `cargo clippy -p ropus-harness --all-targets --locked -- -D warnings` clean.

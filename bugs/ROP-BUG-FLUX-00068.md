@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00068 — Safe float-reference decoder methods permit out-of-bounds C access
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** harness-deep-plc/ffi-safety
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T051116Z-p36074-n718775000-c1 branch=task/bug-ROP-BUG-FLUX-00068-run-fix-20260801T051116Z-p36074-n718775000-c1 code=26659708e647f38f9f2d69c95708e382be449b3e gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T051116Z-p36074-n718775000-c1 branch=task/bug-ROP-BUG-FLUX-00068-run-fix-20260801T051116Z-p36074-n718775000-c1 code=26659708e647f38f9f2d69c95708e382be449b3e gate=manual) -> Closed (2026-08-01, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main dc05a88; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,3 +29,16 @@ Static review at origin/main b65f812. /Users/md/language/ropus/harness-deep-plc/
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-01, independent two-eyes, host flux)
+
+- Fix commit `2665970` makes `harness-deep-plc/src/lib.rs`'s `CRefFloatDecoder` retain its
+  channel count and validate `pcm.len()` against `frame_size * channels` before calling
+  `opus_decode`; safe peek methods now validate ranges against authoritative capacities before
+  entering `c/peek.c`.
+- New tests `decode_rejects_invalid_dimensions_before_entering_c`,
+  `invalid_peeks_return_before_entering_c`,
+  `peek_ranges_reject_negative_empty_overflowing_and_past_end`, and
+  `runtime_peek_capacities_are_sanity_checked` pass, proving invalid inputs never reach C.
+- `cargo clippy -p ropus-harness-deep-plc --all-targets --locked -- -D warnings` clean; `cargo
+  test -p ropus-harness-deep-plc --locked`: every suite green, 0 failed.

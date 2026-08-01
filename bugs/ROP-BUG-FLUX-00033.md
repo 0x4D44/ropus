@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00033 — Decode command accepts truncated framed input as a passing comparison
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness/decode-framing
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T203738Z-p28582-n845844000-c1 branch=task/bug-ROP-BUG-FLUX-00033-run-fix-20260801T203738Z-p28582-n845844000-c1 code=b05bb88dd471cc9ceddab9baef2766665b9265e0 gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T203738Z-p28582-n845844000-c1 branch=task/bug-ROP-BUG-FLUX-00033-run-fix-20260801T203738Z-p28582-n845844000-c1 code=b05bb88dd471cc9ceddab9baef2766665b9265e0 gate=manual) -> Closed (2026-08-01, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main dc05a88; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -52,3 +52,19 @@ Use one shared validator that requires exactly
 `TOTAL_FRAMES * FRAME_SIZE * CHANNELS` samples, nonempty signal energy, and a
 finite-or-explicitly-identical SNR policy before either comparison. Static
 review at `origin/main` `1ae9e50`; no control decoder or test ran.
+
+
+### Verification — Closed (2026-08-01, independent two-eyes, host flux)
+
+Covers the fixed-point decode-command, float control-framing, and lossless-length notes.
+
+- Fix commit `b05bb88` parses framed decode input once into a fallible packet list requiring
+  exact EOF in `harness/src/cli.rs`; new tests
+  `framed_decode_rejects_truncated_length_after_valid_prefix`,
+  `framed_decode_rejects_truncated_payload_after_valid_prefix`, and
+  `decode_command_fails_before_comparing_a_truncated_stream` pass.
+- `harness-control/tests/control_snr.rs`'s lossless path now shares one validator requiring the
+  exact expected sample count; `cargo test -p ropus-harness-control --locked`:
+  `ctrl_fixed_vs_float_classical_snr` and `ctrl_fixed_vs_float_classical_snr_lossless` both pass.
+- `cargo clippy -p ropus-harness --all-targets --locked -- -D warnings` and `cargo clippy -p
+  ropus-harness-control --all-targets --locked -- -D warnings` both clean.

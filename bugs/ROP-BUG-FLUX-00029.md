@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00029 — Control decoder trusts unbounded packet-file allocation sizes
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness/control-decoder
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T195631Z-p79442-n048922000-c1 branch=task/bug-ROP-BUG-FLUX-00029-run-fix-20260801T195631Z-p79442-n048922000-c1 code=0cde825 gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T195631Z-p79442-n048922000-c1 branch=task/bug-ROP-BUG-FLUX-00029-run-fix-20260801T195631Z-p79442-n048922000-c1 code=0cde825 gate=manual) -> Closed (2026-08-01, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main dc05a88; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -40,3 +40,17 @@ the address space, while a tiny record can request about 2 GiB before
 checked-arithmetic, packet-length, frame-count, and output-budget validation to
 both control decoders before creating output. Static review at `origin/main`
 `b65f812`; no decoder or malformed input ran.
+
+
+### Verification — Closed (2026-08-01, independent two-eyes, host flux)
+
+Covers both the fixed-point and float control-decoder observations.
+
+- Fix commit `0cde825` adds preflight validation (Opus rate/channels/frame size, packet length
+  <= 1275, checked arithmetic, capped frames/output) to both
+  `harness/src/bin_inner/ctrl_decode_fixed.rs` and
+  `harness-deep-plc/src/bin_inner/ctrl_decode_float.rs` before any decoder or output allocation.
+- New tests `header_validation_rejects_unsafe_dimensions` and
+  `packet_validation_bounds_lengths_and_flags` pass for **both** binaries
+  (`cargo test -p ropus-harness --locked --bin ctrl_decode_fixed` and `cargo test -p
+  ropus-harness-deep-plc --locked` both green).

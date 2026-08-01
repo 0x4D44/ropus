@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00020 — Primary HTML report write failure still exits successfully
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** full-test/reporting
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T190442Z-p27224-n474403000-c1 branch=task/bug-ROP-BUG-FLUX-00020-run-fix-20260801T190442Z-p27224-n474403000-c1 code=acd764f9a547b2590df887461c3d484bbfe52377 gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T190442Z-p27224-n474403000-c1 branch=task/bug-ROP-BUG-FLUX-00020-run-fix-20260801T190442Z-p27224-n474403000-c1 code=acd764f9a547b2590df887461c3d484bbfe52377 gate=manual) -> Closed (2026-08-01, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main dc05a88; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,3 +29,13 @@ Static review at origin/main d2a0fb9. Observation: `/Users/md/language/ropus/ful
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-01, independent two-eyes, host flux)
+
+- Commit `acd764f` propagates HTML report write failure into the final exit status in
+  `full-test/src/main.rs`, using an atomic temp-file-plus-rename write.
+- New tests `report_write_failure_is_fatal_for_pass_and_warn` and
+  `report_writer_replaces_target_atomically` pass, proving neither PASS nor WARN can exit 0
+  without the primary artifact.
+- `cargo clippy -p full-test --all-targets --locked -- -D warnings` clean; `cargo test -p
+  full-test --locked`: 238 passed, 0 failed.

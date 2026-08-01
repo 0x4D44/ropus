@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00031 — Numeric CLI options allow huge work and arithmetic panics
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness/cli-validation
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T201842Z-p6993-n992405000-c1 branch=task/bug-ROP-BUG-FLUX-00031-run-fix-20260801T201842Z-p6993-n992405000-c1 code=2c7fed8 gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T201842Z-p6993-n992405000-c1 branch=task/bug-ROP-BUG-FLUX-00031-run-fix-20260801T201842Z-p6993-n992405000-c1 code=2c7fed8 gate=manual) -> Closed (2026-08-01, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main dc05a88; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,3 +29,13 @@ Static review at `origin/main` `d0ab87e`. The generic parser at `/Users/md/langu
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-01, independent two-eyes, host flux)
+
+- Fix commit `2c7fed8` replaces the generic `i32`-then-cast CLI parsing with command-specific
+  typed parsers enforcing supported Opus rates/channels, positive bounded durations/iterations,
+  a nonzero change interval, and checked sample-count arithmetic.
+- New tests `rejects_invalid_numeric_ranges` and `checked_sample_count_handles_negative_overflow_and_cap`
+  pass.
+- `cargo clippy -p ropus-harness --all-targets --locked -- -D warnings` clean; `cargo test -p
+  ropus-harness --locked`: every suite green, 0 failed.

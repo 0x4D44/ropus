@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00022 — Projection gate passes fixtures without processing a frame
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** harness/projection-gate
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T041534Z-p18394-n733330000-c1 branch=task/bug-ROP-BUG-FLUX-00022-run-fix-20260801T041534Z-p18394-n733330000-c1 code=de372258083ab0b5c42eaf84d0d95f76c7962553 gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T041534Z-p18394-n733330000-c1 branch=task/bug-ROP-BUG-FLUX-00022-run-fix-20260801T041534Z-p18394-n733330000-c1 code=de372258083ab0b5c42eaf84d0d95f76c7962553 gate=manual) -> Closed (2026-08-01, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main dc05a88; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,3 +29,16 @@ Static review at `origin/main` `d0ab87e`. `/Users/md/language/ropus/harness/src/
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-01, independent two-eyes, host flux)
+
+- Fix commit `de37225` makes `harness/src/bin_inner/projection_roundtrip.rs`'s
+  `FixtureResult::passed()` require at least one processed frame and reject partial-only input,
+  so an empty or truncated fixture can no longer report PASS without exercising audio.
+- New tests `fixture_cannot_pass_until_every_planned_frame_is_processed`,
+  `empty_fixture_cannot_pass_without_processing_a_frame`,
+  `partial_only_fixture_cannot_pass_without_processing_a_frame`, and
+  `clean_fixture_with_one_processed_frame_passes` cover exactly the empty/short/partial/clean
+  cases called for.
+- `cargo clippy -p ropus-harness --all-targets --locked -- -D warnings` clean; `cargo test -p
+  ropus-harness --locked`: every suite green, 0 failed.

@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00032 — Stereo Phase-C trace maps overwrite earlier channel records
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness/phase-c-trace
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T202848Z-p16523-n343500000-c1 branch=task/bug-ROP-BUG-FLUX-00032-run-fix-20260801T202848Z-p16523-n343500000-c1 code=5f1f3f91341f6033f2684cfa9e75e160cbeaa1ee gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T202848Z-p16523-n343500000-c1 branch=task/bug-ROP-BUG-FLUX-00032-run-fix-20260801T202848Z-p16523-n343500000-c1 code=5f1f3f91341f6033f2684cfa9e75e160cbeaa1ee gate=manual) -> Closed (2026-08-01, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main dc05a88; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,3 +29,14 @@ Static review at `origin/main` `d0ab87e`. Phase-C trace comparison intentionally
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-01, independent two-eyes, host flux)
+
+- Fix commit `5f1f3f9` reworks `harness/src/bin_inner/fuzz_repro_diff.rs` to key Phase-C tuples
+  by boundary, rate-control iteration, **and** occurrence ordinal (`v2_base_key`/
+  `keyed_v2_tuples`), so a stereo channel-0-only divergence can no longer be overwritten by
+  channel 1's record at the same `(boundary, iter)` pair.
+- New test `occurrence_keys_preserve_stereo_records_and_first_divergence`
+  (`harness/src/bin/fuzz_repro_diff.rs`, gated behind the `trace-silk-encode` feature) exercises
+  a synthetic two-channel trace and passes: `cargo test -p ropus-harness --locked --features
+  trace-silk-encode --bin fuzz_repro_diff`.
