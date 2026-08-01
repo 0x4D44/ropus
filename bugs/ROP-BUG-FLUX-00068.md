@@ -5,15 +5,15 @@
 - **Severity:** High
 - **Area:** harness-deep-plc/ffi-safety
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T051116Z-p36074-n718775000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00068-run-fix-20260801T051116Z-p36074-n718775000-c1
+- **Owner base:** dc5d3e6a6f9ab5bea01e41fd6498dec007114eba
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T05:11:16Z
+- **Owner until:** 2026-08-01T07:11:16Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
