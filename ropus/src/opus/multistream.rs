@@ -2259,6 +2259,9 @@ impl OpusProjectionEncoder {
         data: &mut [u8],
         max_data_bytes: i32,
     ) -> Result<i32, i32> {
+        if frame_size <= 0 {
+            return Err(OPUS_BAD_ARG);
+        }
         // Apply mixing matrix: transform input channels to stream channels
         let nb_streams = self.ms_encoder.layout.nb_streams;
         let nb_coupled = self.ms_encoder.layout.nb_coupled_streams;
@@ -2420,6 +2423,9 @@ impl OpusProjectionDecoder {
         frame_size: i32,
         decode_fec: bool,
     ) -> Result<i32, i32> {
+        if frame_size <= 0 {
+            return Err(OPUS_BAD_ARG);
+        }
         let nb_channels = self.ms_decoder.layout.nb_channels;
         let nb_streams = self.ms_decoder.layout.nb_streams;
         let nb_coupled = self.ms_decoder.layout.nb_coupled_streams;
@@ -3508,6 +3514,29 @@ mod tests {
             OpusProjectionDecoder::new(48000, 5, 5, 0, &[0u8; 48], 48),
             Err(OPUS_BAD_ARG)
         ));
+
+        let (mut negative_encoder, streams, coupled) =
+            OpusProjectionEncoder::new(48000, 4, 3, OPUS_APPLICATION_AUDIO)
+                .expect("projection encoder for frame-size validation");
+        let demixing = negative_encoder.get_demixing_matrix();
+        let mut negative_decoder = OpusProjectionDecoder::new(
+            48000,
+            4,
+            streams,
+            coupled,
+            &demixing,
+            negative_encoder.get_demixing_matrix_size(),
+        )
+        .expect("projection decoder for frame-size validation");
+        let mut packet = vec![0u8; 4000];
+        let encode = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            negative_encoder.encode(&[], -1, &mut packet, 4000)
+        }));
+        assert!(matches!(encode, Ok(Err(OPUS_BAD_ARG))));
+        let decode = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            negative_decoder.decode(None, 0, &mut [], -1, false)
+        }));
+        assert!(matches!(decode, Ok(Err(OPUS_BAD_ARG))));
 
         let (mut enc, streams, coupled) =
             OpusProjectionEncoder::new(48000, 9, 3, OPUS_APPLICATION_AUDIO)

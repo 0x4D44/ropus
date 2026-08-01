@@ -1,3 +1,7 @@
+- Guard projection frame sizes before buffer allocation (`ropus/src/opus/multistream.rs:OpusProjectionEncoder::encode`).
+
+  Wrapper methods must reject non-positive frame sizes before converting them to `usize`; delegating validation to the underlying multistream codec is too late when the wrapper sizes a temporary buffer first.
+
 - Validate safe-slice lengths before fixed-size constructor copies (`ropus/src/opus/multistream.rs:OpusMSEncoder::new_impl`).
 
   Safe slices prevent memory unsafety, but direct indexing can still panic when a caller passes a short mapping or projection matrix. Return `OPUS_BAD_ARG` before copying, and use checked arithmetic for projection dimensions.
