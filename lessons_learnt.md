@@ -1,3 +1,7 @@
+- Preserve one-sided fuzz errors; only `(Err, Err)` is ignored (`replay_fuzz_decode.rs:classify_decoder_status`).
+
+  A replay oracle must model every status quadrant enforced by the fuzz target, not only the PCM-success path.
+
 - Validate Ogg pages before corpus diff; `PacketReader` hides truncated tails (`corpus_diff.rs:validate_ogg_container`).
 
   A valid decoded prefix is not a complete corpus match. Validate `OpusTags`, classify structural errors separately from exploratory skips, and require clean EOF before recording a match.

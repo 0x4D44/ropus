@@ -2,8 +2,9 @@
 //!
 //! Iterates every file in `tests/fuzz/corpus/fuzz_decode/`, reproduces the
 //! fuzz target's decode (Rust + C reference), and reports any CELT-only seed
-//! whose PCM output differs between the two implementations. Also matches
-//! against panic fingerprints captured from the overnight fuzz run.
+//! whose PCM output differs or whose decoder status diverges between the two
+//! implementations. Also matches against panic fingerprints captured from the
+//! overnight fuzz run.
 //!
 //! Usage:
 //!   cargo run --release --bin replay_fuzz_decode --no-default-features \
@@ -197,6 +198,34 @@ fn first_divergence(a: &[i16], b: &[i16]) -> Option<usize> {
     a.iter().zip(b.iter()).position(|(x, y)| x != y)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DecoderStatus {
+    BothOk,
+    BothErr,
+    RustOkCError,
+    RustErrorCOk,
+}
+
+impl DecoderStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::BothOk => "both-ok",
+            Self::BothErr => "both-error",
+            Self::RustOkCError => "rust-ok-c-error",
+            Self::RustErrorCOk => "rust-error-c-ok",
+        }
+    }
+}
+
+fn classify_decoder_status(rust_ok: bool, c_ok: bool) -> DecoderStatus {
+    match (rust_ok, c_ok) {
+        (true, true) => DecoderStatus::BothOk,
+        (false, false) => DecoderStatus::BothErr,
+        (true, false) => DecoderStatus::RustOkCError,
+        (false, true) => DecoderStatus::RustErrorCOk,
+    }
+}
+
 struct Finding {
     path: PathBuf,
     sample_rate: i32,
@@ -205,6 +234,7 @@ struct Finding {
     samples: usize,
     first_diff_idx: usize,
     first_diffs: Vec<(i16, i16)>,
+    decoder_status: DecoderStatus,
     matched_target: Option<usize>, // index into TARGETS
     matched_fingerprint: Option<String>,
 }
@@ -234,10 +264,37 @@ fn scan_file(path: &Path, fingerprints: &[Fingerprint]) -> Option<Finding> {
 
     let rust_ret = rust_decode(packet, sample_rate, channels);
     let c_ret = c_decode(packet, sample_rate, channels);
+    let decoder_status = classify_decoder_status(rust_ret.is_ok(), c_ret.is_ok());
+
+    if decoder_status == DecoderStatus::BothErr {
+        return None;
+    }
+    if decoder_status != DecoderStatus::BothOk {
+        let samples = match (&rust_ret, &c_ret) {
+            (Ok(r), _) => r.len() / channels as usize,
+            (_, Ok(c)) => c.len() / channels as usize,
+            _ => unreachable!("one-sided decoder status must have one successful result"),
+        };
+        let matched_target = TARGETS.iter().position(|&(sr, ch, pl, ns)| {
+            sr == sample_rate && ch == channels && pl == packet.len() && ns == samples
+        });
+        return Some(Finding {
+            path: path.to_path_buf(),
+            sample_rate,
+            channels,
+            pkt_len: packet.len(),
+            samples,
+            first_diff_idx: 0,
+            first_diffs: vec![],
+            decoder_status,
+            matched_target,
+            matched_fingerprint: None,
+        });
+    }
 
     let (rust_pcm, c_pcm) = match (rust_ret, c_ret) {
         (Ok(r), Ok(c)) => (r, c),
-        _ => return None, // one erred; not a PCM mismatch (other assertions handle this)
+        _ => unreachable!("both-ok decoder status must have two successful results"),
     };
 
     // Check fingerprint match first (more specific).
@@ -275,6 +332,7 @@ fn scan_file(path: &Path, fingerprints: &[Fingerprint]) -> Option<Finding> {
             samples,
             first_diff_idx: 0,
             first_diffs: vec![],
+            decoder_status,
             matched_target: None,
             matched_fingerprint: matched_fp_label,
         });
@@ -311,6 +369,7 @@ fn scan_file(path: &Path, fingerprints: &[Fingerprint]) -> Option<Finding> {
         samples,
         first_diff_idx,
         first_diffs,
+        decoder_status,
         matched_target,
         matched_fingerprint: matched_fp_label,
     })
@@ -453,7 +512,7 @@ pub fn main() {
 
     println!("\n=== Findings ===");
     println!(
-        "{} file(s) produced diverging PCM or matched fingerprint",
+        "{} file(s) produced a decoder-status divergence, diverging PCM, or matched fingerprint",
         findings.len()
     );
     for f in &findings {
@@ -474,6 +533,7 @@ pub fn main() {
             "    sr={} ch={} pkt_len={} samples={}",
             f.sample_rate, f.channels, f.pkt_len, f.samples
         );
+        println!("    decoder status: {}", f.decoder_status.label());
         if !f.first_diffs.is_empty() {
             println!("    first divergence at sample index {}", f.first_diff_idx);
             print!("    first diffs (rust, c): ");
@@ -547,5 +607,27 @@ pub fn main() {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decoder_status_classifier_covers_all_four_quadrants() {
+        assert_eq!(classify_decoder_status(true, true), DecoderStatus::BothOk);
+        assert_eq!(
+            classify_decoder_status(false, false),
+            DecoderStatus::BothErr
+        );
+        assert_eq!(
+            classify_decoder_status(true, false),
+            DecoderStatus::RustOkCError
+        );
+        assert_eq!(
+            classify_decoder_status(false, true),
+            DecoderStatus::RustErrorCOk
+        );
     }
 }
