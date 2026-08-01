@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00009 — Projection codec casts negative frame sizes before validation
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus/opus-projection
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T152816Z-p13950-n626310000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00009-run-fix-20260801T152816Z-p13950-n626310000-c1
-- **Owner base:** 023aa94459111e07ca26fc39290c61a3e1b76a08
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T15:28:16Z
-- **Owner until:** 2026-08-01T17:28:16Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T152816Z-p13950-n626310000-c1 branch=task/bug-ROP-BUG-FLUX-00009-run-fix-20260801T152816Z-p13950-n626310000-c1 code=f706f8a8b0f193bdf05f5346b36569d136f9461c gate=manual)
 
 ## Observation
 
