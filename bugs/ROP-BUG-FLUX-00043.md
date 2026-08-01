@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00043 — Decode, play, and transcode emit samples beyond the EOS granule
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/decode-timeline
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T212437Z-p40235-n096674000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00043-run-fix-20260801T212437Z-p40235-n096674000-c1
-- **Owner base:** a8449cfdbff0be89c9716f8520863fbc343132ab
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T21:24:37Z
-- **Owner until:** 2026-08-01T23:24:37Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T212437Z-p40235-n096674000-c1 branch=task/bug-ROP-BUG-FLUX-00043-run-fix-20260801T212437Z-p40235-n096674000-c1 code=18d06ac gate=manual)
 
 ## Observation
 
