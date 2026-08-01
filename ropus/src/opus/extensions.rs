@@ -44,14 +44,21 @@ pub fn opus_packet_extensions_count_ext(
     nb_frame_exts: &mut [i32],
     nb_frames: i32,
 ) -> i32 {
-    if nb_frames < 0 || nb_frames as usize > nb_frame_exts.len() {
+    if nb_frames < 0
+        || nb_frames as usize > MAX_FRAMES
+        || nb_frames as usize > nb_frame_exts.len()
+        || (len > 0 && (len as usize) > data.len())
+    {
         return OPUS_BAD_ARG;
+    }
+    if len <= 0 {
+        for slot in &mut nb_frame_exts[..nb_frames as usize] {
+            *slot = 0;
+        }
+        return 0;
     }
     for slot in &mut nb_frame_exts[..nb_frames as usize] {
         *slot = 0;
-    }
-    if len <= 0 {
-        return 0;
     }
     let mut iter = Iter::new(data, len, nb_frames);
     let mut count: i32 = 0;
@@ -86,24 +93,29 @@ pub fn opus_packet_extensions_parse_ext<'a>(
     if nb_frames < 0 || nb_frames as usize > MAX_FRAMES {
         return OPUS_BAD_ARG;
     }
-    if nb_frames as usize > nb_frame_exts.len() {
+    if nb_frames as usize > nb_frame_exts.len() || (len > 0 && (len as usize) > data.len()) {
+        return OPUS_BAD_ARG;
+    }
+    let max_ext = *nb_extensions;
+    if max_ext < 0 || (max_ext as usize) > extensions.len() {
         return OPUS_BAD_ARG;
     }
     // Build prefix-sum of frame counts so we can place parsed extensions at
     // the correct position in the output array. `nb_frames_cum[i]` is the
     // index where frame-`i` extensions start; `nb_frames_cum[nb_frames]` is
     // the total.
-    //
-    // Use `wrapping_add` to match C `int` addition semantics
-    // (reference/src/extensions.c:400-405). Well-formed inputs from
-    // `opus_packet_extensions_count_ext` cannot overflow, so this is
-    // observationally identical for trusted inputs — the match matters only
-    // for pathological differential-fuzz inputs.
     let mut nb_frames_cum = [0i32; MAX_FRAMES + 1];
     let mut prev_total: i32 = 0;
     for i in 0..nb_frames as usize {
+        let frame_count = nb_frame_exts[i];
+        if frame_count < 0 {
+            return OPUS_BAD_ARG;
+        }
         nb_frames_cum[i] = prev_total;
-        prev_total = prev_total.wrapping_add(nb_frame_exts[i]);
+        prev_total = match prev_total.checked_add(frame_count) {
+            Some(total) => total,
+            None => return OPUS_BAD_ARG,
+        };
     }
     nb_frames_cum[nb_frames as usize] = prev_total;
 
@@ -111,7 +123,6 @@ pub fn opus_packet_extensions_parse_ext<'a>(
         *nb_extensions = 0;
         return OPUS_OK;
     }
-    let max_ext = *nb_extensions;
     let mut iter = Iter::new(data, len, nb_frames);
     let mut count: i32 = 0;
     loop {
@@ -130,11 +141,106 @@ pub fn opus_packet_extensions_parse_ext<'a>(
             return OPUS_BAD_ARG;
         }
         let idx = nb_frames_cum[f as usize];
+        if idx < 0 {
+            *nb_extensions = count;
+            return OPUS_BAD_ARG;
+        }
         if idx >= max_ext {
             return crate::opus::decoder::OPUS_BUFFER_TOO_SMALL;
         }
-        extensions[idx as usize] = ext;
-        nb_frames_cum[f as usize] += 1;
+        let idx = idx as usize;
+        extensions[idx] = ext;
+        nb_frames_cum[f as usize] = idx as i32 + 1;
         count += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::opus::decoder::OPUS_BUFFER_TOO_SMALL;
+
+    #[test]
+    fn parse_ext_rejects_negative_frame_count() {
+        let data = [0x0Bu8, 0x42];
+        let mut parsed = [OpusExtensionData {
+            id: 0,
+            frame: 0,
+            data: &[],
+            len: 0,
+        }];
+        let mut nb_extensions = 1;
+
+        assert_eq!(
+            opus_packet_extensions_parse_ext(
+                &data,
+                data.len() as i32,
+                &mut parsed,
+                &mut nb_extensions,
+                &[-1],
+                1,
+            ),
+            OPUS_BAD_ARG
+        );
+    }
+
+    #[test]
+    fn parse_ext_rejects_short_output_slice() {
+        let data = [0x0Bu8, 0x42];
+        let mut parsed = [];
+        let mut nb_extensions = 1;
+
+        assert_eq!(
+            opus_packet_extensions_parse_ext(
+                &data,
+                data.len() as i32,
+                &mut parsed,
+                &mut nb_extensions,
+                &[1],
+                1,
+            ),
+            OPUS_BAD_ARG
+        );
+    }
+
+    #[test]
+    fn parse_ext_rejects_length_beyond_input_slice() {
+        let data = [0x0Bu8, 0x42];
+        let mut parsed = [OpusExtensionData {
+            id: 0,
+            frame: 0,
+            data: &[],
+            len: 0,
+        }];
+        let mut nb_extensions = 1;
+
+        assert_eq!(
+            opus_packet_extensions_parse_ext(&data, 3, &mut parsed, &mut nb_extensions, &[1], 1,),
+            OPUS_BAD_ARG
+        );
+    }
+
+    #[test]
+    fn parse_ext_reports_declared_output_capacity_shortage() {
+        let data = [0x0Bu8, 0x42];
+        let mut parsed = [OpusExtensionData {
+            id: 0,
+            frame: 0,
+            data: &[],
+            len: 0,
+        }];
+        let mut nb_extensions = 0;
+
+        assert_eq!(
+            opus_packet_extensions_parse_ext(
+                &data,
+                data.len() as i32,
+                &mut parsed,
+                &mut nb_extensions,
+                &[1],
+                1,
+            ),
+            OPUS_BUFFER_TOO_SMALL
+        );
     }
 }

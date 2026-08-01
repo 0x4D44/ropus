@@ -403,8 +403,14 @@ impl<'a> OpusExtensionIterator<'a> {
     /// Initialize iterator over extension payload bytes.
     /// Matches C `opus_extension_iterator_init`.
     pub fn new(data: &'a [u8], len: i32, nb_frames: i32) -> Self {
-        debug_assert!(len >= 0);
-        debug_assert!(nb_frames >= 0 && nb_frames <= MAX_FRAMES as i32);
+        // The C API receives a pointer plus a caller-verified length. Rust's
+        // safe slice API can still be handed an inconsistent length, so keep
+        // the iterator in an error state instead of indexing past `data`.
+        let valid = (0..=MAX_FRAMES as i32).contains(&nb_frames)
+            && len >= 0
+            && (len as usize) <= data.len();
+        let len = if valid { len } else { -1 };
+        let nb_frames = if valid { nb_frames } else { 0 };
         Self {
             data,
             pos: 0,
@@ -635,6 +641,9 @@ pub fn opus_packet_extensions_count(data: &[u8], len: i32, nb_frames: i32) -> i3
     if len <= 0 {
         return 0;
     }
+    if !(0..=MAX_FRAMES as i32).contains(&nb_frames) || (len as usize) > data.len() {
+        return OPUS_BAD_ARG;
+    }
     let mut iter = OpusExtensionIterator::new(data, len, nb_frames);
     let mut count = 0;
     loop {
@@ -656,12 +665,21 @@ pub fn opus_packet_extensions_parse<'a>(
     nb_extensions: &mut i32,
     nb_frames: i32,
 ) -> i32 {
+    if !(0..=MAX_FRAMES as i32).contains(&nb_frames) {
+        return OPUS_BAD_ARG;
+    }
+    let max_ext = *nb_extensions;
+    if max_ext < 0 || (max_ext as usize) > extensions.len() {
+        return OPUS_BAD_ARG;
+    }
+    if len > 0 && (len as usize) > data.len() {
+        return OPUS_BAD_ARG;
+    }
     if len <= 0 {
         *nb_extensions = 0;
         return 0;
     }
     let mut iter = OpusExtensionIterator::new(data, len, nb_frames);
-    let max_ext = *nb_extensions;
     let mut count: i32 = 0;
     loop {
         let (ret, ext) = iter.next_ext();
@@ -2555,6 +2573,32 @@ mod tests {
             opus_multistream_packet_pad(&mut packet, 3, 2, 1),
             OPUS_BAD_ARG
         );
+    }
+
+    #[test]
+    fn test_packet_extensions_parse_rejects_short_output_slice() {
+        let data = [0x0Bu8, 0x42]; // id=5, one-byte payload
+        let mut parsed = [];
+        let mut nb_extensions = 1;
+
+        assert_eq!(
+            opus_packet_extensions_parse(
+                &data,
+                data.len() as i32,
+                &mut parsed,
+                &mut nb_extensions,
+                1,
+            ),
+            OPUS_BAD_ARG
+        );
+    }
+
+    #[test]
+    fn test_extension_iterator_rejects_length_beyond_input_slice() {
+        let data = [0x0Bu8, 0x42]; // id=5, one-byte payload
+        let mut iter = OpusExtensionIterator::new(&data, 3, 1);
+
+        assert_eq!(iter.next_ext().0, OPUS_INVALID_PACKET);
     }
 
     #[test]

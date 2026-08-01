@@ -1,3 +1,7 @@
+- Extension parsers must validate slice capacities and checked frame-count prefixes before indexing (`ropus/src/opus/repacketizer.rs:opus_packet_extensions_parse`).
+
+  Safe slices do not make caller-provided counts safe: reject lengths beyond the input, capacities beyond output slices, negative counts, and overflowing frame prefixes before iterating.
+
 - Multistream decoder resets must clear neural PLC history via `lpcnet.reset()` (`ropus/src/opus/decoder.rs:OpusDecoder::ms_reset`).
 
   Keep `ms_reset` aligned with the canonical decoder reset: clear FEC/GRU and analysis state while preserving loaded neural model weights.
