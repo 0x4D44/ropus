@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** ropus/opus-multistream-ctl
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T153753Z-p44527-n851873000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00011-run-fix-20260801T153753Z-p44527-n851873000-c1
+- **Owner base:** 0d2addf8b61db3e5d9308da8ce7c53e6550d978d
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T15:37:53Z
+- **Owner until:** 2026-08-01T17:37:53Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
