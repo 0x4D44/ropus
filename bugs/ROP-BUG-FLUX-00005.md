@@ -5,15 +5,15 @@
 - **Severity:** Low
 - **Area:** integration/fuzz-format
 - **Raised:** 2026-07-30
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T134403Z-p37671-n150269000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00005-run-fix-20260801T134403Z-p37671-n150269000-c1
+- **Owner base:** d0b6102b118f40f6eda2c4c17175d3dc20617781
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T13:44:03Z
+- **Owner until:** 2026-08-01T15:44:03Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
