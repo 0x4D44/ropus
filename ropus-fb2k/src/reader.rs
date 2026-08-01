@@ -218,8 +218,13 @@ pub(crate) struct OggOpusReader<R: Read + Seek> {
     file_size: Option<u64>,
     /// Total decoded samples per channel after pre-skip trim, derived from a
     /// reverse-scan of the last Ogg page's absolute granule position. `0`
-    /// means unknown (unseekable IO, unknown size, or sentinel granule).
+    /// can mean either unknown or a known zero-length post-skip stream; use
+    /// `eos_abs_pos` to distinguish those cases.
     total_samples: u64,
+    /// Absolute Ogg granule at which caller-visible decoding ends. `None`
+    /// means the stream is unseekable or its final page carried an unknown
+    /// granule; a known EOS lets `decode_next` trim final-frame padding.
+    eos_abs_pos: Option<u64>,
     /// Average bitrate in bits/sec, computed at open time from `file_size *
     /// 8 * 48_000 / total_samples`. `-1` means unknown.
     nominal_bitrate: i32,
@@ -329,9 +334,9 @@ impl<R: Read + Seek> OggOpusReader<R> {
         // in which case we skip this and report `total_samples = 0`,
         // `nominal_bitrate = -1`. HLD §4.3 permits "unseekable / unknown
         // size" with zero duration.
-        let (packet_reader, total_samples, nominal_bitrate) = match file_size_hint {
+        let (packet_reader, total_samples, nominal_bitrate, eos_abs_pos) = match file_size_hint {
             Some(size) if size > 0 => {
-                let (total_samples, nominal_bitrate) = compute_duration_and_bitrate(
+                let (total_samples, nominal_bitrate, eos_abs_pos) = compute_duration_and_bitrate(
                     &mut bare_reader,
                     stream_serial,
                     head.pre_skip,
@@ -341,14 +346,14 @@ impl<R: Read + Seek> OggOpusReader<R> {
                 fresh
                     .seek_bytes(SeekFrom::Start(audio_start_offset))
                     .map_err(classify_io_error)?;
-                (fresh, total_samples, nominal_bitrate)
+                (fresh, total_samples, nominal_bitrate, eos_abs_pos)
             }
             _ => {
                 // Unseekable / unknown-size: wrap the bare reader back up
                 // without touching its cursor — PacketReader has already
                 // consumed the OpusTags page, so the bare reader sits at
                 // `audio_start_offset` which is exactly where we want.
-                (PacketReader::new(bare_reader), 0u64, -1i32)
+                (PacketReader::new(bare_reader), 0u64, -1i32, None)
             }
         };
 
@@ -363,6 +368,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
             audio_start_offset,
             file_size: file_size_hint,
             total_samples,
+            eos_abs_pos,
             nominal_bitrate,
             decoder: None,
             decode_scratch: Vec::new(),
@@ -485,6 +491,15 @@ impl<R: Read + Seek> OggOpusReader<R> {
         let mut bytes_consumed: u64 = 0;
 
         loop {
+            // A seekable stream's final granule is authoritative. Once the
+            // decoder cursor reaches it, keep EOF sticky even if the final
+            // Opus packet contains codec padding beyond that granule.
+            if let Some(eos_abs_pos) = self.eos_abs_pos
+                && self.next_sample_abs_pos >= eos_abs_pos
+            {
+                return Ok((0, 0));
+            }
+
             let pkt = packet_reader.read_packet().map_err(ogg_err_to_reader)?;
             let Some(pkt) = pkt else {
                 // Clean EOF. Per HLD §4.2 the EOF return reports
@@ -517,21 +532,43 @@ impl<R: Read + Seek> OggOpusReader<R> {
                 ));
             }
 
+            // The final Opus packet is commonly a full frame even when its
+            // EOS granule advertises a shorter source. Keep only samples up
+            // to that absolute granule; the remainder is encoder padding and
+            // must never reach the caller.
+            let decoded_until_eos = match self.eos_abs_pos {
+                Some(eos_abs_pos) => {
+                    if self.next_sample_abs_pos >= eos_abs_pos {
+                        return Ok((0, 0));
+                    }
+                    let remaining = eos_abs_pos - self.next_sample_abs_pos;
+                    decoded.min(remaining.min(decoded as u64) as usize)
+                }
+                None => decoded,
+            };
+            if decoded_until_eos == 0 {
+                return Ok((0, 0));
+            }
+
             // Unified discard: the samples just produced cover absolute
-            // positions [next_sample_abs_pos, next_sample_abs_pos+decoded).
+            // positions [next_sample_abs_pos,
+            // next_sample_abs_pos+decoded_until_eos). The EOS clamp above
+            // removes any post-granule padding from this timeline.
             // Drop leading samples while we're below target_abs_pos.
             let discard = if self.next_sample_abs_pos < self.target_abs_pos {
                 let gap = self.target_abs_pos - self.next_sample_abs_pos;
-                (gap as usize).min(decoded)
+                (gap as usize).min(decoded_until_eos)
             } else {
                 0
             };
-            let kept = decoded - discard;
+            let kept = decoded_until_eos - discard;
 
             // Advance the counter by *every* sample the decoder produced —
             // both discarded and kept. The counter models the decoder's
             // absolute output position, which is what the next seek wants.
-            self.next_sample_abs_pos = self.next_sample_abs_pos.saturating_add(decoded as u64);
+            self.next_sample_abs_pos = self
+                .next_sample_abs_pos
+                .saturating_add(decoded_until_eos as u64);
 
             if kept == 0 {
                 // Packet entirely consumed by pre-skip / post-seek pre-roll
@@ -591,7 +628,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
     ///    callers that already pumped `decode_next`. The HLD §5.2
     ///    `decode_can_seek` will return false for these streams via the C++
     ///    shim, so this is the right contract.
-    /// 2. For seekable streams of unknown duration (`total_samples == 0`),
+    /// 2. For seekable streams of unknown duration (`eos_abs_pos == None`),
     ///    accept only `sample_pos == 0` and rewind to audio start; non-zero
     ///    targets return `InvalidStream`.
     /// 3. Otherwise: clamp `sample_pos` to `[0, total_samples]`. If the
@@ -627,7 +664,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
         // Unlike the unseekable branch we *do* honour `sample_pos == 0` here
         // because the underlying IO can actually rewind us back to audio
         // start, so the operation has real effect.
-        if self.total_samples == 0 {
+        if self.eos_abs_pos.is_none() {
             if sample_pos != 0 {
                 return Err(ReaderError::InvalidStream(
                     "stream duration unknown; seek only to 0 supported".into(),
@@ -719,7 +756,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
     /// the next `decode_next` produces samples starting from absolute
     /// granule 0 (which the unified discard logic then trims down to
     /// `pre_skip`). Shared by the main seek path's early-file shortcut and
-    /// the `total_samples == 0` + `sample_pos == 0` branch.
+    /// the unknown-duration + `sample_pos == 0` branch.
     fn rewind_to_audio_start(&mut self) -> Result<(), ReaderError> {
         // Same reposition pattern M2 established for the post-reverse-scan
         // re-seat: take the bare reader out of the PacketReader, seek it,
@@ -903,7 +940,7 @@ fn scan_pages<R: Read + Seek>(
 
 /// Scan the last 128 KiB of the stream for the last Ogg page whose serial
 /// matches `target_serial`; from its granule position compute total decoded
-/// samples (post-pre-skip) and the average bitrate in bits/sec.
+/// samples (post-pre-skip), the absolute EOS granule, and average bitrate.
 ///
 /// Sibling to `ropus-cli/src/container/ogg.rs::read_last_granule` — the same
 /// RFC 3533 bit-twiddling; deliberately copied rather than shared because
@@ -913,14 +950,14 @@ fn scan_pages<R: Read + Seek>(
 /// Preserves the underlying reader's cursor: restores it to wherever it was
 /// before the scan so the caller's `PacketReader` state remains consistent
 /// when we hand back. Truncated files (file_size < 27 bytes or no matching
-/// page in the trailing window) silently produce `(0, -1)` — that's a
+/// page in the trailing window) silently produce `(0, -1, None)` — that's a
 /// degraded but non-fatal open.
 fn compute_duration_and_bitrate<R: Read + Seek>(
     reader: &mut R,
     target_serial: u32,
     pre_skip: u16,
     file_size: u64,
-) -> Result<(u64, i32), ReaderError> {
+) -> Result<(u64, i32, Option<u64>), ReaderError> {
     let saved_pos = reader.stream_position().map_err(classify_io_error)?;
     let absgp = read_last_granule(reader, target_serial, file_size).map_err(classify_io_error)?;
     // Best-effort restore so PacketReader's view of the stream is unchanged.
@@ -931,11 +968,17 @@ fn compute_duration_and_bitrate<R: Read + Seek>(
         .map_err(classify_io_error)?;
 
     let Some(absgp) = absgp else {
-        return Ok((0, -1));
+        return Ok((0, -1, None));
     };
-    let total_samples = absgp.saturating_sub(pre_skip as u64);
+    let pre_skip = pre_skip as u64;
+    if absgp < pre_skip {
+        return Err(ReaderError::InvalidStream(format!(
+            "final granule {absgp} is before pre-skip {pre_skip}"
+        )));
+    }
+    let total_samples = absgp - pre_skip;
     if total_samples == 0 {
-        return Ok((0, -1));
+        return Ok((0, -1, Some(absgp)));
     }
     // bits/sec = file_size * 8 * sample_rate / total_samples. Compute in u128
     // to avoid overflow on very long, very large files (a 10 GB file with
@@ -947,7 +990,7 @@ fn compute_duration_and_bitrate<R: Read + Seek>(
     // Clamp into i32 — bitrates above 2 Gbps don't exist in the real world
     // and the fb2k shim just surfaces an int anyway.
     let bitrate = i32::try_from(bitrate).unwrap_or(i32::MAX);
-    Ok((total_samples, bitrate))
+    Ok((total_samples, bitrate, Some(absgp)))
 }
 
 /// Reverse-scan for the absolute granule position of the last Ogg page

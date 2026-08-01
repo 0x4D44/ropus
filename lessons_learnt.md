@@ -2,6 +2,10 @@
 
   Rust uses a `-1` channel sentinel, so key V2 records by boundary, iteration, and trace-order occurrence; keep C channel labels in diagnostics.
 
+- Ogg Opus EOS granules cap decoded output (`ropus-fb2k/src/reader.rs:decode_next`); a full final packet can contain padding.
+
+  Keep the absolute EOS granule separate from unknown duration, reject it when it precedes pre-skip, and make EOF sticky after clamping.
+
 - Decode framing must be validated once before comparison (`harness/src/cli.rs:parse_framed_packets`).
 
   A partial length or payload can leave both decoders with the same prefix; require exact EOF and return `Fail` before comparing that prefix.

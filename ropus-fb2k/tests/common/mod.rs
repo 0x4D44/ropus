@@ -80,6 +80,44 @@ pub fn build_opus_fixture_audio_source(
     comments: &[(&str, &str)],
     audio_packets: usize,
     recorded_pre_skip: Option<u16>,
+    pcm_for: impl FnMut(usize) -> Vec<i16>,
+) -> Vec<u8> {
+    build_opus_fixture_audio_source_with_final_granule(
+        vendor,
+        comments,
+        audio_packets,
+        recorded_pre_skip,
+        None,
+        pcm_for,
+    )
+}
+
+/// Build a silence fixture whose final page advertises an explicit absolute
+/// EOS granule. This covers partial final frames and impossible granules in
+/// reader tests without changing the normal fixture's page timeline.
+pub fn build_opus_fixture_with_final_granule(
+    vendor: &str,
+    comments: &[(&str, &str)],
+    audio_packets: usize,
+    recorded_pre_skip: Option<u16>,
+    final_granule: u64,
+) -> Vec<u8> {
+    build_opus_fixture_audio_source_with_final_granule(
+        vendor,
+        comments,
+        audio_packets,
+        recorded_pre_skip,
+        Some(final_granule),
+        |_| vec![0i16; 960 * 2],
+    )
+}
+
+fn build_opus_fixture_audio_source_with_final_granule(
+    vendor: &str,
+    comments: &[(&str, &str)],
+    audio_packets: usize,
+    recorded_pre_skip: Option<u16>,
+    final_granule: Option<u64>,
     mut pcm_for: impl FnMut(usize) -> Vec<i16>,
 ) -> Vec<u8> {
     assert!(audio_packets >= 1, "need at least one audio packet");
@@ -132,7 +170,11 @@ pub fn build_opus_fixture_audio_source(
         } else {
             PacketWriteEndInfo::NormalPacket
         };
-        let absgp = ((idx + 1) as u64) * 960;
+        let absgp = if is_last {
+            final_granule.unwrap_or(((idx + 1) as u64) * 960)
+        } else {
+            ((idx + 1) as u64) * 960
+        };
         writer
             .write_packet(packet, FIXTURE_STREAM_SERIAL, end, absgp)
             .expect("write audio page");

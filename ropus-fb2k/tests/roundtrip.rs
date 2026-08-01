@@ -19,9 +19,10 @@ use ropus::OpusDecoder;
 
 use common::{
     FIXTURE_STREAM_SERIAL, MemIo, build_opus_fixture, build_opus_fixture_audio_source,
-    build_opus_fixture_with_audio_packets, build_opus_head, last_error_string,
-    minimal_opus_fixture, open_from_bytes, open_from_bytes_info_only, open_from_bytes_without_seek,
-    opus_fixture_with_artist_alice, read_tags_collect, surround_family_fixture,
+    build_opus_fixture_with_audio_packets, build_opus_fixture_with_final_granule, build_opus_head,
+    last_error_string, minimal_opus_fixture, open_from_bytes, open_from_bytes_info_only,
+    open_from_bytes_without_seek, opus_fixture_with_artist_alice, read_tags_collect,
+    surround_family_fixture,
 };
 
 use ropus_fb2k::{
@@ -397,6 +398,52 @@ fn decode_wiring_matches_direct_ogg_path() {
     assert!(
         !path_a.is_empty(),
         "fixture must produce some decoded samples"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A partial final frame must stop at the stream's absolute EOS granule rather
+// than exposing the codec padding that follows it.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn decode_stops_at_partial_final_granule() {
+    const PRE_SKIP: u16 = 312;
+    const EOS_GRANULE: u64 = 1_440; // 960 + 480: half of the second frame.
+    let bytes = build_opus_fixture_with_final_granule(
+        "ropus-fb2k-test",
+        &[],
+        2,
+        Some(PRE_SKIP),
+        EOS_GRANULE,
+    );
+
+    let (_io, handle) = open_from_bytes(bytes.clone());
+    assert!(!handle.is_null(), "partial-final-frame fixture must open");
+    let mut info = zeroed_info();
+    assert_eq!(
+        unsafe { ropus_fb2k::ropus_fb2k_get_info(handle, &mut info) },
+        0
+    );
+    assert_eq!(info.total_samples, (EOS_GRANULE - PRE_SKIP as u64));
+    unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+
+    let decoded = decode_through_fb2k(bytes);
+    assert_eq!(
+        decoded.len(),
+        (EOS_GRANULE - PRE_SKIP as u64) as usize * 2,
+        "decoded PCM must stop at EOS instead of including final-frame padding"
+    );
+}
+
+#[test]
+fn open_rejects_final_granule_before_pre_skip() {
+    let bytes = build_opus_fixture_with_final_granule("ropus-fb2k-test", &[], 1, Some(312), 100);
+    let (_io, handle) = open_from_bytes(bytes);
+    assert!(handle.is_null(), "impossible EOS granule must be rejected");
+    assert_eq!(
+        unsafe { ropus_fb2k::ropus_fb2k_last_error_code() },
+        ROPUS_FB2K_INVALID_STREAM
     );
 }
 
@@ -1183,11 +1230,11 @@ fn seek_past_end_clamps() {
         }
         total_post_seek += rc as usize;
     }
-    // The clamp + pre-roll discard consumes the entire stream; any leftover
-    // is explicitly bounded by the final 20 ms page granule alignment.
+    // The clamp target is the exact EOS granule, so the pre-roll is discarded
+    // and no final-frame padding may leak after the end seek.
     assert!(
-        total_post_seek <= 960,
-        "clamped seek produced {total_post_seek} per-ch samples; expected close to 0"
+        total_post_seek == 0,
+        "seek(total_samples) produced {total_post_seek} per-ch samples; expected exact EOF"
     );
 
     unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
