@@ -27,8 +27,8 @@ use super::decoder::{
     OPUS_BANDWIDTH_WIDEBAND,
 };
 use super::encoder::{
-    EncodeAnalysisInput, OPUS_AUTO, OPUS_BITRATE_MAX, OPUS_FRAMESIZE_ARG, OpusEncoder, downmix_int,
-    frame_size_select,
+    EncodeAnalysisInput, OPUS_AUTO, OPUS_BITRATE_MAX, OPUS_FRAMESIZE_2_5_MS, OPUS_FRAMESIZE_120_MS,
+    OPUS_FRAMESIZE_ARG, OpusEncoder, downmix_int, frame_size_select,
 };
 use super::repacketizer::OpusRepacketizer;
 
@@ -1524,8 +1524,12 @@ impl OpusMSEncoder {
         self.application
     }
 
-    pub fn set_expert_frame_duration(&mut self, v: i32) {
+    pub fn set_expert_frame_duration(&mut self, v: i32) -> i32 {
+        if v != OPUS_FRAMESIZE_ARG && (v < OPUS_FRAMESIZE_2_5_MS || v > OPUS_FRAMESIZE_120_MS) {
+            return OPUS_BAD_ARG;
+        }
         self.variable_duration = v;
+        OPUS_OK
     }
 
     pub fn get_expert_frame_duration(&self) -> i32 {
@@ -2495,7 +2499,7 @@ mod tests {
     use super::*;
     use crate::opus::encoder::{
         OPUS_APPLICATION_AUDIO, OPUS_APPLICATION_RESTRICTED_LOWDELAY, OPUS_FRAMESIZE_20_MS,
-        OPUS_FRAMESIZE_40_MS, OPUS_SIGNAL_MUSIC,
+        OPUS_FRAMESIZE_40_MS, OPUS_FRAMESIZE_120_MS, OPUS_SIGNAL_MUSIC,
     };
 
     fn patterned_pcm_i16(frame_size: usize, channels: usize, seed: i32) -> Vec<i16> {
@@ -4068,6 +4072,21 @@ mod tests {
             assert!(enc.get_encoder_mut(0).is_some());
             assert!(enc.get_encoder(99).is_none());
             enc.reset();
+        }
+
+        #[test]
+        fn encoder_expert_frame_duration_rejects_invalid_values() {
+            let mut enc =
+                OpusMSEncoder::new(48000, 2, 1, 1, &[0, 1], OPUS_APPLICATION_AUDIO).unwrap();
+            assert_eq!(enc.set_expert_frame_duration(OPUS_FRAMESIZE_20_MS), OPUS_OK);
+            assert_eq!(enc.get_expert_frame_duration(), OPUS_FRAMESIZE_20_MS);
+            assert_eq!(enc.set_expert_frame_duration(4999), OPUS_BAD_ARG);
+            assert_eq!(enc.get_expert_frame_duration(), OPUS_FRAMESIZE_20_MS);
+            assert_eq!(
+                enc.set_expert_frame_duration(OPUS_FRAMESIZE_120_MS + 1),
+                OPUS_BAD_ARG
+            );
+            assert_eq!(enc.get_expert_frame_duration(), OPUS_FRAMESIZE_20_MS);
         }
 
         #[test]

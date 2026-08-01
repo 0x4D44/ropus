@@ -1,3 +1,7 @@
+- Validate expert frame-duration controls before storing them (`ropus/src/opus/multistream.rs:OpusMSEncoder::set_expert_frame_duration`).
+
+  Multistream setters should mirror the single-stream CTL's accepted sentinel and duration range, return `OPUS_BAD_ARG`, and leave the prior duration unchanged; C callers must receive that status instead of an unconditional success.
+
 - Route multistream decoder CTLs through validated OpusDecoder setters (`ropus/src/opus/multistream.rs:OpusMSDecoder::set_complexity`).
 
   Internal fan-out helpers must preserve public range checks and side effects. Calling raw field assignments can accept invalid values and leave the CELT decoder's complexity out of sync.

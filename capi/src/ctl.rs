@@ -486,10 +486,7 @@ pub unsafe extern "C" fn mdopus_ms_encoder_ctl_set_int(
             }
             OPUS_SET_SIGNAL_REQUEST => ms.set_signal(value),
             OPUS_SET_LSB_DEPTH_REQUEST => ms.set_lsb_depth(value),
-            OPUS_SET_EXPERT_FRAME_DURATION_REQUEST => {
-                ms.set_expert_frame_duration(value);
-                OPUS_OK
-            }
+            OPUS_SET_EXPERT_FRAME_DURATION_REQUEST => ms.set_expert_frame_duration(value),
             OPUS_SET_PREDICTION_DISABLED_REQUEST => ms.set_prediction_disabled(value),
             OPUS_SET_PHASE_INVERSION_DISABLED_REQUEST => ms.set_phase_inversion_disabled(value),
             // `OpusMSEncoder::set_force_mode` fans out to every sub-encoder's
