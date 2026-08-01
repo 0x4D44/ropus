@@ -5,15 +5,15 @@
 - **Severity:** Low
 - **Area:** capi/version-metadata
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T184952Z-p9388-n274066000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00018-run-fix-20260801T184952Z-p9388-n274066000-c1
+- **Owner base:** d9aba8a74e4bcb28dc16d815a71c31114d0b9c05
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T18:49:52Z
+- **Owner until:** 2026-08-01T20:49:52Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
