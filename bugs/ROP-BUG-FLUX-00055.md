@@ -5,15 +5,15 @@
 - **Severity:** High
 - **Area:** ropus-tools-core/path-safety
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T230202Z-p61873-n904081000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00055-run-fix-20260801T230202Z-p61873-n904081000-c1
+- **Owner base:** ffc617949559cf6ab41cad7032ced8de589d464c
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T23:02:02Z
+- **Owner until:** 2026-08-02T01:02:02Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
