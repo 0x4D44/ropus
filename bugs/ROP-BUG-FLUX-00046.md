@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** ropus-tools-core/shared-decode-gain
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T215919Z-p58759-n146521000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00046-run-fix-20260801T215919Z-p58759-n146521000-c1
+- **Owner base:** 300e77a0adfd8eb0f743aa0f4c7129f998b8ce24
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T21:59:19Z
+- **Owner until:** 2026-08-01T23:59:19Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
