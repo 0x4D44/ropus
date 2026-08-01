@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** harness/benchmark-timing
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T194222Z-p62871-n068892000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00027-run-fix-20260801T194222Z-p62871-n068892000-c1
+- **Owner base:** 743ad7a6c1b10a97efeaf00e00c2bf6840e329ad
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T19:42:22Z
+- **Owner until:** 2026-08-01T21:42:22Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
