@@ -5,15 +5,15 @@
 - **Severity:** High
 - **Area:** full-test/stage2
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T040926Z-p98732-n591719000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00019-run-fix-20260801T040926Z-p98732-n591719000-c1
+- **Owner base:** 4221313479830931738fef7322861aee0b5c6443
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T04:09:26Z
+- **Owner until:** 2026-08-01T06:09:26Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
