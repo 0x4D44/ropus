@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use clap::{ArgAction, Parser, ValueEnum};
 use ropus_tools_core::options::EncodeOptions;
-use ropus_tools_core::prelude::{self, PreludeFlags};
+use ropus_tools_core::prelude;
 use ropus_tools_core::{Application, FrameDuration, Signal, commands, ui};
 
 #[derive(Parser, Debug)]
@@ -242,17 +242,13 @@ fn parse_nonzero_serial(raw: &str) -> Result<u32, String> {
 }
 
 fn main() -> ExitCode {
-    // Sniff --quiet/--no-color from raw argv before clap runs so the banner
-    // decision is still honoured when the user passes --help / --version
-    // (clap exits before our main body would otherwise see them).
-    // `output_is_stdout` steers the banner to stderr so the bitstream on
-    // stdout isn't polluted with text.
-    let PreludeFlags {
-        quiet,
-        no_color: _,
-        output_is_stdout,
-    } = prelude::run_prelude();
-    if !quiet {
+    let cli = Cli::parse();
+    prelude::configure_color(cli.no_color);
+
+    // Derive banner routing from Clap's typed result. Raw argv cannot safely
+    // identify the input sentinel because value-taking options may precede it.
+    let output_is_stdout = prelude::output_is_stdout(&cli.input, cli.output.as_deref());
+    if !cli.quiet {
         if output_is_stdout {
             ui::print_banner_stderr(
                 env!("CARGO_PKG_NAME"),
@@ -269,8 +265,6 @@ fn main() -> ExitCode {
             );
         }
     }
-
-    let cli = Cli::parse();
 
     // Build comments vector from the flattened metadata flags. Order matches
     // opus-tools' output: artist, title, album, tracknumber, genre, date,
@@ -353,4 +347,45 @@ fn main() -> ExitCode {
     };
 
     prelude::run(commands::encode(opts))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_value_option_can_surround_stdin_without_changing_implicit_stdout() {
+        let value_options = [
+            ("--bitrate", "64000"),
+            ("--complexity", "5"),
+            ("--comp", "5"),
+            ("--application", "audio"),
+            ("--framesize", "20"),
+            ("--expect-loss", "5"),
+            ("--downmix", "mono"),
+            ("--serial", "1"),
+            ("--artist", "Artist"),
+            ("--title", "Title"),
+            ("--album", "Album"),
+            ("--genre", "Genre"),
+            ("--date", "2026"),
+            ("--tracknumber", "1"),
+            ("--comment", "KEY=VALUE"),
+            ("--picture", "cover.png"),
+        ];
+
+        for (option, value) in value_options {
+            for argv in [
+                vec!["ropusenc", option, value, "-"],
+                vec!["ropusenc", "-", option, value],
+            ] {
+                let cli = Cli::try_parse_from(&argv)
+                    .unwrap_or_else(|error| panic!("{argv:?} should parse: {error}"));
+                assert!(
+                    prelude::output_is_stdout(&cli.input, cli.output.as_deref()),
+                    "{argv:?} must select implicit stdout"
+                );
+            }
+        }
+    }
 }

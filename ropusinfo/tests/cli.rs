@@ -216,6 +216,54 @@ fn info_query_duration_returns_bare_number() {
 }
 
 #[test]
+fn info_query_attached_short_form_returns_bare_number_without_quiet() {
+    // Regression for ROP-BUG-FLUX-00053: Clap accepts `-q=duration`, but the
+    // old prelude scanner did not recognise it and printed a banner before
+    // the query scalar. Do not add `--quiet` here: query mode itself must be
+    // the authoritative reason the banner is suppressed.
+    let opus = encode_tmp_opus("query_attached", Vec::new());
+    if skip_if_no_fixture(
+        &opus,
+        "info_query_attached_short_form_returns_bare_number_without_quiet",
+    ) {
+        return;
+    }
+
+    let out = Command::new(env!("CARGO_BIN_EXE_ropusinfo"))
+        .args([
+            "--no-color",
+            "-q=duration",
+            opus.to_str().expect("path utf8"),
+        ])
+        .output()
+        .expect("run ropusinfo");
+
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "query failed; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).expect("query stdout is UTF-8");
+    let lines: Vec<_> = stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "expected one bare query line, got {lines:?}"
+    );
+    let duration: f64 = lines[0]
+        .trim()
+        .parse()
+        .unwrap_or_else(|_| panic!("duration was not a bare float: {:?}", lines[0]));
+    assert!(
+        duration > 0.0,
+        "duration should be positive, got {duration}"
+    );
+
+    let _ = std::fs::remove_file(&opus);
+}
+
+#[test]
 fn info_query_comment_artist_returns_value() {
     let opus = encode_tmp_opus(
         "query_artist",

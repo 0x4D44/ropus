@@ -178,6 +178,42 @@ fn stdin_to_stdout_round_trip_with_equals() {
     );
 }
 
+#[test]
+fn stdin_after_value_option_uses_clean_implicit_stdout() {
+    // Regression for ROP-BUG-FLUX-00053: the old prelude scanner mistook
+    // `64000` for the positional input and missed the later stdin sentinel.
+    // Clap correctly treats `-` as the input and therefore defaults output
+    // to stdout; the banner must not precede the Ogg bytes.
+    let wav = synth_sine_wav_bytes(1, 1000.0);
+
+    let mut child = Command::new(ropusenc_bin())
+        .args(["--no-color", "--bitrate", "64000", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ropusenc");
+
+    {
+        let mut stdin = child.stdin.take().expect("stdin piped");
+        stdin.write_all(&wav).expect("write WAV into child stdin");
+    }
+
+    let output = child.wait_with_output().expect("wait_with_output");
+    assert!(
+        output.status.success(),
+        "ropusenc exited {:?}; stderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        output.stdout.get(..4),
+        Some(b"OggS".as_slice()),
+        "implicit stdout must start with OggS; got: {:02x?}",
+        &output.stdout[..output.stdout.len().min(16)]
+    );
+}
+
 /// Encode a fixture WAV through `ropusenc` with the supplied extra args and
 /// return the bitstream. Used by the default-bitrate pin tests below to
 /// compare two encodes for byte-identical output.

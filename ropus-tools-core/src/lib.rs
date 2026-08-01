@@ -8,7 +8,7 @@
 //!
 //! Module layout:
 //! ```text
-//! prelude  ──► (binary main: argv sniff + anyhow-chain exit code)
+//! prelude  ──► (binary main: typed output routing + anyhow-chain exit code)
 //! commands ──► audio::{decode, resample, wav}
 //!         └──► container::ogg
 //!         └──► ui, util, consts, options

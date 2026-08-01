@@ -202,6 +202,47 @@ fn stdin_opus_to_stdout_with_o_attached() {
 }
 
 #[test]
+fn stdin_after_value_option_uses_clean_implicit_stdout() {
+    // Regression for ROP-BUG-FLUX-00053: `44100` used to be mistaken for
+    // the positional input by the prelude's raw argv scanner. The typed CLI
+    // maps the later `-` input to implicit stdout, so WAV bytes must begin at
+    // byte zero with no banner prefix.
+    let opus = encode_sine_to_opus_bytes("stdin_after_rate");
+
+    let mut child = Command::new(ropusdec_bin())
+        .args(["--no-color", "--rate", "44100", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn ropusdec");
+
+    {
+        let mut stdin = child.stdin.take().expect("stdin piped");
+        stdin.write_all(&opus).expect("write opus into child stdin");
+    }
+
+    let output = child.wait_with_output().expect("wait_with_output");
+    assert!(
+        output.status.success(),
+        "ropusdec exited {:?}; stderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        output.stdout.get(..4),
+        Some(b"RIFF".as_slice()),
+        "implicit stdout must start with RIFF; got: {:02x?}",
+        &output.stdout[..output.stdout.len().min(16)]
+    );
+    assert_eq!(
+        output.stdout.get(8..12),
+        Some(b"WAVE".as_slice()),
+        "implicit stdout must contain WAVE at bytes 8..12"
+    );
+}
+
+#[test]
 fn stdout_raw_float_has_no_header() {
     // `--raw --float` means 4-byte-aligned f32 LE on stdout, no WAV
     // container. Assert: no RIFF, no WAVE, byte count divisible by 4

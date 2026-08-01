@@ -1,3 +1,9 @@
+- Route CLI banners from typed paths, never raw argv scans (`ropus-tools-core/src/prelude.rs:output_is_stdout`).
+
+  A raw scan cannot distinguish positional inputs from values consumed by
+  earlier options. Parse once with Clap, then derive stdout and query routing
+  from the resulting fields so text never contaminates binary or scalar output.
+
 - Drain Opus lookahead, but set EOS to source + pre-skip (`ropus-tools-core/src/commands/encode.rs:encode`).
 
   Packet input must cover the source plus encoder delay and round up to a full

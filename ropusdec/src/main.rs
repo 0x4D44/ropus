@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use clap::{ArgAction, Parser};
 use ropus_tools_core::options::DecodeOptions;
-use ropus_tools_core::prelude::{self, PreludeFlags};
+use ropus_tools_core::prelude;
 use ropus_tools_core::{commands, ui};
 
 #[derive(Parser, Debug)]
@@ -72,14 +72,13 @@ struct Args {
 }
 
 fn main() -> ExitCode {
-    // `output_is_stdout` steers the banner to stderr so the WAV/PCM byte
-    // stream isn't polluted when `-o -` (or implicit stdin→stdout) is used.
-    let PreludeFlags {
-        quiet,
-        no_color: _,
-        output_is_stdout,
-    } = prelude::run_prelude();
-    if !quiet {
+    let args = Args::parse();
+    prelude::configure_color(args.no_color);
+
+    // Clap has already resolved every option value, so the `-` here is the
+    // authoritative input/output sentinel rather than a guessed positional.
+    let output_is_stdout = prelude::output_is_stdout(&args.input, args.output.as_deref());
+    if !args.quiet {
         if output_is_stdout {
             ui::print_banner_stderr(
                 env!("CARGO_PKG_NAME"),
@@ -96,7 +95,6 @@ fn main() -> ExitCode {
             );
         }
     }
-    let args = Args::parse();
     if args.packet_loss > 100 {
         eprintln!(
             "error: --packet-loss {} is out of range (accepted: 0..=100)",
@@ -115,4 +113,32 @@ fn main() -> ExitCode {
         packet_loss_pct: args.packet_loss,
     };
     prelude::run(commands::decode(opts))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_value_option_can_surround_stdin_without_changing_implicit_stdout() {
+        let value_options = [
+            ("--rate", "44100"),
+            ("--gain", "-3.0"),
+            ("--packet-loss", "5"),
+        ];
+
+        for (option, value) in value_options {
+            for argv in [
+                vec!["ropusdec", option, value, "-"],
+                vec!["ropusdec", "-", option, value],
+            ] {
+                let args = Args::try_parse_from(&argv)
+                    .unwrap_or_else(|error| panic!("{argv:?} should parse: {error}"));
+                assert!(
+                    prelude::output_is_stdout(&args.input, args.output.as_deref()),
+                    "{argv:?} must select implicit stdout"
+                );
+            }
+        }
+    }
 }

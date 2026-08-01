@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use clap::{ArgAction, Parser};
 use ropus_tools_core::options::{LoopMode, PlayOptions};
-use ropus_tools_core::prelude::{self, PreludeFlags};
+use ropus_tools_core::prelude;
 use ropus_tools_core::{commands, ui};
 
 /// Clap-facing mirror of `LoopMode`. Lives here so `ropus-tools-core` does not
@@ -76,10 +76,9 @@ struct Args {
 }
 
 fn main() -> ExitCode {
-    let PreludeFlags {
-        quiet, no_color: _, ..
-    } = prelude::run_prelude();
-    if !quiet {
+    let args = Args::parse();
+    prelude::configure_color(args.no_color);
+    if !args.quiet {
         ui::print_banner(
             env!("CARGO_PKG_NAME"),
             env!("CARGO_PKG_VERSION"),
@@ -87,7 +86,6 @@ fn main() -> ExitCode {
             env!("BUILD_GIT_SHA"),
         );
     }
-    let args = Args::parse();
     // `input` is only optional at the clap layer — `required_unless_present`
     // guarantees it is `Some` on every non-`--list-devices` invocation, and
     // the `--list-devices` branch in `commands::play` returns before ever
@@ -97,7 +95,7 @@ fn main() -> ExitCode {
         input: args.input.unwrap_or_default(),
         volume: args.volume,
         loop_mode: args.loop_mode.into(),
-        quiet,
+        quiet: args.quiet,
         device: args.device,
         list_devices: args.list_devices,
         gain_db: args.gain,
