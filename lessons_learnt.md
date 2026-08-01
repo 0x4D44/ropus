@@ -1,3 +1,7 @@
+- C ABI version strings should use `env!("CARGO_PKG_VERSION")` so package bumps cannot leave stale diagnostics (`capi/src/lib.rs:VERSION_STRING`).
+
+  Keep the C-compatible NUL terminator in the compile-time string and test the exported pointer against the same package metadata.
+
 - C ABI constructors must stage fallible handle/state allocations before publishing outputs (`capi/src/alloc.rs:try_box`).
 
   `handle_alloc_error`, `Box::new`, and `Vec::with_capacity` can abort instead of

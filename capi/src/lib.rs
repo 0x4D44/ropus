@@ -120,7 +120,12 @@ macro_rules! ffi_guard {
 /// The substring "-fixed" signals a fixed-point build, per the convention the
 /// C reference documents in `celt.c::opus_get_version_string`. This matches
 /// the format C consumers may grep on (e.g. `opus_demo`).
-pub(crate) const VERSION_STRING: &[u8] = b"libopus mdopus-capi-0.1.0-fixed\0";
+pub(crate) const VERSION_STRING: &[u8] = concat!(
+    "libopus mdopus-capi-",
+    env!("CARGO_PKG_VERSION"),
+    "-fixed\0"
+)
+.as_bytes();
 
 /// Error-string table (index by `-error`, same convention as C).
 pub(crate) const ERROR_STRINGS: &[&[u8]] = &[
@@ -239,5 +244,20 @@ mod allocation_tests {
         assert_eq!(error, OPUS_ALLOC_FAIL);
         assert_eq!(streams, 111);
         assert_eq!(coupled_streams, 222);
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::{VERSION_STRING, opus_get_version_string};
+    use std::ffi::CStr;
+
+    #[test]
+    fn version_string_matches_package_version() {
+        let expected = format!("libopus mdopus-capi-{}-fixed", env!("CARGO_PKG_VERSION"));
+        let version = unsafe { CStr::from_ptr(opus_get_version_string()) };
+
+        assert_eq!(version.to_str().unwrap(), expected);
+        assert_eq!(version.to_bytes_with_nul(), VERSION_STRING);
     }
 }
