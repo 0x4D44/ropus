@@ -8,6 +8,9 @@
 
 #![allow(dead_code)]
 
+// This source is included by both the standalone 2021 fuzz workspace and the
+// root 2024 harness workspace; their rustfmt import ordering differs.
+#[rustfmt::skip]
 use ropus::opus::decoder::{MAX_FRAMES, opus_packet_parse_impl};
 
 /// Minimum acceptable SNR (in decibels) when comparing the Rust port's

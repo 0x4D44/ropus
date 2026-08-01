@@ -1,3 +1,10 @@
+- Check excluded Cargo workspaces with their own manifest (`.deltic-integrate.toml:fuzz`).
+
+  Root `cargo fmt --all` can miss a standalone workspace, while shared source
+  included by another package may use a different edition's import ordering.
+  Gate the nested manifest explicitly and document any unavoidable shared-file
+  formatter conflict narrowly.
+
 - Route CLI banners from typed paths, never raw argv scans (`ropus-tools-core/src/prelude.rs:output_is_stdout`).
 
   A raw scan cannot distinguish positional inputs from values consumed by
