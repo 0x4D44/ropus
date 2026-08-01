@@ -185,6 +185,13 @@ pub(crate) struct PageIndexEntry {
     pub(crate) byte_offset: u64,
 }
 
+#[derive(Clone, Copy)]
+struct ReaderState {
+    next_sample_abs_pos: u64,
+    target_abs_pos: u64,
+    decoder_initialized: bool,
+}
+
 /// Top-level Ogg Opus reader. Holds the parsed header, the parsed tags, and
 /// the underlying `PacketReader<R>` positioned just after the OpusTags page
 /// (ready for the decode loop to start pulling audio packets).
@@ -203,9 +210,9 @@ pub(crate) struct OggOpusReader<R: Read + Seek> {
     /// filter the reverse-scan and the page-index walk to the right stream
     /// (matches the pattern in `ropus-cli/src/container/ogg.rs`).
     stream_serial: u32,
-    /// `PacketReader` kept alive for the decode loop. `Option` so the seek
-    /// path can `take()` it, reposition the underlying reader, then re-seat
-    /// a fresh `PacketReader` without fighting the borrow checker.
+    /// `PacketReader` kept alive for the decode loop. It stays seated while
+    /// normal seeks use `PacketReader::seek_bytes`; the option is only needed
+    /// while the lazy page-index scan temporarily owns the underlying reader.
     packet_reader: Option<PacketReader<R>>,
     /// Byte offset of the first audio page — i.e. the stream position right
     /// after the OpusTags page was consumed. The page-index walk starts
@@ -258,6 +265,11 @@ pub(crate) struct OggOpusReader<R: Read + Seek> {
     /// between open and first seek; `Some(empty)` is a legal degenerate
     /// result (stream had no indexable pages).
     page_index: Option<Vec<PageIndexEntry>>,
+    /// If an index or reposition operation was cancelled/failed, the callback
+    /// can also reject the rollback seek. Keep the logical decode position and
+    /// replay from the first audio page once the caller retries after clearing
+    /// cancellation, rather than exposing a scan interruption cursor.
+    pending_seek_restore: Option<ReaderState>,
 }
 
 impl<R: Read + Seek> fmt::Debug for OggOpusReader<R> {
@@ -378,6 +390,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
             next_sample_abs_pos: 0,
             target_abs_pos: head.pre_skip as u64,
             page_index: None,
+            pending_seek_restore: None,
         })
     }
 
@@ -445,6 +458,8 @@ impl<R: Read + Seek> OggOpusReader<R> {
         out_interleaved: &mut [f32],
         max_samples_per_ch: usize,
     ) -> Result<(i32, u64), ReaderError> {
+        self.restore_pending_seek()?;
+
         // Test-only panic injection. Compiled out unless the `test-panic`
         // feature is on; see `lib.rs::ropus_fb2k_test_set_panic_flag` for
         // the sibling FFI hook the integration test uses to arm it.
@@ -666,6 +681,8 @@ impl<R: Read + Seek> OggOpusReader<R> {
             ));
         }
 
+        self.restore_pending_seek()?;
+
         // Seekable but unknown duration: only seek-to-zero is meaningful.
         // Unlike the unseekable branch we *do* honour `sample_pos == 0` here
         // because the underlying IO can actually rewind us back to audio
@@ -724,23 +741,21 @@ impl<R: Read + Seek> OggOpusReader<R> {
         let pp = index.partition_point(|e| e.start_granule <= rewind_to);
         let start_page = if pp == 0 { index[0] } else { index[pp - 1] };
 
-        // Take the PacketReader apart so we can reposition the bare reader,
-        // then re-seat a fresh PacketReader at the new offset. A fresh
-        // reader + `seek_bytes` flips the `has_seeked` flag the ogg crate
-        // needs to tolerate mid-stream page reads.
-        let packet_reader = self
+        // Keep the PacketReader in place while seeking. `seek_bytes` flushes
+        // its packet queue and updates its internal seek state in one
+        // operation; a callback failure therefore leaves the existing reader
+        // available for the next call instead of leaving an empty Option.
+        let prior_state = self.reader_state();
+        if let Err(err) = self
             .packet_reader
-            .take()
-            .expect("packet_reader is always Some between open and drop");
-        let mut bare_reader = packet_reader.into_inner();
-        bare_reader
-            .seek(SeekFrom::Start(start_page.byte_offset))
-            .map_err(classify_io_error)?;
-        let mut fresh = PacketReader::new(bare_reader);
-        fresh
+            .as_mut()
+            .expect("packet_reader is always Some between open and drop")
             .seek_bytes(SeekFrom::Start(start_page.byte_offset))
-            .map_err(classify_io_error)?;
-        self.packet_reader = Some(fresh);
+            .map_err(classify_io_error)
+        {
+            self.pending_seek_restore = Some(prior_state);
+            return Err(err);
+        }
 
         // OPUS_RESET_STATE semantics. If the decoder hasn't been created
         // yet (seek-before-first-decode), there's nothing to reset — the
@@ -764,24 +779,20 @@ impl<R: Read + Seek> OggOpusReader<R> {
     /// `pre_skip`). Shared by the main seek path's early-file shortcut and
     /// the unknown-duration + `sample_pos == 0` branch.
     fn rewind_to_audio_start(&mut self) -> Result<(), ReaderError> {
-        // Same reposition pattern M2 established for the post-reverse-scan
-        // re-seat: take the bare reader out of the PacketReader, seek it,
-        // then reseat a fresh PacketReader (the ogg crate's `has_seeked`
-        // flag must be flipped via `seek_bytes` for mid-stream reads to
-        // tolerate the move).
-        let packet_reader = self
+        // `seek_bytes` both repositions the underlying reader and flushes
+        // PacketReader's cached page/packet state. Keeping the wrapper in
+        // place makes a failed rewind transactional for the next operation.
+        let prior_state = self.reader_state();
+        if let Err(err) = self
             .packet_reader
-            .take()
-            .expect("packet_reader is always Some between open and drop");
-        let mut bare_reader = packet_reader.into_inner();
-        bare_reader
-            .seek(SeekFrom::Start(self.audio_start_offset))
-            .map_err(classify_io_error)?;
-        let mut fresh = PacketReader::new(bare_reader);
-        fresh
+            .as_mut()
+            .expect("packet_reader is always Some between open and drop")
             .seek_bytes(SeekFrom::Start(self.audio_start_offset))
-            .map_err(classify_io_error)?;
-        self.packet_reader = Some(fresh);
+            .map_err(classify_io_error)
+        {
+            self.pending_seek_restore = Some(prior_state);
+            return Err(err);
+        }
 
         // OPUS_RESET_STATE if the decoder exists; otherwise the lazy-init
         // path in `decode_next` will build a fresh one.
@@ -809,6 +820,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
         let file_size = self
             .file_size
             .ok_or_else(|| ReaderError::Unsupported("stream is not seekable".into()))?;
+        let prior_state = self.reader_state();
 
         let packet_reader = self
             .packet_reader
@@ -827,22 +839,73 @@ impl<R: Read + Seek> OggOpusReader<R> {
             self.stream_serial,
         );
 
-        // CRITICAL: always re-seat a PacketReader regardless of whether
-        // the post-scan seek-restore succeeds. If we failed here and left
-        // `self.packet_reader = None`, a retry of `seek` would panic on
-        // `take().expect(...)` inside `ffi_guard!`, masking the real
-        // aborted-state error (caller would see -6 INTERNAL instead of
-        // -3 ABORTED). Best-effort restore to `resume_pos`; if that
-        // fails, fall back to `audio_start_offset` so subsequent calls
-        // at least see a valid-looking stream position. The caller still
-        // gets the original error (abort / IO).
-        let _ = bare_reader.seek(SeekFrom::Start(resume_pos));
+        // Always re-seat a PacketReader, even when the scan or rollback
+        // fails. If cancellation is still active, the callback can reject
+        // this rollback too; remember the intended position and retry it
+        // before the next decode/seek after the caller clears cancellation.
         let mut fresh = PacketReader::new(bare_reader);
-        let _ = fresh.seek_bytes(SeekFrom::Start(resume_pos));
+        let restore_result = fresh
+            .seek_bytes(SeekFrom::Start(resume_pos))
+            .map_err(classify_io_error);
         self.packet_reader = Some(fresh);
 
-        self.page_index = Some(index_result?);
+        match (index_result, restore_result) {
+            (Err(index_err), Ok(_)) => {
+                self.pending_seek_restore = Some(prior_state);
+                Err(index_err)
+            }
+            (Err(index_err), Err(_restore_err)) => {
+                self.pending_seek_restore = Some(prior_state);
+                Err(index_err)
+            }
+            (Ok(_), Err(restore_err)) => {
+                self.pending_seek_restore = Some(prior_state);
+                Err(restore_err)
+            }
+            (Ok(index), Ok(_)) => {
+                self.page_index = Some(index);
+                Ok(())
+            }
+        }
+    }
+
+    /// Restore the logical reader position left behind by an interrupted
+    /// index/reposition operation. Re-seating at audio start avoids relying
+    /// on a `PacketReader`'s discarded page queue; the next decode replays and
+    /// discards samples up to the saved absolute position. Callback-backed
+    /// seeks poll abort, so a still-active cancellation remains a clean
+    /// `ABORTED` result and never consumes the pending restore.
+    fn restore_pending_seek(&mut self) -> Result<(), ReaderError> {
+        let Some(state) = self.pending_seek_restore else {
+            return Ok(());
+        };
+        self.packet_reader
+            .as_mut()
+            .expect("packet_reader is always Some between open and drop")
+            .seek_bytes(SeekFrom::Start(self.audio_start_offset))
+            .map_err(classify_io_error)?;
+        if state.decoder_initialized {
+            self.decoder
+                .as_mut()
+                .expect("initialized decoder must remain allocated")
+                .reset();
+        }
+        self.next_sample_abs_pos = 0;
+        self.target_abs_pos = if state.decoder_initialized {
+            state.next_sample_abs_pos.max(state.target_abs_pos)
+        } else {
+            state.target_abs_pos
+        };
+        self.pending_seek_restore = None;
         Ok(())
+    }
+
+    fn reader_state(&self) -> ReaderState {
+        ReaderState {
+            next_sample_abs_pos: self.next_sample_abs_pos,
+            target_abs_pos: self.target_abs_pos,
+            decoder_initialized: self.decoder.is_some(),
+        }
     }
 }
 

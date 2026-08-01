@@ -326,6 +326,9 @@ pub struct MemState {
     /// `decode_next` ever returned without polling the IO layer at all,
     /// neither `read_calls` nor `abort_calls` would move.
     pub abort_calls: usize,
+    /// Number of upcoming `seek` callbacks that should fail. Tests set this
+    /// after open to exercise transactional target and rewind failures.
+    pub seek_failures: usize,
 }
 
 /// Owns the `MemState` box and hands out a `RopusFb2kIo` pointing at it.
@@ -349,6 +352,7 @@ impl MemIo {
                 abort_after_n_reads: None,
                 read_calls: 0,
                 abort_calls: 0,
+                seek_failures: 0,
             })),
             has_seek: true,
         }
@@ -370,6 +374,18 @@ impl MemIo {
     /// variable read-count that would make `with_abort_after(n)` flaky.
     pub fn set_aborting(&self) {
         self.state.lock().unwrap().abort = true;
+    }
+
+    /// Clear a previously raised abort flag so a failed operation can be
+    /// retried and its original cursor/content can be checked.
+    pub fn clear_aborting(&self) {
+        self.state.lock().unwrap().abort = false;
+    }
+
+    /// Fail the next underlying seek callback. The failure is one-shot so a
+    /// following retry can prove that the reader remained usable.
+    pub fn fail_next_seek(&self) {
+        self.state.lock().unwrap().seek_failures += 1;
     }
 
     /// Pretend this is an unseekable stream (e.g. live HTTP). Drops the
@@ -442,6 +458,10 @@ extern "C" fn mem_read(ctx: *mut c_void, out: *mut u8, n: usize) -> i64 {
 extern "C" fn mem_seek(ctx: *mut c_void, off: u64) -> c_int {
     let m = unsafe { &*(ctx as *const Mutex<MemState>) };
     let mut st = m.lock().unwrap();
+    if st.seek_failures > 0 {
+        st.seek_failures -= 1;
+        return -1;
+    }
     if off > st.bytes.len() as u64 {
         return -1;
     }

@@ -1458,6 +1458,145 @@ fn seek_during_abort_recovery_no_panic() {
 }
 
 // ---------------------------------------------------------------------------
+// Failed seeks must preserve the reader and permit a retry.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn failed_target_seek_keeps_reader_usable() {
+    let bytes = build_opus_fixture_with_audio_packets("ropus-fb2k-test", &[], 25, Some(312));
+    let (io, handle) = open_from_bytes(bytes);
+    assert!(!handle.is_null(), "open failed: {}", last_error_string());
+
+    // Build the lazy page index first. The injected failure then belongs to
+    // the target reposition itself, not to the scan's rollback.
+    assert_eq!(
+        unsafe { ropus_fb2k::ropus_fb2k_seek(handle, 10_000) },
+        0,
+        "initial seek failed: {}",
+        last_error_string()
+    );
+    io.fail_next_seek();
+    let failed = unsafe { ropus_fb2k::ropus_fb2k_seek(handle, 12_000) };
+    assert_eq!(failed, ROPUS_FB2K_IO, "target seek failure must be I/O");
+
+    // The failed callback must not leave packet_reader empty or reset the
+    // decoder state. A one-shot failure lets the following seek prove that
+    // the same handle remains operational.
+    assert_eq!(
+        unsafe { ropus_fb2k::ropus_fb2k_seek(handle, 12_000) },
+        0,
+        "retry after target seek failure failed: {}",
+        last_error_string()
+    );
+    let mut buf = vec![0f32; 5760 * 2];
+    let mut bytes_consumed = 0u64;
+    let decoded = unsafe {
+        ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bytes_consumed)
+    };
+    assert!(decoded > 0, "retry seek must leave the reader decodable");
+    unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+}
+
+#[test]
+fn failed_rewind_keeps_reader_usable() {
+    let bytes = build_opus_fixture_with_audio_packets("ropus-fb2k-test", &[], 5, Some(312));
+    let (io, handle) = open_from_bytes(bytes);
+    assert!(!handle.is_null(), "open failed: {}", last_error_string());
+
+    io.fail_next_seek();
+    let failed = unsafe { ropus_fb2k::ropus_fb2k_seek(handle, 0) };
+    assert_eq!(failed, ROPUS_FB2K_IO, "rewind failure must be I/O");
+    assert_eq!(
+        unsafe { ropus_fb2k::ropus_fb2k_seek(handle, 0) },
+        0,
+        "retry after rewind failure failed: {}",
+        last_error_string()
+    );
+
+    let mut buf = vec![0f32; 5760 * 2];
+    let mut bytes_consumed = 0u64;
+    let decoded = unsafe {
+        ropus_fb2k::ropus_fb2k_decode_next(handle, buf.as_mut_ptr(), 5760, &mut bytes_consumed)
+    };
+    assert!(decoded > 0, "retry rewind must leave the reader decodable");
+    unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+}
+
+#[test]
+fn aborted_index_scan_resumes_original_content_after_clear() {
+    let bytes =
+        build_opus_fixture_audio_source("ropus-fb2k-test", &[], 25, Some(312), sine_pcm_for_packet);
+
+    let (_reference_io, reference_handle) = open_from_bytes(bytes.clone());
+    assert!(!reference_handle.is_null());
+    let mut reference_buf = vec![0f32; 5760 * 2];
+    let mut reference_bytes = 0u64;
+    let first = unsafe {
+        ropus_fb2k::ropus_fb2k_decode_next(
+            reference_handle,
+            reference_buf.as_mut_ptr(),
+            5760,
+            &mut reference_bytes,
+        )
+    };
+    assert!(first > 0);
+    let mut reference_next_buf = vec![0f32; 5760 * 2];
+    let mut reference_next_bytes = 0u64;
+    let next = unsafe {
+        ropus_fb2k::ropus_fb2k_decode_next(
+            reference_handle,
+            reference_next_buf.as_mut_ptr(),
+            5760,
+            &mut reference_next_bytes,
+        )
+    };
+    assert!(next > 0);
+    let reference_next = &reference_next_buf[..next as usize * 2];
+    unsafe { ropus_fb2k::ropus_fb2k_close(reference_handle) };
+
+    let (io, handle) = open_from_bytes(bytes);
+    assert!(!handle.is_null());
+    let mut first_buf = vec![0f32; 5760 * 2];
+    let mut first_bytes = 0u64;
+    let first_after_open = unsafe {
+        ropus_fb2k::ropus_fb2k_decode_next(handle, first_buf.as_mut_ptr(), 5760, &mut first_bytes)
+    };
+    assert_eq!(first_after_open, first);
+    assert_eq!(
+        &first_buf[..first as usize * 2],
+        &reference_buf[..first as usize * 2]
+    );
+
+    // The scan and its rollback both observe the active abort. The reader
+    // must return ABORTED without losing the pre-seek decode position.
+    io.set_aborting();
+    let aborted = unsafe { ropus_fb2k::ropus_fb2k_seek(handle, 10_000) };
+    assert_eq!(aborted, ROPUS_FB2K_ABORTED);
+    io.clear_aborting();
+
+    let mut recovered_buf = vec![0f32; 5760 * 2];
+    let mut recovered_bytes = 0u64;
+    let recovered = unsafe {
+        ropus_fb2k::ropus_fb2k_decode_next(
+            handle,
+            recovered_buf.as_mut_ptr(),
+            5760,
+            &mut recovered_bytes,
+        )
+    };
+    assert_eq!(
+        recovered, next,
+        "clear-abort decode must resume with samples"
+    );
+    assert_eq!(
+        &recovered_buf[..recovered as usize * 2],
+        reference_next,
+        "clear-abort decode must resume the original packet position"
+    );
+    unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+}
+
+// ---------------------------------------------------------------------------
 // ReplayGain mapping per HLD §5.5
 // ---------------------------------------------------------------------------
 

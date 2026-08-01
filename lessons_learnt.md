@@ -1,3 +1,7 @@
+- Transactional fb2k seek rollback must restore logical samples, not a raw Ogg cursor (`reader.rs:restore_pending_seek`).
+
+  `PacketReader` can buffer a whole page, so replay from the audio start and discard to the saved absolute sample after cancellation.
+
 - Apply signed OpusHead Q7.8 output gain during fb2k decoder init (`reader.rs:decode_next`); reset preserves it.
 
   Set the header gain once on lazy `OpusDecoder` construction; its reset path keeps `decode_gain`, so seek does not drop it.
