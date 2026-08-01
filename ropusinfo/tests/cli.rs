@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use ropus_tools_core::audio::wav::write_wav_pcm16;
 use ropus_tools_core::commands;
 use ropus_tools_core::options::EncodeOptions;
 
@@ -17,12 +18,6 @@ use ropus_tools_core::options::EncodeOptions;
 /// path. Callers own cleanup. `comments` populates the OpusTags comment list
 /// verbatim — pass `["ARTIST=Foo", "TITLE=Bar"]` to test tag queries.
 fn encode_tmp_opus(tag: &str, comments: Vec<String>) -> PathBuf {
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("ropusinfo has a parent dir (workspace root)")
-        .to_path_buf();
-    let input_wav = workspace.join("tests/vectors/48k_sine1k_loud.wav");
-
     let nonce = format!(
         "{}_{}_{}",
         tag,
@@ -32,17 +27,18 @@ fn encode_tmp_opus(tag: &str, comments: Vec<String>) -> PathBuf {
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     );
+    let input_wav = std::env::temp_dir().join(format!("ropusinfo_cli_{nonce}.wav"));
     let tmp_opus = std::env::temp_dir().join(format!("ropusinfo_cli_{nonce}.opus"));
-
-    // Skip the round-trip encode if the test vector isn't present — leaves the
-    // calling test free to return early with a SKIP marker instead of failing
-    // on the missing fixture, matching round_trip.rs' convention.
-    if !input_wav.exists() {
-        return tmp_opus;
-    }
+    let samples: Vec<i16> = (0..48_000)
+        .map(|n| {
+            let phase = std::f32::consts::TAU * 1_000.0 * n as f32 / 48_000.0;
+            (phase.sin() * 19_000.0) as i16
+        })
+        .collect();
+    write_wav_pcm16(&input_wav, &samples, 48_000, 1).expect("write deterministic WAV fixture");
 
     let enc_opts = EncodeOptions {
-        input: input_wav,
+        input: input_wav.clone(),
         output: Some(tmp_opus.clone()),
         bitrate: Some(64_000),
         complexity: None,
@@ -59,6 +55,7 @@ fn encode_tmp_opus(tag: &str, comments: Vec<String>) -> PathBuf {
         comments,
     };
     commands::encode(enc_opts).expect("encode fixture for CLI test");
+    let _ = std::fs::remove_file(input_wav);
     tmp_opus
 }
 
@@ -66,13 +63,11 @@ fn encode_tmp_opus(tag: &str, comments: Vec<String>) -> PathBuf {
 /// Panics on spawn failure — we want a clear test failure, not a hidden one.
 fn run_ropusinfo(args: &[&str]) -> (String, String, i32) {
     let bin = env!("CARGO_BIN_EXE_ropusinfo");
-    // `--no-color` and `--quiet` keep the output stable across terminals and
-    // strip the banner so assertions can focus on the block itself. Query mode
-    // implicitly disables both already; passing them unconditionally makes the
-    // helper safe to reuse for the default-block tests too.
+    // Disable ANSI color, but leave the banner enabled for default-mode tests.
+    // Query mode suppresses it based on its typed option, so this helper covers
+    // both default and controlled output paths.
     let mut cmd = Command::new(bin);
     cmd.arg("--no-color");
-    cmd.arg("--quiet");
     for a in args {
         cmd.arg(a);
     }
@@ -83,25 +78,9 @@ fn run_ropusinfo(args: &[&str]) -> (String, String, i32) {
     (stdout, stderr, code)
 }
 
-/// True when the test fixture is absent. Returns a clear SKIP message so a
-/// silent skip is visible in CI logs rather than looking like a pass.
-fn skip_if_no_fixture(path: &std::path::Path, test_name: &str) -> bool {
-    if !path.exists() {
-        eprintln!(
-            "SKIPPING {test_name}: opus fixture {path:?} was not built \
-             (the underlying WAV vector was probably missing)"
-        );
-        return true;
-    }
-    false
-}
-
 #[test]
 fn info_default_output_contains_expected_fields() {
     let opus = encode_tmp_opus("default", Vec::new());
-    if skip_if_no_fixture(&opus, "info_default_output_contains_expected_fields") {
-        return;
-    }
 
     let (stdout, _stderr, code) = run_ropusinfo(&[opus.to_str().expect("path utf8")]);
     assert_eq!(code, 0, "exit code 0 expected, got {code}");
@@ -132,9 +111,6 @@ fn info_default_output_contains_expected_fields() {
 #[test]
 fn info_extended_lists_per_packet_toc() {
     let opus = encode_tmp_opus("extended", Vec::new());
-    if skip_if_no_fixture(&opus, "info_extended_lists_per_packet_toc") {
-        return;
-    }
 
     let (stdout, _stderr, code) = run_ropusinfo(&["--extended", opus.to_str().expect("path utf8")]);
     assert_eq!(code, 0, "exit code 0 expected, got {code}");
@@ -193,9 +169,6 @@ fn info_extended_lists_per_packet_toc() {
 #[test]
 fn info_query_duration_returns_bare_number() {
     let opus = encode_tmp_opus("query_dur", Vec::new());
-    if skip_if_no_fixture(&opus, "info_query_duration_returns_bare_number") {
-        return;
-    }
 
     let (stdout, _stderr, code) =
         run_ropusinfo(&["--query", "duration", opus.to_str().expect("path utf8")]);
@@ -222,12 +195,6 @@ fn info_query_attached_short_form_returns_bare_number_without_quiet() {
     // the query scalar. Do not add `--quiet` here: query mode itself must be
     // the authoritative reason the banner is suppressed.
     let opus = encode_tmp_opus("query_attached", Vec::new());
-    if skip_if_no_fixture(
-        &opus,
-        "info_query_attached_short_form_returns_bare_number_without_quiet",
-    ) {
-        return;
-    }
 
     let out = Command::new(env!("CARGO_BIN_EXE_ropusinfo"))
         .args([
@@ -269,9 +236,6 @@ fn info_query_comment_artist_returns_value() {
         "query_artist",
         vec!["ARTIST=Foo".to_string(), "TITLE=Bar".to_string()],
     );
-    if skip_if_no_fixture(&opus, "info_query_comment_artist_returns_value") {
-        return;
-    }
 
     let (stdout, _stderr, code) = run_ropusinfo(&[
         "--query",
@@ -296,9 +260,6 @@ fn info_query_comment_artist_returns_value() {
 #[test]
 fn info_query_missing_comment_is_empty_exit_0() {
     let opus = encode_tmp_opus("query_missing", Vec::new());
-    if skip_if_no_fixture(&opus, "info_query_missing_comment_is_empty_exit_0") {
-        return;
-    }
 
     let (stdout, _stderr, code) = run_ropusinfo(&[
         "--query",
@@ -319,9 +280,6 @@ fn info_query_missing_comment_is_empty_exit_0() {
 #[test]
 fn info_query_unknown_key_exits_2() {
     let opus = encode_tmp_opus("query_unknown", Vec::new());
-    if skip_if_no_fixture(&opus, "info_query_unknown_key_exits_2") {
-        return;
-    }
 
     let (_stdout, stderr, code) =
         run_ropusinfo(&["--query", "gargle", opus.to_str().expect("path utf8")]);

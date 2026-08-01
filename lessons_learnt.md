@@ -1,3 +1,7 @@
+- Required behavior tests must synthesize small fixtures, not return success when checkout assets are absent (`tests/round_trip.rs`).
+
+  Keep large/reference vectors optional, but make core CLI and library oracles deterministic in-test. If an external differential truly needs optional assets, mark it ignored and fail clearly when run manually; never print a skip and pass.
+
 - Empty Ogg Opus packets are malformed, not PLC (`container/ogg.rs:validate_opus_audio_packet`); reject before decode or TOC parsing.
 
   The decoder's empty-slice contract deliberately means packet-loss concealment. Validate every container audio packet first so malformed zero-length payloads cannot fabricate audio, duration, or extended info.

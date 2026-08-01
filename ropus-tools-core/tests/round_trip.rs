@@ -44,12 +44,6 @@ fn read_pcm16_wav(path: &std::path::Path) -> (Vec<i16>, u32, u16) {
 
 #[test]
 fn encode_then_decode_48k_sine_round_trips_with_snr_above_20_db() {
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("ropus-tools-core has a parent dir (the workspace root)")
-        .to_path_buf();
-    let input_wav = workspace.join("tests/vectors/48k_sine1k_loud.wav");
-
     // Per-run unique temp names so parallel test invocations don't race on the
     // same paths.
     let nonce = format!(
@@ -60,19 +54,10 @@ fn encode_then_decode_48k_sine_round_trips_with_snr_above_20_db() {
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     );
+    let input_wav = std::env::temp_dir().join(format!("ropus_tools_core_rt_{nonce}.input.wav"));
     let tmp_opus = std::env::temp_dir().join(format!("ropus_tools_core_rt_{nonce}.opus"));
     let tmp_wav = std::env::temp_dir().join(format!("ropus_tools_core_rt_{nonce}.wav"));
-
-    // Skip cleanly if the test vector isn't present (so the test is portable
-    // to checkouts without the vectors directory populated). Loud eprintln so
-    // a silent skip is visible in CI logs rather than looking like a pass.
-    if !input_wav.exists() {
-        eprintln!(
-            "SKIPPING round_trip: test vector {input_wav:?} not present \
-             (no SNR was computed, this is not a real pass)"
-        );
-        return;
-    }
+    write_sine_wav(&input_wav, 1, 1_000.0);
 
     let enc_opts = EncodeOptions {
         input: input_wav.clone(),
@@ -144,6 +129,7 @@ fn encode_then_decode_48k_sine_round_trips_with_snr_above_20_db() {
     );
 
     // Best-effort cleanup of this run's outputs.
+    let _ = std::fs::remove_file(&input_wav);
     let _ = std::fs::remove_file(&tmp_opus);
     let _ = std::fs::remove_file(&tmp_wav);
 }
@@ -173,20 +159,6 @@ fn encode_with_metadata_flags_round_trips_tags() {
     // Exercises the Step 3 metadata plumbing end-to-end: pass
     // `--artist X --title Y` equivalents through `EncodeOptions.comments`,
     // encode to a real Ogg file, then parse the OpusTags page back out.
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("workspace parent")
-        .to_path_buf();
-    let input_wav = workspace.join("tests/vectors/48k_sine1k_loud.wav");
-
-    if !input_wav.exists() {
-        eprintln!(
-            "SKIPPING encode_with_metadata_flags_round_trips_tags: \
-             test vector {input_wav:?} not present"
-        );
-        return;
-    }
-
     let nonce = format!(
         "{}_{}",
         std::process::id(),
@@ -195,10 +167,12 @@ fn encode_with_metadata_flags_round_trips_tags() {
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     );
+    let input_wav = std::env::temp_dir().join(format!("ropus_tags_rt_{nonce}.input.wav"));
     let tmp_opus = std::env::temp_dir().join(format!("ropus_tags_rt_{nonce}.opus"));
+    write_sine_wav(&input_wav, 1, 1_000.0);
 
     let enc_opts = EncodeOptions {
-        input: input_wav,
+        input: input_wav.clone(),
         output: Some(tmp_opus.clone()),
         bitrate: Some(64_000),
         complexity: None,
@@ -221,6 +195,7 @@ fn encode_with_metadata_flags_round_trips_tags() {
     assert_eq!(tags.get("TITLE"), Some("Y"), "title round-tripped");
     assert_eq!(tags.vendor, "ropus-tools-core-test", "vendor round-tripped");
 
+    let _ = std::fs::remove_file(&input_wav);
     let _ = std::fs::remove_file(&tmp_opus);
 }
 
@@ -230,16 +205,6 @@ fn encode_with_custom_serial_writes_that_serial_to_ogg_pages() {
     // raw bytes of the first OggS page and verify the serial field (offset
     // 14..18 inside the page header, little-endian per RFC 3533) matches
     // what we asked for.
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("workspace parent")
-        .to_path_buf();
-    let input_wav = workspace.join("tests/vectors/48k_sine1k_loud.wav");
-    if !input_wav.exists() {
-        eprintln!("SKIPPING encode_with_custom_serial: test vector missing");
-        return;
-    }
-
     let nonce = format!(
         "{}_{}",
         std::process::id(),
@@ -248,10 +213,12 @@ fn encode_with_custom_serial_writes_that_serial_to_ogg_pages() {
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     );
+    let input_wav = std::env::temp_dir().join(format!("ropus_serial_{nonce}.input.wav"));
     let tmp_opus = std::env::temp_dir().join(format!("ropus_serial_{nonce}.opus"));
+    write_sine_wav(&input_wav, 1, 1_000.0);
 
     let enc_opts = EncodeOptions {
-        input: input_wav,
+        input: input_wav.clone(),
         output: Some(tmp_opus.clone()),
         bitrate: Some(64_000),
         complexity: None,
@@ -275,18 +242,18 @@ fn encode_with_custom_serial_writes_that_serial_to_ogg_pages() {
     let serial = u32::from_le_bytes([bytes[14], bytes[15], bytes[16], bytes[17]]);
     assert_eq!(serial, 0xAABB_CCDD, "custom --serial must appear on page");
 
+    let _ = std::fs::remove_file(&input_wav);
     let _ = std::fs::remove_file(&tmp_opus);
 }
 
-/// Write a canonical 16-bit PCM mono WAV at 48 kHz. Minimal RIFF header
+/// Write a canonical 16-bit PCM sine WAV at 48 kHz. Minimal RIFF header
 /// matching the layout `read_pcm16_wav` above already parses.
-fn write_sine_wav_samples(path: &std::path::Path, num_samples: u32, freq_hz: f32) {
+fn write_pcm16_sine_wav(path: &std::path::Path, num_frames: u32, channels: u16, freq_hz: f32) {
     let sr: u32 = 48_000;
-    let channels: u16 = 1;
     let bits_per_sample: u16 = 16;
     let byte_rate = sr * u32::from(channels) * u32::from(bits_per_sample) / 8;
     let block_align = channels * bits_per_sample / 8;
-    let data_size = num_samples * u32::from(block_align);
+    let data_size = num_frames * u32::from(block_align);
     let riff_size = 36 + data_size;
 
     let mut out = Vec::with_capacity((44 + data_size) as usize);
@@ -305,18 +272,28 @@ fn write_sine_wav_samples(path: &std::path::Path, num_samples: u32, freq_hz: f32
     out.extend_from_slice(&data_size.to_le_bytes());
 
     let two_pi = std::f32::consts::TAU;
-    for n in 0..num_samples {
+    for n in 0..num_frames {
         let t = n as f32 / sr as f32;
         let s = (two_pi * freq_hz * t).sin() * 0.6; // -4.4 dBFS peak
         let q = (s * 32767.0) as i16;
-        out.extend_from_slice(&q.to_le_bytes());
+        for _ in 0..channels {
+            out.extend_from_slice(&q.to_le_bytes());
+        }
     }
 
     std::fs::write(path, &out).expect("write synthetic WAV");
 }
 
+fn write_sine_wav_samples(path: &std::path::Path, num_samples: u32, freq_hz: f32) {
+    write_pcm16_sine_wav(path, num_samples, 1, freq_hz);
+}
+
 fn write_sine_wav(path: &std::path::Path, seconds: u32, freq_hz: f32) {
     write_sine_wav_samples(path, 48_000 * seconds, freq_hz);
+}
+
+fn write_stereo_sine_wav(path: &std::path::Path, seconds: u32, freq_hz: f32) {
+    write_pcm16_sine_wav(path, 48_000 * seconds, 2, freq_hz);
 }
 
 fn timeline_encode_options(input: PathBuf, output: PathBuf) -> EncodeOptions {
@@ -1563,24 +1540,6 @@ fn encode_with_downmix_mono_produces_mono_output() {
     // collapse to a 1-channel stream end-to-end. The critical assertion is
     // `channels == 1` in OpusHead — if the flag didn't plumb through, the
     // encoder would see the original 2-channel PCM and write channels=2.
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("workspace parent")
-        .to_path_buf();
-    let stereo_wav = workspace.join("tests/vectors/48000hz_stereo_sine440.wav");
-    if !stereo_wav.exists() {
-        eprintln!(
-            "SKIPPING encode_with_downmix_mono_produces_mono_output: \
-             stereo fixture {stereo_wav:?} not present"
-        );
-        return;
-    }
-
-    // Sanity: the fixture really is stereo. If someone swaps it for a mono
-    // file by accident, the test degenerates into a tautology and this catches it.
-    let (_, _, in_ch) = read_pcm16_wav(&stereo_wav);
-    assert_eq!(in_ch, 2, "downmix test needs a stereo input fixture");
-
     let nonce = format!(
         "{}_{}",
         std::process::id(),
@@ -1589,11 +1548,18 @@ fn encode_with_downmix_mono_produces_mono_output() {
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     );
+    let stereo_wav = std::env::temp_dir().join(format!("ropus_downmix_{nonce}.input.wav"));
     let tmp_opus = std::env::temp_dir().join(format!("ropus_downmix_{nonce}.opus"));
     let tmp_wav_out = std::env::temp_dir().join(format!("ropus_downmix_out_{nonce}.wav"));
+    write_stereo_sine_wav(&stereo_wav, 1, 440.0);
+
+    // Sanity: the generated fixture must remain stereo so the test cannot
+    // degenerate into a mono-to-mono tautology.
+    let (_, _, in_ch) = read_pcm16_wav(&stereo_wav);
+    assert_eq!(in_ch, 2, "downmix test needs a stereo input fixture");
 
     let enc_opts = EncodeOptions {
-        input: stereo_wav,
+        input: stereo_wav.clone(),
         output: Some(tmp_opus.clone()),
         bitrate: Some(64_000),
         complexity: None,
@@ -1637,6 +1603,7 @@ fn encode_with_downmix_mono_produces_mono_output() {
     assert_eq!(out_ch, 1, "decoded WAV must report 1 channel");
     assert!(!samples.is_empty(), "decoded WAV has no sample data");
 
+    let _ = std::fs::remove_file(&stereo_wav);
     let _ = std::fs::remove_file(&tmp_opus);
     let _ = std::fs::remove_file(&tmp_wav_out);
 }
@@ -1648,19 +1615,6 @@ fn encode_with_picture_flag_embeds_metadata_block_picture() {
     // the Vorbis comments in OpusTags. The detector only inspects the first
     // handful of bytes, so a hand-rolled 32-byte PNG-magic-plus-filler buffer
     // is enough to pass `detect_format`.
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("workspace parent")
-        .to_path_buf();
-    let input_wav = workspace.join("tests/vectors/48k_sine1k_loud.wav");
-    if !input_wav.exists() {
-        eprintln!(
-            "SKIPPING encode_with_picture_flag_embeds_metadata_block_picture: \
-             test vector {input_wav:?} not present"
-        );
-        return;
-    }
-
     let nonce = format!(
         "{}_{}",
         std::process::id(),
@@ -1669,8 +1623,10 @@ fn encode_with_picture_flag_embeds_metadata_block_picture() {
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     );
+    let input_wav = std::env::temp_dir().join(format!("ropus_pic_{nonce}.input.wav"));
     let tmp_png = std::env::temp_dir().join(format!("ropus_pic_{nonce}.png"));
     let tmp_opus = std::env::temp_dir().join(format!("ropus_pic_{nonce}.opus"));
+    write_sine_wav(&input_wav, 1, 1_000.0);
 
     // Minimal PNG stand-in: the 8-byte PNG signature followed by enough
     // filler bytes that `build_picture_block` emits a realistic payload.
@@ -1683,7 +1639,7 @@ fn encode_with_picture_flag_embeds_metadata_block_picture() {
     std::fs::write(&tmp_png, &png_bytes).expect("write fake PNG fixture");
 
     let enc_opts = EncodeOptions {
-        input: input_wav,
+        input: input_wav.clone(),
         output: Some(tmp_opus.clone()),
         bitrate: Some(64_000),
         complexity: None,
@@ -1728,5 +1684,6 @@ fn encode_with_picture_flag_embeds_metadata_block_picture() {
     );
 
     let _ = std::fs::remove_file(&tmp_png);
+    let _ = std::fs::remove_file(&input_wav);
     let _ = std::fs::remove_file(&tmp_opus);
 }

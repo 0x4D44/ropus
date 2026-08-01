@@ -6,9 +6,9 @@
 //! live next to the gain validator in `ropus-tools-core/src/commands/play.rs`
 //! so this file focuses on end-to-end argv behaviour.
 //!
-//! A headless CI host may have zero output devices; rather than failing there
-//! (which would be a false negative — the binary is behaving correctly), the
-//! `list_devices` test degrades to a printed-skip.
+//! A headless CI host may have zero output devices. The test accepts only the
+//! command's structured no-device error; panics, argument failures, and other
+//! enumeration errors remain test failures.
 
 use std::process::{Command, Stdio};
 
@@ -30,12 +30,15 @@ fn list_devices_prints_lines_and_exits_zero() {
     let stderr = String::from_utf8_lossy(&out.stderr);
 
     if !out.status.success() {
-        // Host genuinely has no devices — that's a clean error path we
-        // exercise through integration testing elsewhere; skip here rather
-        // than fail.
-        println!(
-            "skipped: no host devices (exit={:?}, stderr={stderr})",
-            out.status.code()
+        let lower = stderr.to_ascii_lowercase();
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "unexpected --list-devices failure: stderr={stderr:?}"
+        );
+        assert!(
+            lower.contains("no output devices available"),
+            "only the structured no-device outcome may be accepted; stderr={stderr:?}"
         );
         return;
     }

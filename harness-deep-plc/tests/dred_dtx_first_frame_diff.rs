@@ -15,11 +15,12 @@
 //! `harness-deep-plc/dred_encode_shim.c::ropus_test_c_encoder_new` does
 //! NOT call `OPUS_SET_DTX`, and Stage 2's editable scope is restricted to
 //! `ropus/src/opus/encoder.rs` and `harness-deep-plc/tests/` — the shim is
-//! out of bounds. Rather than skip the test, we run the comparison
-//! Rust-side only: the assertion is that the Rust encoder attaches DRED
-//! to a non-zero sub-frame index when sub-frame 0 is DTX-dropped. The
-//! "matches C" comparison reduces to "matches the C contract that Stage 3
-//! is implementing" — explicit and documented.
+//! out of bounds. We run the comparison Rust-side only: the assertion is that
+//! the Rust encoder attaches DRED to the independently observed first non-DTX
+//! sub-frame. The "matches C" comparison reduces to "matches the C contract
+//! that Stage 3 is implementing" — explicit and documented. The test is
+//! ignored by default because it needs optional reference/DNN assets and a
+//! platform-independent DTX fixture.
 //!
 //! Stage 3 (or a subsequent stage) is free to add an `OPUS_SET_DTX` knob
 //! to the shim and tighten this test to a true Rust-vs-C diff. The
@@ -48,12 +49,11 @@ const MAX_PACKET: usize = 2000;
 const DRED_DURATION_2_5MS: i32 = 100;
 const NUM_FRAMES_TO_TRY: usize = 25; // Scan multiple packets — DRED is gated.
 
-fn weights_or_skip(tag: &str) -> bool {
-    if WEIGHTS_BLOB.is_empty() {
-        eprintln!("{tag}: WEIGHTS_BLOB empty — skipping. Run `cargo run -p fetch-assets -- all`.");
-        return false;
-    }
-    true
+fn require_weights() {
+    assert!(
+        !WEIGHTS_BLOB.is_empty(),
+        "DRED DTX differential requires embedded weights; run `cargo run -p fetch-assets -- all`"
+    );
 }
 
 /// Build a 60 ms PCM buffer with sub-frame 0 silent and sub-frames 1..N
@@ -78,10 +78,10 @@ fn synth_multi_frame_pcm(pre_offset_samples: usize) -> Vec<i16> {
 }
 
 /// Locate the DRED extension's sub-frame index inside `packet`. Returns
-/// `Some((nb_frames, ext_frame))` when found, else `None`. Mirrors the
+/// `Some((nb_frames, ext_frame, dtx_count))` when found, else `None`. Mirrors the
 /// `dred_find_payload` walk in `ropus/src/opus/dred.rs:302` but exposes
 /// the per-extension `frame` field instead of the parsed payload.
-fn locate_dred_subframe(packet: &[u8]) -> Option<(i32, i32)> {
+fn locate_dred_subframe(packet: &[u8]) -> Option<(i32, i32, i32)> {
     use ropus::dnn::dred::DRED_EXTENSION_ID;
 
     let mut toc: u8 = 0;
@@ -114,16 +114,21 @@ fn locate_dred_subframe(packet: &[u8]) -> Option<(i32, i32)> {
         }
         // Match the experimental version prefix to filter out stale extensions.
         if ext.len as usize >= 2 && ext.data[0] == b'D' {
-            return Some((nb_frames, ext.frame));
+            // The decoder treats one-byte/zero-byte frame payloads as DTX
+            // (`decode_multiframe`, frame_arg=None). Count the leading DTX
+            // frames independently instead of assuming frame zero was dropped.
+            let dtx_count = (0..nb_frames as usize)
+                .take_while(|&i| sizes[i] <= 1)
+                .count() as i32;
+            return Some((nb_frames, ext.frame, dtx_count));
         }
     }
 }
 
 #[test]
+#[ignore = "requires DNN weights and a DTX-capable differential fixture"]
 fn rust_dred_attaches_to_first_non_dtx_subframe() {
-    if !weights_or_skip("dred_dtx_first_frame_diff") {
-        return;
-    }
+    require_weights();
 
     let mut enc =
         OpusEncoder::new(TARGET_FS, 1, ROPUS_APP_VOIP).expect("OpusEncoder::new(48k, mono, VOIP)");
@@ -138,12 +143,26 @@ fn rust_dred_attaches_to_first_non_dtx_subframe() {
 
     let pcm = synth_multi_frame_pcm(0);
 
+    // DTX needs a sustained inactive interval before it drops a sub-frame.
+    // Pre-warm this encoder so the active packets below can prove a leading
+    // DTX run rather than merely observing an ordinary DRED extension.
+    let silence = vec![0i16; PACKET_FRAME_SIZE as usize];
+    let mut warmup_packet = vec![0u8; MAX_PACKET];
+    for _ in 0..10 {
+        enc.encode(
+            &silence,
+            PACKET_FRAME_SIZE,
+            &mut warmup_packet,
+            MAX_PACKET as i32,
+        )
+        .expect("DTX warm-up encode");
+    }
+
     // Rust packet stream — scan up to NUM_FRAMES_TO_TRY 60 ms packets and
     // find one that (a) contains a DRED extension and (b) was emitted from
     // a multi-frame packet. Stage 2: this loop panics inside `encode`
     // because `compute_dred_bitrate`/`estimate_dred_bitrate` are stubs.
     let mut found = None;
-    let mut last_nb_frames = -1;
     for k in 0..NUM_FRAMES_TO_TRY {
         let start = k * PACKET_FRAME_SIZE as usize;
         let end = start + PACKET_FRAME_SIZE as usize;
@@ -168,8 +187,10 @@ fn rust_dred_attaches_to_first_non_dtx_subframe() {
             // Single-frame packet — F48 isn't exercised here; keep scanning.
             continue;
         }
-        last_nb_frames = inferred_nb_frames;
-        if let Some((nb_frames, ext_frame)) = locate_dred_subframe(&packet) {
+        if let Some((nb_frames, ext_frame, dtx_count)) = locate_dred_subframe(&packet) {
+            if dtx_count == 0 {
+                continue;
+            }
             // Cross-check: parse with the high-level decoder too.
             let decoder = OpusDREDDecoder::new();
             assert!(decoder.loaded(), "DRED decoder weights not loaded");
@@ -181,46 +202,26 @@ fn rust_dred_attaches_to_first_non_dtx_subframe() {
                  ext_frame={ext_frame} nb_latents={} dred_offset={}",
                 dred.nb_latents, dred.dred_offset
             );
-            found = Some((nb_frames, ext_frame));
+            found = Some((nb_frames, ext_frame, dtx_count));
             break;
         }
     }
 
-    let Some((nb_frames, ext_frame)) = found else {
-        // No multi-frame packet with DRED — likely DTX did not fire on
-        // sub-frame 0 (the synthetic PCM may not satisfy the encoder's
-        // DTX activation heuristics, which need ~10 silent frames in a
-        // row). The F48 line in `encode_multiframe` is exercised by the
-        // unit test
-        // `test_first_frame_flag_follows_dtx_count_in_multiframe_dispatch`
-        // (see `ropus/src/opus/encoder.rs`), so the contract is locked
-        // even when this differential cannot reproduce DTX.
-        eprintln!(
-            "dred_dtx_first_frame_diff: skipping DTX-shift assertion — no \
-             multi-frame packet with DRED was observed in {} attempts \
-             (last seen nb_frames={}). The F48 contract is still locked \
-             by the encoder.rs unit test.",
-            NUM_FRAMES_TO_TRY, last_nb_frames
-        );
-        return;
-    };
+    let (nb_frames, ext_frame, dtx_count) = found.expect(
+        "DTX differential fixture was inconclusive: no multi-frame DRED packet with a leading DTX frame was observed",
+    );
 
-    // F48 contract: DRED must attach to sub-frame `dtx_count`, which is
-    // 1 when sub-frame 0 alone is DTX-dropped. Without F48, ropus attaches
-    // it at frame 0 unconditionally. If `ext_frame == 0` we cannot tell
-    // whether F48 worked: it's the right answer when sub-frame 0 was not
-    // DTX'd (which is what happens with this synthetic PCM at 32 kbps).
-    // Treat that as "test inconclusive" rather than a failure.
+    // F48 contract: DRED must attach to the first non-DTX sub-frame.
     assert!(
         nb_frames >= 2,
         "test must observe a multi-frame packet (got nb_frames={nb_frames})"
     );
-    if ext_frame == 0 {
-        eprintln!(
-            "dred_dtx_first_frame_diff: ext_frame=0 and nb_frames={nb_frames} — \
-             DTX did not fire on sub-frame 0 with this PCM, so the F48 shift \
-             cannot be observed here. Contract is still locked by the \
-             encoder.rs unit test."
-        );
-    }
+    assert!(
+        dtx_count > 0 && dtx_count < nb_frames,
+        "fixture must prove a leading DTX run (dtx_count={dtx_count}, nb_frames={nb_frames})"
+    );
+    assert_eq!(
+        ext_frame, dtx_count,
+        "DRED must attach to first non-DTX frame, not frame zero"
+    );
 }
