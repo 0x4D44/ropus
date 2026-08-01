@@ -81,6 +81,7 @@ name = "fuzz"
 paths = ["tests/fuzz/"]
 gate = [
   { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
+  { program = "cargo", args = ["fmt", "--manifest-path", "tests/fuzz/Cargo.toml", "--", "--check"] },
   { program = "cargo", args = ["check", "--manifest-path", "tests/fuzz/Cargo.toml", "--locked"] },
 ]
 
