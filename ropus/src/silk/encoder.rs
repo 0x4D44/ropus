@@ -4835,7 +4835,7 @@ const QS: i32 = 13;
 const QC: i32 = 10;
 
 /// Warped autocorrelation. Matches C: `silk_warped_autocorrelation_FIX_c`.
-pub fn silk_warped_autocorrelation(
+pub(crate) fn silk_warped_autocorrelation(
     corr: &mut [i32],
     scale: &mut i32,
     input: &[i16],
@@ -5048,7 +5048,7 @@ pub fn silk_ltp_analysis_filter(
 /// Correlation matrix computation. Matches C: `silk_corrMatrix_FIX`.
 /// C: ptr1 = &x[order-1], columns indexed backwards.
 /// XX[j,i] = sum(x[order-1-j+n] * x[order-1-i+n] for n in 0..L).
-pub fn silk_corr_matrix(
+pub(crate) fn silk_corr_matrix(
     x: &[i16],
     l: usize,
     order: usize,
@@ -5117,7 +5117,14 @@ pub fn silk_corr_matrix(
 /// Correlation vector computation. Matches C: `silk_corrVector_FIX`.
 /// C: ptr1 = &x[order-1], then ptr1-- for each lag.
 /// So Xt[lag] = inner_product(x[order-1-lag..], t[0..L]).
-pub fn silk_corr_vector(x: &[i16], t: &[i16], l: usize, order: usize, xt: &mut [i32], rshift: i32) {
+pub(crate) fn silk_corr_vector(
+    x: &[i16],
+    t: &[i16],
+    l: usize,
+    order: usize,
+    xt: &mut [i32],
+    rshift: i32,
+) {
     for lag in 0..order {
         let ptr1_start = order - 1 - lag;
         if rshift > 0 {
@@ -7716,7 +7723,7 @@ pub fn silk_encode_frame_fix(
 }
 
 /// Burg's modified method for AR coefficient estimation. Matches C: `silk_burg_modified_c`.
-pub fn silk_burg_modified(
+pub(crate) fn silk_burg_modified(
     res_nrg: &mut i32,
     res_nrg_q: &mut i32,
     a_q16: &mut [i32],

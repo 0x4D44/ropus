@@ -430,7 +430,13 @@ pub fn silk_inner_prod_aligned(x: &[i32], y: &[i32], len: usize) -> i32 {
 /// LPC analysis filter: filters signal `s` with coefficients `a_q12`,
 /// producing output `out`. This is the analysis (whitening) direction.
 /// Matches C: `silk_LPC_analysis_filter`.
-pub fn silk_lpc_analysis_filter(out: &mut [i16], s: &[i16], a_q12: &[i16], len: usize, d: usize) {
+pub(crate) fn silk_lpc_analysis_filter(
+    out: &mut [i16],
+    s: &[i16],
+    a_q12: &[i16],
+    len: usize,
+    d: usize,
+) {
     for ix in d..len {
         let mut out32_q12: u32 = (uc!(s, ix - 1) as i32 * uc!(a_q12, 0) as i32) as u32;
         for j in 1..d {

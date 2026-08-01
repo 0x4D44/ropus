@@ -79,16 +79,61 @@ pub fn clt_mdct_backward(
     shift: i32,
     stride: i32,
 ) {
+    assert!(l.n > 0, "MDCT size must be positive");
+    assert!(
+        shift >= 0 && shift <= l.maxshift && (shift as usize) < l.kfft.len(),
+        "MDCT shift is outside the lookup range"
+    );
+    assert!(stride > 0, "MDCT stride must be positive");
+    assert!(
+        overlap >= 0 && overlap % 2 == 0,
+        "MDCT overlap must be a non-negative even number"
+    );
+
     // Compute effective N for this shift level, and advance trig pointer.
     // The C code halves N first, then advances trig by the halved N.
     let mut n = l.n;
     let mut trig_offset: usize = 0;
     for _ in 0..shift {
         n >>= 1;
-        trig_offset += n as usize;
+        trig_offset = trig_offset
+            .checked_add(n as usize)
+            .expect("MDCT twiddle offset overflow");
     }
+    assert!(n >= 4 && n % 4 == 0, "invalid effective MDCT size");
     let n2 = n >> 1;
     let n4 = n >> 2;
+    let stride = stride as usize;
+    (n2 as usize)
+        .checked_mul(stride)
+        .expect("MDCT input stride overflow");
+
+    let overlap = overlap as usize;
+    let required_output = (overlap / 2)
+        .checked_add(n2 as usize)
+        .expect("MDCT output size overflow")
+        .max(overlap);
+    assert!(
+        output.len() >= required_output,
+        "MDCT output buffer is too short"
+    );
+    assert!(window.len() >= overlap, "MDCT window is too short");
+    assert!(
+        trig_offset
+            .checked_add(n2 as usize)
+            .is_some_and(|end| end <= l.trig.len()),
+        "MDCT twiddle table is too short"
+    );
+
+    let st = l.kfft[shift as usize];
+    assert_eq!(st.nfft, n4, "MDCT and FFT sizes do not match");
+    assert!(
+        std::ptr::eq(st, &FFT_STATE_48000_960_0)
+            || std::ptr::eq(st, &FFT_STATE_48000_960_1)
+            || std::ptr::eq(st, &FFT_STATE_48000_960_2)
+            || std::ptr::eq(st, &FFT_STATE_48000_960_3),
+        "unsupported FFT state"
+    );
     let trig = &l.trig[trig_offset..];
 
     // ---- Fixed-point dynamic range analysis ----
@@ -100,7 +145,7 @@ pub fn clt_mdct_backward(
         let mut sumval: i32 = n2;
         let mut maxval: i32 = 0;
         for i in 0..n2 as usize {
-            let idx = i * stride as usize;
+            let idx = i * stride;
             let sample = if idx < input_len { uc!(input, idx) } else { 0 };
             maxval = max32(maxval, abs32(sample));
             sumval = add32_ovflw(sumval, abs32(shr32(sample, 11)));
@@ -116,7 +161,6 @@ pub fn clt_mdct_backward(
     // interleaved complex pairs [yi, yr] in bit-reversed order.
     {
         let half_ov = (overlap >> 1) as usize;
-        let st = l.kfft[shift as usize];
         let input_len = input.len();
         let mut xp1_idx: usize = 0; // walks forward by 2*stride
         let mut xp2_idx: usize = (n2 - 1) as usize; // walks backward
@@ -126,8 +170,8 @@ pub fn clt_mdct_backward(
         let bitrev = st.bitrev;
         for i in 0..n4 as usize {
             let rev = uc!(bitrev, i) as usize;
-            let idx1 = xp1_idx * stride as usize;
-            let idx2 = xp2_idx * stride as usize;
+            let idx1 = xp1_idx * stride;
+            let idx2 = xp2_idx * stride;
             let x1 = shl32_ovflw(
                 if idx1 < input_len {
                     uc!(input, idx1)
@@ -166,8 +210,7 @@ pub fn clt_mdct_backward(
     // The output buffer at overlap/2 is treated as N/4 complex values.
     // We need to reinterpret pairs of i32 as KissFftCpx for the FFT.
     {
-        let half_ov = (overlap >> 1) as usize;
-        let st = l.kfft[shift as usize];
+        let half_ov = overlap >> 1;
         let fft_len = n4 as usize;
 
         // Build a temporary KissFftCpx buffer from the output pairs
@@ -190,7 +233,7 @@ pub fn clt_mdct_backward(
     // ---- Post-rotation and de-shuffle ----
     // Works from both ends toward the middle, in-place.
     {
-        let half_ov = (overlap >> 1) as usize;
+        let half_ov = overlap >> 1;
         let mut yp0 = half_ov; // walks forward by 2
         let mut yp1 = half_ov + n2 as usize - 2; // walks backward by 2
 
@@ -227,8 +270,7 @@ pub fn clt_mdct_backward(
 
     // ---- Mirror on both sides for TDAC (windowed overlap-add) ----
     {
-        let ov = overlap as usize;
-        super::simd::mdct_window_simd(output, window, ov);
+        super::simd::mdct_window_simd(output, window, overlap);
     }
 }
 
@@ -667,6 +709,15 @@ mod tests {
         assert_eq!(l.kfft[1].nfft, 240); // 960/4
         assert_eq!(l.kfft[2].nfft, 120); // 480/4
         assert_eq!(l.kfft[3].nfft, 60); // 240/4
+    }
+
+    #[test]
+    #[should_panic(expected = "MDCT output buffer is too short")]
+    fn test_mdct_backward_rejects_short_output_before_unchecked_indexing() {
+        let mode = &crate::celt::modes::MODE_48000_960_120;
+        let mut output = [0_i32; 179];
+
+        clt_mdct_backward(&MDCT_48000_960, &[], &mut output, mode.window, 120, 3, 1);
     }
 
     #[test]

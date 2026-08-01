@@ -42,6 +42,22 @@
 //!   verbatim — `bool decode_fec`, `Result<i32, i32>`, raw `i32` channel
 //!   counts. Stable so the `capi/` crate can present a byte-identical FFI.
 //!
+//! Codec-internal DSP helpers are not part of either API tier. In particular,
+//! callers cannot invoke the unchecked-indexing LPC implementation directly:
+//!
+//! ```compile_fail
+//! let mut output = [0_i16; 2];
+//! let signal = [0_i16; 1];
+//! let coefficients = [0_i16; 1];
+//! ropus::silk::common::silk_lpc_analysis_filter(
+//!     &mut output,
+//!     &signal,
+//!     &coefficients,
+//!     2,
+//!     1,
+//! );
+//! ```
+//!
 //! The low-level layer intentionally retains `bool` for `decode_fec` and bare
 //! `i32` errors. There is no high-level multistream facade today; if one is
 //! added later it will live alongside [`Encoder`] / [`Decoder`] and use

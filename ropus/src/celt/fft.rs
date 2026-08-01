@@ -374,7 +374,7 @@ fn kf_bfly5(
 
 /// Internal FFT implementation. Operates on already bit-reversed data in-place.
 /// `downshift` is the remaining right-shift budget (fixed-point only).
-pub fn opus_fft_impl(st: &KissFftState, fout: &mut [KissFftCpx], mut downshift: i32) {
+pub(crate) fn opus_fft_impl(st: &KissFftState, fout: &mut [KissFftCpx], mut downshift: i32) {
     let shift = if st.shift > 0 { st.shift as u32 } else { 0 };
 
     // Build fstride table
@@ -427,7 +427,7 @@ pub fn opus_fft_impl(st: &KissFftState, fout: &mut [KissFftCpx], mut downshift: 
 
 /// Forward FFT. Out-of-place (fin must not alias fout).
 /// Scales input by 1/nfft during bit-reversal permutation.
-pub fn opus_fft(st: &KissFftState, fin: &[KissFftCpx], fout: &mut [KissFftCpx]) {
+pub(crate) fn opus_fft(st: &KissFftState, fin: &[KissFftCpx], fout: &mut [KissFftCpx]) {
     let scale = st.scale;
     let scale_shift = st.scale_shift - 1;
     let bitrev = st.bitrev;
@@ -443,7 +443,14 @@ pub fn opus_fft(st: &KissFftState, fin: &[KissFftCpx], fout: &mut [KissFftCpx]) 
 
 /// Inverse FFT. Out-of-place (fin must not alias fout).
 /// Uses the conjugate-FFT-conjugate trick: no 1/N scaling.
-pub fn opus_ifft(st: &KissFftState, fin: &[KissFftCpx], fout: &mut [KissFftCpx]) {
+///
+/// # Safety
+///
+/// `st` must be a valid codec FFT state. `fin` and `fout` must each contain at
+/// least `st.nfft` elements, and every entry in `st.bitrev[..st.nfft]` must be
+/// a valid index into `fout`. The factor and twiddle tables in `st` must satisfy
+/// the invariants documented by [`KissFftState`].
+pub unsafe fn opus_ifft(st: &KissFftState, fin: &[KissFftCpx], fout: &mut [KissFftCpx]) {
     let bitrev = st.bitrev;
     for i in 0..st.nfft as usize {
         let rev = uc!(bitrev, i) as usize;
@@ -808,7 +815,8 @@ mod tests {
         let mut output = vec![KissFftCpx::default(); n];
 
         opus_fft(st, &input, &mut freq);
-        opus_ifft(st, &freq, &mut output);
+        // SAFETY: the static FFT state is valid and both buffers have `nfft` elements.
+        unsafe { opus_ifft(st, &freq, &mut output) };
 
         // IFFT doesn't scale by 1/N, so output = input * N (but FFT already
         // scaled by 1/N, so output ≈ input). Fixed-point rounding noise
@@ -884,7 +892,8 @@ mod tests {
                 let mut freq = vec![KissFftCpx::default(); n];
                 let mut back = vec![KissFftCpx::default(); n];
                 opus_fft(st, &input, &mut freq);
-                opus_ifft(st, &freq, &mut back);
+                // SAFETY: each static state is valid and both buffers have `nfft` elements.
+                unsafe { opus_ifft(st, &freq, &mut back) };
                 // Just verify it runs without panic; loose tolerance check.
                 // Loose check: verify bounds only (larger N accumulates more
                 // fixed-point rounding noise per sample).

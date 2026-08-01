@@ -49,7 +49,7 @@ fn mac16_16_x4(acc: i32x4, a: i32x4, b: i32x4) -> i32x4 {
 ///
 /// Preconditions: `len >= 3`, `x` has >= `len` elements, `y` has >= `len + 3` elements.
 #[inline(always)]
-pub fn xcorr_kernel_simd(x: &[i32], y: &[i32], sum: &mut [i32; 4], len: usize) {
+pub(crate) fn xcorr_kernel_simd(x: &[i32], y: &[i32], sum: &mut [i32; 4], len: usize) {
     debug_assert!(len >= 3);
     debug_assert!(x.len() >= len);
     debug_assert!(y.len() >= len + 3);
@@ -82,7 +82,7 @@ pub fn xcorr_kernel_simd(x: &[i32], y: &[i32], sum: &mut [i32; 4], len: usize) {
 /// min values in `i32x4` lanes, then performing a horizontal reduction.
 /// Returns `max(maxval, -minval)`.
 #[inline(always)]
-pub fn celt_maxabs32_simd(x: &[i32]) -> i32 {
+pub(crate) fn celt_maxabs32_simd(x: &[i32]) -> i32 {
     let chunks = x.len() / 4;
     let remainder = x.len() % 4;
 
@@ -143,7 +143,7 @@ pub fn celt_maxabs32_simd(x: &[i32]) -> i32 {
 /// per iteration. The 32×32→Q31 multiply requires 64-bit intermediates, so we
 /// unpack to pairs of i64 values, multiply, shift, and repack.
 #[inline(always)]
-pub fn denormalise_band_simd(x: &[i32], out: &mut [i32], len: usize, g: i32, shift: i32) {
+pub(crate) fn denormalise_band_simd(x: &[i32], out: &mut [i32], len: usize, g: i32, shift: i32) {
     use crate::types::{NORM_SHIFT, mult32_32_q31, pshr32, shl32};
 
     let chunks = len / 4;
@@ -203,7 +203,7 @@ pub fn denormalise_band_simd(x: &[i32], out: &mut [i32], len: usize, g: i32, shi
 /// The window values are i16, so we use `i32x4` multiply with truncation.
 /// Each iteration processes 4 forward + 4 reverse elements.
 #[inline(always)]
-pub fn mdct_window_simd(output: &mut [i32], window: &[i16], overlap: usize) {
+pub(crate) fn mdct_window_simd(output: &mut [i32], window: &[i16], overlap: usize) {
     let half = overlap / 2;
     let chunks = half / 4;
     let remainder = half % 4;
