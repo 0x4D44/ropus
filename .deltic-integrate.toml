@@ -73,6 +73,7 @@ gate = [
   { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
   { program = "cargo", args = ["clippy", "-p", "ropus-harness", "--all-targets", "--locked", "--", "-D", "warnings"] },
   { program = "cargo", args = ["test", "-p", "ropus-harness", "--locked"] },
+  { program = "cargo", args = ["run", "-p", "fetch-assets", "--locked", "--", "reference"] },
   { program = "cargo", args = ["check", "--manifest-path", "tests/fuzz/Cargo.toml", "--locked"] },
 ]
 
@@ -82,6 +83,7 @@ paths = ["tests/fuzz/"]
 gate = [
   { program = "cargo", args = ["fmt", "--all", "--", "--check"] },
   { program = "cargo", args = ["fmt", "--manifest-path", "tests/fuzz/Cargo.toml", "--", "--check"] },
+  { program = "cargo", args = ["run", "-p", "fetch-assets", "--locked", "--", "reference"] },
   { program = "cargo", args = ["check", "--manifest-path", "tests/fuzz/Cargo.toml", "--locked"] },
 ]
 
