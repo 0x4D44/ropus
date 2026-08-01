@@ -22,6 +22,10 @@ pub type opus_int32 = i32;
 pub const OPUS_OK: c_int = 0;
 pub const OPUS_BAD_ARG: c_int = -1;
 
+const MAX_DECODE_MEM_CAPACITY: usize = 2 * (2048 + 120);
+const MAX_ENERGY_MEM_CAPACITY: usize = 2 * 21;
+const SILK_OUT_BUF_CAPACITY: usize = 320 + 2 * 80;
+
 #[repr(C)]
 pub struct OpusDecoder {
     _opaque: [u8; 0],
@@ -148,54 +152,57 @@ unsafe extern "C" {
     ) -> c_int;
 
     // Stage 7b.3 diagnostic peek getters (harness-deep-plc/c/peek.c).
-    pub fn peek_decode_mem(
+    fn peek_decode_mem(
         opus_st: *const OpusDecoder,
         offset: c_int,
         count: c_int,
         out: *mut f32,
     ) -> c_int;
-    pub fn peek_decode_mem_stride(opus_st: *const OpusDecoder) -> c_int;
-    pub fn peek_old_band_e(
+    fn peek_decode_mem_stride(opus_st: *const OpusDecoder) -> c_int;
+    fn peek_decode_mem_capacity(opus_st: *const OpusDecoder) -> c_int;
+    fn peek_old_band_e(
         opus_st: *const OpusDecoder,
         offset: c_int,
         count: c_int,
         out: *mut f32,
     ) -> c_int;
-    pub fn peek_old_log_e(
+    fn peek_old_log_e(
         opus_st: *const OpusDecoder,
         offset: c_int,
         count: c_int,
         out: *mut f32,
     ) -> c_int;
-    pub fn peek_background_log_e(
+    fn peek_background_log_e(
         opus_st: *const OpusDecoder,
         offset: c_int,
         count: c_int,
         out: *mut f32,
     ) -> c_int;
-    pub fn peek_nb_ebands(opus_st: *const OpusDecoder) -> c_int;
+    fn peek_nb_ebands(opus_st: *const OpusDecoder) -> c_int;
+    fn peek_energy_mem_capacity(opus_st: *const OpusDecoder) -> c_int;
 
     // SILK-side peeks
-    pub fn peek_silk_fs_khz_top(opus_st: *const OpusDecoder) -> c_int;
-    pub fn peek_silk_prev_gain(opus_st: *const OpusDecoder) -> opus_int32;
-    pub fn peek_silk_s_lpc_q14(
+    fn peek_silk_fs_khz_top(opus_st: *const OpusDecoder) -> c_int;
+    fn peek_silk_prev_gain(opus_st: *const OpusDecoder) -> opus_int32;
+    fn peek_silk_s_lpc_q14(
         opus_st: *const OpusDecoder,
         out: *mut opus_int32,
         max_count: c_int,
     ) -> c_int;
-    pub fn peek_silk_plc_prev_gain_top(opus_st: *const OpusDecoder, out: *mut opus_int32) -> c_int;
-    pub fn peek_silk_plc_pitch(opus_st: *const OpusDecoder) -> opus_int32;
-    pub fn peek_silk_plc_rand_scale(opus_st: *const OpusDecoder) -> opus_int32;
-    pub fn peek_silk_plc_last_lost(opus_st: *const OpusDecoder) -> c_int;
-    pub fn peek_silk_plc_fs(opus_st: *const OpusDecoder) -> c_int;
-    pub fn peek_silk_outbuf(
+    fn peek_silk_plc_prev_gain_top(opus_st: *const OpusDecoder, out: *mut opus_int32) -> c_int;
+    fn peek_silk_plc_pitch(opus_st: *const OpusDecoder) -> opus_int32;
+    fn peek_silk_plc_rand_scale(opus_st: *const OpusDecoder) -> opus_int32;
+    fn peek_silk_plc_last_lost(opus_st: *const OpusDecoder) -> c_int;
+    fn peek_silk_plc_fs(opus_st: *const OpusDecoder) -> c_int;
+    fn peek_silk_outbuf(
         opus_st: *const OpusDecoder,
         offset: c_int,
         count: c_int,
         out: *mut i16,
     ) -> c_int;
-    pub fn peek_silk_ltpmem(opus_st: *const OpusDecoder) -> c_int;
-    pub fn peek_silk_framelen(opus_st: *const OpusDecoder) -> c_int;
+    fn peek_silk_ltpmem(opus_st: *const OpusDecoder) -> c_int;
+    fn peek_silk_framelen(opus_st: *const OpusDecoder) -> c_int;
+    fn peek_silk_outbuf_capacity(opus_st: *const OpusDecoder) -> c_int;
 
     // --- Stage 8.8 full C encoder + C DRED parser shim ---
     // Defined in `harness-deep-plc/dred_encode_shim.c`. Drives the xiph C
@@ -287,21 +294,57 @@ pub const OPUS_APPLICATION_AUDIO: c_int = 2049;
 /// tests so we can just `?` our way through errors and get `Drop` cleanup.
 pub struct CRefFloatDecoder {
     ptr: *mut OpusDecoder,
+    channels: usize,
+    decode_mem_capacity: usize,
+    energy_mem_capacity: usize,
+    silk_out_buf_capacity: usize,
 }
 
 impl CRefFloatDecoder {
     pub fn new(fs: i32, channels: i32) -> Result<Self, i32> {
+        let channels = usize::try_from(channels)
+            .ok()
+            .filter(|&channels| matches!(channels, 1 | 2))
+            .ok_or(OPUS_BAD_ARG)?;
         let mut err: c_int = 0;
-        let ptr = unsafe { opus_decoder_create(fs, channels, &mut err) };
-        if ptr.is_null() || err != OPUS_OK {
+        let ptr = unsafe { opus_decoder_create(fs, channels as c_int, &mut err) };
+        if ptr.is_null() {
+            return Err(if err == OPUS_OK { OPUS_BAD_ARG } else { err });
+        }
+        if err != OPUS_OK {
+            unsafe { opus_decoder_destroy(ptr) };
             return Err(err);
         }
-        Ok(Self { ptr })
+
+        let capacities = unsafe {
+            (
+                peek_decode_mem_capacity(ptr),
+                peek_energy_mem_capacity(ptr),
+                peek_silk_outbuf_capacity(ptr),
+            )
+        };
+        let Some((decode_mem_capacity, energy_mem_capacity, silk_out_buf_capacity)) =
+            validate_peek_capacities(capacities)
+        else {
+            unsafe { opus_decoder_destroy(ptr) };
+            return Err(OPUS_BAD_ARG);
+        };
+
+        Ok(Self {
+            ptr,
+            channels,
+            decode_mem_capacity,
+            energy_mem_capacity,
+            silk_out_buf_capacity,
+        })
     }
 
     /// Decode one Opus packet to interleaved i16 PCM. Pass `None` for `data`
     /// (or a zero-length slice) to trigger the decoder's PLC path.
     /// Returns the number of samples per channel decoded.
+    /// Returns `OPUS_BAD_ARG` without entering C when `frame_size` is not
+    /// positive, the packet length does not fit `opus_int32`, or `pcm` cannot
+    /// hold `frame_size * channels` samples.
     pub fn decode(
         &mut self,
         data: Option<&[u8]>,
@@ -309,8 +352,9 @@ impl CRefFloatDecoder {
         frame_size: i32,
         decode_fec: bool,
     ) -> Result<i32, i32> {
+        checked_decode_output_len(frame_size, self.channels, pcm.len())?;
         let (data_ptr, data_len) = match data {
-            Some(d) if !d.is_empty() => (d.as_ptr(), d.len() as opus_int32),
+            Some(d) if !d.is_empty() => (d.as_ptr(), checked_packet_len(d.len())?),
             _ => (std::ptr::null(), 0),
         };
         let ret = unsafe {
@@ -336,10 +380,9 @@ impl CRefFloatDecoder {
 
     /// Stage 7b.3 diagnostic: read `count` samples from the CELT decode_mem
     /// starting at `offset`. Returns samples as f32 (float-mode `celt_sig`).
-    pub fn peek_decode_mem(&self, offset: i32, count: i32) -> Vec<f32> {
-        let mut out = vec![0.0f32; count as usize];
-        unsafe { peek_decode_mem(self.ptr, offset, count, out.as_mut_ptr()) };
-        out
+    /// Invalid or overflowing ranges return `OPUS_BAD_ARG` before entering C.
+    pub fn peek_decode_mem(&self, offset: i32, count: i32) -> Result<Vec<f32>, i32> {
+        self.copy_f32_peek(offset, count, self.decode_mem_capacity, peek_decode_mem)
     }
 
     /// Per-channel stride of the CELT decode_mem slab.
@@ -348,24 +391,26 @@ impl CRefFloatDecoder {
     }
 
     /// Stage 7b.3 diagnostic: read oldBandE entries as f32 (celt_glog).
-    pub fn peek_old_band_e(&self, offset: i32, count: i32) -> Vec<f32> {
-        let mut out = vec![0.0f32; count as usize];
-        unsafe { peek_old_band_e(self.ptr, offset, count, out.as_mut_ptr()) };
-        out
+    /// Invalid or overflowing ranges return `OPUS_BAD_ARG` before entering C.
+    pub fn peek_old_band_e(&self, offset: i32, count: i32) -> Result<Vec<f32>, i32> {
+        self.copy_f32_peek(offset, count, self.energy_mem_capacity, peek_old_band_e)
     }
 
     /// Stage 7b.3 diagnostic: read oldLogE entries as f32 (celt_glog).
-    pub fn peek_old_log_e(&self, offset: i32, count: i32) -> Vec<f32> {
-        let mut out = vec![0.0f32; count as usize];
-        unsafe { peek_old_log_e(self.ptr, offset, count, out.as_mut_ptr()) };
-        out
+    /// Invalid or overflowing ranges return `OPUS_BAD_ARG` before entering C.
+    pub fn peek_old_log_e(&self, offset: i32, count: i32) -> Result<Vec<f32>, i32> {
+        self.copy_f32_peek(offset, count, self.energy_mem_capacity, peek_old_log_e)
     }
 
     /// Stage 7b.3 diagnostic: read backgroundLogE entries as f32 (celt_glog).
-    pub fn peek_background_log_e(&self, offset: i32, count: i32) -> Vec<f32> {
-        let mut out = vec![0.0f32; count as usize];
-        unsafe { peek_background_log_e(self.ptr, offset, count, out.as_mut_ptr()) };
-        out
+    /// Invalid or overflowing ranges return `OPUS_BAD_ARG` before entering C.
+    pub fn peek_background_log_e(&self, offset: i32, count: i32) -> Result<Vec<f32>, i32> {
+        self.copy_f32_peek(
+            offset,
+            count,
+            self.energy_mem_capacity,
+            peek_background_log_e,
+        )
     }
 
     /// nbEBands of the active CELT mode.
@@ -404,10 +449,16 @@ impl CRefFloatDecoder {
     pub fn silk_plc_fs_khz(&self) -> i32 {
         unsafe { peek_silk_plc_fs(self.ptr) }
     }
-    pub fn silk_out_buf(&self, offset: i32, count: i32) -> Vec<i16> {
-        let mut out = vec![0i16; count as usize];
-        unsafe { peek_silk_outbuf(self.ptr, offset, count, out.as_mut_ptr()) };
-        out
+    /// Read a checked range from SILK's fixed-capacity output history.
+    pub fn silk_out_buf(&self, offset: i32, count: i32) -> Result<Vec<i16>, i32> {
+        let count = checked_peek_range(offset, count, self.silk_out_buf_capacity)?;
+        let mut out = vec![0i16; count];
+        let ret = unsafe { peek_silk_outbuf(self.ptr, offset, count as c_int, out.as_mut_ptr()) };
+        if ret == count as c_int {
+            Ok(out)
+        } else {
+            Err(if ret < 0 { ret } else { OPUS_BAD_ARG })
+        }
     }
     pub fn silk_ltp_mem_length(&self) -> i32 {
         unsafe { peek_silk_ltpmem(self.ptr) }
@@ -415,6 +466,69 @@ impl CRefFloatDecoder {
     pub fn silk_frame_length(&self) -> i32 {
         unsafe { peek_silk_framelen(self.ptr) }
     }
+
+    fn copy_f32_peek(
+        &self,
+        offset: i32,
+        count: i32,
+        capacity: usize,
+        peek: unsafe extern "C" fn(*const OpusDecoder, c_int, c_int, *mut f32) -> c_int,
+    ) -> Result<Vec<f32>, i32> {
+        let count = checked_peek_range(offset, count, capacity)?;
+        let mut out = vec![0.0f32; count];
+        let ret = unsafe { peek(self.ptr, offset, count as c_int, out.as_mut_ptr()) };
+        if ret == count as c_int {
+            Ok(out)
+        } else {
+            Err(if ret < 0 { ret } else { OPUS_BAD_ARG })
+        }
+    }
+}
+
+fn checked_packet_len(len: usize) -> Result<opus_int32, i32> {
+    opus_int32::try_from(len).map_err(|_| OPUS_BAD_ARG)
+}
+
+fn checked_decode_output_len(
+    frame_size: i32,
+    channels: usize,
+    pcm_len: usize,
+) -> Result<usize, i32> {
+    let frame_size = usize::try_from(frame_size)
+        .ok()
+        .filter(|&frame_size| frame_size > 0)
+        .ok_or(OPUS_BAD_ARG)?;
+    let required = frame_size.checked_mul(channels).ok_or(OPUS_BAD_ARG)?;
+    if pcm_len < required {
+        return Err(OPUS_BAD_ARG);
+    }
+    Ok(required)
+}
+
+fn checked_peek_range(offset: i32, count: i32, capacity: usize) -> Result<usize, i32> {
+    let offset = usize::try_from(offset).map_err(|_| OPUS_BAD_ARG)?;
+    let count = usize::try_from(count)
+        .ok()
+        .filter(|&count| count > 0)
+        .ok_or(OPUS_BAD_ARG)?;
+    let end = offset.checked_add(count).ok_or(OPUS_BAD_ARG)?;
+    if end > capacity {
+        return Err(OPUS_BAD_ARG);
+    }
+    Ok(count)
+}
+
+fn validate_peek_capacities(capacities: (i32, i32, i32)) -> Option<(usize, usize, usize)> {
+    let decode_mem = usize::try_from(capacities.0).ok()?;
+    let energy_mem = usize::try_from(capacities.1).ok()?;
+    let silk_out_buf = usize::try_from(capacities.2).ok()?;
+    if !(1..=MAX_DECODE_MEM_CAPACITY).contains(&decode_mem)
+        || !(1..=MAX_ENERGY_MEM_CAPACITY).contains(&energy_mem)
+        || silk_out_buf != SILK_OUT_BUF_CAPACITY
+    {
+        return None;
+    }
+    Some((decode_mem, energy_mem, silk_out_buf))
 }
 
 impl Drop for CRefFloatDecoder {
@@ -426,3 +540,128 @@ impl Drop for CRefFloatDecoder {
 // The C pointer is confined to this struct; sending it between threads is
 // fine as long as the user doesn't clone it (which we don't allow).
 unsafe impl Send for CRefFloatDecoder {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem::ManuallyDrop;
+
+    fn null_decoder(channels: usize) -> ManuallyDrop<CRefFloatDecoder> {
+        ManuallyDrop::new(CRefFloatDecoder {
+            ptr: std::ptr::null_mut(),
+            channels,
+            decode_mem_capacity: MAX_DECODE_MEM_CAPACITY,
+            energy_mem_capacity: MAX_ENERGY_MEM_CAPACITY,
+            silk_out_buf_capacity: SILK_OUT_BUF_CAPACITY,
+        })
+    }
+
+    #[test]
+    fn constructor_rejects_invalid_channels_before_entering_c() {
+        assert!(matches!(
+            CRefFloatDecoder::new(48_000, 0),
+            Err(OPUS_BAD_ARG)
+        ));
+        assert!(matches!(
+            CRefFloatDecoder::new(48_000, -1),
+            Err(OPUS_BAD_ARG)
+        ));
+        assert!(matches!(
+            CRefFloatDecoder::new(48_000, 3),
+            Err(OPUS_BAD_ARG)
+        ));
+    }
+
+    #[test]
+    fn decode_rejects_invalid_dimensions_before_entering_c() {
+        let mut decoder = null_decoder(2);
+        let mut one_sample = [0i16; 1];
+
+        assert_eq!(
+            decoder.decode(None, &mut one_sample, 1, false),
+            Err(OPUS_BAD_ARG)
+        );
+        assert_eq!(
+            decoder.decode(None, &mut one_sample, 0, false),
+            Err(OPUS_BAD_ARG)
+        );
+        assert_eq!(
+            decoder.decode(None, &mut one_sample, -1, false),
+            Err(OPUS_BAD_ARG)
+        );
+    }
+
+    #[test]
+    fn oversized_packet_lengths_are_rejected() {
+        assert_eq!(checked_packet_len(i32::MAX as usize), Ok(i32::MAX));
+        assert_eq!(checked_packet_len(i32::MAX as usize + 1), Err(OPUS_BAD_ARG));
+    }
+
+    #[test]
+    fn peek_ranges_reject_negative_empty_overflowing_and_past_end() {
+        assert_eq!(checked_peek_range(-1, 1, 42), Err(OPUS_BAD_ARG));
+        assert_eq!(checked_peek_range(0, -1, 42), Err(OPUS_BAD_ARG));
+        assert_eq!(checked_peek_range(0, 0, 42), Err(OPUS_BAD_ARG));
+        assert_eq!(checked_peek_range(41, 2, 42), Err(OPUS_BAD_ARG));
+        assert_eq!(checked_peek_range(41, 1, 42), Ok(1));
+    }
+
+    #[test]
+    fn invalid_peeks_return_before_entering_c() {
+        let decoder = null_decoder(1);
+
+        assert_eq!(decoder.peek_decode_mem(-1, 1), Err(OPUS_BAD_ARG));
+        assert_eq!(decoder.peek_old_band_e(0, 0), Err(OPUS_BAD_ARG));
+        assert_eq!(decoder.peek_old_log_e(42, 1), Err(OPUS_BAD_ARG));
+        assert_eq!(decoder.peek_background_log_e(41, 2), Err(OPUS_BAD_ARG));
+        assert_eq!(decoder.silk_out_buf(480, 1), Err(OPUS_BAD_ARG));
+    }
+
+    #[test]
+    fn runtime_peek_capacities_are_sanity_checked() {
+        assert_eq!(
+            validate_peek_capacities((
+                MAX_DECODE_MEM_CAPACITY as i32,
+                MAX_ENERGY_MEM_CAPACITY as i32,
+                SILK_OUT_BUF_CAPACITY as i32,
+            )),
+            Some((
+                MAX_DECODE_MEM_CAPACITY,
+                MAX_ENERGY_MEM_CAPACITY,
+                SILK_OUT_BUF_CAPACITY,
+            ))
+        );
+        assert_eq!(
+            validate_peek_capacities((
+                -1,
+                MAX_ENERGY_MEM_CAPACITY as i32,
+                SILK_OUT_BUF_CAPACITY as i32,
+            )),
+            None
+        );
+        assert_eq!(
+            validate_peek_capacities((
+                MAX_DECODE_MEM_CAPACITY as i32 + 1,
+                MAX_ENERGY_MEM_CAPACITY as i32,
+                SILK_OUT_BUF_CAPACITY as i32,
+            )),
+            None
+        );
+        assert_eq!(
+            validate_peek_capacities((
+                MAX_DECODE_MEM_CAPACITY as i32,
+                MAX_ENERGY_MEM_CAPACITY as i32 + 1,
+                SILK_OUT_BUF_CAPACITY as i32,
+            )),
+            None
+        );
+        assert_eq!(
+            validate_peek_capacities((
+                MAX_DECODE_MEM_CAPACITY as i32,
+                MAX_ENERGY_MEM_CAPACITY as i32,
+                SILK_OUT_BUF_CAPACITY as i32 - 1,
+            )),
+            None
+        );
+    }
+}

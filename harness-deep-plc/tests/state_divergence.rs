@@ -164,7 +164,9 @@ fn snapshot(c: &CRefFloatDecoder, r_dec: &RopusDecoder) -> Snapshot {
     let ltp_mem_c = c.silk_ltp_mem_length();
     let tail_len = 32;
     let offset_c = ltp_mem_c - tail_len;
-    let c_out = c.silk_out_buf(offset_c, tail_len);
+    let c_out = c
+        .silk_out_buf(offset_c, tail_len)
+        .expect("valid SILK outBuf tail range");
     // Rust mirror
     let ltp_mem_r = cs_r.ltp_mem_length;
     let offset_r = ltp_mem_r - tail_len as usize;
@@ -427,7 +429,9 @@ fn stage7b3_silk_detail_first_loss() {
         );
         // Dump full outBuf diff summary
         let ltp_mem = c_dec.silk_ltp_mem_length();
-        let c_ob = c_dec.silk_out_buf(0, ltp_mem);
+        let c_ob = c_dec
+            .silk_out_buf(0, ltp_mem)
+            .expect("valid SILK outBuf history range");
         let r_ob = &cs_r.out_buf[..ltp_mem as usize];
         let mut ob_diffs = 0;
         let mut first_diff = None;

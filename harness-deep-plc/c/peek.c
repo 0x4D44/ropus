@@ -91,6 +91,13 @@ int peek_opus_silk_offset(const void *st) {
 
 /* ---- CELT state getters -------------------------------------------------- */
 
+static int peek_valid_range(int offset, int count, int capacity, const void *out) {
+    return offset >= 0 && count >= 0 && offset <= capacity
+        && count <= capacity - offset && (count == 0 || out != NULL);
+}
+
+#define PEEK_DECODE_BUFFER_SIZE 2048
+
 int peek_celt_channels(const void *celt_st) {
     const PeekCeltHdr *h = (const PeekCeltHdr *)celt_st;
     return h->channels;
@@ -105,13 +112,13 @@ int peek_celt_overlap(const void *celt_st) {
 int peek_celt_decode_mem(const void *celt_st, int offset, int count, float *out) {
     const PeekCeltHdr *h = (const PeekCeltHdr *)celt_st;
     const celt_sig *buf = h->_decode_mem;
+    int capacity = (PEEK_DECODE_BUFFER_SIZE + h->overlap) * h->channels;
+    if (!peek_valid_range(offset, count, capacity, out)) return OPUS_BAD_ARG;
     for (int i = 0; i < count; i++) {
         out[i] = (float)buf[offset + i];
     }
     return count;
 }
-
-#define PEEK_DECODE_BUFFER_SIZE 2048
 
 static const celt_glog *peek_celt_trailing_base(const PeekCeltHdr *h) {
     int per_ch = PEEK_DECODE_BUFFER_SIZE + h->overlap;
@@ -127,6 +134,7 @@ int peek_celt_nb_ebands(const void *celt_st) {
 int peek_celt_old_band_e(const void *celt_st, int offset, int count, float *out) {
     const PeekCeltHdr *h = (const PeekCeltHdr *)celt_st;
     const celt_glog *base = peek_celt_trailing_base(h);
+    if (!peek_valid_range(offset, count, 2 * h->mode->nbEBands, out)) return OPUS_BAD_ARG;
     for (int i = 0; i < count; i++) {
         out[i] = (float)base[offset + i];
     }
@@ -137,6 +145,7 @@ int peek_celt_old_log_e(const void *celt_st, int offset, int count, float *out) 
     const PeekCeltHdr *h = (const PeekCeltHdr *)celt_st;
     int nb = h->mode->nbEBands;
     const celt_glog *base = peek_celt_trailing_base(h) + 2 * nb;
+    if (!peek_valid_range(offset, count, 2 * nb, out)) return OPUS_BAD_ARG;
     for (int i = 0; i < count; i++) {
         out[i] = (float)base[offset + i];
     }
@@ -147,6 +156,7 @@ int peek_celt_old_log_e2(const void *celt_st, int offset, int count, float *out)
     const PeekCeltHdr *h = (const PeekCeltHdr *)celt_st;
     int nb = h->mode->nbEBands;
     const celt_glog *base = peek_celt_trailing_base(h) + 4 * nb;
+    if (!peek_valid_range(offset, count, 2 * nb, out)) return OPUS_BAD_ARG;
     for (int i = 0; i < count; i++) {
         out[i] = (float)base[offset + i];
     }
@@ -157,6 +167,7 @@ int peek_celt_background_log_e(const void *celt_st, int offset, int count, float
     const PeekCeltHdr *h = (const PeekCeltHdr *)celt_st;
     int nb = h->mode->nbEBands;
     const celt_glog *base = peek_celt_trailing_base(h) + 6 * nb;
+    if (!peek_valid_range(offset, count, 2 * nb, out)) return OPUS_BAD_ARG;
     for (int i = 0; i < count; i++) {
         out[i] = (float)base[offset + i];
     }
@@ -222,6 +233,8 @@ int peek_silk_plc_fs_khz(const void *silk_dec) {
  * MAX_FRAME_LENGTH + 2 * MAX_SUB_FRAME_LENGTH. */
 int peek_silk_out_buf(const void *silk_dec, int offset, int count, opus_int16 *out) {
     const silk_decoder_state *s = (const silk_decoder_state *)silk_dec;
+    int capacity = MAX_FRAME_LENGTH + 2 * MAX_SUB_FRAME_LENGTH;
+    if (!peek_valid_range(offset, count, capacity, out)) return OPUS_BAD_ARG;
     for (int i = 0; i < count; i++) out[i] = s->outBuf[offset + i];
     return count;
 }
@@ -259,6 +272,11 @@ int peek_decode_mem_stride(const void *opus_st) {
     return PEEK_DECODE_BUFFER_SIZE + peek_celt_overlap(c);
 }
 
+int peek_decode_mem_capacity(const void *opus_st) {
+    const void *c = celt_from_opus(opus_st);
+    return peek_decode_mem_stride(opus_st) * peek_celt_channels(c);
+}
+
 int peek_old_band_e(const void *opus_st, int offset, int count, float *out) {
     return peek_celt_old_band_e(celt_from_opus(opus_st), offset, count, out);
 }
@@ -273,6 +291,10 @@ int peek_background_log_e(const void *opus_st, int offset, int count, float *out
 
 int peek_nb_ebands(const void *opus_st) {
     return peek_celt_nb_ebands(celt_from_opus(opus_st));
+}
+
+int peek_energy_mem_capacity(const void *opus_st) {
+    return 2 * peek_nb_ebands(opus_st);
 }
 
 /* SILK wrappers */
@@ -309,4 +331,8 @@ int peek_silk_ltpmem(const void *opus_st) {
 }
 int peek_silk_framelen(const void *opus_st) {
     return peek_silk_frame_length(silk_from_opus(opus_st));
+}
+int peek_silk_outbuf_capacity(const void *opus_st) {
+    (void)opus_st;
+    return MAX_FRAME_LENGTH + 2 * MAX_SUB_FRAME_LENGTH;
 }
