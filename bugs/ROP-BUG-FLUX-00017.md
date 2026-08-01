@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** capi/allocation-errors
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T181555Z-p60679-n523856000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00017-run-fix-20260801T181555Z-p60679-n523856000-c1
+- **Owner base:** 12c0973b5ecf1c3b762d583b29f11ed30369d48c
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T18:15:55Z
+- **Owner until:** 2026-08-01T20:15:55Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
