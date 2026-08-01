@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00010 — Multistream decoder setters bypass validation and CELT complexity propagation
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus/opus-multistream-ctl
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T153302Z-p26375-n308063000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00010-run-fix-20260801T153302Z-p26375-n308063000-c1
-- **Owner base:** 61125abac5ca5b9f5d31e286e90db14d9e9352ab
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T15:33:02Z
-- **Owner until:** 2026-08-01T17:33:02Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T153302Z-p26375-n308063000-c1 branch=task/bug-ROP-BUG-FLUX-00010-run-fix-20260801T153302Z-p26375-n308063000-c1 code=ab04c06f3666903778861f5d6084eb28ee9caf74 gate=manual)
 
 ## Observation
 
