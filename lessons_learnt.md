@@ -1,3 +1,7 @@
+- Reverse Ogg duration scans must validate full CRC-checked EOS pages (`container/ogg.rs:parse_duration_page`), not `OggS` bytes.
+
+  Skip malformed, non-EOS, and unknown-granule candidates so payload data cannot fabricate duration or bitrate.
+
 - Shared Opus decode must apply `OpusHead.output_gain` in `audio/decode.rs:decode_reader_with_gain`; keep CLI gain in Q8 for Opus and linear post-gain for other codecs.
 
 - Shared OpusHead parsing must reject unsupported versions, channels, mappings, and family-0 trailing bytes (`container/ogg.rs:parse_opus_head`).

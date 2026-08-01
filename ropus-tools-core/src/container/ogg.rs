@@ -5,6 +5,9 @@ use std::io::{Read, Seek, SeekFrom};
 
 use anyhow::{Result, anyhow, bail};
 
+const OGG_CAPTURE: &[u8; 4] = b"OggS";
+const OGG_HEADER_LEN: usize = 27;
+
 /// Logical Ogg stream serial. Any non-zero value works for a single stream we
 /// write ourselves. NEVER use this for matching against an arbitrary input
 /// stream; capture the input's serial from its first OggS page instead.
@@ -331,12 +334,11 @@ pub fn detect_granule_gaps(granules: &[u64]) -> Vec<GranuleGap> {
     gaps
 }
 
-/// Scan backwards from EOF for the last Ogg `OggS` page belonging to
-/// `target_serial`, and return its absolute granule position. Returns
-/// `Ok(None)` if the last matching page has the unknown-granule sentinel
-/// (`0xFFFF_FFFF_FFFF_FFFF`) or if no matching page can be found in the
-/// search window — both of which leave the caller responsible for falling
-/// back to the slow whole-stream decode.
+/// Scan backwards from EOF for the last complete, CRC-valid EOS Ogg page
+/// belonging to `target_serial`, and return its absolute granule position.
+/// Returns `Ok(None)` if the EOS page has the unknown-granule sentinel or if no
+/// matching page can be found in the search window — both of which leave the
+/// caller responsible for falling back to the slow whole-stream decode.
 ///
 /// Reads at most the trailing 128 KiB of the file. RFC 3533 caps a single
 /// Ogg page at 65,307 bytes (27-byte header + 255 lacing entries × 255
@@ -347,13 +349,11 @@ pub fn read_last_granule<R: Read + Seek>(
     target_serial: u32,
 ) -> std::io::Result<Option<u64>> {
     const SCAN_WINDOW: u64 = 128 * 1024;
-    const HEADER_LEN: usize = 27;
-
     // Use Seek to obtain the source's length without depending on filesystem
     // metadata, so this helper can drive any Read+Seek (including Cursor in
     // unit tests).
     let file_len = src.seek(SeekFrom::End(0))?;
-    if file_len < HEADER_LEN as u64 {
+    if file_len < OGG_HEADER_LEN as u64 {
         return Ok(None);
     }
 
@@ -365,33 +365,18 @@ pub fn read_last_granule<R: Read + Seek>(
     src.read_exact(&mut buf)?;
 
     // Reverse-scan for the b"OggS" capture pattern. For each candidate, validate
-    // the fixed-layout header and that the serial number matches. Walk back to
-    // the previous candidate if any check fails (e.g. wrong stream in a
-    // multiplexed file, or coincidental "OggS" bytes inside packet data).
+    // the complete page extent, flags, stream serial, and CRC, then require EOS.
+    // Walk back to the previous candidate if any check fails (e.g. wrong stream
+    // in a multiplexed file, or coincidental "OggS" bytes inside packet data).
     let mut i = buf.len().saturating_sub(4);
     loop {
-        if i + HEADER_LEN <= buf.len()
-            && &buf[i..i + 4] == b"OggS"
-            // stream_structure_version must be 0 per RFC 3533 §6
-            && buf[i + 4] == 0
+        if let Some((absgp, is_eos)) = parse_duration_page(&buf, i, target_serial)
+            && is_eos
         {
-            let absgp = u64::from_le_bytes([
-                buf[i + 6],
-                buf[i + 7],
-                buf[i + 8],
-                buf[i + 9],
-                buf[i + 10],
-                buf[i + 11],
-                buf[i + 12],
-                buf[i + 13],
-            ]);
-            let serial = u32::from_le_bytes([buf[i + 14], buf[i + 15], buf[i + 16], buf[i + 17]]);
-            if serial == target_serial {
-                if absgp == UNKNOWN_GRANULE {
-                    return Ok(None);
-                }
-                return Ok(Some(absgp));
+            if absgp == UNKNOWN_GRANULE {
+                return Ok(None);
             }
+            return Ok(Some(absgp));
         }
         if i == 0 {
             return Ok(None);
@@ -400,27 +385,121 @@ pub fn read_last_granule<R: Read + Seek>(
     }
 }
 
+/// Validate an Ogg page candidate from the reverse duration window. Returning
+/// the EOS bit separately lets the scan ignore valid trailing non-EOS pages.
+fn parse_duration_page(buf: &[u8], start: usize, target_serial: u32) -> Option<(u64, bool)> {
+    if start.checked_add(OGG_HEADER_LEN)? > buf.len()
+        || &buf[start..start + 4] != OGG_CAPTURE
+        || buf[start + 4] != 0
+    {
+        return None;
+    }
+
+    let header_type = buf[start + 5];
+    // RFC 3533 defines only continued/BOS/EOS bits; reserved bits must be 0.
+    if header_type & !0x07 != 0 {
+        return None;
+    }
+
+    let serial = u32::from_le_bytes([
+        buf[start + 14],
+        buf[start + 15],
+        buf[start + 16],
+        buf[start + 17],
+    ]);
+    if serial != target_serial {
+        return None;
+    }
+
+    let absgp = u64::from_le_bytes([
+        buf[start + 6],
+        buf[start + 7],
+        buf[start + 8],
+        buf[start + 9],
+        buf[start + 10],
+        buf[start + 11],
+        buf[start + 12],
+        buf[start + 13],
+    ]);
+    let segment_count = buf[start + 26] as usize;
+    let lacing_start = start + OGG_HEADER_LEN;
+    let lacing_end = lacing_start.checked_add(segment_count)?;
+    if lacing_end > buf.len() {
+        return None;
+    }
+    let payload_len: usize = buf[lacing_start..lacing_end]
+        .iter()
+        .map(|&segment| segment as usize)
+        .sum();
+    let page_end = lacing_end.checked_add(payload_len)?;
+    if page_end > buf.len() {
+        return None;
+    }
+
+    let expected_crc = u32::from_le_bytes([
+        buf[start + 22],
+        buf[start + 23],
+        buf[start + 24],
+        buf[start + 25],
+    ]);
+    if ogg_page_crc32(&buf[start..page_end]) != expected_crc {
+        return None;
+    }
+
+    Some((absgp, header_type & 0x04 != 0))
+}
+
+/// Compute the RFC 3533 Ogg CRC. The checksum field is treated as zero while
+/// calculating, matching the writer and the `ogg` crate's page parser.
+fn ogg_page_crc32(page: &[u8]) -> u32 {
+    const POLY: u32 = 0x04C1_1DB7;
+    let mut crc = 0u32;
+    for (idx, &byte) in page.iter().enumerate() {
+        let byte = if (22..26).contains(&idx) { 0 } else { byte };
+        crc ^= u32::from(byte) << 24;
+        for _ in 0..8 {
+            crc = if crc & 0x8000_0000 != 0 {
+                (crc << 1) ^ POLY
+            } else {
+                crc << 1
+            };
+        }
+    }
+    crc
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
 
-    /// Build a minimal valid 27-byte Ogg page (zero-segment payload) with the
-    /// supplied absolute granule position and stream serial. Tests only care
-    /// about the fields `read_last_granule` inspects (capture pattern,
-    /// version, absgp, serial, segment count).
-    fn build_minimal_ogg_page(absgp: u64, serial: u32) -> Vec<u8> {
-        let mut page = Vec::with_capacity(27);
-        page.extend_from_slice(b"OggS"); // capture pattern
+    /// Build a CRC-valid Ogg page with one optional payload segment.
+    fn build_ogg_page(absgp: u64, serial: u32, header_type: u8, payload: &[u8]) -> Vec<u8> {
+        assert!(payload.len() <= u8::MAX as usize);
+        let mut page = Vec::with_capacity(OGG_HEADER_LEN + 1 + payload.len());
+        page.extend_from_slice(OGG_CAPTURE);
         page.push(0); // stream_structure_version
-        page.push(0x04); // header_type_flag (end-of-stream — irrelevant here)
+        page.push(header_type);
         page.extend_from_slice(&absgp.to_le_bytes());
         page.extend_from_slice(&serial.to_le_bytes());
         page.extend_from_slice(&0u32.to_le_bytes()); // page sequence
-        page.extend_from_slice(&0u32.to_le_bytes()); // CRC (read_last_granule does not verify)
-        page.push(0); // page_segments = 0 → no lacing bytes follow
-        debug_assert_eq!(page.len(), 27);
+        page.extend_from_slice(&0u32.to_le_bytes()); // CRC placeholder
+        if payload.is_empty() {
+            page.push(0);
+        } else {
+            page.push(1);
+            page.push(payload.len() as u8);
+            page.extend_from_slice(payload);
+        }
+        let crc = ogg_page_crc32(&page);
+        page[22..26].copy_from_slice(&crc.to_le_bytes());
         page
+    }
+
+    /// Build a minimal valid 27-byte EOS Ogg page (zero-segment payload) with
+    /// the supplied absolute granule position and stream serial.
+    fn build_minimal_ogg_page(absgp: u64, serial: u32) -> Vec<u8> {
+        build_ogg_page(absgp, serial, 0x04, &[])
     }
 
     #[test]
@@ -457,6 +536,46 @@ mod tests {
         let mut cursor = Cursor::new(buf);
         let got = read_last_granule(&mut cursor, 0xC0DE_C0DE).expect("ok");
         assert_eq!(got, Some(42));
+    }
+
+    #[test]
+    fn read_last_granule_skips_valid_non_eos_trailer() {
+        let mut buf = build_minimal_ogg_page(42, 0xC0DE_C0DE);
+        buf.extend_from_slice(&build_ogg_page(999, 0xC0DE_C0DE, 0, &[]));
+        let mut cursor = Cursor::new(buf);
+        let got = read_last_granule(&mut cursor, 0xC0DE_C0DE).expect("ok");
+        assert_eq!(got, Some(42), "duration must come from an EOS page");
+    }
+
+    #[test]
+    fn read_last_granule_skips_bad_crc_candidate() {
+        let mut bad = build_minimal_ogg_page(999, 0xC0DE_C0DE);
+        bad[6] ^= 1; // change granule without repairing its CRC
+        let mut buf = build_minimal_ogg_page(42, 0xC0DE_C0DE);
+        buf.extend_from_slice(&bad);
+        let mut cursor = Cursor::new(buf);
+        let got = read_last_granule(&mut cursor, 0xC0DE_C0DE).expect("ok");
+        assert_eq!(got, Some(42), "bad CRC must not fabricate duration");
+    }
+
+    #[test]
+    fn read_last_granule_skips_truncated_candidate() {
+        let mut buf = build_minimal_ogg_page(42, 0xC0DE_C0DE);
+        buf.extend_from_slice(b"OggS\x00\x04\x01\x02");
+        let mut cursor = Cursor::new(buf);
+        let got = read_last_granule(&mut cursor, 0xC0DE_C0DE).expect("ok");
+        assert_eq!(got, Some(42), "truncated page must not fabricate duration");
+    }
+
+    #[test]
+    fn read_last_granule_skips_header_shaped_payload() {
+        let mut fake = build_minimal_ogg_page(999, 0xC0DE_C0DE);
+        fake[22..26].fill(0); // invalid checksum once embedded as payload
+        let mut buf = build_minimal_ogg_page(42, 0xC0DE_C0DE);
+        buf.extend_from_slice(&build_ogg_page(777, 0xC0DE_C0DE, 0, &fake));
+        let mut cursor = Cursor::new(buf);
+        let got = read_last_granule(&mut cursor, 0xC0DE_C0DE).expect("ok");
+        assert_eq!(got, Some(42), "payload bytes must not fabricate duration");
     }
 
     // -- OpusTags ----------------------------------------------------------

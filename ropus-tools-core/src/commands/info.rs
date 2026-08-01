@@ -159,9 +159,14 @@ fn collect_summary(input: &std::path::Path) -> Result<InfoSummary> {
         packet_idx += 1;
     }
 
+    let pre_skip = head.pre_skip as u64;
     let sample_count = match absgp_opt {
-        Some(absgp) => absgp.saturating_sub(head.pre_skip as u64),
-        None => slow_sample_count.saturating_sub(head.pre_skip as u64),
+        Some(absgp) => absgp
+            .checked_sub(pre_skip)
+            .ok_or_else(|| anyhow!("final granule {absgp} is before pre-skip {pre_skip}"))?,
+        None => slow_sample_count.checked_sub(pre_skip).ok_or_else(|| {
+            anyhow!("decoded sample count {slow_sample_count} is smaller than pre-skip {pre_skip}")
+        })?,
     };
 
     // Separate pass for per-page granules: the `ogg` crate's PacketReader
