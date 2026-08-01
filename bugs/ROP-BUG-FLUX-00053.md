@@ -5,15 +5,15 @@
 - **Severity:** High
 - **Area:** ropus-tools-core/prelude-routing
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T122743Z-p98923-n509169000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00053-run-fix-20260801T122743Z-p98923-n509169000-c1
+- **Owner base:** 37096076d022a92d1f816e89d69d0d568c32d0a0
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T12:27:43Z
+- **Owner until:** 2026-08-01T14:27:43Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
