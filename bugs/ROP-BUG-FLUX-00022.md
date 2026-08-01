@@ -5,15 +5,15 @@
 - **Severity:** High
 - **Area:** harness/projection-gate
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260801T041534Z-p18394-n733330000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00022-run-fix-20260801T041534Z-p18394-n733330000-c1
+- **Owner base:** 970262d59daa199e346ab3ec1cf0dd55ac47b512
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-01T04:15:34Z
+- **Owner until:** 2026-08-01T06:15:34Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
