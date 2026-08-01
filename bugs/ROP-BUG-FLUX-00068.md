@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00068 — Safe float-reference decoder methods permit out-of-bounds C access
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** harness-deep-plc/ffi-safety
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T051116Z-p36074-n718775000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00068-run-fix-20260801T051116Z-p36074-n718775000-c1
-- **Owner base:** dc5d3e6a6f9ab5bea01e41fd6498dec007114eba
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T05:11:16Z
-- **Owner until:** 2026-08-01T07:11:16Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-01, deltic:auto role=fix run=fix-20260801T051116Z-p36074-n718775000-c1 branch=task/bug-ROP-BUG-FLUX-00068-run-fix-20260801T051116Z-p36074-n718775000-c1 code=26659708e647f38f9f2d69c95708e382be449b3e gate=manual)
 
 ## Observation
 
