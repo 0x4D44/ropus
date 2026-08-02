@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00061 — CLI build provenance can be stale or identify an unrelated repository
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropusenc/build-provenance
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260801T235001Z-p20648-n265745000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00061-run-fix-20260801T235001Z-p20648-n265745000-c1
-- **Owner base:** 3c465a5819592cc3e4ceeab6ba65a36b87a7561a
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-01T23:50:01Z
-- **Owner until:** 2026-08-02T01:50:01Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260801T235001Z-p20648-n265745000-c1 branch=task/bug-ROP-BUG-FLUX-00061-run-fix-20260801T235001Z-p20648-n265745000-c1 code=82f1c1fe3a11e9623f33d4ad4134235b9e37c992 gate=manual)
 
 ## Observation
 
