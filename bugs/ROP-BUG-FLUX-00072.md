@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00072 — Classical PLC control cannot calibrate the neural acceptance gate
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** harness-control/oracle-calibration
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260802T013612Z-p39664-n393663000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00072-run-fix-20260802T013612Z-p39664-n393663000-c1
-- **Owner base:** 78bc4ba7245a60d391345ff3ca4dffa62746c54e
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-02T01:36:12Z
-- **Owner until:** 2026-08-02T03:36:12Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02T01:55:56Z, deltic:auto role=fix run=fix-20260802T013612Z-p39664-n393663000-c1 branch=task/bug-ROP-BUG-FLUX-00072-run-fix-20260802T013612Z-p39664-n393663000-c1 code=39487bd gate=manual)
 
 ## Observation
 
