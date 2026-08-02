@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00065 — Playback status width miscounts Unicode terminal cells
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Low
 - **Area:** ropusplay/terminal-layout
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260802T003410Z-p49291-n070544000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00065-run-fix-20260802T003410Z-p49291-n070544000-c1
-- **Owner base:** c684e7e0ed36c2e64057a2ec303e1449221a3760
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-02T00:34:10Z
-- **Owner until:** 2026-08-02T02:34:10Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260802T003410Z-p49291-n070544000-c1 branch=task/bug-ROP-BUG-FLUX-00065-run-fix-20260802T003410Z-p49291-n070544000-c1 code=4977e79 gate=manual)
 
 ## Observation
 
