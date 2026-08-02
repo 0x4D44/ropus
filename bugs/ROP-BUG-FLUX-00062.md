@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00062 — Quiet and no-color flags do not control all CLI output
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Low
 - **Area:** ropusenc/output-controls
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260802T000337Z-p75344-n767448000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00062-run-fix-20260802T000337Z-p75344-n767448000-c1
-- **Owner base:** d3834f70ec3754919032aa004c411c21f10de519
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-02T00:03:37Z
-- **Owner until:** 2026-08-02T02:03:37Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260802T000337Z-p75344-n767448000-c1 branch=task/bug-ROP-BUG-FLUX-00062-run-fix-20260802T000337Z-p75344-n767448000-c1 code=36928a3af769720eb3932c4096fdd7c744b64020 gate=manual)
 
 ## Observation
 
