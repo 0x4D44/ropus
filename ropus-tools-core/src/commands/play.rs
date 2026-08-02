@@ -9,8 +9,9 @@
 //! - Per-track decode errors are logged with a yellow `warning:` prefix and
 //!   skipped via `advance_on_error` so one corrupt file does not end a session.
 
+use std::fmt;
 use std::fs::{self, File};
-use std::io::{BufReader, Write};
+use std::io::{self, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -26,7 +27,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::audio::decode::{DecodedAudio, MAX_GAIN_DB, MIN_GAIN_DB, decode_to_f32_with_gain};
 use crate::container::ogg::OpusTags;
 use crate::options::{LoopMode, PlayOptions};
-use crate::ui::{escape_terminal_path, escape_terminal_text, heading};
+use crate::ui::{escape_terminal_path, escape_terminal_text};
 
 /// What ended a track. Drives the index-advancement logic in the main FSM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,25 +42,75 @@ enum Action {
     Quit,
 }
 
-/// Enables terminal raw mode on construction and disables it on Drop. The
-/// Drop impl runs on panic, `?`-bubble, or clean return, which is why this is
-/// a guard rather than a pair of bare function calls.
-struct RawModeGuard;
+/// Terminal mode operations used by [`RawModeGuard`]. A small seam keeps the
+/// restore path unit-testable without requiring a real interactive terminal.
+trait TerminalMode {
+    fn enable_raw_mode(&mut self) -> io::Result<()>;
+    fn disable_raw_mode(&mut self) -> io::Result<()>;
+}
 
-impl RawModeGuard {
-    fn enable() -> Result<Self> {
-        crossterm::terminal::enable_raw_mode().context("enabling terminal raw mode")?;
-        Ok(Self)
+struct CrosstermTerminal;
+
+impl TerminalMode for CrosstermTerminal {
+    fn enable_raw_mode(&mut self) -> io::Result<()> {
+        crossterm::terminal::enable_raw_mode()
+    }
+
+    fn disable_raw_mode(&mut self) -> io::Result<()> {
+        crossterm::terminal::disable_raw_mode()
     }
 }
 
-impl Drop for RawModeGuard {
+/// Enables terminal raw mode on construction. Normal/error exits call
+/// [`RawModeGuard::restore`] explicitly so failures are reported; `Drop`
+/// remains the best-effort fallback for panic/unwind paths.
+struct RawModeGuard<'a, T: TerminalMode> {
+    terminal: &'a mut T,
+    active: bool,
+}
+
+impl<'a, T: TerminalMode> RawModeGuard<'a, T> {
+    fn enable(terminal: &'a mut T) -> Result<Self> {
+        terminal
+            .enable_raw_mode()
+            .context("enabling terminal raw mode")?;
+        Ok(Self {
+            terminal,
+            active: true,
+        })
+    }
+
+    fn restore(&mut self) -> Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+        self.terminal
+            .disable_raw_mode()
+            .context("restoring terminal raw mode")?;
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl<T: TerminalMode> Drop for RawModeGuard<'_, T> {
     fn drop(&mut self) {
-        let _ = crossterm::terminal::disable_raw_mode();
+        if self.active {
+            let _ = self.terminal.disable_raw_mode();
+        }
     }
 }
 
 pub fn play(opts: PlayOptions) -> Result<()> {
+    let mut stdout = std::io::stdout();
+    let mut stderr = std::io::stderr();
+    play_with_io(opts, &mut stdout, &mut stderr)
+}
+
+fn play_with_io<W: Write, E: Write>(
+    opts: PlayOptions,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<()> {
     validate_volume(opts.volume)?;
     // Validate gain before even the device-list shortcut. Direct library
     // callers must not be able to bypass the same option boundary as Clap.
@@ -68,7 +119,7 @@ pub fn play(opts: PlayOptions) -> Result<()> {
     // `--list-devices` short-circuits before the banner, any file I/O, and any
     // audio-output initialisation: we only need a host to walk for names.
     if opts.list_devices {
-        return list_output_devices();
+        return list_output_devices(stdout);
     }
 
     // Resolve the audio device *before* touching the filesystem. A bogus
@@ -80,150 +131,199 @@ pub fn play(opts: PlayOptions) -> Result<()> {
             .map_err(|e| anyhow!("no default audio output device available: {e}"))?,
     };
 
-    heading("play");
+    write_output(stdout, format_args!("{}\n", "play".bright_yellow().bold()))?;
 
     let playlist = build_playlist(&opts.input)?;
     if playlist.len() == 1 {
-        println!("file     {}", escape_terminal_path(&playlist[0]).cyan());
+        write_output(
+            stdout,
+            format_args!("file     {}\n", escape_terminal_path(&playlist[0]).cyan()),
+        )?;
     } else {
-        println!(
-            "playlist {} tracks from {}",
-            playlist.len().to_string().bright_white(),
-            escape_terminal_path(&opts.input).cyan(),
-        );
+        write_output(
+            stdout,
+            format_args!(
+                "playlist {} tracks from {}\n",
+                playlist.len().to_string().bright_white(),
+                escape_terminal_path(&opts.input).cyan(),
+            ),
+        )?;
     }
 
     let interactive = interactive_enabled(opts.quiet);
-    // Bind the guard so it lives for the whole playback session and disables
-    // raw mode on any path out of this function.
-    let _raw = if interactive {
-        let guard = RawModeGuard::enable()?;
-        // Raw mode disables the implicit line ending for `println!`, so we
-        // stitch `\r\n` explicitly for the help row + blank status row.
-        print!("[space] pause  [n] next  [p] prev  [q] quit\r\n\r\n");
-        let _ = std::io::stdout().flush();
-        Some(guard)
+    let mut terminal = CrosstermTerminal;
+    // Keep the guard alive for the complete playback session. The closure
+    // below captures all fallible output and playback errors; explicit
+    // restoration afterward can therefore preserve both error causes.
+    let mut raw = if interactive {
+        Some(RawModeGuard::enable(&mut terminal)?)
     } else {
         None
     };
 
-    let mut idx: usize = 0;
-    let mut consecutive_errors: usize = 0;
-    let playlist_len = playlist.len();
-
-    'outer: loop {
-        let path = &playlist[idx];
-
-        // Decode-latency UX: print an ephemeral `decoding …` line only on the
-        // interactive TTY path. Redirected and quiet playback must stay plain
-        // text; carriage returns and erase escapes make logs unreadable.
+    let playback_result = (|| -> Result<()> {
         if interactive {
-            let stem = path
-                .file_stem()
-                .map(|s| escape_terminal_text(&s.to_string_lossy()))
-                .unwrap_or_else(|| escape_terminal_path(path));
-            let cols = crossterm::terminal::size()
-                .map(|(w, _)| w as usize)
-                .unwrap_or(80);
-            let prefix = format!("decoding {}/{}  ", idx + 1, playlist_len);
-            let stem_fit = truncate_to_fit(&stem, cols, prefix.width(), 0);
-            print!("\r{prefix}{stem_fit}");
-            let _ = std::io::stdout().flush();
+            // Raw mode disables the implicit line ending for `println!`, so
+            // stitch `\r\n` explicitly for the help row + blank status row.
+            write_output(
+                stdout,
+                format_args!("[space] pause  [n] next  [p] prev  [q] quit\r\n\r\n"),
+            )?;
         }
 
-        let (decoded, tags) = match decode_track(path, opts.gain_db) {
-            Ok(ok) => ok,
-            Err(e) => {
-                if interactive {
-                    // Clear the ephemeral decoding line; the warning goes to
-                    // stderr so it sits above the next status-line repaint.
-                    print!("\r\x1b[K");
-                    let _ = std::io::stdout().flush();
-                }
-                eprintln!(
-                    "{} skipping {}: {}",
-                    "warning:".yellow(),
-                    escape_terminal_path(path),
-                    escape_terminal_text(&e.to_string())
-                );
-                consecutive_errors += 1;
-                if consecutive_errors >= playlist_len {
-                    bail!("all {playlist_len} tracks failed to decode");
-                }
-                idx = match advance_on_error(idx, playlist_len, opts.loop_mode) {
-                    Some(next) => next,
-                    None => break 'outer,
-                };
-                continue 'outer;
+        let mut idx: usize = 0;
+        let mut consecutive_errors: usize = 0;
+        let playlist_len = playlist.len();
+
+        'outer: loop {
+            let path = &playlist[idx];
+
+            // Decode-latency UX: print an ephemeral `decoding …` line only on the
+            // interactive TTY path. Redirected and quiet playback must stay plain
+            // text; carriage returns and erase escapes make logs unreadable.
+            if interactive {
+                let stem = path
+                    .file_stem()
+                    .map(|s| escape_terminal_text(&s.to_string_lossy()))
+                    .unwrap_or_else(|| escape_terminal_path(path));
+                let cols = crossterm::terminal::size()
+                    .map(|(w, _)| w as usize)
+                    .unwrap_or(80);
+                let prefix = format!("decoding {}/{}  ", idx + 1, playlist_len);
+                let stem_fit = truncate_to_fit(&stem, cols, prefix.width(), 0);
+                write_output(stdout, format_args!("\r{prefix}{stem_fit}"))?;
             }
-        };
-        consecutive_errors = 0;
 
-        let channels_u16 =
-            u16::try_from(decoded.channels).map_err(|_| anyhow!("channel count overflow"))?;
-        let duration = Duration::from_secs_f64(
-            decoded.samples.len() as f64 / decoded.channels as f64 / decoded.sample_rate as f64,
-        );
-        let file_len = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-        let avg_kbps = compute_avg_kbps(file_len, duration.as_secs_f64());
-        let display_name = resolve_display_name(&tags, path);
-
-        let sink =
-            rodio::Sink::try_new(&handle).map_err(|e| anyhow!("creating sink failed: {e}"))?;
-        if let Some(v) = opts.volume {
-            sink.set_volume(v.clamp(0.0, 1.0));
-        }
-        sink.append(rodio::buffer::SamplesBuffer::new(
-            channels_u16,
-            decoded.sample_rate,
-            decoded.samples,
-        ));
-
-        let action = if interactive {
-            run_track_loop(
-                &sink,
-                &display_name,
-                duration,
-                idx,
-                playlist_len,
-                opts.loop_mode,
-                avg_kbps,
-            )?
-        } else {
-            run_track_noninteractive(&sink, &display_name, duration, idx, playlist_len);
-            Action::TrackFinished
-        };
-
-        // Read the elapsed position while the sink is still in scope —
-        // Prev's "restart-current vs previous-track" branch uses it.
-        let pos_at_exit = sink.get_pos();
-
-        match action {
-            Action::TrackFinished => {
-                idx = match opts.loop_mode {
-                    LoopMode::Single => idx,
-                    LoopMode::All => (idx + 1) % playlist_len,
-                    LoopMode::Off => {
-                        if idx + 1 < playlist_len {
-                            idx + 1
-                        } else {
-                            break 'outer;
-                        }
+            let (decoded, tags) = match decode_track(path, opts.gain_db) {
+                Ok(ok) => ok,
+                Err(e) => {
+                    if interactive {
+                        // Clear the ephemeral decoding line; the warning goes to
+                        // stderr so it sits above the next status-line repaint.
+                        write_output(stdout, format_args!("\r\x1b[K"))?;
                     }
-                };
-            }
-            Action::Next => idx = (idx + 1) % playlist_len,
-            Action::Prev => {
-                // Convention: >2s means restart current, else step back.
-                if pos_at_exit <= Duration::from_secs(2) {
-                    idx = if idx == 0 { playlist_len - 1 } else { idx - 1 };
+                    write_output(
+                        stderr,
+                        format_args!(
+                            "{} skipping {}: {}\n",
+                            "warning:".yellow(),
+                            escape_terminal_path(path),
+                            escape_terminal_text(&e.to_string())
+                        ),
+                    )?;
+                    consecutive_errors += 1;
+                    if consecutive_errors >= playlist_len {
+                        bail!("all {playlist_len} tracks failed to decode");
+                    }
+                    idx = match advance_on_error(idx, playlist_len, opts.loop_mode) {
+                        Some(next) => next,
+                        None => break 'outer,
+                    };
+                    continue 'outer;
                 }
+            };
+            consecutive_errors = 0;
+
+            let channels_u16 =
+                u16::try_from(decoded.channels).map_err(|_| anyhow!("channel count overflow"))?;
+            let duration = Duration::from_secs_f64(
+                decoded.samples.len() as f64 / decoded.channels as f64 / decoded.sample_rate as f64,
+            );
+            let file_len = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            let avg_kbps = compute_avg_kbps(file_len, duration.as_secs_f64());
+            let display_name = resolve_display_name(&tags, path);
+
+            let sink =
+                rodio::Sink::try_new(&handle).map_err(|e| anyhow!("creating sink failed: {e}"))?;
+            if let Some(v) = opts.volume {
+                sink.set_volume(v.clamp(0.0, 1.0));
             }
-            Action::Quit => break 'outer,
+            sink.append(rodio::buffer::SamplesBuffer::new(
+                channels_u16,
+                decoded.sample_rate,
+                decoded.samples,
+            ));
+
+            let action = if interactive {
+                run_track_loop(
+                    stdout,
+                    &sink,
+                    &display_name,
+                    duration,
+                    idx,
+                    playlist_len,
+                    opts.loop_mode,
+                    avg_kbps,
+                )?
+            } else {
+                run_track_noninteractive(
+                    stdout,
+                    &sink,
+                    &display_name,
+                    duration,
+                    idx,
+                    playlist_len,
+                )?;
+                Action::TrackFinished
+            };
+
+            // Read the elapsed position while the sink is still in scope —
+            // Prev's "restart-current vs previous-track" branch uses it.
+            let pos_at_exit = sink.get_pos();
+
+            match action {
+                Action::TrackFinished => {
+                    idx = match opts.loop_mode {
+                        LoopMode::Single => idx,
+                        LoopMode::All => (idx + 1) % playlist_len,
+                        LoopMode::Off => {
+                            if idx + 1 < playlist_len {
+                                idx + 1
+                            } else {
+                                break 'outer;
+                            }
+                        }
+                    };
+                }
+                Action::Next => idx = (idx + 1) % playlist_len,
+                Action::Prev => {
+                    // Convention: >2s means restart current, else step back.
+                    if pos_at_exit <= Duration::from_secs(2) {
+                        idx = if idx == 0 { playlist_len - 1 } else { idx - 1 };
+                    }
+                }
+                Action::Quit => break 'outer,
+            }
+        }
+        Ok(())
+    })();
+
+    let restore_result = raw
+        .as_mut()
+        .map(RawModeGuard::restore)
+        .transpose()
+        .map(|_| ());
+    combine_playback_and_restore(playback_result, restore_result)
+}
+
+fn write_output<W: Write>(writer: &mut W, args: fmt::Arguments<'_>) -> Result<()> {
+    writer.write_fmt(args).context("writing playback output")?;
+    writer.flush().context("flushing playback output")?;
+    Ok(())
+}
+
+fn combine_playback_and_restore<T>(
+    playback_result: Result<T>,
+    restore_result: Result<()>,
+) -> Result<T> {
+    match (playback_result, restore_result) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(playback), Ok(())) => Err(playback),
+        (Ok(_), Err(restore)) => Err(restore),
+        (Err(playback), Err(restore)) => {
+            Err(playback.context(format!("terminal restoration also failed: {restore:#}")))
         }
     }
-
-    Ok(())
 }
 
 /// Validate `--gain DB` and convert it to a linear multiplier. Returns 1.0 for
@@ -293,7 +393,7 @@ fn format_device_list(names: &[String]) -> Result<String> {
 /// scripts can `if ropusplay --list-devices; then …` without parsing stdout.
 /// Enumeration + printing live here; the formatting + empty-list contract is
 /// delegated to `format_device_list` so it is unit-testable.
-fn list_output_devices() -> Result<()> {
+fn list_output_devices<W: Write>(stdout: &mut W) -> Result<()> {
     let host = rodio::cpal::default_host();
     let devices = host
         .output_devices()
@@ -308,9 +408,7 @@ fn list_output_devices() -> Result<()> {
         }
     }
     let formatted = format_device_list(&names)?;
-    print!("{formatted}");
-    let _ = std::io::stdout().flush();
-    Ok(())
+    write_output(stdout, format_args!("{formatted}"))
 }
 
 /// Find an output device by exact (case-sensitive) name and hand the caller a
@@ -363,7 +461,8 @@ fn open_named_output_stream(
 /// naturally (`Action::TrackFinished`) or the user presses `n` / `p` / `q` /
 /// Ctrl-C.
 #[allow(clippy::too_many_arguments)]
-fn run_track_loop(
+fn run_track_loop<W: Write>(
+    stdout: &mut W,
     sink: &rodio::Sink,
     display_name: &str,
     duration: Duration,
@@ -392,16 +491,14 @@ fn run_track_loop(
             avg_kbps,
         );
         if last_rendered.as_deref() != Some(status.as_str()) {
-            print!("\r\x1b[K{status}");
-            let _ = std::io::stdout().flush();
+            write_output(stdout, format_args!("\r\x1b[K{status}"))?;
             last_rendered = Some(status);
         }
 
         if sink.empty() {
             // Move off the status line so subsequent output (next track's
             // decoding line or shell prompt) does not overwrite it.
-            print!("\r\n");
-            let _ = std::io::stdout().flush();
+            write_output(stdout, format_args!("\r\n"))?;
             return Ok(Action::TrackFinished);
         }
 
@@ -430,18 +527,15 @@ fn run_track_loop(
                         last_rendered = None;
                     }
                     KeyCode::Char('n') => {
-                        print!("\r\n");
-                        let _ = std::io::stdout().flush();
+                        write_output(stdout, format_args!("\r\n"))?;
                         return Ok(Action::Next);
                     }
                     KeyCode::Char('p') => {
-                        print!("\r\n");
-                        let _ = std::io::stdout().flush();
+                        write_output(stdout, format_args!("\r\n"))?;
                         return Ok(Action::Prev);
                     }
                     KeyCode::Char('q') => {
-                        print!("\r\n");
-                        let _ = std::io::stdout().flush();
+                        write_output(stdout, format_args!("\r\n"))?;
                         return Ok(Action::Quit);
                     }
                     KeyCode::Char('c') | KeyCode::Char('C')
@@ -450,8 +544,7 @@ fn run_track_loop(
                         // In raw mode on Windows, Ctrl-C is a KeyEvent, not a
                         // signal. Without this branch the user would have no
                         // way to exit.
-                        print!("\r\n");
-                        let _ = std::io::stdout().flush();
+                        write_output(stdout, format_args!("\r\n"))?;
                         return Ok(Action::Quit);
                     }
                     _ => {}
@@ -464,13 +557,14 @@ fn run_track_loop(
 /// Non-interactive fallback: print one summary line and block until the sink
 /// drains. Used when stdout or stdin is not a tty, or when `-q/--quiet` is
 /// set — both cases where a repainting status line would be noise.
-fn run_track_noninteractive(
+fn run_track_noninteractive<W: Write>(
+    stdout: &mut W,
     sink: &rodio::Sink,
     display_name: &str,
     duration: Duration,
     track_idx: usize,
     playlist_len: usize,
-) {
+) -> Result<()> {
     let total = duration.as_secs();
     let clock = if total >= 3600 {
         format!(
@@ -482,13 +576,17 @@ fn run_track_noninteractive(
     } else {
         format!("{}:{:02}", total / 60, total % 60)
     };
-    println!(
-        "playing {}/{}  {}  ({clock})",
-        track_idx + 1,
-        playlist_len,
-        escape_terminal_text(display_name),
-    );
+    write_output(
+        stdout,
+        format_args!(
+            "playing {}/{}  {}  ({clock})\n",
+            track_idx + 1,
+            playlist_len,
+            escape_terminal_text(display_name),
+        ),
+    )?;
     sink.sleep_until_end();
+    Ok(())
 }
 
 /// Average bitrate in kbps computed from on-disk byte size and decoded
@@ -779,6 +877,96 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("injected writer failure"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::other("injected flush failure"))
+        }
+    }
+
+    struct FlushFailingWriter(Vec<u8>);
+
+    impl Write for FlushFailingWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::other("injected flush failure"))
+        }
+    }
+
+    struct FakeTerminal {
+        disable_calls: usize,
+        fail_disable: bool,
+    }
+
+    impl TerminalMode for FakeTerminal {
+        fn enable_raw_mode(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn disable_raw_mode(&mut self) -> io::Result<()> {
+            self.disable_calls += 1;
+            if self.fail_disable {
+                Err(io::Error::other("injected restore failure"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn write_output_propagates_write_failures() {
+        let mut writer = FailingWriter;
+        let error = write_output(&mut writer, format_args!("hello"))
+            .expect_err("injected output failure must be reported");
+        assert!(format!("{error:#}").contains("writing playback output"));
+    }
+
+    #[test]
+    fn write_output_propagates_flush_failures() {
+        let mut writer = FlushFailingWriter(Vec::new());
+        let error = write_output(&mut writer, format_args!("hello"))
+            .expect_err("injected flush failure must be reported");
+        assert!(format!("{error:#}").contains("flushing playback output"));
+        assert_eq!(writer.0, b"hello");
+    }
+
+    #[test]
+    fn raw_mode_restore_reports_failure_and_drop_retries() {
+        let mut terminal = FakeTerminal {
+            disable_calls: 0,
+            fail_disable: true,
+        };
+        {
+            let mut guard = RawModeGuard::enable(&mut terminal).expect("enable raw mode");
+            let error = guard
+                .restore()
+                .expect_err("injected restore failure must be reported");
+            assert!(format!("{error:#}").contains("restoring terminal raw mode"));
+        }
+        assert_eq!(terminal.disable_calls, 2, "Drop remains an unwind fallback");
+    }
+
+    #[test]
+    fn playback_and_restore_errors_are_both_preserved() {
+        let error = combine_playback_and_restore::<()>(
+            Err(anyhow!("injected playback failure")),
+            Err(anyhow!("restoring terminal raw mode: injected failure")),
+        )
+        .expect_err("both injected failures must be returned");
+        let message = format!("{error:#}");
+        assert!(message.contains("injected playback failure"));
+        assert!(message.contains("restoring terminal raw mode: injected failure"));
     }
 
     // -- build_playlist ----------------------------------------------------

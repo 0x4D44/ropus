@@ -1,3 +1,9 @@
+- Propagate playback writes and explicitly restore raw mode; Drop alone cannot report terminal cleanup failures (`commands/play.rs`).
+
+  Keep playback output behind a fallible `Write` seam so write and flush failures
+  reach the caller. Restore raw mode before the guard drops, and combine cleanup
+  errors with playback failures without hiding either cause.
+
 - Use Unicode cell width plus grapheme clusters for status truncation; scalar counts wrap CJK/emoji (`commands/play.rs:truncate_to_fit`).
 
   Measure prefixes, suffixes, and labels with `unicode-width`, then truncate
