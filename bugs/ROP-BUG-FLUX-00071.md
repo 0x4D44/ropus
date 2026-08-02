@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00071 — Integrated DRED encoder gate ignores malformed packets after one success
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-deep-plc/dred-parse-oracle
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260802T013109Z-p32726-n965228000-c1 branch=task/bug-ROP-BUG-FLUX-00071-run-fix-20260802T013109Z-p32726-n965228000-c1 code=5c76cfc gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260802T013109Z-p32726-n965228000-c1 branch=task/bug-ROP-BUG-FLUX-00071-run-fix-20260802T013109Z-p32726-n965228000-c1 code=5c76cfc gate=manual) -> Closed (2026-08-02, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main 60de518; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,3 +29,24 @@ Static review at origin/main b65f812. /Users/md/language/ropus/harness-deep-plc/
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-02, independent two-eyes, host flux)
+
+- Fix commit `5c76cfc` extracts `validate_c_parse_frame` and `validate_rust_dred_frame` in
+  `dred_integrated_encode.rs`, called unconditionally (`.unwrap_or_else(|e| panic!(...))`)
+  for every packet in both `rust_encoded_packets_parse_on_c_reference` and
+  `c_encoded_packets_parse_with_rust_decoder`, replacing the old `if ret >= 0 && nb_latents
+  >= 1 { ... }` guard that silently skipped negative-return packets after an earlier
+  success. A new `validation_tests` module directly proves the fix:
+  `malformed_packet_after_valid_packet_is_not_masked` asserts a valid frame 0
+  (`validate_c_parse_frame(0, 720, 1, 2)` succeeds) followed by a malformed frame 1
+  (`validate_c_parse_frame(1, -1, 0, -1)` returns `Err`) — exactly the masking scenario the
+  bug describes, and the equivalent negative case for the Rust-side validator. Under the
+  pre-fix loop shape (`if ret >= 0 && ... { assert }`) a `ret = -1` packet falls outside the
+  branch and is silently skipped, so this validator and its unit tests could not exist before
+  the fix.
+- Rebuilt against the real C reference on a fresh worktree at `origin/main` `60de518`:
+  `cargo test -p ropus-harness-deep-plc --test dred_integrated_encode` — 5 passed, 0 failed,
+  including both new `validation_tests` cases and the three live Rust<->C DRED round-trip
+  cases.
+- `cargo clippy -p ropus-harness-deep-plc --all-targets --locked -- -D warnings`: clean.

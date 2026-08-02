@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00070 — DRED bitrate-plumbing gates do not prove their claimed behavior
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-deep-plc/dred-bitrate-oracles
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260802T012532Z-p27320-n993770000-c1 branch=task/bug-ROP-BUG-FLUX-00070-run-fix-20260802T012532Z-p27320-n993770000-c1 code=b66301d gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260802T012532Z-p27320-n993770000-c1 branch=task/bug-ROP-BUG-FLUX-00070-run-fix-20260802T012532Z-p27320-n993770000-c1 code=b66301d gate=manual) -> Closed (2026-08-02, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main 60de518; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,3 +29,22 @@ Static review at origin/main b65f812. /Users/md/language/ropus/harness-deep-plc/
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-02, independent two-eyes, host flux)
+
+- Fix commit `b66301d` relabels `dred_bitrate_plumbing_diff.rs`'s test as
+  `cross_precision_silk_packet_envelope_is_bounded` (an honest coarse diagnostic, no longer
+  claiming DRED parity), adds a new `require_populated_dred_extensions` helper to
+  `dred_bitrate_plumbing_nonzero_diff.rs` that parses both packet streams and asserts at
+  least one populated DRED extension before the PCM side check, and adds
+  `active_duration_100_vector_proves_nonzero_dred_budget` to
+  `dred_compute_bitrate_ffi_diff.rs` pinning the exact duration-100 scalar configuration.
+  Confirmed by reading the diff: the new assertions run strictly before the PCM/SNR
+  comparison, matching "require populated DRED extensions before applying PCM side checks".
+- Rebuilt against the real C reference on a fresh worktree at `origin/main` `60de518`:
+  `cargo test -p ropus-harness-deep-plc --test dred_bitrate_plumbing_diff --test
+  dred_bitrate_plumbing_nonzero_diff --test dred_compute_bitrate_ffi_diff` — 5 passed, 0
+  failed, including `rust_and_c_dred_packets_match_at_dred_active_config` (both encoder
+  streams proved to carry populated DRED before PCM comparison) and
+  `active_duration_100_vector_proves_nonzero_dred_budget` (duration-100, not 320).
+- `cargo clippy -p ropus-harness-deep-plc --all-targets --locked -- -D warnings`: clean.
