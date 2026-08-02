@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00070 — DRED bitrate-plumbing gates do not prove their claimed behavior
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-deep-plc/dred-bitrate-oracles
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260802T012532Z-p27320-n993770000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00070-run-fix-20260802T012532Z-p27320-n993770000-c1
-- **Owner base:** 27d6f4334686ddc5eca39891fe328291631cf6ef
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-02T01:25:32Z
-- **Owner until:** 2026-08-02T03:25:32Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260802T012532Z-p27320-n993770000-c1 branch=task/bug-ROP-BUG-FLUX-00070-run-fix-20260802T012532Z-p27320-n993770000-c1 code=b66301d gate=manual)
 
 ## Observation
 
