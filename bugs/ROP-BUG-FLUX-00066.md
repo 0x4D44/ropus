@@ -5,15 +5,15 @@
 - **Severity:** Low
 - **Area:** ropusplay/terminal-io
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260802T011105Z-p7367-n149474000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00066-run-fix-20260802T011105Z-p7367-n149474000-c1
+- **Owner base:** 7aa8512450cb94db9ea0a88fcbe90fd40c7b7b99
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-02T01:11:05Z
+- **Owner until:** 2026-08-02T03:11:05Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
