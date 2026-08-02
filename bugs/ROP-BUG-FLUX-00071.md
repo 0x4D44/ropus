@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00071 — Integrated DRED encoder gate ignores malformed packets after one success
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-deep-plc/dred-parse-oracle
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260802T013109Z-p32726-n965228000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00071-run-fix-20260802T013109Z-p32726-n965228000-c1
-- **Owner base:** 468ce05b2c89b65c665389eae64030a7fa861807
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-02T01:31:09Z
-- **Owner until:** 2026-08-02T03:31:09Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260802T013109Z-p32726-n965228000-c1 branch=task/bug-ROP-BUG-FLUX-00071-run-fix-20260802T013109Z-p32726-n965228000-c1 code=5c76cfc gate=manual)
 
 ## Observation
 
