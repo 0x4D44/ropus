@@ -14,4 +14,6 @@ rubato = "0.16"                                          # resample to 48 kHz
 ogg = "0.9"                                              # Ogg container R/W
 rodio = "0.20"                                           # playback (cpal under the hood)
 crossterm = "0.28"                                       # terminal raw mode + key events for interactive player
+unicode-segmentation = "1.12"                             # grapheme-safe status-label truncation
+unicode-width = "0.1.14"                                  # terminal display-cell widths
 anyhow = "1.0"                                           # error ergonomics for CLI callers

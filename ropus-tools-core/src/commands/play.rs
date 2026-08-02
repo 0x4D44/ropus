@@ -20,6 +20,8 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::tty::IsTty;
 use ogg::reading::PacketReader;
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::audio::decode::{DecodedAudio, MAX_GAIN_DB, MIN_GAIN_DB, decode_to_f32_with_gain};
 use crate::container::ogg::OpusTags;
@@ -124,7 +126,7 @@ pub fn play(opts: PlayOptions) -> Result<()> {
                 .map(|(w, _)| w as usize)
                 .unwrap_or(80);
             let prefix = format!("decoding {}/{}  ", idx + 1, playlist_len);
-            let stem_fit = truncate_to_fit(&stem, cols, prefix.chars().count(), 0);
+            let stem_fit = truncate_to_fit(&stem, cols, prefix.width(), 0);
             print!("\r{prefix}{stem_fit}");
             let _ = std::io::stdout().flush();
         }
@@ -596,7 +598,6 @@ pub(crate) fn format_status_line(
     avg_kbps: f64,
 ) -> String {
     let display_name = escape_terminal_text(display_name);
-    // Both glyphs are cell-width 1 so chars().count() matches display cells.
     let glyph: char = if paused { '\u{2016}' } else { '\u{25B6}' };
     let track = format_track(track_idx, playlist_len);
     let loop_ind = loop_indicator(loop_mode);
@@ -608,24 +609,14 @@ pub(crate) fn format_status_line(
         // with `…` to fit the exact width.
         let prefix = format!("{glyph} {track}  ");
         let suffix = format!("  {pos_str} / {dur_str}");
-        let name = truncate_to_fit(
-            &display_name,
-            cols,
-            prefix.chars().count(),
-            suffix.chars().count(),
-        );
+        let name = truncate_to_fit(&display_name, cols, prefix.width(), suffix.width());
         return format!("{prefix}{name}{suffix}");
     }
 
     let bar = progress_bar(pos, dur);
     let prefix = format!("{glyph} {track}{loop_ind}  ");
     let suffix = format!("  [{bar}]  {pos_str} / {dur_str}  {avg_kbps:.0} kbps");
-    let name = truncate_to_fit(
-        &display_name,
-        cols,
-        prefix.chars().count(),
-        suffix.chars().count(),
-    );
+    let name = truncate_to_fit(&display_name, cols, prefix.width(), suffix.width());
     format!("{prefix}{name}{suffix}")
 }
 
@@ -687,24 +678,40 @@ fn format_duration(value: Duration, reference: Duration) -> String {
     }
 }
 
-/// Truncate `name` (by chars) so `prefix_cols + name_cols + suffix_cols <=
-/// cols`. Appends U+2026 when anything was removed. Returns the original when
-/// it already fits, or an empty string when prefix+suffix alone already
-/// overflow — this keeps the render degradation monotonic instead of panicking.
+/// Truncate `name` by grapheme clusters so `prefix_cols + name_cols +
+/// suffix_cols <= cols`, using Unicode terminal-cell widths. Appends U+2026
+/// when anything was removed. The scan stops at the first cluster beyond the
+/// visible budget; an untruncated label is the only case that scans its full
+/// input.
 fn truncate_to_fit(name: &str, cols: usize, prefix_cols: usize, suffix_cols: usize) -> String {
-    let budget = cols.saturating_sub(prefix_cols + suffix_cols);
-    let name_cols = name.chars().count();
-    if name_cols <= budget {
-        return name.to_string();
-    }
+    let fixed_cols = prefix_cols.saturating_add(suffix_cols);
+    let budget = cols.saturating_sub(fixed_cols);
     if budget == 0 {
         return String::new();
     }
-    // Reserve one column for the `…`.
-    let keep = budget.saturating_sub(1);
-    let mut out: String = name.chars().take(keep).collect();
-    out.push('\u{2026}');
-    out
+
+    let ellipsis = "…";
+    let keep_budget = budget.saturating_sub(ellipsis.width());
+    let mut used_cols = 0usize;
+    let mut keep_end = 0usize;
+
+    for (start, grapheme) in name.grapheme_indices(true) {
+        let grapheme_cols = grapheme.width();
+        let next_cols = used_cols.saturating_add(grapheme_cols);
+        if next_cols > budget {
+            let mut out = String::with_capacity(keep_end + ellipsis.len());
+            out.push_str(&name[..keep_end]);
+            out.push_str(ellipsis);
+            return out;
+        }
+
+        used_cols = next_cols;
+        if used_cols <= keep_budget {
+            keep_end = start + grapheme.len();
+        }
+    }
+
+    name.to_string()
 }
 
 /// Pick the next playlist index after a decode error. `Off` stops when we run
@@ -1150,9 +1157,9 @@ mod tests {
             192.0,
         );
         assert!(
-            line.chars().count() <= 60,
-            "rendered line must fit cols=60, got {} chars: {line}",
-            line.chars().count()
+            line.width() <= 60,
+            "rendered line must fit cols=60, got {} cells: {line}",
+            line.width()
         );
         assert!(
             line.contains('\u{2026}'),
@@ -1176,6 +1183,70 @@ mod tests {
         assert!(!line.contains('\u{2593}'), "no filled bar cell: {line}");
         assert!(!line.contains('\u{2591}'), "no empty bar cell: {line}");
         assert!(!line.contains("kbps"), "no bitrate: {line}");
+    }
+
+    #[test]
+    fn status_line_wide_labels_fit_terminal_cells() {
+        let wide_name = "東京".repeat(100);
+        let line = format_status_line(
+            60,
+            false,
+            LoopMode::Off,
+            &wide_name,
+            0,
+            1,
+            Duration::from_secs(30),
+            Duration::from_secs(240),
+            192.0,
+        );
+        assert!(line.width() <= 60, "wide label overflowed: {line}");
+        assert!(line.ends_with(" kbps"));
+        assert!(line.contains('\u{2026}'), "expected title ellipsis: {line}");
+    }
+
+    #[test]
+    fn status_line_resize_recomputes_unicode_budget() {
+        let name = "東京 👩\u{200D}💻 e\u{301} ".repeat(30);
+        let wide = format_status_line(
+            120,
+            false,
+            LoopMode::Off,
+            &name,
+            0,
+            1,
+            Duration::from_secs(30),
+            Duration::from_secs(240),
+            192.0,
+        );
+        let narrow = format_status_line(
+            40,
+            false,
+            LoopMode::Off,
+            &name,
+            0,
+            1,
+            Duration::from_secs(30),
+            Duration::from_secs(240),
+            192.0,
+        );
+        assert!(wide.width() <= 120, "wide render overflowed: {wide}");
+        assert!(narrow.width() <= 40, "narrow render overflowed: {narrow}");
+        assert_ne!(wide, narrow, "resize must change the rendered budget");
+    }
+
+    #[test]
+    fn truncate_to_fit_preserves_combining_and_emoji_graphemes() {
+        let combining = "e\u{301}".repeat(20);
+        let combining_fit = truncate_to_fit(&combining, 5, 0, 0);
+        assert_eq!(combining_fit.width(), 5);
+        assert_eq!(combining_fit, "e\u{301}e\u{301}e\u{301}e\u{301}…");
+        assert!(!combining_fit.ends_with('\u{301}'));
+
+        let emoji = "👩\u{200D}💻".repeat(20);
+        let emoji_fit = truncate_to_fit(&emoji, 5, 0, 0);
+        assert_eq!(emoji_fit.width(), 5);
+        assert_eq!(emoji_fit, "👩\u{200D}💻👩\u{200D}💻…");
+        assert!(!emoji_fit.contains("👩\u{200D}…"));
     }
 
     #[test]

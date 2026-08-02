@@ -1,3 +1,10 @@
+- Use Unicode cell width plus grapheme clusters for status truncation; scalar counts wrap CJK/emoji (`commands/play.rs:truncate_to_fit`).
+
+  Measure prefixes, suffixes, and labels with `unicode-width`, then truncate
+  on `unicode-segmentation` grapheme boundaries. Stop scanning when the first
+  cluster exceeds the visible budget; this keeps resize work bounded while
+  preserving combining marks and emoji ZWJ sequences.
+
 - Reject empty post-pre-skip decode output; empty sinks make playback look successful (`audio/decode.rs`).
 
   Packet-level decode failures may be skipped for recovery, but the shared
