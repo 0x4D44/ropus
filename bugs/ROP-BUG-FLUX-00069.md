@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00069 — Neural differential oracles accept non-finite output as passing
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Must
 - **Severity:** Medium
 - **Area:** harness-deep-plc/neural-oracles
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260802T011840Z-p16348-n137842000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00069-run-fix-20260802T011840Z-p16348-n137842000-c1
-- **Owner base:** 76e23b8c04d01b36e69c7c99d1cbb88e2bb5db0a
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-02T01:18:40Z
-- **Owner until:** 2026-08-02T03:18:40Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260802T011840Z-p16348-n137842000-c1 branch=task/bug-ROP-BUG-FLUX-00069-run-fix-20260802T011840Z-p16348-n137842000-c1 code=0159cf8 gate=manual)
 
 ## Observation
 
