@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00061 — CLI build provenance can be stale or identify an unrelated repository
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropusenc/build-provenance
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260801T235001Z-p20648-n265745000-c1 branch=task/bug-ROP-BUG-FLUX-00061-run-fix-20260801T235001Z-p20648-n265745000-c1 code=82f1c1fe3a11e9623f33d4ad4134235b9e37c992 gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260801T235001Z-p20648-n265745000-c1 branch=task/bug-ROP-BUG-FLUX-00061-run-fix-20260801T235001Z-p20648-n265745000-c1 code=82f1c1fe3a11e9623f33d4ad4134235b9e37c992 gate=manual) -> Closed (2026-08-02, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main 66f0954; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,6 +29,26 @@ Static review at origin/main b4e2c31. /Users/md/language/ropus/ropusenc/build.rs
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-02, independent two-eyes, host flux)
+
+- Fix commit `82f1c1f` adds a centralized `ropus-tools-core/src/build_provenance.rs`
+  module (`discover()`), used by all four `build.rs` scripts (`ropusenc`, `ropusdec`,
+  `ropusinfo`, `ropusplay`), replacing the byte-identical unsafe `git rev-parse` scripts
+  the bug and its notes describe. Confirmed by reading: each `build.rs` is now a 5-line
+  delegator to the shared module.
+- The regression suite `ropus-tools-core/tests/build_provenance.rs` (new file, added by
+  the fix) is a strong fails-before-fix case: it directly includes the new module and did
+  not exist prior to `82f1c1f`, so it could not compile or pass without the fix. Its four
+  cases (`normal_clone_tracks_head_and_same_branch_ref`,
+  `linked_worktree_resolves_common_ref_without_using_root_git_path`,
+  `detached_head_still_reports_commit_and_watches_head`,
+  `vendored_and_packaged_layouts_return_unknown`) exercise exactly the linked-worktree,
+  same-branch-ref, and unrelated-ancestor-repository scenarios in the observation and its
+  three per-CLI notes.
+- `cargo test -p ropus-tools-core --test build_provenance`: 4 passed, 0 failed.
+- `cargo clippy -p ropus-tools-core --all-targets --locked -- -D warnings`: clean.
+- `cargo build --workspace`: clean, no warnings.
 
 ### Confirmed in `ropusdec` (2026-07-31)
 

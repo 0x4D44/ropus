@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00062 — Quiet and no-color flags do not control all CLI output
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Low
 - **Area:** ropusenc/output-controls
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260802T000337Z-p75344-n767448000-c1 branch=task/bug-ROP-BUG-FLUX-00062-run-fix-20260802T000337Z-p75344-n767448000-c1 code=36928a3af769720eb3932c4096fdd7c744b64020 gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260802T000337Z-p75344-n767448000-c1 branch=task/bug-ROP-BUG-FLUX-00062-run-fix-20260802T000337Z-p75344-n767448000-c1 code=36928a3af769720eb3932c4096fdd7c744b64020 gate=manual) -> Closed (2026-08-02, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main 66f0954; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,6 +29,25 @@ Static review at origin/main b4e2c31. The signed parity goal at /Users/md/langua
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-02, independent two-eyes, host flux)
+
+- Fix commit `36928a3` carries a typed output policy into
+  `ropus-tools-core/src/commands/{decode,encode,play}.rs` reporting, adds `no_color`
+  handling in `ropus-tools-core/src/options.rs`/`prelude.rs`, and configures Clap with
+  `ColorChoice::Never` under `--no-color` in all four CLI `main.rs` files. New CLI
+  regression suites land in `ropusdec/tests/cli.rs`, `ropusenc/tests/cli.rs`, and
+  `ropusplay/tests/cli.rs`, plus unit tests in each `main.rs` (`no_color_disables_clap_ansi_for_help_and_errors`).
+- Fails-before/passes-after re-verified directly: reverted the fix's ten source files
+  (`decode.rs`, `encode.rs`, `commands/mod.rs`, `play.rs`, `options.rs`, `prelude.rs`, and
+  all four CLI `main.rs`) to their pre-fix versions (`1f373bf`) while keeping the new tests,
+  then ran `cargo test -p ropusdec -p ropusenc -p ropusplay -p ropusinfo`.
+  `ropusdec`'s `quiet_success_suppresses_informational_output` and
+  `quiet_failure_preserves_errors_without_progress_reports` both failed against the pre-fix
+  source (stdout carried informational text under `--quiet`), reproducing the bug exactly.
+  Restored the fix and reran: all suites green (`ropusdec` 6/6, `ropusenc` 10/10, `ropusinfo`
+  8/8, `ropusplay` 3/3, plus each CLI's inline unit tests).
+- `cargo clippy -p ropus-tools-core --all-targets --locked -- -D warnings`: clean.
 
 ### Confirmed in `ropusdec` (2026-07-31)
 
