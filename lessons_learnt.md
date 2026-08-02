@@ -4,6 +4,12 @@
   reach the caller. Restore raw mode before the guard drops, and combine cleanup
   errors with playback failures without hiding either cause.
 
+- Differential oracles must reject non-finite neural inputs and outputs before bit/SNR math (`harness-deep-plc/tests/support/finite_oracle.rs`).
+
+  NaN makes ordered comparisons false, so running maxima retain optimistic
+  initial values and a Tier 2 gate can pass catastrophically invalid output.
+  Validate both sides and derived metrics before evaluating parity or drift.
+
 - Use Unicode cell width plus grapheme clusters for status truncation; scalar counts wrap CJK/emoji (`commands/play.rs:truncate_to_fit`).
 
   Measure prefixes, suffixes, and labels with `unicode-width`, then truncate

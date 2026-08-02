@@ -37,6 +37,10 @@ use ropus_harness_deep_plc::{
     ropus_test_rdovaedec_new,
 };
 
+#[path = "support/finite_oracle.rs"]
+mod finite_oracle;
+use finite_oracle::{assert_finite_pair, assert_finite_slice};
+
 /// How many consecutive frames to push through before declaring divergence
 /// a pass. More than the encoder's kernel depth so the GRU banks evolve
 /// and the conv memories shift at least a few times post-init.
@@ -90,7 +94,7 @@ fn synth_input(f: usize) -> [f32; DEC_INPUT_WIDTH] {
 }
 
 fn compute_snr_db(reference: &[f32], test: &[f32]) -> f64 {
-    assert_eq!(reference.len(), test.len());
+    assert_finite_pair("RDOVAE decoder SNR", reference, test);
     let mut sig_power = 0.0f64;
     let mut err_power = 0.0f64;
     for (&r, &t) in reference.iter().zip(test.iter()) {
@@ -106,11 +110,17 @@ fn compute_snr_db(reference: &[f32], test: &[f32]) -> f64 {
     if err == 0.0 {
         return f64::INFINITY;
     }
-    10.0 * (sig / err).log10()
+    let snr = 10.0 * (sig / err).log10();
+    assert!(
+        snr.is_finite(),
+        "RDOVAE decoder SNR became non-finite: {snr:?} (signal={sig:?}, error={err:?})"
+    );
+    snr
 }
 
 /// Index of the first diverging element (if any). Returns None on bit-exact.
 fn first_divergent(a: &[f32], b: &[f32]) -> Option<(usize, f32, f32)> {
+    assert_finite_pair("RDOVAE decoder differential output", a, b);
     for (i, (&x, &y)) in a.iter().zip(b.iter()).enumerate() {
         if x.to_bits() != y.to_bits() {
             return Some((i, x, y));
@@ -158,6 +168,7 @@ fn rdovae_decode_qframe_matches_c_reference() {
     // bank — the same projection the encoder-side `gdense2` emits at the
     // start of each DRED payload.
     let initial_state = synth_initial_state();
+    assert_finite_slice("RDOVAE decoder initial state", &initial_state);
     unsafe {
         ropus_test_dred_rdovae_dec_init_states(c_state, c_model, initial_state.as_ptr());
     }
@@ -171,6 +182,7 @@ fn rdovae_decode_qframe_matches_c_reference() {
 
     for f in 0..NUM_FRAMES {
         let input = synth_input(f);
+        assert_finite_slice("RDOVAE decoder input", &input);
 
         // --- C forward pass ---
         let mut c_qframe = vec![0.0f32; DEC_QFRAME_WIDTH];
@@ -187,8 +199,8 @@ fn rdovae_decode_qframe_matches_c_reference() {
         let mut r_qframe = vec![0.0f32; DEC_QFRAME_WIDTH];
         rust_state.decode_qframe(&rust_model, &mut r_qframe, &input);
 
-        // Tier 1 — bit-exact. `to_bits()` comparison handles NaN / -0.0
-        // edge cases without tripping PartialEq quirks.
+        // Tier 1 — bit-exact. The finite guard in `first_divergent` rejects
+        // NaN and infinities before `to_bits()` comparison can go false-green.
         let qframe_diverge = first_divergent(&c_qframe, &r_qframe);
         if let Some(detail) = qframe_diverge {
             all_bit_exact = false;
@@ -295,6 +307,7 @@ fn decode_qframe_diff_quantised_inputs() {
             let s = (rng as i32) as f64 / (i32::MAX as f64);
             *x = (s * 0.2) as f32;
         }
+        assert_finite_slice("quantised-input encoder warmup", &enc_input);
     }
     let mut warmup_latents = [0.0f32; DRED_LATENT_DIM];
     let mut seed_state = [0.0f32; DRED_STATE_DIM];
@@ -332,6 +345,7 @@ fn decode_qframe_diff_quantised_inputs() {
             let s = (rng as i32) as f64 / (i32::MAX as f64);
             *x = (s * 0.2) as f32;
         }
+        assert_finite_slice("quantised-input encoder frame", &frame_input);
         let mut latents = [0.0f32; DRED_LATENT_DIM];
         let mut _state = [0.0f32; DRED_STATE_DIM];
         rust_enc_state.encode_dframe(&rust_enc_model, &mut latents, &mut _state, &frame_input);
@@ -346,6 +360,7 @@ fn decode_qframe_diff_quantised_inputs() {
         let mut dec_input = [0.0f32; DRED_LATENT_DIM + 1];
         dec_input[..DRED_LATENT_DIM].copy_from_slice(&quantised_latent);
         dec_input[DRED_LATENT_DIM] = q_level as f32;
+        assert_finite_slice("quantised-input decoder input", &dec_input);
 
         // --- C forward pass ---
         let mut c_qframe = vec![0.0f32; 80];

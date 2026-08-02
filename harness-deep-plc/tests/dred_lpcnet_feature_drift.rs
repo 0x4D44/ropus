@@ -20,6 +20,10 @@ use ropus_harness_deep_plc::{
     ropus_test_dredenc_free, ropus_test_dredenc_latents_buffer_fill, ropus_test_dredenc_new,
 };
 
+#[path = "support/finite_oracle.rs"]
+mod finite_oracle;
+use finite_oracle::{assert_finite_pair, assert_finite_slice};
+
 const FIXTURE_NAME: &str = "48000hz_mono_sine440.wav";
 const FIXTURE_SR: i32 = 48_000;
 const FIXTURE_CH: i32 = 1;
@@ -161,6 +165,11 @@ fn lpcnet_feature_drift_report(per_frame: &[(Vec<f32>, Vec<f32>)]) -> LpcnetFeat
     let mut per_feature_max_abs_drift = [0.0f32; NB_TOTAL_FEATURES];
 
     for (frame, (c_feat, r_feat)) in per_frame.iter().enumerate() {
+        assert_finite_pair(
+            &format!("LPCNet feature drift frame {frame}"),
+            c_feat,
+            r_feat,
+        );
         assert_eq!(c_feat.len(), NB_TOTAL_FEATURES);
         assert_eq!(r_feat.len(), NB_TOTAL_FEATURES);
 
@@ -168,6 +177,12 @@ fn lpcnet_feature_drift_report(per_frame: &[(Vec<f32>, Vec<f32>)]) -> LpcnetFeat
         let mut frame_has_drift = false;
         for j in 0..NB_TOTAL_FEATURES {
             let diff = c_feat[j] - r_feat[j];
+            assert!(
+                diff.is_finite(),
+                "LPCNet feature drift became non-finite at frame {frame}, feature {j}: c={:?}, r={:?}, diff={diff:?}",
+                c_feat[j],
+                r_feat[j]
+            );
             let abs_diff = diff.abs();
             sum_sq += (diff as f64) * (diff as f64);
 
@@ -196,6 +211,10 @@ fn lpcnet_feature_drift_report(per_frame: &[(Vec<f32>, Vec<f32>)]) -> LpcnetFeat
         }
 
         let rms = (sum_sq / NB_TOTAL_FEATURES as f64).sqrt() as f32;
+        assert!(
+            rms.is_finite(),
+            "LPCNet per-frame RMS drift became non-finite at frame {frame}: {rms:?}"
+        );
         if rms > max_rms_per_frame {
             max_rms_per_frame = rms;
             max_rms_per_frame_idx = Some(frame);
@@ -457,6 +476,7 @@ fn test_dred_lpcnet_feature_drift_is_bounded_against_c_reference() {
         let sample_start = fi * frame_size * channels as usize;
         let sample_end = sample_start + frame_size * channels as usize;
         let frame_pcm = &pcm_f[sample_start..sample_end];
+        assert_finite_slice("LPCNet PCM input", frame_pcm);
 
         unsafe {
             ropus_test_dred_compute_latents(

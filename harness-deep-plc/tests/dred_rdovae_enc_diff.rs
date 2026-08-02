@@ -27,6 +27,10 @@ use ropus_harness_deep_plc::{
     ropus_test_rdovae_enc_state_new, ropus_test_rdovaeenc_free, ropus_test_rdovaeenc_new,
 };
 
+#[path = "support/finite_oracle.rs"]
+mod finite_oracle;
+use finite_oracle::{assert_finite_pair, assert_finite_slice};
+
 /// How many consecutive frames to push through before declaring divergence
 /// a pass. Covers at least two dilation=2 state rotations (2 frames) and a
 /// few extra to catch accumulation drift.
@@ -53,7 +57,7 @@ fn synth_input(f: usize) -> [f32; 2 * DRED_NUM_FEATURES] {
 }
 
 fn compute_snr_db(reference: &[f32], test: &[f32]) -> f64 {
-    assert_eq!(reference.len(), test.len());
+    assert_finite_pair("RDOVAE encoder SNR", reference, test);
     let mut sig_power = 0.0f64;
     let mut err_power = 0.0f64;
     for (&r, &t) in reference.iter().zip(test.iter()) {
@@ -69,11 +73,17 @@ fn compute_snr_db(reference: &[f32], test: &[f32]) -> f64 {
     if err == 0.0 {
         return f64::INFINITY;
     }
-    10.0 * (sig / err).log10()
+    let snr = 10.0 * (sig / err).log10();
+    assert!(
+        snr.is_finite(),
+        "RDOVAE encoder SNR became non-finite: {snr:?} (signal={sig:?}, error={err:?})"
+    );
+    snr
 }
 
 /// Index of the first diverging element (if any). Returns None on bit-exact.
 fn first_divergent(a: &[f32], b: &[f32]) -> Option<(usize, f32, f32)> {
+    assert_finite_pair("RDOVAE encoder differential output", a, b);
     for (i, (&x, &y)) in a.iter().zip(b.iter()).enumerate() {
         if x.to_bits() != y.to_bits() {
             return Some((i, x, y));
@@ -126,6 +136,7 @@ fn rdovae_encode_dframe_matches_c_reference() {
 
     for f in 0..NUM_FRAMES {
         let input = synth_input(f);
+        assert_finite_slice("RDOVAE encoder input", &input);
 
         // --- C forward pass ---
         let mut c_latents = vec![0.0f32; DRED_LATENT_DIM];
@@ -145,8 +156,8 @@ fn rdovae_encode_dframe_matches_c_reference() {
         let mut r_initial_state = vec![0.0f32; DRED_STATE_DIM];
         rust_state.encode_dframe(&rust_model, &mut r_latents, &mut r_initial_state, &input);
 
-        // Tier 1 — bit-exact. `to_bits()` comparison handles NaN / -0.0
-        // edge cases without tripping PartialEq quirks.
+        // Tier 1 — bit-exact. The finite guard in `first_divergent` rejects
+        // NaN and infinities before `to_bits()` comparison can go false-green.
         let latents_diverge = first_divergent(&c_latents, &r_latents);
         let state_diverge = first_divergent(&c_initial_state, &r_initial_state);
         if latents_diverge.is_some() || state_diverge.is_some() {
