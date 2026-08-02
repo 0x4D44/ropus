@@ -614,6 +614,70 @@ fn empty_ogg_audio_packet_is_rejected_without_plc_or_toc_fabrication() {
     let _ = std::fs::remove_file(output);
 }
 
+#[test]
+fn playback_rejects_header_only_all_invalid_and_pre_skip_only_audio() {
+    use ropus_tools_core::container::ogg::read_last_granule;
+
+    let source = encode_tmp_sine_opus("playback_zero_source");
+    let nonce = format!(
+        "{}_{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos()
+    );
+    let header_only = std::env::temp_dir().join(format!("ropus_play_header_only_{nonce}.opus"));
+    let all_invalid = std::env::temp_dir().join(format!("ropus_play_all_invalid_{nonce}.opus"));
+    let pre_skip_only = std::env::temp_dir().join(format!("ropus_play_pre_skip_only_{nonce}.opus"));
+
+    let final_granule = {
+        let mut file = std::fs::File::open(&source).expect("open playback source");
+        read_last_granule(
+            &mut file,
+            ropus_tools_core::container::ogg::OGG_STREAM_SERIAL,
+        )
+        .expect("scan playback source granule")
+        .expect("playback source has EOS granule")
+    };
+    let final_granule_u16 =
+        u16::try_from(final_granule).expect("one-second fixture granule fits in OpusHead");
+
+    rewrite_playback_fixture(&source, &header_only, 0, None, false, Some(0));
+    rewrite_playback_fixture(&source, &all_invalid, 0, Some(&[0x9B, 7]), true, Some(0));
+    rewrite_playback_fixture(
+        &source,
+        &pre_skip_only,
+        final_granule_u16,
+        None,
+        true,
+        Some(final_granule),
+    );
+
+    for (path, expect_empty_audio_error) in [
+        (&header_only, false),
+        (&all_invalid, false),
+        (&pre_skip_only, true),
+    ] {
+        let error = match ropus_tools_core::audio::decode::decode_to_f32(path) {
+            Ok(_) => panic!("zero-playback fixture must fail"),
+            Err(error) => error,
+        };
+        if expect_empty_audio_error {
+            assert!(
+                format!("{error:#}").contains("no audio samples"),
+                "unexpected zero-playback error for {}: {error:#}",
+                path.display()
+            );
+        }
+    }
+
+    let _ = std::fs::remove_file(source);
+    let _ = std::fs::remove_file(header_only);
+    let _ = std::fs::remove_file(all_invalid);
+    let _ = std::fs::remove_file(pre_skip_only);
+}
+
 /// Decode every audio packet, then apply the OpusHead/EOS timeline trims from
 /// RFC 7845. This deliberately does not use `commands::decode`: end-trim
 /// handling there is tracked separately, while this regression proves the
@@ -715,7 +779,7 @@ fn encode_rejects_empty_audio_without_creating_an_ogg_stream() {
     let error = commands::encode(timeline_encode_options(input.clone(), output.clone()))
         .expect_err("empty audio must be rejected");
     assert!(
-        error.to_string().contains("no audio samples"),
+        format!("{error:#}").contains("no audio samples"),
         "unexpected error: {error:#}"
     );
     assert!(
@@ -906,6 +970,84 @@ fn rewrite_opus_head_gain(input: &std::path::Path, output: &std::path::Path, gai
     }
     let mut output_file = writer.into_inner();
     output_file.flush().expect("flush rewritten Opus");
+}
+
+/// Repack an Opus stream into one of the zero-playback fixtures used by the
+/// shared playback decoder regression. `audio_payload` replaces every audio
+/// packet when present; `include_audio=false` closes the stream on OpusTags.
+fn rewrite_playback_fixture(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    pre_skip: u16,
+    audio_payload: Option<&[u8]>,
+    include_audio: bool,
+    eos_granule: Option<u64>,
+) {
+    use std::io::Write;
+
+    use ogg::reading::PacketReader;
+    use ogg::writing::{PacketWriteEndInfo, PacketWriter};
+
+    let input_file = std::fs::File::open(input).expect("open playback fixture source");
+    let mut reader = PacketReader::new(std::io::BufReader::new(input_file));
+    let head_packet = reader
+        .read_packet()
+        .expect("read playback OpusHead")
+        .expect("playback OpusHead");
+    let serial = head_packet.stream_serial();
+    let mut head = head_packet.data;
+    head[10..12].copy_from_slice(&pre_skip.to_le_bytes());
+    let tags = reader
+        .read_packet()
+        .expect("read playback OpusTags")
+        .expect("playback OpusTags")
+        .data;
+    let mut audio = Vec::new();
+    while let Some(packet) = reader.read_packet().expect("read playback audio") {
+        let granule = packet.absgp_page();
+        audio.push((packet.data, granule));
+    }
+
+    let output_file = std::fs::File::create(output).expect("create playback fixture");
+    let mut writer = PacketWriter::new(std::io::BufWriter::new(output_file));
+    writer
+        .write_packet(head, serial, PacketWriteEndInfo::EndPage, 0)
+        .expect("write playback OpusHead");
+    let tags_end = if include_audio {
+        PacketWriteEndInfo::EndPage
+    } else {
+        PacketWriteEndInfo::EndStream
+    };
+    writer
+        .write_packet(tags, serial, tags_end, 0)
+        .expect("write playback OpusTags");
+
+    if include_audio {
+        let audio_len = audio.len();
+        for (index, (data, original_granule)) in audio.into_iter().enumerate() {
+            let last = index + 1 == audio_len;
+            let end_info = if last {
+                PacketWriteEndInfo::EndStream
+            } else {
+                PacketWriteEndInfo::NormalPacket
+            };
+            let granule = if last {
+                eos_granule.unwrap_or(original_granule)
+            } else {
+                original_granule
+            };
+            writer
+                .write_packet(
+                    audio_payload.map_or(data, |payload| payload.to_vec()),
+                    serial,
+                    end_info,
+                    granule,
+                )
+                .expect("write playback audio");
+        }
+    }
+    let mut output_file = writer.into_inner();
+    output_file.flush().expect("flush playback fixture");
 }
 
 fn rms(samples: &[f32]) -> f64 {

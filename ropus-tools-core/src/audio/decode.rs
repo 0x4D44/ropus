@@ -294,6 +294,14 @@ pub fn decode_reader_with_gain(
         }
     }
 
+    // A corrupt stream may have every packet rejected above, or a valid
+    // stream's pre-skip may consume its only decoded frame. Never hand an
+    // empty track to playback: an empty sink looks like successful playback
+    // and can make loop modes spin forever.
+    if interleaved.is_empty() {
+        bail!("decoded input contains no audio samples");
+    }
+
     Ok(DecodedAudio {
         samples: interleaved,
         sample_rate,

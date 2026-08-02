@@ -1,3 +1,9 @@
+- Reject empty post-pre-skip decode output; empty sinks make playback look successful (`audio/decode.rs`).
+
+  Packet-level decode failures may be skipped for recovery, but the shared
+  decoder must fail if no samples survive the EOS and pre-skip bounds. That
+  keeps Off, All, and Single playback modes on their existing error path.
+
 - Strict scalar queries fail on fallback decode errors; human estimates need explicit completeness (`info.rs:SampleCount`).
 
   Do not turn skipped packets into a plausible exit-0 scalar. Return the
