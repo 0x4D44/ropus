@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** harness-deep-plc/dred-parse-oracle
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260802T013109Z-p32726-n965228000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00071-run-fix-20260802T013109Z-p32726-n965228000-c1
+- **Owner base:** 468ce05b2c89b65c665389eae64030a7fa861807
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-02T01:31:09Z
+- **Owner until:** 2026-08-02T03:31:09Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
