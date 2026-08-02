@@ -1,6 +1,6 @@
 # ROP-BUG-FLUX-00057 — Required integration tests silently pass when vectors are absent
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/test-integrity
@@ -18,7 +18,7 @@
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260801T232638Z-p40721-n439187000-c1 branch=task/bug-ROP-BUG-FLUX-00057-run-fix-20260801T232638Z-p40721-n439187000-c1 code=033b529c520a4a2af11cda3ed69c0171d2dcb95c gate=manual)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260801T232638Z-p40721-n439187000-c1 branch=task/bug-ROP-BUG-FLUX-00057-run-fix-20260801T232638Z-p40721-n439187000-c1 code=033b529c520a4a2af11cda3ed69c0171d2dcb95c gate=manual) -> Closed (2026-08-02, independent two-eyes verification on host flux, model=claude-sonnet-5, at origin/main 43a61b9; fixer was a prior automated fix session, verifier is a different actor)
 
 ## Observation
 
@@ -29,6 +29,33 @@ Static review at origin/main ac7ff8a. Five behavioral tests at /Users/md/languag
 <unfixed — raised only>
 
 ## Notes
+
+### Verification — Closed (2026-08-02, independent two-eyes, host flux)
+
+Covers the main observation plus all three notes (`ropusinfo` behavior tests, `ropusplay`
+device test, DTX/DRED gate).
+
+- Fix commit `033b529` replaces external test-vector dependencies with in-test deterministic
+  WAV generation in `ropus-tools-core/tests/round_trip.rs` and `ropusinfo/tests/cli.rs`,
+  tightens `ropusplay/tests/cli.rs` to accept only the structured no-device error, and makes
+  `harness-deep-plc/tests/dred_dtx_first_frame_diff.rs` hard-fail on an inconclusive fixture
+  (now `#[ignore]`d by default rather than silently returning success).
+- Regression re-verified directly: at the pre-fix commit (`033b529c~1`), moving
+  `tests/vectors/48k_sine1k_loud.wav` aside and running
+  `encode_then_decode_48k_sine_round_trips_with_snr_above_20_db` reported `test result: ok`
+  in 0.00s — the false-green this bug describes (SKIPPING, no real work, still "passes").
+  Repeating the same removal at the current (fixed) tree: the test still ran a full
+  encode/decode/SNR check against its own generated fixture and passed for real (`ok` in
+  0.06s, with genuine encode/decode log output, not an instant no-op).
+  `ropusinfo/tests/cli.rs` and `ropusplay/tests/cli.rs` diffs confirmed by reading: both now
+  generate their own fixtures / require a specific error string rather than treating any
+  failure as a skip, matching the notes exactly.
+  `dred_dtx_first_frame_diff.rs`'s test module is compiled only under
+  `#[cfg(not(no_reference))]` (gated on the git-ignored C reference), so it could not be
+  independently re-executed in this environment; the code-level fix (`found.expect(...)`
+  replacing a silent `return`, plus explicit `#[ignore]`) was confirmed by reading the diff.
+- `cargo clippy -p ropus-tools-core --all-targets --locked -- -D warnings` clean; `cargo test
+  -p ropus-tools-core -p ropusinfo -p ropusplay`: 132+22+2+7+2 passed, 0 failed.
 
 ### Confirmed in all `ropusinfo` CLI behavior tests (2026-07-31)
 
