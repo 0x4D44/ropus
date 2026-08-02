@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00066 — Playback discards output and terminal restoration failures
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Low
 - **Area:** ropusplay/terminal-io
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260802T011105Z-p7367-n149474000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00066-run-fix-20260802T011105Z-p7367-n149474000-c1
-- **Owner base:** 7aa8512450cb94db9ea0a88fcbe90fd40c7b7b99
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-02T01:11:05Z
-- **Owner until:** 2026-08-02T03:11:05Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260802T011105Z-p7367-n149474000-c1 branch=task/bug-ROP-BUG-FLUX-00066-run-fix-20260802T011105Z-p7367-n149474000-c1 code=465a04a gate=manual)
 
 ## Observation
 
