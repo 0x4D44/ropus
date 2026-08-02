@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00064 — All-invalid tracks count as successful empty playback
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropusplay/decode-completeness
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260802T002554Z-p32406-n239300000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00064-run-fix-20260802T002554Z-p32406-n239300000-c1
-- **Owner base:** 6590e7ff9cb6053c76d976fdc5d20764397d7be7
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-02T00:25:54Z
-- **Owner until:** 2026-08-02T02:25:54Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260802T002554Z-p32406-n239300000-c1 branch=task/bug-ROP-BUG-FLUX-00064-run-fix-20260802T002554Z-p32406-n239300000-c1 code=55a6de7 gate=manual)
 
 ## Observation
 
