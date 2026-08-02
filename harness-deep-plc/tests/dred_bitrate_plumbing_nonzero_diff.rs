@@ -57,8 +57,10 @@
 //! `tests/dred_compute_bitrate_ffi_diff.rs`, which sidesteps the SILK
 //! precision boundary entirely.
 
+use ropus::dnn::dred::DRED_MAX_FRAMES;
 use ropus::dnn::embedded_weights::WEIGHTS_BLOB;
 use ropus::opus::decoder::OpusDecoder;
+use ropus::opus::dred::OpusDREDDecoder;
 use ropus::opus::encoder::{OPUS_APPLICATION_VOIP as ROPUS_APP_VOIP, OpusEncoder};
 
 use ropus_harness_deep_plc::{
@@ -264,6 +266,47 @@ fn snr_db(reference: &[i16], test: &[i16]) -> f64 {
     10.0 * (sig / noise).log10()
 }
 
+/// Parse every packet in one stream and require at least one populated DRED
+/// extension. The PCM side check below is meaningful only after both encoder
+/// streams have proved that they actually carried the DRED payload under test.
+fn require_populated_dred_extensions(label: &str, packets: &[Vec<u8>]) -> Vec<i32> {
+    let decoder = OpusDREDDecoder::new();
+    assert!(
+        decoder.loaded(),
+        "{label}: embedded RDOVAE weights must be available"
+    );
+    let mut per_frame = Vec::with_capacity(packets.len());
+    let mut found = false;
+    for (i, packet) in packets.iter().enumerate() {
+        let dred = decoder
+            .parse(packet, 2 * TARGET_FS, TARGET_FS)
+            .unwrap_or_else(|error| panic!("{label} frame {i}: DRED parse failed ({error})"));
+        assert!(
+            dred.nb_latents >= 0,
+            "{label} frame {i}: parser returned negative latent count {}",
+            dred.nb_latents
+        );
+        if dred.nb_latents > 0 {
+            assert!(
+                dred.nb_latents as usize <= DRED_MAX_FRAMES,
+                "{label} frame {i}: nb_latents {} exceeds DRED_MAX_FRAMES",
+                dred.nb_latents
+            );
+            assert!(
+                dred.process_stage >= 1,
+                "{label} frame {i}: populated DRED must be at process stage >= 1"
+            );
+            found = true;
+        }
+        per_frame.push(dred.nb_latents);
+    }
+    assert!(
+        found,
+        "{label}: no packet carried a populated DRED extension; nb_latents per frame = {per_frame:?}"
+    );
+    per_frame
+}
+
 // ---------------------------------------------------------------------------
 // The differential.
 // ---------------------------------------------------------------------------
@@ -288,6 +331,15 @@ fn rust_and_c_dred_packets_match_at_dred_active_config() {
     let c_packets = encode_c_frames(&wav.samples);
 
     assert_eq!(rust_packets.len(), c_packets.len());
+
+    // Establish DRED presence on both streams before comparing their decoded
+    // PCM. This prevents ordinary SILK packets from making the side check
+    // pass while the advertised DRED bitrate plumbing is inactive.
+    let rust_dred = require_populated_dred_extensions("Rust encoder", &rust_packets);
+    let c_dred = require_populated_dred_extensions("C encoder", &c_packets);
+    eprintln!(
+        "dred_bitrate_plumbing_nonzero_diff: parsed DRED latent counts rust={rust_dred:?} c={c_dred:?}"
+    );
 
     // Decode both packet streams through the same decoder and compare PCM.
     // Cross-precision SILK encoder output cannot be byte-exact (see file

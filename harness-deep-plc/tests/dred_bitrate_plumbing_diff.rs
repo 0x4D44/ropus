@@ -1,10 +1,10 @@
 #![cfg(not(no_reference))]
-//! Stage 2 (TDD) — DRED bitrate-plumbing differential test.
+//! Stage 2 diagnostic — cross-precision SILK packet envelope.
 //!
-//! Exercises the F33/F48/F53/quantizer fixes by encoding the same fixed
-//! PCM stream through both the Rust `OpusEncoder` and the xiph C reference
-//! (via the existing `dred_encode_shim.c` harness) with DRED active, and
-//! asserts the per-frame packet bytes match.
+//! Encodes the same fixed PCM stream through both the Rust `OpusEncoder` and
+//! the xiph C reference (via the existing `dred_encode_shim.c` harness) and
+//! checks a coarse packet-size envelope. Rust uses fixed-point SILK while the
+//! C harness uses float SILK, so this is not a DRED parity oracle.
 //!
 //! ## Configuration parity
 //!
@@ -23,16 +23,9 @@
 //! parameters and configure the Rust side to match exactly. Stage 3
 //! reviewers may grow the shim if needed.
 //!
-//! ## Failure semantics
-//!
-//! The two functions under test (`compute_dred_bitrate`,
-//! `estimate_dred_bitrate`) and the call-site fixes don't exist yet —
-//! Stage 2 only stubs them with `unimplemented!()`. Encoding a frame
-//! through the Rust path will therefore panic during Stage 2 runs.
-//! This is the desired Stage 2 signal. Once Stage 3 lands, this test
-//! must pass byte-equal — and if f32 drift turns up, the assertion
-//! drops to a Tier-2 SNR check with explicit `eprintln!` diagnostic
-//! and a comment naming the suspect f32 op (per HLD §6 risk row 1).
+//! The exact scalar DRED bitrate parity gate lives in
+//! `dred_compute_bitrate_ffi_diff.rs`; the DRED-active packet-extension gate
+//! lives in `dred_bitrate_plumbing_nonzero_diff.rs`.
 
 use std::fs;
 use std::path::PathBuf;
@@ -198,7 +191,7 @@ fn encode_c_frames(samples: &[i16]) -> Vec<Vec<u8>> {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn rust_and_c_dred_packets_match_byte_for_byte() {
+fn cross_precision_silk_packet_envelope_is_bounded() {
     if !weights_or_skip("dred_bitrate_plumbing_diff") {
         return;
     }

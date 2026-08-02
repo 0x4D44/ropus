@@ -142,9 +142,10 @@ const COMPUTE_VECTORS: &[(&str, i32, i32, i32, i32, i32, i32)] = &[
     ("fec1_loss15_16k_320_40k", 1, 15, 16_000, 100, 40_000, 320),
     // FEC off, loss=30 → MIN16(.8, .55+.30)=.8 → DA's counterexample
     // settings driven straight through `compute_dred_bitrate`. This
-    // is the row whose transitive integration test trips SILK drift.
-    // Direct FFI sidesteps that entirely.
-    ("fec0_loss30_16k_320_40k", 0, 30, 16_000, 320, 40_000, 320),
+    // is the row whose transitive integration test trips SILK drift. Keep the
+    // duration at 100: that is the integrated DRED configuration exercised by
+    // the packet-level gates. Direct FFI sidesteps the SILK drift entirely.
+    ("fec0_loss30_16k_320_40k", 0, 30, 16_000, 100, 40_000, 320),
     // FEC off, loss=0 → 12*0/100 = 0 → return 0. Covers the
     // `packet_loss_perc <= 5` branch's degenerate case.
     ("fec0_loss0_24k_480_24k", 0, 0, 24_000, 50, 24_000, 480),
@@ -190,5 +191,23 @@ fn compute_dred_bitrate_byte_exact_against_c_ref() {
         failures.is_empty(),
         "compute_dred_bitrate diverged from C ref:\n  - {}",
         failures.join("\n  - ")
+    );
+}
+
+#[test]
+fn active_duration_100_vector_proves_nonzero_dred_budget() {
+    let c = c_compute_dred_bitrate(0, 30, 16_000, 100, 40_000, 320);
+    let r = ropus_test_compute_dred_bitrate(0, 30, 16_000, 100, 40_000, 320);
+    assert_eq!(
+        c, r,
+        "active duration-100 scalar diverged: C={c:?}, Rust={r:?}"
+    );
+    assert!(
+        c.0 > 0,
+        "duration-100 active vector must allocate a non-zero DRED bitrate: {c:?}"
+    );
+    assert!(
+        c.4 > 0,
+        "duration-100 active vector must allocate DRED chunks: {c:?}"
     );
 }

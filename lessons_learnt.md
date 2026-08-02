@@ -4,6 +4,12 @@
   reach the caller. Restore raw mode before the guard drops, and combine cleanup
   errors with playback failures without hiding either cause.
 
+- DRED gates must prove active extensions before PCM checks; packet-size envelopes cannot prove bitrate plumbing (`harness-deep-plc/tests/dred_bitrate_plumbing_nonzero_diff.rs`).
+
+  Keep cross-precision SILK size checks labelled as diagnostics, pin the scalar
+  duration-100 active vector to nonzero bitrate/chunks, and parse both emitted
+  streams before treating PCM SNR as evidence about DRED.
+
 - Differential oracles must reject non-finite neural inputs and outputs before bit/SNR math (`harness-deep-plc/tests/support/finite_oracle.rs`).
 
   NaN makes ordered comparisons false, so running maxima retain optimistic
