@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** ropusinfo/query-integrity
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260802T001734Z-p11561-n537342000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00063-run-fix-20260802T001734Z-p11561-n537342000-c1
+- **Owner base:** 700867c2b2668f1cf877d175c05b0a5ebd24fc7a
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-02T00:17:34Z
+- **Owner until:** 2026-08-02T02:17:34Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
