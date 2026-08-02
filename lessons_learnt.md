@@ -1,3 +1,10 @@
+- Quiet must reach shared reporters; choose Clap no-color before parsing (`options.rs:OutputPolicy`, `prelude.rs:no_color_requested`).
+
+  Keep library command wrappers non-quiet for compatibility, pass a typed
+  policy from each CLI, and configure Clap before it renders help or parse
+  errors. TTY-only playback repainting must also stay behind the interactive
+  terminal check.
+
 - Build provenance must validate Git top-level ownership and watch HEAD plus its resolved ref (`ropus-tools-core/src/build_provenance.rs:discover`).
 
   A linked worktree stores `.git` as a file and branch commits move `refs/heads/*`, while vendored crates can inherit a consumer repository. Resolve Git paths through Git itself, compare the top-level to the package workspace, and emit `unknown` outside it.

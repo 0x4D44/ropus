@@ -9,8 +9,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{ArgAction, Parser, ValueEnum};
-use ropus_tools_core::options::EncodeOptions;
+use clap::{ArgAction, ColorChoice, CommandFactory, FromArgMatches, Parser, ValueEnum};
+use ropus_tools_core::options::{EncodeOptions, OutputPolicy};
 use ropus_tools_core::prelude;
 use ropus_tools_core::{Application, FrameDuration, Signal, commands, ui};
 
@@ -268,8 +268,22 @@ fn parse_complexity(raw: &str) -> Result<u8, String> {
     Ok(value)
 }
 
+fn command_with_color(color: ColorChoice) -> clap::Command {
+    Cli::command().color(color)
+}
+
+fn parse_cli() -> Cli {
+    let color = if prelude::no_color_requested() {
+        ColorChoice::Never
+    } else {
+        ColorChoice::Auto
+    };
+    let matches = command_with_color(color).get_matches();
+    Cli::from_arg_matches(&matches).expect("Clap already validated the command line")
+}
+
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = parse_cli();
     prelude::configure_color(cli.no_color);
 
     // Derive banner routing from Clap's typed result. Raw argv cannot safely
@@ -373,7 +387,10 @@ fn main() -> ExitCode {
         comments,
     };
 
-    prelude::run(commands::encode(opts))
+    prelude::run(commands::encode_with_policy(
+        opts,
+        OutputPolicy { quiet: cli.quiet },
+    ))
 }
 
 #[cfg(test)]
@@ -422,5 +439,24 @@ mod tests {
         assert!(parse_bitrate("2147483648").is_err());
         assert!(parse_complexity("11").is_err());
         assert!(parse_complexity("255").is_err());
+    }
+
+    #[test]
+    fn no_color_disables_clap_ansi_for_help_and_errors() {
+        let help = command_with_color(ColorChoice::Never)
+            .render_help()
+            .to_string();
+        assert!(
+            !help.contains('\x1b'),
+            "help unexpectedly contains ANSI: {help:?}"
+        );
+
+        let error = command_with_color(ColorChoice::Never)
+            .try_get_matches_from(["ropusenc", "--no-color", "--unknown"])
+            .expect_err("unknown flag must fail parsing");
+        assert!(
+            !error.to_string().contains('\x1b'),
+            "error unexpectedly contains ANSI: {error}"
+        );
     }
 }

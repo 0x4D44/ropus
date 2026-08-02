@@ -112,12 +112,10 @@ pub fn play(opts: PlayOptions) -> Result<()> {
     'outer: loop {
         let path = &playlist[idx];
 
-        // Decode-latency UX: print an ephemeral `decoding …` line so the user
-        // sees progress even when a 10-minute file takes a noticeable moment
-        // to decode. Truncate to the terminal width so a long filename does
-        // not wrap onto a second row — `\r\x1b[K` only clears the current
-        // row, which would otherwise leave orphan fragments above.
-        {
+        // Decode-latency UX: print an ephemeral `decoding …` line only on the
+        // interactive TTY path. Redirected and quiet playback must stay plain
+        // text; carriage returns and erase escapes make logs unreadable.
+        if interactive {
             let stem = path
                 .file_stem()
                 .map(|s| escape_terminal_text(&s.to_string_lossy()))
@@ -134,10 +132,12 @@ pub fn play(opts: PlayOptions) -> Result<()> {
         let (decoded, tags) = match decode_track(path, opts.gain_db) {
             Ok(ok) => ok,
             Err(e) => {
-                // Clear the ephemeral decoding line; the warning goes to
-                // stderr so it sits above the next status-line repaint.
-                print!("\r\x1b[K");
-                let _ = std::io::stdout().flush();
+                if interactive {
+                    // Clear the ephemeral decoding line; the warning goes to
+                    // stderr so it sits above the next status-line repaint.
+                    print!("\r\x1b[K");
+                    let _ = std::io::stdout().flush();
+                }
                 eprintln!(
                     "{} skipping {}: {}",
                     "warning:".yellow(),

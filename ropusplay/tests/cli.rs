@@ -50,6 +50,42 @@ fn list_devices_prints_lines_and_exits_zero() {
     );
 }
 
+#[test]
+fn list_devices_without_quiet_has_no_banner_pollution() {
+    let bin = env!("CARGO_BIN_EXE_ropusplay");
+    let out = Command::new(bin)
+        .args(["--no-color", "--list-devices"])
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn ropusplay --list-devices without quiet");
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !out.status.success() {
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "unexpected --list-devices failure: stderr={stderr:?}"
+        );
+        assert!(
+            stderr
+                .to_ascii_lowercase()
+                .contains("no output devices available"),
+            "only the structured no-device outcome may be accepted; stderr={stderr:?}"
+        );
+        return;
+    }
+
+    assert!(
+        !stdout.contains("(build "),
+        "device list must not contain the ropusplay banner: stdout={stdout:?}"
+    );
+    assert!(
+        !stdout.contains('\x1b'),
+        "device list must not contain ANSI escapes: stdout={stdout:?}"
+    );
+}
+
 /// An obviously-nonexistent `--device` name must exit non-zero and surface
 /// the requested name on stderr. The exact message format is owned by
 /// `open_named_output_stream`; we only assert that the name is echoed back

@@ -9,6 +9,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Write a canonical 16-bit PCM mono WAV with a 1 kHz sine at 48 kHz to the
 /// caller-supplied byte buffer. Duplicates the synth helper in
@@ -56,6 +57,19 @@ fn ropusenc_bin() -> PathBuf {
     // crate; integration tests get the rebuilt binary, so no need to run
     // `cargo build` beforehand.
     PathBuf::from(env!("CARGO_BIN_EXE_ropusenc"))
+}
+
+fn temp_path(tag: &str, extension: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock after Unix epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "ropusenc_{tag}_{}_{}.{}",
+        std::process::id(),
+        nonce,
+        extension
+    ))
 }
 
 #[test]
@@ -417,5 +431,95 @@ fn stdout_has_no_banner_pollution() {
     assert!(
         !stdout_head.windows(7).any(|w| w == b"decoded"),
         "stdout must not carry the 'decoded' progress label"
+    );
+}
+
+#[test]
+fn quiet_success_suppresses_informational_output() {
+    let wav = synth_sine_wav_bytes(1, 1000.0);
+    let output_path = temp_path("quiet_success", "opus");
+
+    let mut child = Command::new(ropusenc_bin())
+        .args([
+            "--quiet",
+            "--no-color",
+            "-",
+            "-o",
+            output_path.to_str().expect("temporary path is UTF-8"),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn quiet ropusenc");
+    child
+        .stdin
+        .take()
+        .expect("stdin piped")
+        .write_all(&wav)
+        .expect("write WAV into child stdin");
+
+    let result = child.wait_with_output().expect("wait for quiet ropusenc");
+    assert!(
+        result.status.success(),
+        "quiet encode failed: stderr={:?}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        result.stdout.is_empty(),
+        "quiet encode wrote stdout: {:?}",
+        result.stdout
+    );
+    assert!(
+        result.stderr.is_empty(),
+        "quiet encode wrote stderr: {:?}",
+        result.stderr
+    );
+
+    let encoded = std::fs::read(&output_path).expect("read quiet encode output");
+    assert_eq!(
+        &encoded[..4],
+        b"OggS",
+        "quiet encode output is not Ogg Opus"
+    );
+    let _ = std::fs::remove_file(output_path);
+}
+
+#[test]
+fn quiet_failure_preserves_errors_without_progress_reports() {
+    let output_path = temp_path("quiet_failure", "opus");
+    let result = Command::new(ropusenc_bin())
+        .args([
+            "--quiet",
+            "--no-color",
+            "missing-ropusenc-input.wav",
+            "-o",
+            output_path.to_str().expect("temporary path is UTF-8"),
+        ])
+        .output()
+        .expect("spawn failing quiet ropusenc");
+
+    assert!(!result.status.success(), "missing input must fail");
+    assert!(
+        result.stdout.is_empty(),
+        "quiet failure wrote stdout: {:?}",
+        result.stdout
+    );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("error:"),
+        "quiet failure must report an error: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains("input    "),
+        "quiet failure leaked input report: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains("output   "),
+        "quiet failure leaked output report: {stderr:?}"
+    );
+    assert!(
+        !output_path.exists(),
+        "failed encode must not create output"
     );
 }

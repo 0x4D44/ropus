@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{ArgAction, Parser};
+use clap::{ArgAction, ColorChoice, CommandFactory, FromArgMatches, Parser};
 use ropus_tools_core::options::{LoopMode, PlayOptions};
 use ropus_tools_core::prelude;
 use ropus_tools_core::{commands, ui};
@@ -107,10 +107,24 @@ fn parse_gain_db(raw: &str) -> Result<f32, String> {
     Ok(value)
 }
 
+fn command_with_color(color: ColorChoice) -> clap::Command {
+    Args::command().color(color)
+}
+
+fn parse_args() -> Args {
+    let color = if prelude::no_color_requested() {
+        ColorChoice::Never
+    } else {
+        ColorChoice::Auto
+    };
+    let matches = command_with_color(color).get_matches();
+    Args::from_arg_matches(&matches).expect("Clap already validated the command line")
+}
+
 fn main() -> ExitCode {
-    let args = Args::parse();
+    let args = parse_args();
     prelude::configure_color(args.no_color);
-    if !args.quiet {
+    if !args.quiet && !args.list_devices {
         ui::print_banner(
             env!("CARGO_PKG_NAME"),
             env!("CARGO_PKG_VERSION"),
@@ -152,5 +166,24 @@ mod tests {
         assert!(parse_gain_db("128").is_err());
         assert!(parse_gain_db("Infinity").is_err());
         assert!(parse_gain_db("-128").is_ok());
+    }
+
+    #[test]
+    fn no_color_disables_clap_ansi_for_help_and_errors() {
+        let help = command_with_color(ColorChoice::Never)
+            .render_help()
+            .to_string();
+        assert!(
+            !help.contains('\x1b'),
+            "help unexpectedly contains ANSI: {help:?}"
+        );
+
+        let error = command_with_color(ColorChoice::Never)
+            .try_get_matches_from(["ropusplay", "--no-color", "--unknown"])
+            .expect_err("unknown flag must fail parsing");
+        assert!(
+            !error.to_string().contains('\x1b'),
+            "error unexpectedly contains ANSI: {error}"
+        );
     }
 }

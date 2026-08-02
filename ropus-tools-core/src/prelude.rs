@@ -15,6 +15,30 @@ pub fn configure_color(no_color: bool) {
     }
 }
 
+/// Detect the standalone `--no-color` flag before Clap renders help or parse
+/// errors. The scan stops at `--`, so a positional filename with that spelling
+/// remains data rather than changing parser output policy.
+pub fn no_color_requested() -> bool {
+    no_color_in(std::env::args_os().skip(1))
+}
+
+fn no_color_in<I>(args: I) -> bool
+where
+    I: IntoIterator,
+    I::Item: AsRef<std::ffi::OsStr>,
+{
+    for arg in args {
+        let arg = arg.as_ref();
+        if arg == "--" {
+            break;
+        }
+        if arg == "--no-color" {
+            return true;
+        }
+    }
+    false
+}
+
 /// Decide whether a typed input/output pair routes binary data to stdout.
 ///
 /// An explicit output wins. Without one, stdin input (`-`) implies stdout
@@ -50,6 +74,19 @@ pub fn run(result: anyhow::Result<()>) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_color_flag_stops_at_end_of_options() {
+        assert!(!no_color_in([
+            std::ffi::OsString::from("input.opus"),
+            std::ffi::OsString::from("--"),
+            std::ffi::OsString::from("--no-color"),
+        ]));
+        assert!(no_color_in([
+            std::ffi::OsString::from("input.opus"),
+            std::ffi::OsString::from("--no-color"),
+        ]));
+    }
 
     #[test]
     fn typed_paths_select_stdout_without_reparsing_argv() {

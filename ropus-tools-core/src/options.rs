@@ -9,6 +9,14 @@ use std::path::PathBuf;
 
 use ropus::{Application, FrameDuration, Signal};
 
+/// Typed policy for informational output shared by command implementations.
+/// Errors still surface through the CLI prelude; `quiet` suppresses only
+/// progress, headings, and successful-completion messages.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OutputPolicy {
+    pub quiet: bool,
+}
+
 #[derive(Debug)]
 pub struct EncodeOptions {
     pub input: PathBuf,

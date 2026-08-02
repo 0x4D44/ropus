@@ -34,7 +34,7 @@ use crate::container::ogg::{
     OpusTags, UNKNOWN_GRANULE, parse_opus_head, validate_opus_audio_packet,
 };
 use crate::container::toc::decode_toc;
-use crate::options::DecodeOptions;
+use crate::options::{DecodeOptions, OutputPolicy};
 use crate::ui::{escape_terminal_path, escape_terminal_text, format_num, heading, ok};
 use crate::util::{
     channel_count_to_ropus, is_stdio_sentinel, noncolliding_default_output,
@@ -87,6 +87,10 @@ trait ReadSeek: std::io::Read + std::io::Seek {}
 impl<T: std::io::Read + std::io::Seek> ReadSeek for T {}
 
 pub fn decode(opts: DecodeOptions) -> Result<()> {
+    decode_with_policy(opts, OutputPolicy::default())
+}
+
+pub fn decode_with_policy(opts: DecodeOptions, policy: OutputPolicy) -> Result<()> {
     // Validate all public option values before opening the input or creating
     // the output. This keeps GUI/plugin callers on the same safe boundary as
     // the Clap wrapper and prevents invalid options from consuming a stream.
@@ -133,17 +137,19 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
     // stdout doesn't mix with the banner text.
     macro_rules! report {
         ($($arg:tt)*) => {
-            if output_is_stdout {
+            if !policy.quiet && output_is_stdout {
                 eprintln!($($arg)*);
-            } else {
+            } else if !policy.quiet {
                 println!($($arg)*);
             }
         };
     }
-    if output_is_stdout {
-        eprintln!("{}", "decode".bright_yellow().bold());
-    } else {
-        heading("decode");
+    if !policy.quiet {
+        if output_is_stdout {
+            eprintln!("{}", "decode".bright_yellow().bold());
+        } else {
+            heading("decode");
+        }
     }
     report!(
         "input    {}",
@@ -437,6 +443,7 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
                 resampled.len() as u64,
                 &output_path,
                 output_is_stdout,
+                policy.quiet,
             )
         } else {
             // i16 output via the f32 pipeline (triggered by --rate or dither).
@@ -458,6 +465,7 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
                 i16_out.len() as u64,
                 &output_path,
                 output_is_stdout,
+                policy.quiet,
             )
         }
     } else {
@@ -480,6 +488,7 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
             trimmed_i16.len() as u64,
             &output_path,
             output_is_stdout,
+            policy.quiet,
         )
     }
 }
@@ -562,7 +571,11 @@ fn report_and_return(
     emitted_samples: u64,
     output: &Path,
     output_is_stdout: bool,
+    quiet: bool,
 ) -> Result<()> {
+    if quiet {
+        return Ok(());
+    }
     // Mirror the progress-banner gating inside `decode()`: progress lines
     // must not land on stdout when it's the bitstream sink.
     let line = format!(

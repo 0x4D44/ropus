@@ -20,7 +20,7 @@ use crate::container::ogg::{OGG_STREAM_SERIAL, OpusTags, build_opus_head};
 use crate::container::picture::{
     MAX_PICTURE_BYTES, PictureFormat, base64_encode, build_picture_block, detect_format,
 };
-use crate::options::EncodeOptions;
+use crate::options::{EncodeOptions, OutputPolicy};
 use crate::ui::{escape_terminal_path, format_num, heading, ok};
 use crate::util::{
     channel_count_to_ropus, is_stdio_sentinel, noncolliding_default_output,
@@ -250,6 +250,10 @@ fn validate_encode_options(opts: &EncodeOptions) -> Result<()> {
 }
 
 pub fn encode(opts: EncodeOptions) -> Result<()> {
+    encode_with_policy(opts, OutputPolicy::default())
+}
+
+pub fn encode_with_policy(opts: EncodeOptions, policy: OutputPolicy) -> Result<()> {
     validate_encode_options(&opts)?;
 
     // Guard the encoder's output buffer sizing. At `--framesize` ≥ 40 ms,
@@ -294,17 +298,19 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
     // bitstream, so progress must go to stderr in that case.
     macro_rules! report {
         ($($arg:tt)*) => {
-            if output_is_stdout {
+            if !policy.quiet && output_is_stdout {
                 eprintln!($($arg)*);
-            } else {
+            } else if !policy.quiet {
                 println!($($arg)*);
             }
         };
     }
-    if output_is_stdout {
-        eprintln!("{}", "encode".bright_yellow().bold());
-    } else {
-        heading("encode");
+    if !policy.quiet {
+        if output_is_stdout {
+            eprintln!("{}", "encode".bright_yellow().bold());
+        } else {
+            heading("encode");
+        }
     }
     report!(
         "input    {}",
@@ -557,10 +563,12 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
     } else {
         escape_terminal_path(&output_path)
     };
-    if output_is_stdout {
-        eprintln!("{}", format!("encoded -> {dest}").green());
-    } else {
-        ok(&format!("encoded -> {dest}"));
+    if !policy.quiet {
+        if output_is_stdout {
+            eprintln!("{}", format!("encoded -> {dest}").green());
+        } else {
+            ok(&format!("encoded -> {dest}"));
+        }
     }
     Ok(())
 }

@@ -109,6 +109,19 @@ fn ropusdec_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_ropusdec"))
 }
 
+fn temp_path(tag: &str, extension: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock after Unix epoch")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "ropusdec_{tag}_{}_{}.{}",
+        std::process::id(),
+        nonce,
+        extension
+    ))
+}
+
 #[test]
 fn stdin_opus_to_stdout_wav() {
     // Build a known Opus stream in-process, then pipe it to `ropusdec - -o -`.
@@ -290,5 +303,91 @@ fn stdout_raw_float_has_no_header() {
     assert!(
         !output.stdout.windows(4).any(|w| w == b"WAVE"),
         "raw output must contain no 'WAVE' marker"
+    );
+}
+
+#[test]
+fn quiet_success_suppresses_informational_output() {
+    let opus = encode_sine_to_opus_bytes("quiet_success");
+    let output_path = temp_path("quiet_success", "wav");
+
+    let mut child = Command::new(ropusdec_bin())
+        .args([
+            "--quiet",
+            "--no-color",
+            "-",
+            "-o",
+            output_path.to_str().expect("temporary path is UTF-8"),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn quiet ropusdec");
+    child
+        .stdin
+        .take()
+        .expect("stdin piped")
+        .write_all(&opus)
+        .expect("write Opus into child stdin");
+
+    let result = child.wait_with_output().expect("wait for quiet ropusdec");
+    assert!(
+        result.status.success(),
+        "quiet decode failed: stderr={:?}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        result.stdout.is_empty(),
+        "quiet decode wrote stdout: {:?}",
+        result.stdout
+    );
+    assert!(
+        result.stderr.is_empty(),
+        "quiet decode wrote stderr: {:?}",
+        result.stderr
+    );
+
+    let decoded = std::fs::read(&output_path).expect("read quiet decode output");
+    assert_eq!(&decoded[..4], b"RIFF", "quiet decode output is not WAV");
+    let _ = std::fs::remove_file(output_path);
+}
+
+#[test]
+fn quiet_failure_preserves_errors_without_progress_reports() {
+    let output_path = temp_path("quiet_failure", "wav");
+    let result = Command::new(ropusdec_bin())
+        .args([
+            "--quiet",
+            "--no-color",
+            "missing-ropusdec-input.opus",
+            "-o",
+            output_path.to_str().expect("temporary path is UTF-8"),
+        ])
+        .output()
+        .expect("spawn failing quiet ropusdec");
+
+    assert!(!result.status.success(), "missing input must fail");
+    assert!(
+        result.stdout.is_empty(),
+        "quiet failure wrote stdout: {:?}",
+        result.stdout
+    );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("error:"),
+        "quiet failure must report an error: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains("input    "),
+        "quiet failure leaked input report: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains("output   "),
+        "quiet failure leaked output report: {stderr:?}"
+    );
+    assert!(
+        !output_path.exists(),
+        "failed decode must not create output"
     );
 }
