@@ -5,15 +5,15 @@
 - **Severity:** High
 - **Area:** harness-control/oracle-calibration
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260802T013612Z-p39664-n393663000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00072-run-fix-20260802T013612Z-p39664-n393663000-c1
+- **Owner base:** 78bc4ba7245a60d391345ff3ca4dffa62746c54e
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-02T01:36:12Z
+- **Owner until:** 2026-08-02T03:36:12Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
