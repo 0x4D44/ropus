@@ -1,3 +1,10 @@
+- Classical PLC SNR cannot calibrate neural PLC; use direct Rust-vs-C fixtures and loss patterns (tier2_snr.rs).
+
+  Classical LPC/LTP and neural concealment propagate arithmetic error through
+  different transfer functions. Keep the fixed-vs-float classical experiment
+  as a mode/identity/energy/divergence diagnostic, and calibrate the neural
+  acceptance margin with like-for-like Rust-vs-C cases.
+
 - Propagate playback writes and explicitly restore raw mode; Drop alone cannot report terminal cleanup failures (`commands/play.rs`).
 
   Keep playback output behind a fallible `Write` seam so write and flush failures

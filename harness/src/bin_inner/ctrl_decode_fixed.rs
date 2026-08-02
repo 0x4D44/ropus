@@ -2,9 +2,8 @@
 //! PLC on the C reference compiled in FIXED_POINT mode.
 //!
 //! Part of the Stage 7b.3 control experiment that measures the fixed-vs-float
-//! arithmetic gap in isolation (without DEEP_PLC), so we can decide whether
-//! the 60 dB tier-2 SNR gate is ceiling-limited by construction or still has
-//! a Rust port bug leaking into it.
+//! arithmetic gap in isolation (without DEEP_PLC). This is a classical PLC
+//! diagnostic; neural tier-2 calibration lives in the direct neural harness.
 //!
 //! This binary reads a packets file, decodes every frame through the C
 //! reference decoder (fixed-point, classical PLC — DEEP_PLC is not compiled
@@ -38,6 +37,7 @@ use std::process;
 
 const OPUS_OK: c_int = 0;
 const OPUS_SET_COMPLEXITY_REQUEST: c_int = 4010;
+const CONTROL_COMPLEXITY: c_int = 4;
 
 const LOST_BIT: u32 = 0x8000_0000;
 const MAX_PACKET_LEN: usize = 1275;
@@ -222,11 +222,13 @@ pub fn main() {
     // Complexity < 5 to force classical SILK PLC in the float harness. The
     // fixed-point build has no DEEP_PLC regardless, so this knob only affects
     // the float side — we set it here too for uniformity.
-    let rc = unsafe { bindings::opus_decoder_ctl(dec, OPUS_SET_COMPLEXITY_REQUEST, 4) };
+    let rc =
+        unsafe { bindings::opus_decoder_ctl(dec, OPUS_SET_COMPLEXITY_REQUEST, CONTROL_COMPLEXITY) };
     if rc != OPUS_OK {
-        eprintln!("opus_decoder_ctl(OPUS_SET_COMPLEXITY, 4) failed: {rc}");
+        eprintln!("opus_decoder_ctl(OPUS_SET_COMPLEXITY, {CONTROL_COMPLEXITY}) failed: {rc}");
         process::exit(1);
     }
+    eprintln!("control-mode=classical fixed-point complexity={CONTROL_COMPLEXITY}");
 
     // --- Decode every frame, streaming PCM to output ---
     let fout = File::create(&pcm_path).unwrap_or_else(|e| {

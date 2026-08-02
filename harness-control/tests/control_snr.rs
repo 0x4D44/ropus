@@ -1,22 +1,16 @@
-//! Stage 7b.3 control experiment: measure the fixed-vs-float arithmetic-gap
-//! ceiling of classical SILK PLC under the exact tier-2 test conditions.
+//! Stage 7b.3 diagnostic: measure the fixed-vs-float arithmetic gap of
+//! classical SILK PLC under the tier-2 packet and loss conditions.
 //!
-//! ## What this test decides
+//! This is a control diagnostic, not a ceiling or calibration oracle for the
+//! neural PLC gate. Classical LPC/LTP concealment and neural concealment have
+//! different error-transfer functions, so a classical SNR cannot bound the
+//! direct Rust-vs-C neural comparison in `harness-deep-plc/tests/tier2_snr.rs`.
 //!
-//! Tier-2 SNR (ropus vs C-float with DEEP_PLC) currently sits at 51.79 dB. The
-//! HLD gate is 60 dB. The devils-advocate hypothesis is that the 60 dB gate is
-//! unachievable *by construction* because ropus is fixed-point and the
-//! harness's C reference for tier-2 is float — ± 1 LSB quantisation drift on
-//! every frame, amplified ~9× by the sLPC back-copy step in `silk/PLC.c`,
-//! ceiling the achievable SNR at ~50 dB regardless of whether the neural PLC
-//! path is bit-exact.
-//!
-//! If the hypothesis is right, the **classical** SILK PLC (no neural path at
-//! all) should show a similar ceiling when compared across fixed vs float
-//! under the same loss pattern — nothing but the 1-LSB arithmetic gap
-//! multiplied by the IIR recurrence.
-//!
-//! ## How the test works
+//! The test proves its own identity: both decoder binaries receive the same
+//! packet file, announce their fixed/float classical mode and complexity,
+//! decode a non-silent signal, and diverge on the lossy path. The measured
+//! classical SNR stays inside a broad diagnostic interval so a broken control
+//! harness cannot silently become the new neural calibration source.
 //!
 //! 1. Synthesise the same deterministic 2-second PCM as `tier2_snr.rs`.
 //! 2. Encode once with ropus at 16 kbps, complexity 10 (identical bitstream
@@ -32,17 +26,8 @@
 //! 5. Read both PCMs back from disk and compute SNR(fixed, float). This is
 //!    the control number.
 //!
-//! The tier-2 gate reports SNR(rust, float-C). This test reports
-//! SNR(fixed-C, float-C). The relationship is: the tier-2 number can never
-//! exceed the control number (the noise floor is the same 1-LSB gap
-//! multiplied by the same IIR), modulo Rust vs C divergence on integer ops
-//! — which is supposed to be zero (tier-1 bit-exact).
-//!
-//! ## Interpretation cheat-sheet
-//!
-//! - control ≈ 50 dB → 60 dB gate is ceiling-limited, amend HLD.
-//! - control > 60 dB → ropus still has a port bug biting us.
-//! - 55-65 dB → partial: some ceiling, some residual bug.
+//! The neural gate is calibrated only by its direct Rust-vs-C neural cases;
+//! this experiment supplies context about the classical arithmetic gap.
 
 use std::env;
 use std::fs::File;
@@ -68,6 +53,14 @@ const SIGNAL_DURATION_MS: i32 = 2_000;
 const TOTAL_FRAMES: i32 = SIGNAL_DURATION_MS / FRAME_MS;
 
 const LOST_BIT: u32 = 0x8000_0000;
+const CONTROL_COMPLEXITY: i32 = 4;
+const CONTROL_SNR_MIN_DB: f64 = 35.0;
+const CONTROL_SNR_MAX_DB: f64 = 50.0;
+const CONTROL_LOSSLESS_MIN_DB: f64 = 80.0;
+const CONTROL_SIGNAL_MIN_MEAN_SQUARE: f64 = 1_000_000.0;
+const CONTROL_OUTPUT_MIN_MEAN_SQUARE: f64 = 100_000.0;
+const FIXED_MODE_MARKER: &str = "control-mode=classical fixed-point complexity=4";
+const FLOAT_MODE_MARKER: &str = "control-mode=classical float complexity=4 deep_plc=disabled";
 
 // Loss pattern is byte-for-byte identical to `tier2_snr.rs::is_lost`.
 fn is_lost(frame_idx: usize) -> bool {
@@ -189,6 +182,33 @@ fn compute_snr_db(ref_pcm: &[i16], test: &[i16]) -> f64 {
     10.0 * (signal_power / noise_power).log10()
 }
 
+fn mean_square_energy(pcm: &[i16]) -> f64 {
+    assert!(!pcm.is_empty(), "energy requires non-empty PCM");
+    pcm.iter()
+        .map(|&sample| {
+            let sample = sample as f64;
+            sample * sample
+        })
+        .sum::<f64>()
+        / pcm.len() as f64
+}
+
+fn packet_stream_fingerprint(packets: &[Vec<u8>]) -> u64 {
+    // Small deterministic FNV-1a fingerprint: enough to prove both child
+    // decoders consumed the same non-empty packet stream without a new hash
+    // dependency in this test-only crate.
+    let mut hash = 0xcbf29ce484222325u64;
+    for packet in packets {
+        for &byte in packet {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
 fn first_divergent(a: &[i16], b: &[i16]) -> Option<usize> {
     a.iter().zip(b.iter()).position(|(x, y)| x != y)
 }
@@ -216,13 +236,13 @@ fn ctrl_tmp_dir() -> PathBuf {
     dir
 }
 
-fn run_decoder(package: &str, bin: &str, packets: &Path, pcm_out: &Path) {
+fn run_decoder(package: &str, bin: &str, packets: &Path, pcm_out: &Path, mode_marker: &str) {
     // Use `cargo run` rather than locating the binary directly — keeps this
     // test agnostic to the target triple + release vs debug dir names. The
     // dep binaries rebuild only if they or their C sources changed, so the
     // first invocation pays a one-time cost, subsequent runs are cheap.
     let t0 = Instant::now();
-    let status = Command::new(env!("CARGO"))
+    let output = Command::new(env!("CARGO"))
         .args([
             "run",
             "--quiet",
@@ -236,12 +256,19 @@ fn run_decoder(package: &str, bin: &str, packets: &Path, pcm_out: &Path) {
         .arg(packets)
         .arg(pcm_out)
         .current_dir(workspace_root())
-        .status()
+        .output()
         .unwrap_or_else(|e| panic!("cargo run -p {package} --bin {bin} failed: {e}"));
     let elapsed = t0.elapsed();
     assert!(
-        status.success(),
-        "cargo run -p {package} --bin {bin} exited with {status:?} ({elapsed:?})"
+        output.status.success(),
+        "cargo run -p {package} --bin {bin} exited with {:?} ({elapsed:?}); stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(mode_marker),
+        "{bin} did not announce expected control mode marker {mode_marker:?}; stderr: {stderr}"
     );
     eprintln!("  {bin}: decoded in {elapsed:.2?}");
 }
@@ -253,6 +280,10 @@ fn run_decoder(package: &str, bin: &str, packets: &Path, pcm_out: &Path) {
 #[test]
 fn ctrl_fixed_vs_float_classical_snr() {
     eprintln!("=== Stage 7b.3 control experiment: C-fixed-classical vs C-float-classical ===");
+    assert_eq!(
+        CONTROL_COMPLEXITY, 4,
+        "control markers and decoder configuration must stay at classical complexity"
+    );
 
     // 1. Reference PCM + encode — identical to tier2_snr.rs's preamble.
     let pcm_in = synth_reference_pcm();
@@ -269,12 +300,28 @@ fn ctrl_fixed_vs_float_classical_snr() {
         n_lost > 5,
         "loss pattern lost only {n_lost} packets — not meaningful"
     );
+    let expected_lost = (TOTAL_FRAMES as usize - 1) / 7;
+    assert_eq!(
+        n_lost, expected_lost,
+        "control loss pattern changed: expected {expected_lost} lost frames"
+    );
+    let input_energy = mean_square_energy(&pcm_in);
+    assert!(
+        input_energy > CONTROL_SIGNAL_MIN_MEAN_SQUARE,
+        "control input is not energetic enough: mean-square={input_energy:.1}"
+    );
+    let packet_fingerprint = packet_stream_fingerprint(&packets);
+    assert_ne!(
+        packet_fingerprint, 0,
+        "encoded control packet stream is empty"
+    );
 
     // 2. Write packets to a tempfile. Both decoders read the same bytes so
     // there's no chance the two sides see a different frame-by-frame stream.
     let tmp = ctrl_tmp_dir();
     let packets_path = tmp.join("ctrl_packets.bin");
     write_packets_file(&packets_path, &packets, is_lost).expect("write packets file");
+    let packet_file_before = std::fs::read(&packets_path).expect("read control packet file");
     eprintln!(
         "  wrote {} frames ({} lost) to {}",
         packets.len(),
@@ -290,12 +337,20 @@ fn ctrl_fixed_vs_float_classical_snr() {
         "ctrl_decode_fixed",
         &packets_path,
         &fixed_pcm_path,
+        FIXED_MODE_MARKER,
     );
     run_decoder(
         "ropus-harness-deep-plc",
         "ctrl_decode_float",
         &packets_path,
         &float_pcm_path,
+        FLOAT_MODE_MARKER,
+    );
+
+    assert_eq!(
+        std::fs::read(&packets_path).expect("read packets after fixed/float decode"),
+        packet_file_before,
+        "control decoder mutated the shared packet stream"
     );
 
     // 4. Read back + compute SNR.
@@ -313,6 +368,13 @@ fn ctrl_fixed_vs_float_classical_snr() {
         (TOTAL_FRAMES as usize) * (FRAME_SIZE as usize) * (CHANNELS as usize),
         "PCM length inconsistent with expected frames*frame_size*channels"
     );
+    let fixed_energy = mean_square_energy(&pcm_fixed);
+    let float_energy = mean_square_energy(&pcm_float);
+    assert!(
+        fixed_energy > CONTROL_OUTPUT_MIN_MEAN_SQUARE
+            && float_energy > CONTROL_OUTPUT_MIN_MEAN_SQUARE,
+        "classical control output lost signal energy: fixed={fixed_energy:.1}, float={float_energy:.1}"
+    );
 
     let snr = compute_snr_db(&pcm_float, &pcm_fixed);
     let first_diverge = first_divergent(&pcm_float, &pcm_fixed);
@@ -322,16 +384,18 @@ fn ctrl_fixed_vs_float_classical_snr() {
     eprintln!("  total samples   = {}", pcm_fixed.len());
     eprintln!("  SNR(fixed vs float, classical PLC) = {:.2} dB", snr);
     eprintln!("  first divergent sample index = {first_diverge:?}");
+    eprintln!("  packet fingerprint = {packet_fingerprint:016x}");
     eprintln!("===");
 
-    // The control experiment has no pass/fail threshold — the measured SNR
-    // IS the answer. But we sanity-check against catastrophe (any value
-    // below 20 dB would indicate something catastrophically wrong with the
-    // harness itself, not the arithmetic gap we're trying to measure).
     assert!(
-        snr > 20.0,
-        "control SNR {snr:.2} dB is catastrophically low — the harness is broken, \
-         not measuring the arithmetic gap. Inspect first divergent sample {first_diverge:?}."
+        first_diverge.is_some(),
+        "classical fixed/float control unexpectedly produced identical lossy PCM"
+    );
+    assert!(
+        (CONTROL_SNR_MIN_DB..=CONTROL_SNR_MAX_DB).contains(&snr),
+        "classical control SNR {snr:.2} dB is outside diagnostic interval \
+         [{CONTROL_SNR_MIN_DB:.0}, {CONTROL_SNR_MAX_DB:.0}] — inspect mode, \
+         packet identity, and first divergent sample {first_diverge:?}"
     );
 }
 
@@ -345,10 +409,20 @@ fn ctrl_fixed_vs_float_classical_snr_lossless() {
 
     let pcm_in = synth_reference_pcm();
     let packets = encode_with_ropus(&pcm_in);
+    assert!(
+        mean_square_energy(&pcm_in) > CONTROL_SIGNAL_MIN_MEAN_SQUARE,
+        "lossless control input is not energetic"
+    );
+    let packet_fingerprint = packet_stream_fingerprint(&packets);
+    assert_ne!(
+        packet_fingerprint, 0,
+        "encoded lossless packet stream is empty"
+    );
 
     let tmp = ctrl_tmp_dir();
     let packets_path = tmp.join("ctrl_packets_lossless.bin");
     write_packets_file(&packets_path, &packets, |_| false).expect("write packets");
+    let packet_file_before = std::fs::read(&packets_path).expect("read lossless packet file");
 
     let fixed_pcm_path = tmp.join("ctrl_fixed_lossless.pcm");
     let float_pcm_path = tmp.join("ctrl_float_lossless.pcm");
@@ -357,32 +431,50 @@ fn ctrl_fixed_vs_float_classical_snr_lossless() {
         "ctrl_decode_fixed",
         &packets_path,
         &fixed_pcm_path,
+        FIXED_MODE_MARKER,
     );
     run_decoder(
         "ropus-harness-deep-plc",
         "ctrl_decode_float",
         &packets_path,
         &float_pcm_path,
+        FLOAT_MODE_MARKER,
+    );
+
+    assert_eq!(
+        std::fs::read(&packets_path).expect("read lossless packets after decode"),
+        packet_file_before,
+        "lossless control decoder mutated the shared packet stream"
     );
 
     let pcm_fixed = read_pcm_file(&fixed_pcm_path).expect("read fixed pcm");
     let pcm_float = read_pcm_file(&float_pcm_path).expect("read float pcm");
     let snr = compute_snr_db(&pcm_float, &pcm_fixed);
     let first_diverge = first_divergent(&pcm_float, &pcm_fixed);
+    let fixed_energy = mean_square_energy(&pcm_fixed);
+    let float_energy = mean_square_energy(&pcm_float);
 
     eprintln!("===");
     eprintln!(
         "  SNR(fixed vs float, NO loss) = {:.2} dB, first diverge at {:?}",
         snr, first_diverge
     );
+    eprintln!("  mean-square energy fixed={fixed_energy:.1}, float={float_energy:.1}");
+    eprintln!("  packet fingerprint = {packet_fingerprint:016x}");
     eprintln!("===");
 
-    // Loose lower bound: the lossless classical path across fixed/float
-    // should be very close to identical — 60 dB gives plenty of slack
-    // (tier2_snr.rs's lossless regression uses 80 dB against Rust-fixed).
     assert!(
-        snr > 60.0,
-        "Lossless SNR {snr:.2} dB is below a safe baseline — something is \
-         wrong beyond the arithmetic gap we're trying to measure."
+        fixed_energy > CONTROL_OUTPUT_MIN_MEAN_SQUARE
+            && float_energy > CONTROL_OUTPUT_MIN_MEAN_SQUARE,
+        "lossless control output lost signal energy: fixed={fixed_energy:.1}, float={float_energy:.1}"
+    );
+    assert!(
+        first_diverge.is_some(),
+        "lossless fixed/float control unexpectedly produced identical PCM"
+    );
+    assert!(
+        snr >= CONTROL_LOSSLESS_MIN_DB,
+        "Lossless SNR {snr:.2} dB is below the fixed/float diagnostic baseline \
+         of {CONTROL_LOSSLESS_MIN_DB:.0} dB — first divergent sample {first_diverge:?}"
     );
 }

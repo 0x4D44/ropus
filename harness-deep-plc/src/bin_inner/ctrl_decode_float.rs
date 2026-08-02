@@ -259,6 +259,7 @@ pub fn main() {
         eprintln!("set_complexity({CONTROL_COMPLEXITY}) failed: {e}");
         process::exit(1);
     });
+    eprintln!("control-mode=classical float complexity={CONTROL_COMPLEXITY} deep_plc=disabled");
 
     let fout = File::create(&pcm_path).unwrap_or_else(|e| {
         eprintln!("create {}: {e}", pcm_path.display());
