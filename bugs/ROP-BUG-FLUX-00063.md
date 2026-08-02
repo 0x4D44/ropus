@@ -1,24 +1,24 @@
 # ROP-BUG-FLUX-00063 — Strict info queries return partial estimates after fallback decode errors
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropusinfo/query-integrity
 - **Raised:** 2026-07-31
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260802T001734Z-p11561-n537342000-c1
-- **Owner host:** flux
-- **Owner branch:** task/bug-ROP-BUG-FLUX-00063-run-fix-20260802T001734Z-p11561-n537342000-c1
-- **Owner base:** 700867c2b2668f1cf877d175c05b0a5ebd24fc7a
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-08-02T00:17:34Z
-- **Owner until:** 2026-08-02T02:17:34Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-07-31, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-08-02, deltic:auto role=fix run=fix-20260802T001734Z-p11561-n537342000-c1 branch=task/bug-ROP-BUG-FLUX-00063-run-fix-20260802T001734Z-p11561-n537342000-c1 code=e70bb9c27c49258090ad97c8a0558584b09089a0 gate=manual)
 
 ## Observation
 
