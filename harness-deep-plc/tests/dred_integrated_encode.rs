@@ -25,7 +25,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use ropus::dnn::dred::DRED_MAX_FRAMES;
+use ropus::dnn::dred::{DRED_MAX_FRAMES, OpusDred};
 use ropus::dnn::embedded_weights::WEIGHTS_BLOB;
 use ropus::opus::dred::OpusDREDDecoder;
 use ropus::opus::encoder::OPUS_APPLICATION_VOIP as ROPUS_APP_VOIP;
@@ -108,6 +108,101 @@ fn weights_or_skip(tag: &str) -> bool {
         return false;
     }
     true
+}
+
+/// Validate one C parser result and report whether it carried DRED. A zero
+/// return with zero latents is a valid ordinary Opus packet; every negative
+/// return or malformed populated result must fail even after an earlier
+/// packet succeeded.
+fn validate_c_parse_frame(
+    frame: usize,
+    parse_ret: i32,
+    nb_latents: i32,
+    process_stage: i32,
+) -> Result<bool, String> {
+    if parse_ret < 0 {
+        return Err(format!(
+            "frame {frame}: C DRED parser returned error {parse_ret}"
+        ));
+    }
+    if nb_latents < 0 {
+        return Err(format!(
+            "frame {frame}: C DRED parser returned negative nb_latents {nb_latents}"
+        ));
+    }
+    if nb_latents == 0 {
+        return Ok(false);
+    }
+    if nb_latents as usize > DRED_MAX_FRAMES {
+        return Err(format!(
+            "frame {frame}: C DRED parser returned {nb_latents} latents, exceeding DRED_MAX_FRAMES"
+        ));
+    }
+    if process_stage < 1 {
+        return Err(format!(
+            "frame {frame}: populated C DRED must reach process stage >= 1, got {process_stage}"
+        ));
+    }
+    Ok(true)
+}
+
+/// Validate a Rust parser result before processing it. Packets without DRED
+/// are allowed to remain at the parser's empty stage; every populated packet
+/// must have bounded latents and a parse-complete stage.
+fn validate_rust_dred_frame(frame: usize, dred: &OpusDred) -> Result<bool, String> {
+    if dred.nb_latents < 0 {
+        return Err(format!(
+            "frame {frame}: Rust DRED parser returned negative nb_latents {}",
+            dred.nb_latents
+        ));
+    }
+    if dred.nb_latents == 0 {
+        return Ok(false);
+    }
+    if dred.nb_latents as usize > DRED_MAX_FRAMES {
+        return Err(format!(
+            "frame {frame}: Rust DRED parser returned {} latents, exceeding DRED_MAX_FRAMES",
+            dred.nb_latents
+        ));
+    }
+    if dred.process_stage < 1 {
+        return Err(format!(
+            "frame {frame}: populated Rust DRED must reach process stage >= 1, got {}",
+            dred.process_stage
+        ));
+    }
+    Ok(true)
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::{OpusDred, validate_c_parse_frame, validate_rust_dred_frame};
+
+    #[test]
+    fn malformed_packet_after_valid_packet_is_not_masked() {
+        assert!(validate_c_parse_frame(0, 720, 1, 2).unwrap());
+        assert!(validate_c_parse_frame(1, -1, 0, -1).is_err());
+
+        let valid = OpusDred {
+            nb_latents: 1,
+            process_stage: 1,
+            ..OpusDred::default()
+        };
+        assert!(validate_rust_dred_frame(0, &valid).unwrap());
+
+        let malformed = OpusDred {
+            nb_latents: 1,
+            process_stage: 0,
+            ..OpusDred::default()
+        };
+        assert!(validate_rust_dred_frame(1, &malformed).is_err());
+    }
+
+    #[test]
+    fn ordinary_packet_without_dred_is_valid_but_not_presence_evidence() {
+        assert!(!validate_c_parse_frame(0, 0, 0, -1).unwrap());
+        assert!(!validate_rust_dred_frame(0, &OpusDred::default()).unwrap());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -237,15 +332,9 @@ fn rust_encoded_packets_parse_on_c_reference() {
             pkt.len()
         );
         per_frame_nb_latents.push(nb_latents);
-        if ret >= 0 && nb_latents >= 1 {
-            assert!(
-                process_stage >= 1,
-                "process_stage must be >= 1 on parsed DRED"
-            );
-            assert!(
-                nb_latents as usize <= DRED_MAX_FRAMES,
-                "nb_latents {nb_latents} exceeds DRED_MAX_FRAMES"
-            );
+        let has_dred = validate_c_parse_frame(i, ret, nb_latents, process_stage)
+            .unwrap_or_else(|error| panic!("{error}"));
+        if has_dred {
             found = true;
         }
     }
@@ -280,7 +369,7 @@ fn c_encoded_packets_parse_with_rust_decoder() {
     let mut found = false;
     let mut per_frame = Vec::new();
     for (i, pkt) in frames.iter().enumerate() {
-        let dred = decoder
+        let mut dred = decoder
             .parse(pkt, 2 * TARGET_FS, TARGET_FS)
             .expect("parse should not error on a well-formed packet");
         eprintln!(
@@ -291,9 +380,11 @@ fn c_encoded_packets_parse_with_rust_decoder() {
             dred.dred_offset
         );
         per_frame.push(dred.nb_latents);
-        if dred.nb_latents >= 1 {
-            assert!(dred.process_stage >= 1);
-            assert!(dred.nb_latents as usize <= DRED_MAX_FRAMES);
+        let has_dred = validate_rust_dred_frame(i, &dred).unwrap_or_else(|error| panic!("{error}"));
+        if has_dred {
+            let ret = decoder.process(&mut dred);
+            assert_eq!(ret, 0, "Rust DRED process failed on frame {i}: {ret}");
+            assert_eq!(dred.process_stage, 2);
             found = true;
         }
     }
@@ -327,26 +418,25 @@ fn rust_encoder_decoder_dred_roundtrip() {
         let mut dred = decoder
             .parse(pkt, 2 * TARGET_FS, TARGET_FS)
             .expect("parse should not error");
-        if dred.nb_latents < 1 {
-            continue;
+        let has_dred = validate_rust_dred_frame(i, &dred).unwrap_or_else(|error| panic!("{error}"));
+        if has_dred {
+            // Process every populated extension, not only the first one. This
+            // keeps later malformed or unprocessable packets visible to the
+            // acceptance gate.
+            let ret = decoder.process(&mut dred);
+            assert_eq!(
+                ret, 0,
+                "process should succeed on parsed packet (frame {i})"
+            );
+            assert_eq!(dred.process_stage, 2);
+            // At least one feature must be nonzero on a live signal frame.
+            let any_nonzero = dred.fec_features.iter().any(|f| *f != 0.0);
+            assert!(
+                any_nonzero,
+                "fec_features all-zero after process on frame {i} — RDOVAE decoder not driven"
+            );
+            found_with_latents = true;
         }
-        // Found one — drive it through `process` to populate fec_features,
-        // proving the full parse → process chain closes. Matches the
-        // 8.7 round-trip test's contract.
-        let ret = decoder.process(&mut dred);
-        assert_eq!(
-            ret, 0,
-            "process should succeed on parsed packet (frame {i})"
-        );
-        assert_eq!(dred.process_stage, 2);
-        // At least one feature must be nonzero on a live signal frame.
-        let any_nonzero = dred.fec_features.iter().any(|f| *f != 0.0);
-        assert!(
-            any_nonzero,
-            "fec_features all-zero after process on frame {i} — RDOVAE decoder not driven"
-        );
-        found_with_latents = true;
-        break;
     }
     assert!(
         found_with_latents,

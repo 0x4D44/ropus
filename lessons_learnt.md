@@ -4,6 +4,11 @@
   reach the caller. Restore raw mode before the guard drops, and combine cleanup
   errors with playback failures without hiding either cause.
 
+- Integrated parser gates must validate every packet and process every DRED extension; an early success cannot prove a stream (`dred_integrated_encode.rs`).
+
+  Keep a separate presence flag, but continue through all emitted packets and
+  fail on any parser error, invalid latent count, or unprocessed extension.
+
 - DRED gates must prove active extensions before PCM checks; packet-size envelopes cannot prove bitrate plumbing (`harness-deep-plc/tests/dred_bitrate_plumbing_nonzero_diff.rs`).
 
   Keep cross-precision SILK size checks labelled as diagnostics, pin the scalar
