@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** ropusplay/decode-completeness
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260802T002554Z-p32406-n239300000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00064-run-fix-20260802T002554Z-p32406-n239300000-c1
+- **Owner base:** 6590e7ff9cb6053c76d976fdc5d20764397d7be7
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-02T00:25:54Z
+- **Owner until:** 2026-08-02T02:25:54Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
