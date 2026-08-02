@@ -78,6 +78,89 @@ fn run_ropusinfo(args: &[&str]) -> (String, String, i32) {
     (stdout, stderr, code)
 }
 
+fn ogg_crc32(page: &[u8]) -> u32 {
+    const POLY: u32 = 0x04C1_1DB7;
+    let mut crc = 0u32;
+    for (index, &byte) in page.iter().enumerate() {
+        let byte = if (22..26).contains(&index) { 0 } else { byte };
+        crc ^= u32::from(byte) << 24;
+        for _ in 0..8 {
+            crc = if crc & 0x8000_0000 != 0 {
+                (crc << 1) ^ POLY
+            } else {
+                crc << 1
+            };
+        }
+    }
+    crc
+}
+
+fn build_ogg_page(
+    serial: u32,
+    sequence: u32,
+    header_type: u8,
+    granule: u64,
+    payload: &[u8],
+) -> Vec<u8> {
+    assert!(payload.len() <= u8::MAX as usize);
+    let mut page = Vec::with_capacity(28 + payload.len());
+    page.extend_from_slice(b"OggS");
+    page.push(0); // stream structure version
+    page.push(header_type);
+    page.extend_from_slice(&granule.to_le_bytes());
+    page.extend_from_slice(&serial.to_le_bytes());
+    page.extend_from_slice(&sequence.to_le_bytes());
+    page.extend_from_slice(&0u32.to_le_bytes()); // CRC placeholder
+    page.push(1); // one lacing segment
+    page.push(payload.len() as u8);
+    page.extend_from_slice(payload);
+    let crc = ogg_crc32(&page);
+    page[22..26].copy_from_slice(&crc.to_le_bytes());
+    page
+}
+
+fn write_incomplete_invalid_opus(tag: &str) -> PathBuf {
+    let nonce = format!(
+        "{}_{}_{}",
+        tag,
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let path = std::env::temp_dir().join(format!("ropusinfo_cli_{nonce}.opus"));
+    let serial = 0x1234_5678;
+    let unknown_granule = u64::MAX;
+
+    let mut head = b"OpusHead".to_vec();
+    head.extend_from_slice(&[1, 1]); // version, mono channel count
+    head.extend_from_slice(&0u16.to_le_bytes()); // pre-skip
+    head.extend_from_slice(&48_000u32.to_le_bytes());
+    head.extend_from_slice(&0i16.to_le_bytes()); // output gain
+    head.push(0); // family 0 mapping
+
+    let mut tags = b"OpusTags".to_vec();
+    tags.extend_from_slice(&0u32.to_le_bytes()); // empty vendor
+    tags.extend_from_slice(&0u32.to_le_bytes()); // zero comments
+
+    // Non-empty but invalid Opus payload: the container validator accepts it,
+    // while the codec rejects it during the strict fallback decode.
+    let invalid_audio = [0x9B, 7];
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&build_ogg_page(serial, 0, 0x02, 0, &head));
+    bytes.extend_from_slice(&build_ogg_page(serial, 1, 0, 0, &tags));
+    bytes.extend_from_slice(&build_ogg_page(
+        serial,
+        2,
+        0x04,
+        unknown_granule,
+        &invalid_audio,
+    ));
+    std::fs::write(&path, bytes).expect("write incomplete invalid Opus fixture");
+    path
+}
+
 #[test]
 fn info_default_output_contains_expected_fields() {
     let opus = encode_tmp_opus("default", Vec::new());
@@ -290,4 +373,54 @@ fn info_query_unknown_key_exits_2() {
     );
 
     let _ = std::fs::remove_file(&opus);
+}
+
+#[test]
+fn strict_duration_and_bitrate_reject_incomplete_decode_without_scalar() {
+    let opus = write_incomplete_invalid_opus("strict_incomplete");
+
+    for query in ["duration", "bitrate"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ropusinfo"))
+            .args([
+                "--no-color",
+                "--query",
+                query,
+                opus.to_str().expect("path utf8"),
+            ])
+            .output()
+            .expect("run strict query");
+
+        assert!(
+            !out.status.success(),
+            "{query} must fail for an invalid fallback packet; stderr={:?}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            out.stdout.is_empty(),
+            "{query} must not emit a partial scalar: {:?}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("decoding Opus audio packet"),
+            "{query} error must identify strict packet decoding: {:?}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let human = Command::new(env!("CARGO_BIN_EXE_ropusinfo"))
+        .args(["--no-color", opus.to_str().expect("path utf8")])
+        .output()
+        .expect("run human info diagnostic");
+    assert!(
+        human.status.success(),
+        "human info should retain a diagnostic estimate: {:?}",
+        String::from_utf8_lossy(&human.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&human.stdout).contains("estimate; 1 packet error(s) skipped"),
+        "human info must label its estimate: {:?}",
+        String::from_utf8_lossy(&human.stdout)
+    );
+
+    let _ = std::fs::remove_file(opus);
 }

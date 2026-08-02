@@ -64,6 +64,40 @@ impl QueryKey {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SampleCount {
+    Exact(u64),
+    Estimate { samples: u64, error_count: u64 },
+}
+
+impl SampleCount {
+    fn value(self) -> u64 {
+        match self {
+            Self::Exact(samples) | Self::Estimate { samples, .. } => samples,
+        }
+    }
+
+    fn annotation(self) -> Option<String> {
+        match self {
+            Self::Exact(_) => None,
+            Self::Estimate { error_count, .. } => {
+                Some(format!("estimate; {error_count} packet error(s) skipped"))
+            }
+        }
+    }
+
+    fn from_value(samples: u64, error_count: u64) -> Self {
+        if error_count == 0 {
+            Self::Exact(samples)
+        } else {
+            Self::Estimate {
+                samples,
+                error_count,
+            }
+        }
+    }
+}
+
 /// Validate a query key without opening its input file.
 ///
 /// The CLI uses this to retain opus-tools' exit code 2 for an unknown key,
@@ -79,7 +113,9 @@ struct InfoSummary {
     head: OpusHead,
     tags: OpusTags,
     /// Per-channel decoded sample count, post pre-skip trim, at 48 kHz.
-    sample_count: u64,
+    /// Human output may carry an explicitly labelled estimate when fallback
+    /// decoding skipped malformed packets.
+    sample_count: SampleCount,
     /// Total file size in bytes. Zero if the metadata call failed (rare, on
     /// stdin or unusual filesystems).
     file_len: u64,
@@ -93,7 +129,7 @@ struct InfoSummary {
 
 impl InfoSummary {
     fn duration_s(&self) -> f64 {
-        self.sample_count as f64 / OPUS_SR as f64
+        self.sample_count.value() as f64 / OPUS_SR as f64
     }
 
     fn avg_kbps(&self) -> f64 {
@@ -180,6 +216,7 @@ fn collect_summary(input: &std::path::Path, retain_packets: bool) -> Result<Info
     // needs neither the bytes nor their per-packet allocation.
     let mut packets = retain_packets.then(Vec::new);
     let mut slow_sample_count: u64 = 0;
+    let mut packet_errors: u64 = 0;
     // We lazily spin up the decoder only when the slow path needs it; on a
     // healthy file (absgp known) we walk packets purely for their TOC bytes.
     let need_slow = absgp_opt.is_none();
@@ -206,6 +243,7 @@ fn collect_summary(input: &std::path::Path, retain_packets: bool) -> Result<Info
             match dec.decode(&pkt.data, &mut decoded, DecodeMode::Normal) {
                 Ok(n) => slow_sample_count += n as u64,
                 Err(e) => {
+                    packet_errors += 1;
                     eprintln!(
                         "{} packet {}: {}",
                         "warning:".yellow(),
@@ -220,12 +258,20 @@ fn collect_summary(input: &std::path::Path, retain_packets: bool) -> Result<Info
 
     let pre_skip = head.pre_skip as u64;
     let sample_count = match absgp_opt {
-        Some(absgp) => absgp
-            .checked_sub(pre_skip)
-            .ok_or_else(|| anyhow!("final granule {absgp} is before pre-skip {pre_skip}"))?,
-        None => slow_sample_count.checked_sub(pre_skip).ok_or_else(|| {
-            anyhow!("decoded sample count {slow_sample_count} is smaller than pre-skip {pre_skip}")
-        })?,
+        Some(absgp) => SampleCount::from_value(
+            absgp
+                .checked_sub(pre_skip)
+                .ok_or_else(|| anyhow!("final granule {absgp} is before pre-skip {pre_skip}"))?,
+            packet_errors,
+        ),
+        None => SampleCount::from_value(
+            slow_sample_count.checked_sub(pre_skip).ok_or_else(|| {
+                anyhow!(
+                    "decoded sample count {slow_sample_count} is smaller than pre-skip {pre_skip}"
+                )
+            })?,
+            packet_errors,
+        ),
     };
 
     // Separate pass for per-page granules: the `ogg` crate's PacketReader
@@ -289,14 +335,15 @@ fn print_default_block(input: &std::path::Path, s: &InfoSummary) {
         "Total data length: {} bytes",
         s.file_len.to_string().bright_white()
     );
-    println!(
-        "Playback length: {}",
-        format_playback_length(s.duration_s()).bright_white()
-    );
-    println!(
-        "Average bitrate: {} kb/s",
-        format!("{:.1}", s.avg_kbps()).bright_white()
-    );
+    let duration = format_playback_length(s.duration_s()).bright_white();
+    let bitrate = format!("{:.1}", s.avg_kbps()).bright_white();
+    if let Some(annotation) = s.sample_count.annotation() {
+        println!("Playback length: {duration} ({annotation})");
+        println!("Average bitrate: {bitrate} kb/s ({annotation})");
+    } else {
+        println!("Playback length: {duration}");
+        println!("Average bitrate: {bitrate} kb/s");
+    }
 }
 
 fn print_extended(s: &InfoSummary) {
@@ -418,6 +465,7 @@ fn query_sample_count(input: &std::path::Path, head: OpusHead, target_serial: u3
         read_last_granule(&mut fast_file, target_serial).context("scanning for last Ogg page")?;
 
     let sample_count = if let Some(absgp) = absgp_opt {
+        validate_query_packets(input, target_serial)?;
         absgp
             .checked_sub(head.pre_skip as u64)
             .ok_or_else(|| anyhow!("final granule {absgp} is before pre-skip {}", head.pre_skip))?
@@ -425,6 +473,29 @@ fn query_sample_count(input: &std::path::Path, head: OpusHead, target_serial: u3
         decode_sample_count(input, head)?
     };
     Ok(sample_count)
+}
+
+/// Validate every target-stream audio packet before trusting a fast-path
+/// granule. Strict scalar queries must never print a value from a stream that
+/// contains a malformed packet, even when an EOS granule is available.
+fn validate_query_packets(input: &std::path::Path, target_serial: u32) -> Result<()> {
+    let file =
+        File::open(input).with_context(|| format!("opening {}", escape_terminal_path(input)))?;
+    let mut reader = PacketReader::new(BufReader::new(file));
+    reader.read_packet()?.ok_or_else(|| anyhow!("empty file"))?;
+    reader
+        .read_packet()?
+        .ok_or_else(|| anyhow!("expected OpusTags packet, got end of stream"))?;
+
+    let mut packet_idx = 0u64;
+    while let Some(pkt) = reader.read_packet()? {
+        if pkt.stream_serial() == target_serial {
+            validate_opus_audio_packet(&pkt.data)
+                .with_context(|| format!("validating Opus audio packet {packet_idx}"))?;
+            packet_idx += 1;
+        }
+    }
+    Ok(())
 }
 
 /// Slow duration fallback for truncated streams. This decodes packets in a
@@ -450,17 +521,10 @@ fn decode_sample_count(input: &std::path::Path, head: OpusHead) -> Result<u64> {
     while let Some(pkt) = reader.read_packet()? {
         validate_opus_audio_packet(&pkt.data)
             .with_context(|| format!("validating Opus audio packet {packet_idx}"))?;
-        match decoder.decode(&pkt.data, &mut decoded, DecodeMode::Normal) {
-            Ok(n) => sample_count += n as u64,
-            Err(e) => {
-                eprintln!(
-                    "{} packet {}: {}",
-                    "warning:".yellow(),
-                    packet_idx,
-                    escape_terminal_text(&e.to_string())
-                );
-            }
-        }
+        let n = decoder
+            .decode(&pkt.data, &mut decoded, DecodeMode::Normal)
+            .map_err(|e| anyhow!("decoding Opus audio packet {packet_idx}: {e}"))?;
+        sample_count += n as u64;
         packet_idx += 1;
     }
     sample_count
@@ -481,7 +545,7 @@ fn collect_query(input: &std::path::Path, key: &QueryKey) -> Result<()> {
             let summary = InfoSummary {
                 head,
                 tags: OpusTags::default(),
-                sample_count: 0,
+                sample_count: SampleCount::Exact(0),
                 file_len,
                 packets: Vec::new(),
                 page_granules: Vec::new(),
@@ -493,7 +557,7 @@ fn collect_query(input: &std::path::Path, key: &QueryKey) -> Result<()> {
             let summary = InfoSummary {
                 head,
                 tags,
-                sample_count: 0,
+                sample_count: SampleCount::Exact(0),
                 file_len,
                 packets: Vec::new(),
                 page_granules: Vec::new(),
@@ -506,7 +570,7 @@ fn collect_query(input: &std::path::Path, key: &QueryKey) -> Result<()> {
             let summary = InfoSummary {
                 head,
                 tags: OpusTags::default(),
-                sample_count,
+                sample_count: SampleCount::Exact(sample_count),
                 file_len,
                 packets: Vec::new(),
                 page_granules: Vec::new(),

@@ -1,3 +1,9 @@
+- Strict scalar queries fail on fallback decode errors; human estimates need explicit completeness (`info.rs:SampleCount`).
+
+  Do not turn skipped packets into a plausible exit-0 scalar. Return the
+  decoder error before formatting strict output, while the human report may
+  retain a value only when it labels the sample count and bitrate as estimates.
+
 - Quiet must reach shared reporters; choose Clap no-color before parsing (`options.rs:OutputPolicy`, `prelude.rs:no_color_requested`).
 
   Keep library command wrappers non-quiet for compatibility, pass a typed
