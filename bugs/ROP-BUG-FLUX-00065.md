@@ -5,15 +5,15 @@
 - **Severity:** Low
 - **Area:** ropusplay/terminal-layout
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260802T003410Z-p49291-n070544000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00065-run-fix-20260802T003410Z-p49291-n070544000-c1
+- **Owner base:** c684e7e0ed36c2e64057a2ec303e1449221a3760
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-02T00:34:10Z
+- **Owner until:** 2026-08-02T02:34:10Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
