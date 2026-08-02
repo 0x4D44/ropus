@@ -5,15 +5,15 @@
 - **Severity:** Medium
 - **Area:** harness-deep-plc/neural-oracles
 - **Raised:** 2026-07-31
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260802T011840Z-p16348-n137842000-c1
+- **Owner host:** flux
+- **Owner branch:** task/bug-ROP-BUG-FLUX-00069-run-fix-20260802T011840Z-p16348-n137842000-c1
+- **Owner base:** 76e23b8c04d01b36e69c7c99d1cbb88e2bb5db0a
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-08-02T01:18:40Z
+- **Owner until:** 2026-08-02T03:18:40Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
