@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00006 — Full-test child processes can run forever
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** full-test/subprocess-supervision
 - **Raised:** 2026-08-14T15:50:22Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260912T205144Z-5d46f11b
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00006-run-fix-20260912T205144Z-5d46f11b
-- **Owner base:** 53572f78dffca731fdebe6ea98d6b55cac6319e6
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-12T20:51:44Z
-- **Owner until:** 2026-09-12T22:51:44Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T15:50:22Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-08-14T15:50:22Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-12T21:06:54Z, deltic:auto role=fix run=fix-20260912T205144Z-5d46f11b branch=task/bug-ROP-BUG-CRUCIBLE-00006-run-fix-20260912T205144Z-5d46f11b code=eed31d60f719892a6adaefa5cd65493bd559cd77 gate=manual)
 
 ## Observation
 
