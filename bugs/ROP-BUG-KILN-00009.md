@@ -6,15 +6,15 @@
 - **Area:** tools/fuzz-launchers
 - **Raised:** 2026-08-13T17:17:38Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260912T222100Z-8af8029e
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KILN-00009-run-fix-20260912T222100Z-8af8029e
+- **Owner base:** 97eb949137a6e9b52483664cd9e36268d949cb1c
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-12T22:21:00Z
+- **Owner until:** 2026-09-13T00:21:00Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
