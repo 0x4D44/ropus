@@ -13,8 +13,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PROFILE_DIR="$ROOT/target/pgo-profiles"
-MERGED_PROFILE="$ROOT/target/pgo-merged.profdata"
+HARNESS_MANIFEST="$ROOT/harness/Cargo.toml"
+TARGET_DIR="$ROOT/target"
+PROFILE_DIR="$TARGET_DIR/pgo-profiles"
+MERGED_PROFILE="$TARGET_DIR/pgo-merged.profdata"
+RELEASE_DIR="$TARGET_DIR/release"
 VECTORS_DIR="$ROOT/tests/vectors"
 BENCH_WAV="$VECTORS_DIR/48k_sine1k_loud.wav"
 
@@ -43,17 +46,67 @@ for arg in "$@"; do
     esac
 done
 
+sha256_of() {
+    local path="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$path" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$path" | awk '{print $1}'
+    else
+        echo "ERROR: need sha256sum or shasum to identify the built binary" >&2
+        return 1
+    fi
+}
+
+release_binary() {
+    local base="$RELEASE_DIR/ropus-compare"
+    if [[ -f "${base}.exe" ]]; then
+        printf '%s\n' "${base}.exe"
+    elif [[ -f "$base" ]]; then
+        printf '%s\n' "$base"
+    else
+        echo "ERROR: ropus-compare binary not found under $RELEASE_DIR" >&2
+        return 1
+    fi
+}
+
+run_benchmark() {
+    local label="$1"
+    local binary="$2"
+    if [[ ! -f "$binary" ]]; then
+        echo "ERROR: $label binary not found: $binary" >&2
+        return 1
+    fi
+
+    local before after
+    before="$(sha256_of "$binary")"
+    echo "  $label binary: $binary"
+    echo "  $label binary identity: $before"
+    if ! "$binary" bench "$BENCH_WAV" --iters "$BENCH_ITERS"; then
+        echo "ERROR: $label benchmark failed" >&2
+        return 1
+    fi
+    after="$(sha256_of "$binary")"
+    if [[ "$before" != "$after" ]]; then
+        echo "ERROR: $label binary changed during measurement (before=$before after=$after)" >&2
+        return 1
+    fi
+    echo "  $label binary unchanged after benchmark: $after"
+}
+
 # ── Step 0: Baseline bench (non-PGO release) ──────────────────────────
 if [[ "$BENCH_ONLY" == false ]]; then
     echo ""
     echo "═══ Step 0: Baseline release build ═══"
-    cargo build --release --manifest-path "$ROOT/Cargo.toml" 2>&1 | tail -3
+    cargo build --release --manifest-path "$HARNESS_MANIFEST" \
+        --target-dir "$TARGET_DIR" \
+        --package ropus-harness --bin ropus-compare 2>&1 | tail -3
 
     if [[ -f "$BENCH_WAV" ]]; then
         echo ""
         echo "── Baseline benchmark ──"
-        cargo run --release --manifest-path "$ROOT/Cargo.toml" \
-            --bin ropus-compare -- bench "$BENCH_WAV" --iters "$BENCH_ITERS"
+        BASELINE_BIN="$(release_binary)"
+        run_benchmark "Baseline" "$BASELINE_BIN"
     fi
 fi
 
@@ -65,15 +118,16 @@ if [[ "$BENCH_ONLY" == false ]]; then
     mkdir -p "$PROFILE_DIR"
 
     RUSTFLAGS="-Cprofile-generate=$PROFILE_DIR" \
-        cargo build --release --manifest-path "$ROOT/Cargo.toml" 2>&1 | tail -3
+        cargo build --release --manifest-path "$HARNESS_MANIFEST" \
+            --target-dir "$TARGET_DIR" \
+            --package ropus-harness --bin ropus-compare 2>&1 | tail -3
 
     # ── Step 2: Training workload ─────────────────────────────────────
     echo ""
     echo "═══ Step 2: Training workload ═══"
-    INSTRUMENTED_BIN="$ROOT/target/release/ropus-compare.exe"
-    if [[ ! -f "$INSTRUMENTED_BIN" ]]; then
-        INSTRUMENTED_BIN="$ROOT/target/release/ropus-compare"
-    fi
+    INSTRUMENTED_BIN="$(release_binary)"
+    echo "  Instrumented binary: $INSTRUMENTED_BIN"
+    echo "  Instrumented binary identity: $(sha256_of "$INSTRUMENTED_BIN")"
 
     BITRATES=(16000 32000 64000 128000)
     WAV_COUNT=0
@@ -113,15 +167,17 @@ if [[ ! -f "$MERGED_PROFILE" ]]; then
 fi
 
 RUSTFLAGS="-Cprofile-use=$MERGED_PROFILE -Cllvm-args=-pgo-warn-missing-function" \
-    cargo build --release --manifest-path "$ROOT/Cargo.toml" 2>&1 | tail -3
+    cargo build --release --manifest-path "$HARNESS_MANIFEST" \
+        --target-dir "$TARGET_DIR" \
+        --package ropus-harness --bin ropus-compare 2>&1 | tail -3
 
 # ── Step 5: PGO bench ────────────────────────────────────────────────
 if [[ -f "$BENCH_WAV" ]]; then
     echo ""
     echo "═══ Step 5: PGO benchmark ═══"
-    cargo run --release --manifest-path "$ROOT/Cargo.toml" \
-        --bin ropus-compare -- bench "$BENCH_WAV" --iters "$BENCH_ITERS"
+    PGO_BIN="$(release_binary)"
+    run_benchmark "PGO" "$PGO_BIN"
 fi
 
 echo ""
-echo "Done. PGO binary at: $ROOT/target/release/ropus-compare"
+echo "Done. PGO binary at: $RELEASE_DIR/ropus-compare"
