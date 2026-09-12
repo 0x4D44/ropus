@@ -314,6 +314,15 @@ fn run_generated_smoke_with_runner(
     probe: FfmpegProbe,
     runner: &dyn CommandRunner,
 ) -> Outcome {
+    run_generated_smoke_with_hasher(root, probe, runner, sha256_of_opus_payload)
+}
+
+fn run_generated_smoke_with_hasher(
+    root: &Path,
+    probe: FfmpegProbe,
+    runner: &dyn CommandRunner,
+    payload_hasher: fn(&Path) -> Result<String, String>,
+) -> Outcome {
     let started = Instant::now();
     let mut issues = Vec::new();
     let manifest = match load_manifest(root) {
@@ -489,11 +498,22 @@ fn run_generated_smoke_with_runner(
                         entry.id, bytes, entry.max_size_bytes
                     ));
                 }
-                let sha256 = sha256_of_opus_payload(&output_path).ok();
+                let oversized = matches!(bytes, Some(bytes) if bytes > entry.max_size_bytes);
+                let sha256 = if oversized {
+                    None
+                } else {
+                    payload_hasher(&output_path).ok()
+                };
                 let mut entry_status = "generated".to_string();
                 let mut entry_note =
                     "generated in a temporary directory; media remains untracked".to_string();
-                if let Some(expected) = &entry.expected_sha256 {
+                if oversized {
+                    entry_status = "oversized".to_string();
+                    entry_note = format!(
+                        "generated output exceeded max_size_bytes {}; skipped payload hashing",
+                        entry.max_size_bytes
+                    );
+                } else if let Some(expected) = &entry.expected_sha256 {
                     match &sha256 {
                         Some(produced) if produced == expected => {
                             pinned_matched += 1;
@@ -1457,6 +1477,43 @@ expected_sha256 = "{}"
     }
 
     #[test]
+    fn oversized_generated_output_skips_payload_hashing() {
+        const SPARSE_BYTES: u64 = 16 * 1024 * 1024;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write(tmp.path(), "tests/vectors/48k_sine1k_loud.wav", "fake wav");
+        let manifest = manifest_text().replace("max_size_bytes = 100000", "max_size_bytes = 1");
+        write(tmp.path(), MANIFEST_REL, &manifest);
+
+        fn unexpected_hash(_: &Path) -> Result<String, String> {
+            panic!("oversized output must not reach the payload hasher");
+        }
+
+        let runner = SparseOutputRunner { size: SPARSE_BYTES };
+        let outcome = run_generated_smoke_with_hasher(
+            tmp.path(),
+            FfmpegProbe::Available {
+                version: "ffmpeg version test".to_string(),
+            },
+            &runner,
+            unexpected_hash,
+        );
+
+        assert_eq!(outcome.status, Status::Fail);
+        assert!(
+            outcome
+                .issues
+                .iter()
+                .any(|issue| issue.contains("exceeding manifest max_size_bytes 1")),
+            "issues: {:?}",
+            outcome.issues
+        );
+        assert_eq!(outcome.entries[0].bytes, Some(SPARSE_BYTES));
+        assert_eq!(outcome.entries[0].sha256, None);
+        assert_eq!(outcome.entries[0].status, "oversized");
+    }
+
+    #[test]
     fn manifest_parser_validates_bitrate_and_channels() {
         let too_many_channels = r#"
 [[entries]]
@@ -1865,6 +1922,27 @@ channels = 1
 
         fn calls(&self) -> Vec<(String, Vec<String>)> {
             self.calls.lock().unwrap().clone()
+        }
+    }
+
+    struct SparseOutputRunner {
+        size: u64,
+    }
+
+    impl CommandRunner for SparseOutputRunner {
+        fn run(&self, program: &str, args: &[String]) -> std::io::Result<std::process::Output> {
+            if program == "ffmpeg" {
+                let output_path = args.last().ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidInput, "missing output path")
+                })?;
+                let file = fs::File::create(output_path)?;
+                file.set_len(self.size)?;
+            }
+            Ok(std::process::Output {
+                status: std::process::ExitStatus::default(),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
         }
     }
 
