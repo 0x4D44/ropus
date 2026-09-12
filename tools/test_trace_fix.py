@@ -41,7 +41,10 @@ class TraceFixRecoveryTests(unittest.TestCase):
             patch.object(trace_fix, "invoke_agent", invoke_agent),
             patch.object(trace_fix.subprocess, "run", cargo_build),
         ):
-            self.assertTrue(trace_fix.trace_fix_loop(log))
+            try:
+                self.assertTrue(trace_fix.trace_fix_loop(log))
+            except NameError as exc:
+                self.fail(f"build recovery raised an unexpected NameError: {exc}")
 
         self.assertEqual(build.call_count, 2)
         if divergence:

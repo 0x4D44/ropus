@@ -414,10 +414,13 @@ def trace_fix_loop(log: logging.Logger) -> bool:
                     capture_output=True, text=True, timeout=300,
                     encoding="utf-8", errors="replace",
                 ).stderr[:3000]
-                invoke_claude(
+                repair_ok, repair_output = invoke_agent(
                     f"cargo build failed after adding debug prints. Fix errors:\n```\n{build_err}\n```",
                     timeout=600,
                 )
+                if not repair_ok:
+                    log.error("  Build-repair agent failed: %s", repair_output[:500])
+                    continue
                 if not build(log, clean=True):
                     log.error("  Still broken, skipping iteration")
                     continue
@@ -431,10 +434,13 @@ def trace_fix_loop(log: logging.Logger) -> bool:
                 capture_output=True, text=True, timeout=300,
                 encoding="utf-8", errors="replace",
             ).stderr[:3000]
-            invoke_claude(
+            repair_ok, repair_output = invoke_agent(
                 f"cargo build failed. Fix errors:\n```\n{build_err}\n```",
                 timeout=600,
             )
+            if not repair_ok:
+                log.error("  Build-repair agent failed: %s", repair_output[:500])
+                continue
             if not build(log):
                 log.error("  Still broken after build fix")
                 continue
