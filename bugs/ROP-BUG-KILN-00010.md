@@ -6,15 +6,15 @@
 - **Area:** tools/trace-fix
 - **Raised:** 2026-08-13T17:17:38Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260912T223742Z-7a97ad5d
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KILN-00010-run-fix-20260912T223742Z-7a97ad5d
+- **Owner base:** b3ff2a1612d182381d880a4320ef798a83b483b6
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-12T22:37:42Z
+- **Owner until:** 2026-09-13T00:37:42Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
