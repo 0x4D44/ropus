@@ -27,6 +27,28 @@ Observation: tools/pgo_build.sh invokes cargo run for ropus-compare from the vir
 
 ## Fix
 
-<unfixed — raised only>
+Integrated code commit `05b5c28bb2809135d28c9f8adefa1556a44521ad` now builds
+the explicitly selected `ropus-harness`/`ropus-compare` target with one fixed
+target directory. Training and both benchmark runs execute the resulting
+binary directly, while the launcher records its SHA-256 before and after each
+measurement. Focused coverage lives in `tools/test_pgo_build.py`.
+
+Validation evidence:
+
+- Regression proof: replacing `run_benchmark`'s direct binary invocation with
+  the old `cargo run` command made
+  `test_builds_and_measures_the_selected_pgo_binary_directly` fail on its own
+  `assertEqual(len(cargo_lines), 3, cargo_lines)` assertion after observing
+  five Cargo calls, including two `ARGS=run` entries.
+- After restoration, `python -m unittest -v tools.test_pgo_build` passed the
+  selected fake-tool integration test. It observed three package-selected
+  builds, profile-generate/profile-use flags, direct baseline/training/PGO
+  invocations, and unchanged binary identities around both benchmarks.
+- Normalized `bash -n tools/pgo_build.sh` and
+  `python -m py_compile tools/test_pgo_build.py` passed. The exact real command
+  `deltic timeout 180 cargo build --release --manifest-path
+  harness/Cargo.toml --target-dir target --package ropus-harness --bin
+  ropus-compare` also completed successfully; only the repository's existing
+  missing-reference/DNN-data warnings were emitted.
 
 ## Notes
