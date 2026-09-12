@@ -27,6 +27,24 @@ Static review at origin/main a97b6f11. harness-control/tests/control_snr.rs:232-
 
 ## Fix
 
-<unfixed — raised only>
+Implemented in `harness-control/tests/control_snr.rs` and integrated at code
+commit `3f5469608ca0e5722746a2d26b24c2bd28de551d`.
+
+- Control runs now allocate unique OS-temp directories using process, time, and
+  sequence identity, then remove each directory through its drop guard.
+- Packet and PCM paths for both child decoders are derived inside that guard,
+  so concurrent test processes cannot truncate or read each other’s files.
+- Added an overlapping-directory oracle that checks uniqueness and cleanup.
+
+Verification:
+
+- `$null | deltic timeout 180 cargo test -p ropus-harness-control --test control_snr control_temp_dirs_are_unique_and_cleaned_up` — 1 passed, 0 failed.
+- `$null | deltic timeout 180 cargo test -p ropus-harness-control --test control_snr loss_pattern_contains_only_complete_recovery_cycles` — 1 passed, 0 failed.
+- `deltic timeout 120 cargo check -p ropus-harness-control` — passed.
+- `deltic timeout 120 cargo fmt --all -- --check` — passed.
+- `git diff --check` — passed.
+- Red proof: forced a fixed temp name; the isolation test failed because both
+  guards resolved to the same path. The unique naming logic was restored and
+  the focused tests passed.
 
 ## Notes
