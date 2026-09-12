@@ -27,6 +27,22 @@ Static review at origin/main a97b6f11. harness-control/tests/control_snr.rs:65-6
 
 ## Fix
 
-<unfixed — raised only>
+Implemented in `harness-control/tests/control_snr.rs` and integrated at code
+commit `ce30efbd0b93799d3839f064b631638af21714da`.
+
+- The control loss predicate now shares the seven-frame interval and requires
+  a complete recovery horizon before dropping a packet.
+- Added an exact loss-index oracle for frames 7 through 91 (13 losses), and
+  updated the control assertion to use that expected set.
+
+Verification:
+
+- `$null | deltic timeout 180 cargo test -p ropus-harness-control --test control_snr loss_pattern_contains_only_complete_recovery_cycles` — 1 passed, 0 failed.
+- `deltic timeout 120 cargo check -p ropus-harness-control` — passed.
+- `deltic timeout 120 cargo fmt --all -- --check` — passed.
+- `git diff --check` — passed.
+- Red proof: temporarily removed the recovery-horizon guard; the exact-index
+  test failed because frame 98 was included. The guard was restored and the
+  focused test passed.
 
 ## Notes
