@@ -27,6 +27,28 @@ Static review at origin/main a97b6f11. harness-control/tests/control_snr.rs:245-
 
 ## Fix
 
-<unfixed — raised only>
+Implemented in `harness-control/tests/control_snr.rs` and integrated at code
+commit `89ff8918d856a2812318da2d1a9e3cada7074217`.
+
+- Replaced unbounded `Command::output` calls with a timeout-aware runner that
+  drains both output pipes, polls a 15-minute deadline, kills the full process
+  tree (`kill` process groups on Unix and `taskkill /T` on Windows), and reaps
+  the direct child.
+- Decoder failures now distinguish timeout diagnostics from non-zero exits.
+- Added a hanging-child regression test that completes in under one second.
+
+Verification:
+
+- `$null | deltic timeout 180 cargo test -p ropus-harness-control --test control_snr hanging_control_child_is_killed_and_reports_a_distinct_timeout` — 1 passed, 0 failed.
+- `$null | deltic timeout 180 cargo test -p ropus-harness-control --test control_snr control_temp_dirs_are_unique_and_cleaned_up` — 1 passed, 0 failed.
+- `$null | deltic timeout 180 cargo test -p ropus-harness-control --test control_snr loss_pattern_contains_only_complete_recovery_cycles` — 1 passed, 0 failed.
+- `deltic timeout 120 cargo check -p ropus-harness-control` — passed.
+- `deltic timeout 120 cargo fmt --all -- --check` — passed.
+- Red proof: temporarily changed the runner to ignore its caller timeout; the
+  hanging-child test took 3.2 seconds and failed its one-second bound. The
+  caller-supplied deadline was restored and the focused tests passed.
+
+The full decoder SNR tests were not run; this checkout lacks the optional DNN
+weights and those tests are expected to fail for that environment reason.
 
 ## Notes
