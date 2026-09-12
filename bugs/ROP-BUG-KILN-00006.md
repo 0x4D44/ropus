@@ -27,6 +27,23 @@ Observation: tools/generate_fuzz_seeds.py documents and emits a six-byte encode 
 
 ## Fix
 
-<unfixed — raised only>
+Integrated code commit `72e3e9fbcd4d9c785f9a63e49d3b681ef560ada4` updates
+`tools/generate_fuzz_seeds.py` to emit the live eight-byte encode prologue,
+including VBR/FEC and DTX/loss controls. Generated encode and roundtrip seeds
+now begin PCM at byte 8. The helper matches the newer
+`tools/gen_fuzz_seeds.py` header builder, and focused coverage lives in
+`tools/test_generate_fuzz_seeds.py`.
+
+Validation evidence:
+
+- Before the fix, `encode_config(...)` returned six bytes and a marker PCM
+  sample began at offset 6; the live Rust parsers consume bytes 0–7 as config.
+- Regression proof: the new header test failed when the emitted DTX/loss byte
+  was deliberately replaced with zero.
+- After restoration, `$null | deltic timeout 120 python -m unittest -v
+  tools.test_generate_fuzz_seeds tools.test_integrity tools.test_checkpoint`
+  passed all 18 tests.
+- The legacy header matched `gen_fuzz_seeds.make_encode_header(...)` byte for
+  byte for the same configuration, and Python compilation passed.
 
 ## Notes
