@@ -76,7 +76,12 @@ impl TargetSummary {
 
     #[cfg(test)]
     fn passed(&self) -> bool {
-        self.build != "fail" && self.replay != "fail"
+        self.build == "pass"
+            && if self.crashes == 0 {
+                self.replay == "skip"
+            } else {
+                self.replay == "pass"
+            }
     }
 }
 
@@ -143,6 +148,7 @@ fn run_full_sanity(root: &Path) -> Outcome {
     let started = Instant::now();
     let mut child_command = Command::new(&command[0]);
     child_command.args(&command[1..]).current_dir(root);
+    let manifest = root.join("tests").join("fuzz").join("Cargo.toml");
     let output = crate::process_capture::output(&mut child_command);
     let duration_ms = started.elapsed().as_millis() as u64;
 
@@ -157,16 +163,34 @@ fn run_full_sanity(root: &Path) -> Outcome {
                     None => "fuzz sanity command terminated by signal".to_string(),
                 });
             }
+            let targets = match discover_targets(&manifest) {
+                Ok(declared) if !declared.is_empty() => {
+                    let (targets, report_issues) = validate_sanity_report(&stdout, &declared);
+                    issues.extend(report_issues);
+                    targets
+                }
+                Ok(_) => {
+                    issues.push(format!(
+                        "no fuzz targets declared in {}",
+                        display_path(&manifest)
+                    ));
+                    Vec::new()
+                }
+                Err(error) => {
+                    issues.push(error);
+                    Vec::new()
+                }
+            };
             Outcome {
                 mode: Mode::FullSanity,
-                status: if output.status.success() {
+                status: if issues.is_empty() {
                     Status::Pass
                 } else {
                     Status::Fail
                 },
                 duration_ms,
                 command,
-                targets: parse_summary_lines(&stdout),
+                targets,
                 issues,
                 stdout,
                 stderr,
@@ -266,11 +290,76 @@ pub fn sanity_command() -> Vec<String> {
     ]
 }
 
-fn parse_summary_lines(stdout: &str) -> Vec<TargetSummary> {
-    stdout
+const SANITY_SUCCESS_MARKER: &str = "RESULT: All crash regressions pass.";
+
+fn validate_sanity_report(stdout: &str, declared: &[String]) -> (Vec<TargetSummary>, Vec<String>) {
+    let declared_set: BTreeSet<&str> = declared.iter().map(String::as_str).collect();
+    let mut targets = Vec::new();
+    let mut issues = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    if declared_set.len() != declared.len() {
+        issues.push("fuzz manifest declares duplicate target names".to_string());
+    }
+
+    for (line_number, raw_line) in stdout.lines().enumerate() {
+        let line = raw_line.trim();
+        if !line.starts_with("fuzz_") {
+            continue;
+        }
+        let Some(target) = parse_summary_line(line) else {
+            issues.push(format!(
+                "malformed fuzz sanity target row on line {}: {line}",
+                line_number + 1
+            ));
+            continue;
+        };
+
+        if !declared_set.contains(target.name.as_str()) {
+            issues.push(format!(
+                "fuzz sanity report contains unexpected target row: {}",
+                target.name
+            ));
+        }
+        if !seen.insert(target.name.clone()) {
+            issues.push(format!(
+                "fuzz sanity report contains duplicate target row: {}",
+                target.name
+            ));
+        }
+        if target.build != "pass" {
+            issues.push(format!(
+                "fuzz sanity target {} has invalid build state: {}",
+                target.name, target.build
+            ));
+        }
+        let expected_replay = if target.crashes == 0 { "skip" } else { "pass" };
+        if target.replay != expected_replay {
+            issues.push(format!(
+                "fuzz sanity target {} has invalid replay state for {} crashes: {}",
+                target.name, target.crashes, target.replay
+            ));
+        }
+        targets.push(target);
+    }
+
+    for target in declared {
+        if !seen.contains(target) {
+            issues.push(format!(
+                "fuzz sanity report is missing target row: {target}"
+            ));
+        }
+    }
+    if !stdout
         .lines()
-        .filter_map(parse_summary_line)
-        .collect::<Vec<_>>()
+        .any(|line| line.trim() == SANITY_SUCCESS_MARKER)
+    {
+        issues.push(format!(
+            "fuzz sanity report is missing terminal success marker: {SANITY_SUCCESS_MARKER}"
+        ));
+    }
+
+    (targets, issues)
 }
 
 fn parse_summary_line(line: &str) -> Option<TargetSummary> {
@@ -283,12 +372,14 @@ fn parse_summary_line(line: &str) -> Option<TargetSummary> {
     let mut crashes = None;
     let mut replay = None;
     for part in parts {
-        if let Some(value) = part.strip_prefix("build=") {
-            build = Some(value.to_string());
-        } else if let Some(value) = part.strip_prefix("crashes=") {
-            crashes = value.parse::<usize>().ok();
-        } else if let Some(value) = part.strip_prefix("replay=") {
-            replay = Some(value.to_string());
+        let (key, value) = part.split_once('=')?;
+        match key {
+            "build" if build.is_none() => build = Some(value.to_string()),
+            "crashes" if crashes.is_none() => {
+                crashes = Some(value.parse::<usize>().ok()?);
+            }
+            "replay" if replay.is_none() => replay = Some(value.to_string()),
+            _ => return None,
         }
     }
     Some(TargetSummary {
@@ -502,6 +593,104 @@ mod tests {
         assert_eq!(row.crashes, 4);
         assert_eq!(row.replay, "pass");
         assert!(row.passed());
+    }
+
+    #[test]
+    fn sanity_report_accepts_complete_success_output() {
+        let declared = vec!["fuzz_decode".to_string(), "fuzz_encode".to_string()];
+        let stdout = concat!(
+            "fuzz_decode build=pass crashes=2 replay=pass\n",
+            "fuzz_encode build=pass crashes=0 replay=skip\n",
+            "RESULT: All crash regressions pass.\n",
+        );
+
+        let (targets, issues) = validate_sanity_report(stdout, &declared);
+
+        assert_eq!(targets.len(), 2);
+        assert!(issues.is_empty(), "unexpected issues: {issues:?}");
+    }
+
+    #[test]
+    fn sanity_report_rejects_zero_output() {
+        let declared = vec!["fuzz_decode".to_string()];
+
+        let (targets, issues) = validate_sanity_report("", &declared);
+
+        assert!(targets.is_empty());
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("missing target row"))
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("terminal success marker"))
+        );
+    }
+
+    #[test]
+    fn sanity_report_rejects_incomplete_target_set() {
+        let declared = vec!["fuzz_decode".to_string(), "fuzz_encode".to_string()];
+        let stdout = concat!(
+            "fuzz_decode build=pass crashes=0 replay=skip\n",
+            "RESULT: All crash regressions pass.\n",
+        );
+
+        let (_, issues) = validate_sanity_report(stdout, &declared);
+
+        assert!(issues.iter().any(|issue| issue.contains("fuzz_encode")));
+    }
+
+    #[test]
+    fn sanity_report_rejects_duplicate_and_invalid_rows() {
+        let declared = vec!["fuzz_decode".to_string()];
+        let stdout = concat!(
+            "fuzz_decode build=pass crashes=1 replay=skip\n",
+            "fuzz_decode build=fail crashes=1 replay=fail\n",
+            "RESULT: All crash regressions pass.\n",
+        );
+
+        let (_, issues) = validate_sanity_report(stdout, &declared);
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("duplicate target row"))
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("invalid build state"))
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("invalid replay state"))
+        );
+    }
+
+    #[test]
+    fn sanity_report_rejects_malformed_and_unexpected_rows() {
+        let declared = vec!["fuzz_decode".to_string()];
+        let stdout = concat!(
+            "fuzz_decode build=pass\n",
+            "fuzz_extra build=pass crashes=0 replay=skip\n",
+            "RESULT: All crash regressions pass.\n",
+        );
+
+        let (_, issues) = validate_sanity_report(stdout, &declared);
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("malformed fuzz sanity target row"))
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("unexpected target row"))
+        );
     }
 
     #[test]
