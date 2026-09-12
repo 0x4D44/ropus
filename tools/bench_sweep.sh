@@ -17,6 +17,43 @@ BIN="$ROOT/target/release/ropus-compare.exe"
 [[ -x "$BIN" ]] || BIN="$ROOT/target/release/ropus-compare"
 [[ -x "$BIN" ]] || { echo "Bench binary not found under $ROOT/target/release"; exit 1; }
 
+parse_timing_rows() {
+    local output_path="$1"
+    awk -F'│' '
+        function trim(value) {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+            return value
+        }
+        function valid_timing(value) {
+            return value ~ /^[0-9]+([.][0-9]+)?$/ && (value + 0) > 0
+        }
+        {
+            label = trim($2)
+            if (label != "C encode" && label != "Rust encode" &&
+                label != "C decode" && label != "Rust decode") {
+                next
+            }
+            count[label]++
+            timing = trim($4)
+            sub(/ms$/, "", timing)
+            gsub(/[[:space:]]/, "", timing)
+            if (!valid_timing(timing)) {
+                bad = 1
+            } else {
+                value[label] = timing
+            }
+        }
+        END {
+            if (count["C encode"] != 1 || count["Rust encode"] != 1 ||
+                count["C decode"] != 1 || count["Rust decode"] != 1 || bad) {
+                exit 1
+            }
+            printf "%s\t%s\t%s\t%s\n", value["C encode"], value["Rust encode"],
+                value["C decode"], value["Rust decode"]
+        }
+    ' "$output_path"
+}
+
 # label|wav|bitrate
 VECTORS=(
     "SILK NB 8k mono noise|$ROOT/tests/vectors/8000hz_mono_noise.wav|16000"
@@ -33,6 +70,8 @@ VECTORS=(
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+: > "$TMP/summary.txt"
+failures=0
 
 for entry in "${VECTORS[@]}"; do
     IFS='|' read -r label wav bitrate <<< "$entry"
@@ -42,18 +81,23 @@ for entry in "${VECTORS[@]}"; do
     fi
     out="$TMP/$(printf '%s' "$label" | tr ' /' '__').txt"
     "$BIN" bench "$wav" --iters "$ITERS" --repeats 1 --bitrate "$bitrate" > "$out" 2>&1 || {
-        echo "FAIL $label"; cat "$out"; continue
+        echo "FAIL $label"
+        cat "$out"
+        failures=$((failures + 1))
+        continue
     }
     # Save full output for later inspection.
     echo "── $label (bitrate=$bitrate, iters=$ITERS) ──"
-    grep -E "^  encode *:|^  decode *:" "$out"
-    # Also keep a compact table row.
-    c_enc=$(awk -F'│' '/C encode/   {gsub(/ms| /,"",$4); print $4}' "$out")
-    r_enc=$(awk -F'│' '/Rust encode/{gsub(/ms| /,"",$4); print $4}' "$out")
-    c_dec=$(awk -F'│' '/C decode/   {gsub(/ms| /,"",$4); print $4}' "$out")
-    r_dec=$(awk -F'│' '/Rust decode/{gsub(/ms| /,"",$4); print $4}' "$out")
-    enc_ratio=$(awk "BEGIN{printf \"%.3f\", $r_enc / $c_enc}")
-    dec_ratio=$(awk "BEGIN{printf \"%.3f\", $r_dec / $c_dec}")
+    if ! parsed="$(parse_timing_rows "$out")"; then
+        echo "FAIL $label — expected exactly one finite timing row for each C/Rust encode/decode operation"
+        cat "$out"
+        failures=$((failures + 1))
+        continue
+    fi
+    IFS=$'\t' read -r c_enc r_enc c_dec r_dec <<< "$parsed"
+    # Keep a compact table row.
+    enc_ratio=$(awk -v rust="$r_enc" -v c="$c_enc" 'BEGIN { printf "%.3f", rust / c }')
+    dec_ratio=$(awk -v rust="$r_dec" -v c="$c_dec" 'BEGIN { printf "%.3f", rust / c }')
     printf '  %-36s  C-enc=%6sms  R-enc=%6sms  enc_ratio=%s   C-dec=%6sms  R-dec=%6sms  dec_ratio=%s\n' \
         "$label" "$c_enc" "$r_enc" "$enc_ratio" "$c_dec" "$r_dec" "$dec_ratio" \
         >> "$TMP/summary.txt"
@@ -62,3 +106,8 @@ done
 echo
 echo "═══ SWEEP SUMMARY (medians, iters=$ITERS) ═══"
 cat "$TMP/summary.txt"
+
+if (( failures > 0 )); then
+    echo "SWEEP FAILED: $failures vector(s) failed." >&2
+    exit 1
+fi
