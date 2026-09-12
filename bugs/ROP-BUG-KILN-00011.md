@@ -27,6 +27,26 @@ Observation: tools/fetch-fb2k-sdk.ps1 downloads executable build headers and sou
 
 ## Fix
 
-<unfixed — raised only>
+Integrated code commit `5906099df304b499f495f3cdc896d2fa77b30a8b` now pins the
+official `SDK-2025-03-07.7z` SHA-256 and verifies it before extraction. With
+`-Force`, extraction happens in a temporary staging directory; the existing
+SDK is replaced only after the staged `foobar2000` and `pfc` directories pass
+the layout check. Focused coverage lives in
+`tools/test_fetch_fb2k_sdk.py`.
+
+Validation evidence:
+
+- Regression proof: mutating the SHA-256 guard to
+  `$false -and $sha -ne $ExpectedSha256` made
+  `test_same_length_wrong_archive_fails_before_replacing_sdk` fail on its own
+  `assertIn("SHA-256 mismatch", output)` assertion after output reached the
+  extraction step.
+- After restoration, `python -m unittest -v tools.test_fetch_fb2k_sdk` passed
+  the selected same-length tampered-archive test. It observed the mismatch,
+  no extraction output, and an unchanged prior SDK marker.
+- `python -m py_compile tools/test_fetch_fb2k_sdk.py` and PowerShell parser
+  validation passed. A local `pwsh -NoProfile -File tools/fetch-fb2k-sdk.ps1
+  -Force` run against the official archive also passed the pinned digest and
+  extracted-layout checks.
 
 ## Notes
