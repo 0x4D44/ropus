@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00008 — Fuzz sanity can pass without verified target results
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** full-test/fuzz-gate
 - **Raised:** 2026-08-14T15:50:23Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260912T210803Z-0eec838b
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00008-run-fix-20260912T210803Z-0eec838b
-- **Owner base:** f4b815f7cd71161551c8b840dc085b43542e7018
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-12T21:08:03Z
-- **Owner until:** 2026-09-12T23:08:03Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T15:50:23Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-08-14T15:50:23Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-12T21:22:11Z, deltic:auto role=fix run=fix-20260912T210803Z-0eec838b branch=task/bug-ROP-BUG-CRUCIBLE-00008-run-fix-20260912T210803Z-0eec838b code=4ffb5a4b78ed7a76673a9ac3606743495ce4ada6 gate=manual)
 
 ## Observation
 
