@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00004 — Legacy integration tools pass when required fixtures are absent
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** tools/test-integrity
 - **Raised:** 2026-08-13T17:17:35Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260912T213422Z-1ed60022
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00004-run-fix-20260912T213422Z-1ed60022
-- **Owner base:** 486d400497ad83c7228aba67acadd4cc73a653bd
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-12T21:34:22Z
-- **Owner until:** 2026-09-12T23:34:22Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-13T17:17:35Z, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-08-13T17:17:35Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T21:43:11Z, deltic:auto role=fix run=fix-20260912T213422Z-1ed60022 branch=task/bug-ROP-BUG-KILN-00004-run-fix-20260912T213422Z-1ed60022 code=e7243c2ef7f50c475cb91e604aa38aac5e6722f2 gate=manual)
 
 ## Observation
 
