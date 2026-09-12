@@ -457,10 +457,11 @@ def fix_loop(results: list[dict], log: logging.Logger) -> bool:
 
         # Re-test
         log.info("  Re-running tests...")
-        results = run_all_tests(log)
-        if not results:
+        retested_results = run_all_tests(log)
+        if not retested_results:
             log.error("No comparison results produced after fix")
             return False
+        results[:] = retested_results
         passed, failed, skipped = summarize_results(results, log)
 
         if failed == 0:

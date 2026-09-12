@@ -44,6 +44,19 @@ class IntegrateIntegrityTests(unittest.TestCase):
             self.assertFalse(integrate.fix_loop(missing, _logger()))
         invoke.assert_not_called()
 
+    def test_fix_loop_updates_caller_results_after_retest(self) -> None:
+        results = [{"passed": False, "output": "before fix"}]
+        retested = [{"passed": True, "output": "after fix"}]
+        with (
+            patch.object(integrate, "MAX_FIX_ITERATIONS", 1),
+            patch.object(integrate, "invoke_claude", return_value=(True, "fixed")),
+            patch.object(integrate, "build_harness", return_value=True),
+            patch.object(integrate, "run_all_tests", return_value=retested),
+        ):
+            self.assertTrue(integrate.fix_loop(results, _logger()))
+
+        self.assertEqual(results, retested)
+
     def test_test_command_propagates_comparator_failure(self) -> None:
         failed = [{"mode": "encode", "wav": "fixture.wav", "passed": False, "output": "FAIL"}]
         with (
