@@ -14,7 +14,19 @@
 set -u
 
 CAMPAIGN_DIR="${1:?campaign dir required}"
-DURATION="${2:-86400}"   # 24h default
+DURATION_INPUT="${2:-86400}"   # 24h default
+if [[ "$DURATION_INPUT" =~ ^0*([1-9][0-9]*)$ ]]; then
+    DURATION_VALUE="${BASH_REMATCH[1]}"
+else
+    echo "Duration must be a positive decimal integer from 1 to 86400 seconds." >&2
+    exit 1
+fi
+if [[ ${#DURATION_VALUE} -gt 5 ||
+      ( ${#DURATION_VALUE} -eq 5 && "$DURATION_VALUE" > "86400" ) ]]; then
+    echo "Duration must be a positive decimal integer from 1 to 86400 seconds." >&2
+    exit 1
+fi
+DURATION=$((10#$DURATION_VALUE))
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # target:workers:max_len
@@ -83,6 +95,8 @@ echo "Started:   $(date '+%Y-%m-%d %H:%M:%S %Z')" \
 echo "" | tee -a "$CAMPAIGN_DIR/launcher.log"
 
 TOTAL_JOBS=0
+JOB_PIDS=()
+JOB_LABELS=()
 for spec in "${TARGET_JOBS[@]}"; do
     IFS=: read -r t workers max_len <<< "$spec"
     mkdir -p "$CAMPAIGN_DIR/$t"
@@ -101,6 +115,8 @@ for spec in "${TARGET_JOBS[@]}"; do
                 > "$LOG" 2>&1
         ) &
         pid=$!
+        JOB_PIDS+=("$pid")
+        JOB_LABELS+=("$t w$w")
         echo "$pid" > "$CAMPAIGN_DIR/$t/pid-w$w"
         echo "[$t w$w] launched pid=$pid → $LOG" \
             | tee -a "$CAMPAIGN_DIR/launcher.log"
@@ -116,7 +132,27 @@ echo "  ls $CAMPAIGN_DIR/<target>/{artifacts-wN,capture-wN}/ for crashes" \
 echo "  tail -f $CAMPAIGN_DIR/<target>/run-wN.log to watch a worker" \
     | tee -a "$CAMPAIGN_DIR/launcher.log"
 
-wait
+FAILED_WORKERS=()
+for i in "${!JOB_PIDS[@]}"; do
+    pid="${JOB_PIDS[$i]}"
+    label="${JOB_LABELS[$i]}"
+    wait "$pid"
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        FAILED_WORKERS+=("$label (pid=$pid, exit=$status)")
+    fi
+done
+
 echo "" | tee -a "$CAMPAIGN_DIR/launcher.log"
+if [[ ${#FAILED_WORKERS[@]} -gt 0 ]]; then
+    echo "Worker failures (${#FAILED_WORKERS[@]}):" | tee -a "$CAMPAIGN_DIR/launcher.log"
+    for failure in "${FAILED_WORKERS[@]}"; do
+        echo "  $failure" | tee -a "$CAMPAIGN_DIR/launcher.log"
+    done
+fi
 echo "Finished:  $(date '+%Y-%m-%d %H:%M:%S %Z')" \
     | tee -a "$CAMPAIGN_DIR/launcher.log"
+
+if [[ ${#FAILED_WORKERS[@]} -gt 0 ]]; then
+    exit 1
+fi
