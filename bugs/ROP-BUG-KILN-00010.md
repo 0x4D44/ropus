@@ -27,6 +27,19 @@ Observation: tools/trace_fix.py calls invoke_claude in both build-failure recove
 
 ## Fix
 
-<unfixed — raised only>
+Integrated code commit `52c8d7e03e75a1d87ae1e5483b1b006b1b001a91` now uses the
+defined `invoke_agent` dispatcher in both build-recovery branches and checks its
+Boolean result before attempting another build. Focused coverage lives in
+`tools/test_trace_fix.py`.
+
+Validation evidence:
+
+- Before the fix, mutating both recovery calls back to `invoke_claude` made the
+  two selected tests fail on their own assertions with the observed undefined-name
+  error: `build recovery raised an unexpected NameError`.
+- After restoration, `python -m unittest -v tools.test_trace_fix
+  tools.test_checkpoint` passed all six tests.
+- `python -m py_compile tools/trace_fix.py tools/test_trace_fix.py` passed, and
+  the source contains no `invoke_claude` reference.
 
 ## Notes
