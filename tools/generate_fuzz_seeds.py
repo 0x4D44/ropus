@@ -116,13 +116,42 @@ def gen_full_scale(n):
 # Config packing
 # ---------------------------------------------------------------------------
 
-def encode_config(sr_idx, channels, app_idx, bitrate, complexity):
-    """Pack 6-byte config header for fuzz_encode / fuzz_roundtrip format."""
+def encode_config(
+    sr_idx,
+    channels,
+    app_idx,
+    bitrate,
+    complexity,
+    vbr=False,
+    vbr_constraint=False,
+    inband_fec=0,
+    dtx=False,
+    loss_perc=0,
+):
+    """Pack the 8-byte config header used by encode and roundtrip targets."""
     # Map bitrate back to u16: bitrate = 6000 + (raw % 504001)
-    raw = min(bitrate - 6000, 65535)
+    raw = max(0, min(int(bitrate) - 6000, 65535))
     b3, b4 = struct.pack("<H", raw)
     ch_byte = 0 if channels == 1 else 1
-    return bytes([sr_idx, ch_byte, app_idx, b3, b4, complexity])
+
+    vbr_fec = 0
+    if vbr:
+        vbr_fec |= 0b0001
+    if vbr_constraint:
+        vbr_fec |= 0b0010
+    vbr_fec |= (max(0, min(2, int(inband_fec))) & 0b11) << 2
+
+    dtx_loss = (1 if dtx else 0) | ((max(0, min(100, int(loss_perc))) << 1) & 0b1111_1110)
+    return bytes([
+        sr_idx % 5,
+        ch_byte,
+        app_idx % 3,
+        b3,
+        b4,
+        int(complexity) % 11,
+        vbr_fec,
+        dtx_loss,
+    ])
 
 def decode_config(sr_idx, channels):
     """Pack 2-byte config header for fuzz_decode format."""
@@ -130,7 +159,7 @@ def decode_config(sr_idx, channels):
     return bytes([sr_idx, ch_byte])
 
 def multiframe_config(sr_idx, channels, app_idx, bitrate, complexity, num_frames):
-    """Pack 7-byte config header for fuzz_encode_multiframe format."""
+    """Pack the encode header plus frame count for legacy multiframe seeds."""
     base = encode_config(sr_idx, channels, app_idx, bitrate, complexity)
     frame_byte = num_frames - 5  # maps to 0-5, target adds 5
     return base + bytes([frame_byte])
