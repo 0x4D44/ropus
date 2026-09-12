@@ -27,6 +27,24 @@ Static review at origin/main bb54eb50. C:\worktrees\ropus\20260814-REV-ROP-CDX@C
 
 ## Fix
 
-<unfixed — raised only>
+Implemented in `full-test/src/corpus.rs` and integrated at code commit
+`33c0a0442aad8b19d4b96ea420653b32873138e6`.
+
+- The generated-output size check now marks oversized entries and skips payload
+  hashing, so `max_size_bytes` is an effective memory and work boundary.
+- Added a sparse-file regression oracle with an injected hasher that panics if
+  an oversized output reaches `fs::read`; the report retains the byte count,
+  `oversized` status, and no digest.
+
+Verification:
+
+- `$null | deltic timeout 180 cargo test -p full-test corpus::tests` — 20
+  passed, 0 failed.
+- `deltic timeout 180 cargo check -p full-test` — passed.
+- `deltic timeout 120 cargo fmt --all -- --check` — passed.
+- `git diff --check` — passed.
+- Red proof: temporarily restored unconditional hashing; the sparse-file test
+  failed with `oversized output must not reach the payload hasher`. The guard
+  was restored and the focused suite passed.
 
 ## Notes
