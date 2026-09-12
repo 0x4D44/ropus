@@ -27,6 +27,26 @@ Static review at origin/main bb54eb50 on the primary Windows platform. C:\worktr
 
 ## Fix
 
-<unfixed — raised only>
+Replaced the Unix-only `timeout`/`bash` and `timeout`/`env` command chains used by
+release preflight. `full-test` now selects `tools/fuzz_run.ps1` through native
+PowerShell on Windows, sets Cargo environment variables through `Command`, and
+uses the shared Rust process supervisor with 300-second fuzz and 900-second
+platform deadlines. The HTML expectation was updated for the native command
+shape.
+
+Focused regression coverage:
+
+- `$null | deltic timeout 240 cargo test -p full-test --locked` — 238 passed.
+- `cargo fmt --all -- --check` — passed.
+- `powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tools/fuzz_run.ps1 --list` — passed and listed all 14 manifest targets.
+
+Fails-before proof: temporarily restoring the old `timeout 300 bash` command
+made `full_sanity_command_uses_native_powershell_without_unix_wrappers` fail
+with the old command vector. Temporarily removing the `CARGO_TARGET_DIR` and
+`RUSTFLAGS` assignments made `generic_command_sets_environment_on_command`
+fail on the missing environment assertion. Both root-cause mutations were
+restored before commit.
+
+Fix provenance: local commit `de4d7e3`; integrated fix commit `a57b406`.
 
 ## Notes
