@@ -6,15 +6,15 @@
 - **Area:** full-test/corpus-resource-bounds
 - **Raised:** 2026-08-14T15:50:26Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260912T233006Z-693fa291
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00011-run-fix-20260912T233006Z-693fa291
-- **Owner base:** f54766f0a5146242bc10834335b342a5cfe85d69
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-12T23:30:06Z
-- **Owner until:** 2026-09-13T01:30:06Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
