@@ -21,6 +21,20 @@ CAMPAIGN_DIR="${1:?campaign dir required}"
 DURATION="${2:-54000}"   # 15h default — Phase 4 budget
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+MAX_DURATION=86400
+die() {
+    printf 'ERROR: %s\n' "$1" >&2
+    exit 2
+}
+
+if ! [[ "$DURATION" =~ ^[0-9]{1,5}$ ]]; then
+    die "duration must be a decimal integer between 1 and ${MAX_DURATION} seconds"
+fi
+DURATION=$((10#$DURATION))
+if (( DURATION < 1 || DURATION > MAX_DURATION )); then
+    die "duration must be a decimal integer between 1 and ${MAX_DURATION} seconds"
+fi
+
 # target:forks:max_len
 #
 # Heavy (6 forks): encode_multiframe — biggest unblocked surface;
@@ -78,6 +92,9 @@ echo "Started:   $(date '+%Y-%m-%d %H:%M:%S %Z')" \
 echo "" | tee -a "$CAMPAIGN_DIR/launcher.log"
 
 TOTAL_FORKS=0
+TOTAL_JOBS=0
+PIDS=()
+PID_LABELS=()
 for spec in "${TARGET_JOBS[@]}"; do
     IFS=: read -r t forks max_len <<< "$spec"
     mkdir -p "$CAMPAIGN_DIR/$t"
@@ -106,10 +123,13 @@ for spec in "${TARGET_JOBS[@]}"; do
             > "$LOG" 2>&1
     ) &
     pid=$!
+    PIDS+=("$pid")
+    PID_LABELS+=("$t")
     echo "$pid" > "$CAMPAIGN_DIR/$t/pid"
     echo "[$t fork=$forks] launched pid=$pid → $LOG" \
         | tee -a "$CAMPAIGN_DIR/launcher.log"
     TOTAL_FORKS=$((TOTAL_FORKS + forks))
+    TOTAL_JOBS=$((TOTAL_JOBS + 1))
 done
 
 echo "" | tee -a "$CAMPAIGN_DIR/launcher.log"
@@ -120,7 +140,29 @@ echo "  ls $CAMPAIGN_DIR/<target>/{artifacts,capture}/ for crashes" \
 echo "  tail -f $CAMPAIGN_DIR/<target>/run.log to watch a target" \
     | tee -a "$CAMPAIGN_DIR/launcher.log"
 
-wait
+FAILURES=0
+FAILED_JOBS=()
+for i in "${!PIDS[@]}"; do
+    pid="${PIDS[$i]}"
+    label="${PID_LABELS[$i]}"
+    wait "$pid"
+    status=$?
+    if [[ $status -ne 0 ]]; then
+        FAILURES=$((FAILURES + 1))
+        FAILED_JOBS+=("$label (exit=$status)")
+    fi
+done
+
 echo "" | tee -a "$CAMPAIGN_DIR/launcher.log"
 echo "Finished:  $(date '+%Y-%m-%d %H:%M:%S %Z')" \
     | tee -a "$CAMPAIGN_DIR/launcher.log"
+
+if [[ $FAILURES -gt 0 ]]; then
+    echo "Worker failures: $FAILURES/$TOTAL_JOBS" | tee -a "$CAMPAIGN_DIR/launcher.log"
+    printf '  FAILED: %s\n' "${FAILED_JOBS[@]}" | tee -a "$CAMPAIGN_DIR/launcher.log"
+    exit 1
+fi
+
+echo "All $TOTAL_JOBS targets completed successfully." \
+    | tee -a "$CAMPAIGN_DIR/launcher.log"
+exit 0
