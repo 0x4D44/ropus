@@ -51,6 +51,8 @@ const BITRATE: i32 = 16_000;
 const ENC_COMPLEXITY: i32 = 10;
 const SIGNAL_DURATION_MS: i32 = 2_000;
 const TOTAL_FRAMES: i32 = SIGNAL_DURATION_MS / FRAME_MS;
+const LOSS_INTERVAL_FRAMES: usize = 7;
+const EXPECTED_LOST_FRAMES: &[usize] = &[7, 14, 21, 28, 35, 42, 49, 56, 63, 70, 77, 84, 91];
 
 const LOST_BIT: u32 = 0x8000_0000;
 const CONTROL_COMPLEXITY: i32 = 4;
@@ -64,7 +66,21 @@ const FLOAT_MODE_MARKER: &str = "control-mode=classical float complexity=4 deep_
 
 // Loss pattern is byte-for-byte identical to `tier2_snr.rs::is_lost`.
 fn is_lost(frame_idx: usize) -> bool {
-    frame_idx > 0 && frame_idx.is_multiple_of(7)
+    frame_idx > 0
+        && frame_idx.is_multiple_of(LOSS_INTERVAL_FRAMES)
+        && frame_idx + LOSS_INTERVAL_FRAMES <= TOTAL_FRAMES as usize
+}
+
+#[test]
+fn loss_pattern_contains_only_complete_recovery_cycles() {
+    let losses: Vec<_> = (0..TOTAL_FRAMES as usize).filter(|&i| is_lost(i)).collect();
+
+    assert_eq!(losses, EXPECTED_LOST_FRAMES);
+    assert!(
+        losses
+            .iter()
+            .all(|&i| i + LOSS_INTERVAL_FRAMES <= TOTAL_FRAMES as usize)
+    );
 }
 
 // Synthetic PCM: bit-identical to `tier2_snr.rs::synth_reference_pcm()`.
@@ -300,7 +316,7 @@ fn ctrl_fixed_vs_float_classical_snr() {
         n_lost > 5,
         "loss pattern lost only {n_lost} packets — not meaningful"
     );
-    let expected_lost = (TOTAL_FRAMES as usize - 1) / 7;
+    let expected_lost = EXPECTED_LOST_FRAMES.len();
     assert_eq!(
         n_lost, expected_lost,
         "control loss pattern changed: expected {expected_lost} lost frames"
