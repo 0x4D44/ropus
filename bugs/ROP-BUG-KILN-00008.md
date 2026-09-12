@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00008 — Fuzz runner reports all clear after fuzzer failure
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** tools/fuzz-runner
 - **Raised:** 2026-08-13T17:17:37Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260912T220200Z-dc7a268b
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00008-run-fix-20260912T220200Z-dc7a268b
-- **Owner base:** bdc4eacaeebe833a411b8b30b3ef36bf87a87407
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-12T22:02:00Z
-- **Owner until:** 2026-09-13T00:02:00Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-13T17:17:37Z, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-08-13T17:17:37Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T22:17:41Z, deltic:auto role=fix run=fix-20260912T220200Z-dc7a268b branch=task/bug-ROP-BUG-KILN-00008-run-fix-20260912T220200Z-dc7a268b code=75ae57c27f69e412188a328c19f56a4962a229a8 gate=manual)
 
 ## Observation
 
