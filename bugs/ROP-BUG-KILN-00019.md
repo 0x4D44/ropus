@@ -6,15 +6,15 @@
 - **Area:** harness-control/lossless-oracle
 - **Raised:** 2026-08-16T07:50:15Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260912T235836Z-974d1259
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KILN-00019-run-fix-20260912T235836Z-974d1259
+- **Owner base:** d65972a949651afb0f71b9509c02a42450f53bfd
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-12T23:58:36Z
+- **Owner until:** 2026-09-13T01:58:36Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
