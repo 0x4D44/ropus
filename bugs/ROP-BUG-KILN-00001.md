@@ -27,6 +27,18 @@ Observation: tools/bisect_fix.py and tools/trace_fix.py periodically run git add
 
 ## Fix
 
-<unfixed — raised only>
+`tools/checkpoint.py` now requires a linked worktree, stages only tracked changes
+under the explicit `ropus/src` allowlist, rejects pre-staged paths outside that
+allowlist, and reports non-zero Git add/commit results. Both autonomous loops
+refuse the primary checkout before building or invoking another agent.
+
+Validation: `$null | python -m unittest tools.test_checkpoint -v` selected 4
+tests and passed; both tool `--help` imports and `py_compile` also passed.
+
+Fails-before proof: temporarily changing the checkpoint add command from
+`git add --update -- <allowlist>` to `git add -A` made
+`test_only_allowlisted_tracked_changes_are_committed` fail on its
+`unrelated tracked work was staged` assertion. The allowlist change was restored
+before commit `b38fc9c`, integrated as `6c6b9f7`.
 
 ## Notes
