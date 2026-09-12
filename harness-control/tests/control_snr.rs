@@ -31,11 +31,12 @@
 
 use std::env;
 use std::fs::File;
-use std::io::{BufWriter, Read, Write};
+use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ropus::{OPUS_APPLICATION_VOIP, OPUS_OK, OpusEncoder};
 
@@ -64,6 +65,8 @@ const CONTROL_SIGNAL_MIN_MEAN_SQUARE: f64 = 1_000_000.0;
 const CONTROL_OUTPUT_MIN_MEAN_SQUARE: f64 = 100_000.0;
 const FIXED_MODE_MARKER: &str = "control-mode=classical fixed-point complexity=4";
 const FLOAT_MODE_MARKER: &str = "control-mode=classical float complexity=4 deep_plc=disabled";
+const CONTROL_COMMAND_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const CONTROL_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 // Loss pattern is byte-for-byte identical to `tier2_snr.rs::is_lost`.
 fn is_lost(frame_idx: usize) -> bool {
@@ -303,13 +306,224 @@ fn control_temp_dirs_are_unique_and_cleaned_up() {
     assert!(!second_path.exists());
 }
 
+#[derive(Debug)]
+enum ControlCapture {
+    Completed(Output),
+    TimedOut(Output),
+}
+
+fn run_command_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+) -> io::Result<ControlCapture> {
+    configure_process_group(command);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "child stdout was not piped"));
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "child stderr was not piped"));
+    let (mut stdout, mut stderr) = match (stdout, stderr) {
+        (Ok(stdout), Ok(stderr)) => (stdout, stderr),
+        (Err(error), _) | (_, Err(error)) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
+
+    let stdout_thread = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    });
+    let stderr_thread = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    });
+    let deadline = Instant::now() + timeout;
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if Instant::now() >= deadline => {
+                timed_out = true;
+                break terminate_process_tree(&mut child);
+            }
+            Ok(None) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                thread::sleep(remaining.min(CONTROL_POLL_INTERVAL));
+            }
+            Err(error) => {
+                let cleanup = terminate_process_tree(&mut child);
+                let _ = join_output_reader(stdout_thread);
+                let _ = join_output_reader(stderr_thread);
+                return Err(combine_wait_error(error, cleanup));
+            }
+        }
+    }?;
+    let stdout = join_output_reader(stdout_thread)?;
+    let stderr = join_output_reader(stderr_thread)?;
+    let output = Output {
+        status,
+        stdout,
+        stderr,
+    };
+    Ok(if timed_out {
+        ControlCapture::TimedOut(output)
+    } else {
+        ControlCapture::Completed(output)
+    })
+}
+
+fn combine_wait_error(wait_error: io::Error, cleanup: io::Result<ExitStatus>) -> io::Error {
+    match cleanup {
+        Ok(_) => wait_error,
+        Err(cleanup_error) => io::Error::other(format!(
+            "failed while waiting for child: {wait_error}; process-tree cleanup also failed: \
+             {cleanup_error}"
+        )),
+    }
+}
+
+fn terminate_process_tree(child: &mut Child) -> io::Result<ExitStatus> {
+    let tree_error = kill_process_tree(child.id()).err();
+    if let Some(tree_error) = tree_error {
+        let direct_error = child.kill().err();
+        let status = child.wait();
+        return match status {
+            Ok(status) => Err(io::Error::other(format!(
+                "process-tree cleanup failed: {tree_error}; direct child was reaped with {status}{}",
+                direct_error
+                    .as_ref()
+                    .map(|error| format!("; direct kill also failed: {error}"))
+                    .unwrap_or_default()
+            ))),
+            Err(wait_error) => Err(io::Error::other(format!(
+                "process-tree cleanup failed: {tree_error}; waiting for direct child also failed: \
+                 {wait_error}{}",
+                direct_error
+                    .as_ref()
+                    .map(|error| format!("; direct kill also failed: {error}"))
+                    .unwrap_or_default()
+            ))),
+        };
+    }
+    child.wait()
+}
+
+#[cfg(unix)]
+fn configure_process_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn configure_process_group(_command: &mut Command) {}
+
+#[cfg(unix)]
+fn kill_process_tree(pid: u32) -> io::Result<()> {
+    let group = format!("-{pid}");
+    let status = Command::new("kill")
+        .args(["-KILL", &group])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "kill process group for child {pid} exited with {status}"
+        )))
+    }
+}
+
+#[cfg(windows)]
+fn kill_process_tree(pid: u32) -> io::Result<()> {
+    let status = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "taskkill for child {pid} exited with {status}"
+        )))
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn kill_process_tree(pid: u32) -> io::Result<()> {
+    Err(io::Error::other(format!(
+        "process-tree termination is unsupported for child {pid}"
+    )))
+}
+
+fn join_output_reader(handle: thread::JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Vec<u8>> {
+    handle
+        .join()
+        .map_err(|_| io::Error::other("child output reader panicked"))?
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn hanging_control_child_is_killed_and_reports_a_distinct_timeout() {
+    let mut command = hanging_command();
+    let started = Instant::now();
+    let result = run_command_with_timeout(&mut command, Duration::from_millis(100))
+        .expect("supervisor should return a timeout result");
+
+    match result {
+        ControlCapture::TimedOut(output) => {
+            assert!(!output.status.success());
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "timeout took too long: {:?}",
+                started.elapsed()
+            );
+        }
+        ControlCapture::Completed(output) => {
+            panic!("hanging child completed unexpectedly: {:?}", output.status);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn hanging_command() -> Command {
+    let mut command = Command::new("sh");
+    command.args(["-c", "sleep 2 & wait"]);
+    command
+}
+
+#[cfg(windows)]
+fn hanging_command() -> Command {
+    let mut command = Command::new("powershell");
+    command.args([
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Start-Process -FilePath powershell -ArgumentList '-NoLogo','-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 2' -Wait",
+    ]);
+    command
+}
+
 fn run_decoder(package: &str, bin: &str, packets: &Path, pcm_out: &Path, mode_marker: &str) {
     // Use `cargo run` rather than locating the binary directly — keeps this
     // test agnostic to the target triple + release vs debug dir names. The
     // dep binaries rebuild only if they or their C sources changed, so the
     // first invocation pays a one-time cost, subsequent runs are cheap.
     let t0 = Instant::now();
-    let output = Command::new(env!("CARGO"))
+    let mut command = Command::new(env!("CARGO"));
+    command
         .args([
             "run",
             "--quiet",
@@ -322,10 +536,17 @@ fn run_decoder(package: &str, bin: &str, packets: &Path, pcm_out: &Path, mode_ma
         ])
         .arg(packets)
         .arg(pcm_out)
-        .current_dir(workspace_root())
-        .output()
+        .current_dir(workspace_root());
+    let result = run_command_with_timeout(&mut command, CONTROL_COMMAND_TIMEOUT)
         .unwrap_or_else(|e| panic!("cargo run -p {package} --bin {bin} failed: {e}"));
     let elapsed = t0.elapsed();
+    let output = match result {
+        ControlCapture::Completed(output) => output,
+        ControlCapture::TimedOut(output) => panic!(
+            "cargo run -p {package} --bin {bin} timed out after {elapsed:?}; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    };
     assert!(
         output.status.success(),
         "cargo run -p {package} --bin {bin} exited with {:?} ({elapsed:?}); stderr: {}",
