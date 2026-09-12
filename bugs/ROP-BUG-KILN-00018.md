@@ -6,15 +6,15 @@
 - **Area:** harness-control/subprocess-supervision
 - **Raised:** 2026-08-16T07:50:04Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260912T235011Z-6ec2c4c6
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KILN-00018-run-fix-20260912T235011Z-6ec2c4c6
+- **Owner base:** 937134f80d5ba1e118dd788a5efd5e1f6459c52b
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-12T23:50:11Z
+- **Owner until:** 2026-09-13T01:50:11Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
