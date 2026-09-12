@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00010 — Trace fixer crashes in build-failure recovery
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** tools/trace-fix
 - **Raised:** 2026-08-13T17:17:38Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260912T223742Z-7a97ad5d
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00010-run-fix-20260912T223742Z-7a97ad5d
-- **Owner base:** b3ff2a1612d182381d880a4320ef798a83b483b6
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-12T22:37:42Z
-- **Owner until:** 2026-09-13T00:37:42Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-13T17:17:38Z, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-08-13T17:17:38Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T22:44:29Z, deltic:auto role=fix run=fix-20260912T223742Z-7a97ad5d branch=task/bug-ROP-BUG-KILN-00010-run-fix-20260912T223742Z-7a97ad5d code=52c8d7e03e75a1d87ae1e5483b1b006b1b001a91 gate=manual)
 
 ## Observation
 
