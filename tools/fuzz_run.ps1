@@ -22,7 +22,7 @@ Options:
   --duration SECONDS         LibFuzzer time per target (default: 600).
   --jobs COUNT               LibFuzzer workers (default: 1).
   --max-len BYTES            LibFuzzer input limit (default: 16384).
-  --no-diff                  Keep compatibility with fuzz_run.sh.
+  --no-diff                  Rejected; select Rust-only safety targets with --target.
 '@ | Write-Output
 }
 
@@ -209,6 +209,7 @@ function Invoke-Campaign {
     $runDirectory = Join-Path $runDirectory $timestamp
     New-Item -ItemType Directory -Force -Path $runDirectory | Out-Null
     $totalFindings = 0
+    $targetFailures = 0
 
     foreach ($target in $SelectedTargets) {
         Write-Output "--- Fuzzing: $target ($Duration`s, $Jobs jobs) ---"
@@ -226,6 +227,10 @@ function Invoke-Campaign {
         $logFile = Join-Path $targetFindings 'fuzz.log'
         & cargo @fuzzArgs 2>&1 | Tee-Object -FilePath $logFile
         $fuzzExit = $LASTEXITCODE
+        if ($fuzzExit -ne 0) {
+            Write-Output "  ERROR: $target exited with status $fuzzExit."
+            [void]$targetFailures++
+        }
 
         $artifacts = @(
             Get-ChildItem -LiteralPath $targetFindings -File -ErrorAction SilentlyContinue |
@@ -246,9 +251,14 @@ function Invoke-Campaign {
     Write-Output '=== Fuzz run complete ==='
     Write-Output "  Run ID: $timestamp"
     Write-Output "  Total findings: $totalFindings"
-    if ($totalFindings -gt 0) {
-        Write-Output "Findings saved to: $runDirectory"
-        Write-Output 'Findings were detected; inspect the artifacts before rerunning.'
+    Write-Output "  Target failures: $targetFailures"
+    if ($totalFindings -gt 0 -or $targetFailures -gt 0) {
+        if ($totalFindings -gt 0) {
+            Write-Output "Findings saved to: $runDirectory"
+        }
+        if ($targetFailures -gt 0) {
+            Write-Output 'Fuzz targets failed; inspect the per-target logs before rerunning.'
+        }
         return 1
     }
     return 0
@@ -268,7 +278,7 @@ try {
             '--sanity' { $sanityOnly = $true; continue }
             '--check-crashes' { $sanityOnly = $true; continue }
             '--list' { $listOnly = $true; continue }
-            '--no-diff' { continue }
+            '--no-diff' { throw '--no-diff is not supported; select Rust-only safety targets with --target' }
             '-h' { Show-Usage; exit 0 }
             '--help' { Show-Usage; exit 0 }
             '--target' {

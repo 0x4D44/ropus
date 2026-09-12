@@ -11,7 +11,7 @@
 #   ./tools/fuzz_run.sh --target fuzz_decode   # single target
 #   ./tools/fuzz_run.sh --target fuzz_decode --target fuzz_encode  # multiple
 #   ./tools/fuzz_run.sh --jobs 4               # parallel libFuzzer jobs
-#   ./tools/fuzz_run.sh --no-diff              # skip differential mode (no C ref needed)
+#   ./tools/fuzz_run.sh --no-diff              # rejected; select safety targets with --target
 #   ./tools/fuzz_run.sh --list                 # list available targets
 #   ./tools/fuzz_run.sh --sanity               # build targets + replay committed crashes only
 #   ./tools/fuzz_run.sh --check-crashes        # alias for --sanity
@@ -108,7 +108,6 @@ TARGETS=()
 CHECK_CRASHES_ONLY=false
 SANITY_ONLY=false
 LIST_ONLY=false
-NO_DIFF=false
 
 # --------------------------------------------------------------------------- #
 # Argument parsing
@@ -132,7 +131,7 @@ while [[ $# -gt 0 ]]; do
             require_value "$1" "${2:-}"
             JOBS="$2"; shift 2 ;;
         --no-diff)
-            NO_DIFF=true; shift ;;
+            die "--no-diff is not supported; select Rust-only safety targets with --target" ;;
         --list)
             LIST_ONLY=true; shift ;;
         --check-crashes)
@@ -350,6 +349,7 @@ fi
 # Main fuzzing loop
 # --------------------------------------------------------------------------- #
 TOTAL_FINDINGS=0
+TARGET_FAILURES=0
 SUMMARY=""
 
 for target in "${TARGETS[@]}"; do
@@ -389,6 +389,11 @@ for target in "${TARGETS[@]}"; do
     fuzz_exit=$?
     set -e
 
+    if [[ $fuzz_exit -ne 0 ]]; then
+        echo "  ERROR: $target exited with status $fuzz_exit."
+        ((TARGET_FAILURES += 1))
+    fi
+
     # Count new findings
     new_findings=$(find "$target_findings" -maxdepth 1 -name 'crash-*' -o -name 'leak-*' -o -name 'timeout-*' -o -name 'oom-*' 2>/dev/null | wc -l)
 
@@ -416,13 +421,19 @@ done
 echo "=== Fuzz run complete ==="
 echo "  Run ID: $TIMESTAMP"
 echo "  Total findings: $TOTAL_FINDINGS"
+echo "  Target failures: $TARGET_FAILURES"
 echo ""
 echo "Per-target results:"
 echo -e "$SUMMARY"
 
-if [[ $TOTAL_FINDINGS -gt 0 ]]; then
-    echo "Findings saved to: $RUN_DIR"
-    echo "Crash regressions copied to: $CRASHES_DIR"
+if [[ $TOTAL_FINDINGS -gt 0 || $TARGET_FAILURES -gt 0 ]]; then
+    if [[ $TOTAL_FINDINGS -gt 0 ]]; then
+        echo "Findings saved to: $RUN_DIR"
+        echo "Crash regressions copied to: $CRASHES_DIR"
+    fi
+    if [[ $TARGET_FAILURES -gt 0 ]]; then
+        echo "Fuzz targets failed; inspect the per-target logs before rerunning."
+    fi
     echo ""
     echo "Next steps:"
     echo "  1. Examine findings: ls $RUN_DIR/<target>/"
