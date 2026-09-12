@@ -27,6 +27,25 @@ Observation: tools/bench_sweep.sh expects legacy lines beginning with encode or 
 
 ## Fix
 
-<unfixed — raised only>
+Integrated code commit `ceb21caa6c1638619319fee2d06b2681288231b4` now parses
+the current four-row `C encode`/`Rust encode`/`C decode`/`Rust decode` timing
+table through one strict helper. It rejects missing, duplicate, nonnumeric, or
+non-finite timings, and aggregates benchmark-process and parser failures into
+the final sweep status. Focused coverage lives in
+`tools/test_bench_sweep.py`.
+
+Validation evidence:
+
+- Regression proof: restoring the old legacy `grep` gate made
+  `test_current_table_is_parsed_into_summary` fail on its own
+  `assertEqual(result.returncode, 0, ...)` assertion because the sweep exited
+  before parsing the current table.
+- After restoration, `python -m unittest -v tools.test_bench_sweep` passed all
+  four selected tests. They cover current output and ratios, missing and
+  non-finite rows, and mixed vector success with a nonzero final status.
+- Normalized `bash -n tools/bench_sweep.sh` and
+  `python -m py_compile tools/test_bench_sweep.py` passed. A live benchmark was
+  not available because the repository lacks `reference/celt/bands.c`; the
+  focused fake-binary harness supplied the captured current-format output.
 
 ## Notes
