@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00007 — Asset fetch accepts an unpinned C reference checkout
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** tools/fetch-assets
 - **Raised:** 2026-08-13T17:17:37Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260912T204139Z-9f5cf2d3
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00007-run-fix-20260912T204139Z-9f5cf2d3
-- **Owner base:** cc73d2332d73a5f3385a9ccf86ecb81897dc9e57
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-12T20:41:39Z
-- **Owner until:** 2026-09-12T22:41:39Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-13T17:17:37Z, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-08-13T17:17:37Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T20:50:37Z, deltic:auto role=fix run=fix-20260912T204139Z-9f5cf2d3 branch=task/bug-ROP-BUG-KILN-00007-run-fix-20260912T204139Z-9f5cf2d3 code=3460ad377b0abec83a63ffc8afdd857324b6824a gate=manual)
 
 ## Observation
 
