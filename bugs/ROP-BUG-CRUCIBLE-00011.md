@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00011 — Oversized corpus output is fully buffered after rejection
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** full-test/corpus-resource-bounds
 - **Raised:** 2026-08-14T15:50:26Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260912T233205Z-c8473729
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00011-run-fix-20260912T233205Z-c8473729
-- **Owner base:** f8478c845f45c17597da3027ff0d73b7beb0a661
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-12T23:32:05Z
-- **Owner until:** 2026-09-13T01:32:05Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T15:50:26Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-08-14T15:50:26Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-12T23:37:29Z, deltic:auto role=fix run=fix-20260912T233205Z-c8473729 branch=task/bug-ROP-BUG-CRUCIBLE-00011-run-fix-20260912T233205Z-c8473729 code=33c0a0442aad8b19d4b96ea420653b32873138e6 gate=manual)
 
 ## Observation
 
