@@ -97,18 +97,7 @@ fn fetch_reference(repo_root: &Path) -> Result<(), String> {
     let sentinel = ref_dir.join("celt").join("bands.c");
 
     if sentinel.exists() {
-        let head = git_head(&ref_dir).unwrap_or_else(|_| "unknown".to_string());
-        if head == OPUS_REF_COMMIT {
-            println!("[reference] already present at pinned commit, skipping");
-        } else {
-            println!(
-                "[reference] already present (HEAD={}), expected {}.\n\
-                 [reference] not touching it; delete reference/ and rerun to force a clean clone.",
-                &head[..head.len().min(10)],
-                &OPUS_REF_COMMIT[..10],
-            );
-        }
-        return Ok(());
+        return validate_existing_reference(git_head(&ref_dir));
     }
 
     require_tool("git")?;
@@ -132,6 +121,29 @@ fn fetch_reference(repo_root: &Path) -> Result<(), String> {
 
     println!("[reference] OK (commit {})", &OPUS_REF_COMMIT[..10]);
     Ok(())
+}
+
+fn validate_existing_reference(head: Result<String, String>) -> Result<(), String> {
+    match head {
+        Ok(head) if head == OPUS_REF_COMMIT => {
+            println!("[reference] already present at pinned commit, skipping");
+            Ok(())
+        }
+        Ok(head) => Err(format!(
+            "[reference] existing checkout has unexpected HEAD={}; expected {}.\n\
+             [reference] not touching it; delete reference/ and rerun to force a clean clone.",
+            short_commit(&head),
+            &OPUS_REF_COMMIT[..10],
+        )),
+        Err(error) => Err(format!(
+            "[reference] cannot verify existing checkout: {error}.\n\
+             [reference] not touching it; delete reference/ and rerun to force a clean clone."
+        )),
+    }
+}
+
+fn short_commit(commit: &str) -> &str {
+    commit.get(..commit.len().min(10)).unwrap_or(commit)
 }
 
 fn git_head(dir: &Path) -> Result<String, String> {
@@ -281,4 +293,65 @@ fn verify_sha256(path: &Path, expected_hex: &str) -> io::Result<bool> {
         let _ = write!(got_hex, "{b:02x}");
     }
     Ok(got_hex.eq_ignore_ascii_case(expected_hex))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock must be after the Unix epoch")
+                .as_nanos();
+            let path = env::temp_dir().join(format!(
+                "fetch-assets-reference-test-{}-{nonce}",
+                std::process::id()
+            ));
+            fs::create_dir(&path).expect("test directory must be unique");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn existing_reference_rejects_unreadable_head() {
+        let temp = TempDir::new();
+        let sentinel_dir = temp.path().join("reference").join("celt");
+        fs::create_dir_all(&sentinel_dir).expect("sentinel directory must be created");
+        fs::write(sentinel_dir.join("bands.c"), []).expect("sentinel must be created");
+
+        let result = fetch_reference(temp.path());
+
+        let error = result.expect_err("an unverifiable reference must not be accepted");
+        assert!(
+            error.contains("cannot verify existing checkout"),
+            "unexpected validation error: {error}"
+        );
+    }
+
+    #[test]
+    fn existing_reference_rejects_mismatched_head() {
+        let result =
+            validate_existing_reference(Ok("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef".to_string()));
+
+        let error = result.expect_err("a mismatched reference must not be accepted");
+        assert!(
+            error.contains("unexpected HEAD=deadbeefde"),
+            "unexpected validation error: {error}"
+        );
+    }
 }
