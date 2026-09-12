@@ -26,6 +26,11 @@ import logging
 from pathlib import Path
 from datetime import datetime
 
+if __package__:
+    from .checkpoint import CHECKPOINT_PATHS, commit_checkpoint, ensure_dedicated_worktree
+else:
+    from checkpoint import CHECKPOINT_PATHS, commit_checkpoint, ensure_dedicated_worktree
+
 ROOT = Path(__file__).resolve().parent.parent
 CORPUS_DIR = ROOT / "tests" / "vectors"
 LOGS = ROOT / "logs"
@@ -282,16 +287,13 @@ def surgical_fix_loop(log: logging.Logger) -> bool:
 
         # Periodic commit
         if (iteration + 1) % 5 == 0:
-            subprocess.run(
-                ["git", "-c", "user.name=0x4D44", "-c", "user.email=martingdavidson@gmail.com",
-                 "add", "-A"], cwd=str(ROOT), capture_output=True
-            )
-            subprocess.run(
-                ["git", "-c", "user.name=0x4D44", "-c", "user.email=martingdavidson@gmail.com",
-                 "commit", "-m", f"Bisect fix iteration {iteration + 1}: {passed}/{total} passing"],
-                cwd=str(ROOT), capture_output=True
-            )
-            log.info(f"  Committed checkpoint: {passed}/{total} passing")
+            if commit_checkpoint(
+                ROOT,
+                CHECKPOINT_PATHS,
+                f"Bisect fix iteration {iteration + 1}: {passed}/{total} passing",
+                log,
+            ):
+                log.info(f"  Committed checkpoint: {passed}/{total} passing")
 
     log.error(f"Exhausted {MAX_FIX_ITERATIONS} iterations")
     return False
@@ -302,6 +304,8 @@ def cmd_run(args):
     log.info("mdopus surgical bisect fixer")
     log.info("=" * 60)
 
+    if not ensure_dedicated_worktree(ROOT, log):
+        return 1
     if not build(log):
         log.error("Initial build failed")
         return 1

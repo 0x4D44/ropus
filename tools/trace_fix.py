@@ -25,6 +25,11 @@ from pathlib import Path
 from datetime import datetime
 from collections import OrderedDict
 
+if __package__:
+    from .checkpoint import CHECKPOINT_PATHS, commit_checkpoint, ensure_dedicated_worktree
+else:
+    from checkpoint import CHECKPOINT_PATHS, commit_checkpoint, ensure_dedicated_worktree
+
 ROOT = Path(__file__).resolve().parent.parent
 CORPUS_DIR = ROOT / "tests" / "vectors"
 LOGS = ROOT / "logs"
@@ -453,16 +458,13 @@ def trace_fix_loop(log: logging.Logger) -> bool:
 
         # Periodic commit
         if (iteration + 1) % 3 == 0:
-            subprocess.run(
-                ["git", "-c", "user.name=0x4D44", "-c", "user.email=martingdavidson@gmail.com",
-                 "add", "-A"], cwd=str(ROOT), capture_output=True
-            )
-            subprocess.run(
-                ["git", "-c", "user.name=0x4D44", "-c", "user.email=martingdavidson@gmail.com",
-                 "commit", "-m", f"Trace-fix iteration {iteration + 1}\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"],
-                cwd=str(ROOT), capture_output=True
-            )
-            log.info(f"  Committed checkpoint")
+            if commit_checkpoint(
+                ROOT,
+                CHECKPOINT_PATHS,
+                f"Trace-fix iteration {iteration + 1}\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>",
+                log,
+            ):
+                log.info(f"  Committed checkpoint")
 
     log.error(f"Exhausted {MAX_ITERATIONS} iterations")
     return False
@@ -471,6 +473,8 @@ def trace_fix_loop(log: logging.Logger) -> bool:
 def cmd_run(args):
     log = setup_logging()
     log.info("mdopus trace-fix loop")
+    if not ensure_dedicated_worktree(ROOT, log):
+        return 1
     if not build(log):
         log.error("Build failed")
         return 1
