@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00006 — Legacy fuzz seed generator emits shifted encode inputs
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** tools/fuzz-seeds
 - **Raised:** 2026-08-13T17:17:36Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260912T215101Z-135631f9
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00006-run-fix-20260912T215101Z-135631f9
-- **Owner base:** 77b72833b5013065a472b47bcaaec688f61a2269
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-12T21:51:01Z
-- **Owner until:** 2026-09-12T23:51:01Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-13T17:17:36Z, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-08-13T17:17:36Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T22:00:01Z, deltic:auto role=fix run=fix-20260912T215101Z-135631f9 branch=task/bug-ROP-BUG-KILN-00006-run-fix-20260912T215101Z-135631f9 code=72e3e9fbcd4d9c785f9a63e49d3b681ef560ada4 gate=manual)
 
 ## Observation
 
