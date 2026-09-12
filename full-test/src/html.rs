@@ -1542,7 +1542,8 @@ mod tests {
         assert!(html.contains("release-platform-sanitizer-breadth"));
         assert!(html.contains("<code>generic-x86_64-smoke</code>"));
         assert!(html.contains("generic x86_64 smoke failed"));
-        assert!(html.contains("RUSTFLAGS=-C target-cpu=x86-64"));
+        assert!(html.contains("cargo test -p ropus --lib -- --test-threads=1"));
+        assert!(!html.contains("RUSTFLAGS=-C target-cpu=x86-64"));
         assert!(html.contains("only fxsr/sse/sse2"));
     }
 

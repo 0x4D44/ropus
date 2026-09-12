@@ -1,18 +1,20 @@
 //! Phase 1.2 fuzz sanity gate.
 //!
-//! The shell runner owns cargo-fuzz command details. This module owns
-//! full-test policy: default runs do not require fuzz tooling, non-quick
+//! The platform-specific runner owns cargo-fuzz command details. This module
+//! owns full-test policy: default runs do not require fuzz tooling, non-quick
 //! release preflight runs the bounded sanity command, and quick release
 //! preflight only inventories manifest targets plus committed crash files.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
 use crate::cli::Options;
+
+const FULL_SANITY_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -149,15 +151,25 @@ fn run_full_sanity(root: &Path) -> Outcome {
     let mut child_command = Command::new(&command[0]);
     child_command.args(&command[1..]).current_dir(root);
     let manifest = root.join("tests").join("fuzz").join("Cargo.toml");
-    let output = crate::process_capture::output(&mut child_command);
+    let output =
+        crate::process_capture::output_with_timeout(&mut child_command, FULL_SANITY_TIMEOUT);
     let duration_ms = started.elapsed().as_millis() as u64;
 
     match output {
-        Ok(output) => {
+        Ok(captured) => {
+            let (output, timed_out) = match captured {
+                crate::process_capture::CaptureResult::Completed(output) => (output, false),
+                crate::process_capture::CaptureResult::TimedOut(output) => (output, true),
+            };
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
             let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
             let mut issues = Vec::new();
-            if !output.status.success() {
+            if timed_out {
+                issues.push(format!(
+                    "fuzz sanity command timed out after {} seconds",
+                    FULL_SANITY_TIMEOUT.as_secs()
+                ));
+            } else if !output.status.success() {
                 issues.push(match output.status.code() {
                     Some(code) => format!("fuzz sanity command exited with status {code}"),
                     None => "fuzz sanity command terminated by signal".to_string(),
@@ -281,13 +293,24 @@ fn inventory_only(root: &Path) -> Outcome {
 }
 
 pub fn sanity_command() -> Vec<String> {
-    vec![
-        "timeout".to_string(),
-        "300".to_string(),
-        "bash".to_string(),
-        "tools/fuzz_run.sh".to_string(),
-        "--sanity".to_string(),
-    ]
+    if cfg!(windows) {
+        vec![
+            "powershell".to_string(),
+            "-NoProfile".to_string(),
+            "-NonInteractive".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-File".to_string(),
+            "tools/fuzz_run.ps1".to_string(),
+            "--sanity".to_string(),
+        ]
+    } else {
+        vec![
+            "bash".to_string(),
+            "tools/fuzz_run.sh".to_string(),
+            "--sanity".to_string(),
+        ]
+    }
 }
 
 const SANITY_SUCCESS_MARKER: &str = "RESULT: All crash regressions pass.";
@@ -576,11 +599,36 @@ mod tests {
         assert_eq!(selected_mode(&options(true, true)), Mode::InventoryOnly);
     }
 
+    #[cfg(windows)]
     #[test]
-    fn full_sanity_command_is_bounded_and_named() {
+    fn full_sanity_command_uses_native_powershell_without_unix_wrappers() {
         assert_eq!(
             sanity_command(),
-            vec!["timeout", "300", "bash", "tools/fuzz_run.sh", "--sanity"]
+            vec![
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "tools/fuzz_run.ps1",
+                "--sanity",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>()
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn full_sanity_command_uses_bash_without_timeout_wrapper() {
+        assert_eq!(
+            sanity_command(),
+            vec!["bash", "tools/fuzz_run.sh", "--sanity"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
         );
     }
 

@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde::ser::Serializer;
@@ -16,6 +16,10 @@ use crate::cli::Options;
 use crate::fuzz::{Mode as FuzzMode, Outcome as FuzzOutcome, Status as FuzzStatus};
 
 pub const GENERIC_PROFILE_PROOF_NOTE: &str = "generic x86_64 command verified 2026-05-06 with `cargo rustc -p ropus --lib -- --print cfg`: default x86-64-v3 emitted AVX2/BMI/FMA features, while `RUSTFLAGS='-C target-cpu=x86-64'` emitted only fxsr/sse/sse2 CPU features";
+
+const GENERIC_X86_64_TIMEOUT: Duration = Duration::from_secs(900);
+const GENERIC_X86_64_TARGET_DIR: &str = "target/platform-breadth/x86_64-generic";
+const GENERIC_X86_64_RUSTFLAGS: &str = "-C target-cpu=x86-64";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Profile {
@@ -221,7 +225,7 @@ impl Outcome {
             "asan-fuzz-sanity",
             "ASan fuzz sanity",
             LaneStatus::Pass,
-            vec!["timeout".to_string(), "300".to_string()],
+            crate::fuzz::sanity_command(),
             50,
             "sanitizer breadth is satisfied only by the existing cargo-fuzz full-sanity lane; quick fuzz inventory is not sanitizer coverage",
             Vec::new(),
@@ -362,6 +366,21 @@ where
                 "generic x86_64 smoke command could not launch: {error}"
             )],
         ),
+        GenericRun::TimedOut {
+            duration_ms,
+            output_tail,
+        } => LaneOutcome::claimed(
+            "generic-x86_64-smoke",
+            "Generic x86_64 smoke",
+            LaneStatus::Fail,
+            command,
+            duration_ms,
+            GENERIC_PROFILE_PROOF_NOTE,
+            vec![format!(
+                "generic x86_64 smoke command timed out after {} seconds: {output_tail}",
+                GENERIC_X86_64_TIMEOUT.as_secs()
+            )],
+        ),
     }
 }
 
@@ -419,11 +438,6 @@ fn sanitizer_lane(profile: Profile, fuzz: &FuzzOutcome) -> LaneOutcome {
 
 pub fn generic_x86_64_command() -> Vec<String> {
     vec![
-        "timeout".to_string(),
-        "900".to_string(),
-        "env".to_string(),
-        "CARGO_TARGET_DIR=target/platform-breadth/x86_64-generic".to_string(),
-        "RUSTFLAGS=-C target-cpu=x86-64".to_string(),
         "cargo".to_string(),
         "test".to_string(),
         "-p".to_string(),
@@ -448,30 +462,52 @@ enum GenericRun {
         error: String,
         duration_ms: u64,
     },
+    TimedOut {
+        duration_ms: u64,
+        output_tail: String,
+    },
 }
 
 fn execute_generic_smoke(command: &[String], root: &Path) -> GenericRun {
     let started = Instant::now();
     let mut child_command = Command::new(&command[0]);
     child_command.args(&command[1..]).current_dir(root);
-    let output = crate::process_capture::output(&mut child_command);
+    configure_generic_x86_64_command(&mut child_command);
+    let output =
+        crate::process_capture::output_with_timeout(&mut child_command, GENERIC_X86_64_TIMEOUT);
     let duration_ms = started.elapsed().as_millis() as u64;
 
     match output {
-        Ok(output) if output.status.success() => GenericRun::Success { duration_ms },
-        Ok(output) => GenericRun::NonZero {
+        Ok(crate::process_capture::CaptureResult::Completed(output)) if output.status.success() => {
+            GenericRun::Success { duration_ms }
+        }
+        Ok(crate::process_capture::CaptureResult::Completed(output)) => GenericRun::NonZero {
             code: output.status.code(),
             duration_ms,
-            output_tail: combined_output_tail(
-                &String::from_utf8_lossy(&output.stdout),
-                &String::from_utf8_lossy(&output.stderr),
-            ),
+            output_tail: output_tail(&output),
+        },
+        Ok(crate::process_capture::CaptureResult::TimedOut(output)) => GenericRun::TimedOut {
+            duration_ms,
+            output_tail: output_tail(&output),
         },
         Err(error) => GenericRun::LaunchError {
             error: error.to_string(),
             duration_ms,
         },
     }
+}
+
+fn configure_generic_x86_64_command(command: &mut Command) {
+    command
+        .env("CARGO_TARGET_DIR", GENERIC_X86_64_TARGET_DIR)
+        .env("RUSTFLAGS", GENERIC_X86_64_RUSTFLAGS);
+}
+
+fn output_tail(output: &std::process::Output) -> String {
+    combined_output_tail(
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    )
 }
 
 fn combined_output_tail(stdout: &str, stderr: &str) -> String {
@@ -523,7 +559,7 @@ mod tests {
             mode,
             status,
             duration_ms: 50,
-            command: vec!["timeout".to_string(), "300".to_string()],
+            command: crate::fuzz::sanity_command(),
             targets: Vec::new(),
             issues: if status == FuzzStatus::Fail {
                 vec!["fuzz sanity failed".to_string()]
@@ -559,15 +595,10 @@ mod tests {
     }
 
     #[test]
-    fn command_is_bounded_and_sets_generic_rustflags() {
+    fn command_uses_native_cargo_without_unix_wrappers() {
         assert_eq!(
             generic_x86_64_command(),
             vec![
-                "timeout",
-                "900",
-                "env",
-                "CARGO_TARGET_DIR=target/platform-breadth/x86_64-generic",
-                "RUSTFLAGS=-C target-cpu=x86-64",
                 "cargo",
                 "test",
                 "-p",
@@ -580,6 +611,21 @@ mod tests {
             .map(String::from)
             .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn generic_command_sets_environment_on_command() {
+        let mut command = Command::new("cargo");
+        configure_generic_x86_64_command(&mut command);
+
+        let environment = command
+            .get_envs()
+            .filter_map(|(key, value)| value.map(|value| (key.to_owned(), value.to_owned())))
+            .collect::<Vec<_>>();
+        assert!(
+            environment.contains(&("CARGO_TARGET_DIR".into(), GENERIC_X86_64_TARGET_DIR.into()))
+        );
+        assert!(environment.contains(&("RUSTFLAGS".into(), GENERIC_X86_64_RUSTFLAGS.into())));
     }
 
     #[test]
