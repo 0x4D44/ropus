@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00016 — Classical control uses stale packet-loss recovery horizon
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-control/loss-pattern
 - **Raised:** 2026-08-16T07:49:45Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260912T233905Z-2a8132f9
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00016-run-fix-20260912T233905Z-2a8132f9
-- **Owner base:** 40f4cacf220b85e52fbdf5dd2ece194471fbce34
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-12T23:39:05Z
-- **Owner until:** 2026-09-13T01:39:05Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-16T07:49:45Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-16T07:49:45Z, raised via `deltic bugs new`) -> Fixed (2026-09-12T23:42:37Z, deltic:auto role=fix run=fix-20260912T233905Z-2a8132f9 branch=task/bug-ROP-BUG-KILN-00016-run-fix-20260912T233905Z-2a8132f9 code=ce30efbd0b93799d3839f064b631638af21714da gate=manual)
 
 ## Observation
 
