@@ -275,6 +275,14 @@ def run_all_tests(log: logging.Logger) -> list[dict]:
         wav_path = CORPUS_DIR / f"{tc['name']}.wav"
         if not wav_path.exists():
             log.warning(f"  Missing: {wav_path}")
+            results.append({
+                "mode": "fixture",
+                "wav": str(wav_path),
+                "passed": False,
+                "output": f"Missing required WAV fixture: {wav_path}",
+                "returncode": 1,
+                "error": "missing_fixture",
+            })
             continue
 
         for bitrate in BITRATES:
@@ -296,6 +304,10 @@ def summarize_results(results: list[dict], log: logging.Logger) -> tuple[int, in
     passed = sum(1 for r in results if r["passed"] is True)
     failed = sum(1 for r in results if r["passed"] is False)
     skipped = sum(1 for r in results if r["passed"] is None)
+
+    if not results:
+        failed = 1
+        log.error("No comparison results produced")
 
     log.info(f"\n{'='*60}")
     log.info(f"RESULTS: {passed} passed, {failed} failed, {skipped} skipped")
@@ -390,8 +402,16 @@ FIX_PROMPT = textwrap.dedent("""\
 
 def fix_loop(results: list[dict], log: logging.Logger) -> bool:
     """Iterate: collect failures, ask Claude to fix, re-test."""
+    if not results:
+        log.error("No comparison results produced")
+        return False
+
+    if any(r.get("error") == "missing_fixture" for r in results):
+        log.error("Required WAV fixture missing; cannot continue fix loop")
+        return False
+
     for iteration in range(MAX_FIX_ITERATIONS):
-        failures = [r for r in results if r["passed"] is False]
+        failures = [r for r in results if r["passed"] is not True]
         if not failures:
             log.info("All tests passing!")
             return True
@@ -438,6 +458,9 @@ def fix_loop(results: list[dict], log: logging.Logger) -> bool:
         # Re-test
         log.info("  Re-running tests...")
         results = run_all_tests(log)
+        if not results:
+            log.error("No comparison results produced after fix")
+            return False
         passed, failed, skipped = summarize_results(results, log)
 
         if failed == 0:

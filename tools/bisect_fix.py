@@ -93,7 +93,12 @@ def run_test(wav_name: str, bitrate: int, mode: str = "encode") -> dict:
     """Run a single comparison test, return detailed results."""
     wav_path = CORPUS_DIR / f"{wav_name}.wav"
     if not wav_path.exists():
-        return {"passed": None, "output": f"File not found: {wav_path}"}
+        return {
+            "passed": False,
+            "output": f"File not found: {wav_path}",
+            "returncode": 1,
+            "error": "missing_fixture",
+        }
 
     cmd = [str(COMPARE_BIN)]
     if mode == "encode":
@@ -138,7 +143,7 @@ def scan_all(log: logging.Logger) -> list[dict]:
             results.append(r)
 
     passed = sum(1 for r in results if r.get("passed"))
-    failed = sum(1 for r in results if r.get("passed") is False)
+    failed = sum(1 for r in results if r.get("passed") is not True)
     log.info(f"\nScan: {passed} passed, {failed} failed out of {len(results)}")
     return results
 
@@ -149,11 +154,11 @@ def find_simplest_failure(results: list[dict]) -> dict | None:
     for name, sr, ch in TEST_PRIORITY:
         for br in BITRATES:
             for r in results:
-                if r.get("name") == name and r.get("bitrate") == br and r.get("passed") is False:
+                if r.get("name") == name and r.get("bitrate") == br and r.get("passed") is not True:
                     return r
     # Fallback: any failure
     for r in results:
-        if r.get("passed") is False:
+        if r.get("passed") is not True:
             return r
     return None
 
@@ -230,8 +235,16 @@ def surgical_fix_loop(log: logging.Logger) -> bool:
         log.info("Scanning tests...")
         results = scan_all(log)
 
+        if not results:
+            log.error("No comparison results produced")
+            return False
+
+        if any(r.get("error") == "missing_fixture" for r in results):
+            log.error("Required WAV fixture missing; cannot continue fix loop")
+            return False
+
         passed = sum(1 for r in results if r.get("passed"))
-        failed = sum(1 for r in results if r.get("passed") is False)
+        failed = sum(1 for r in results if r.get("passed") is not True)
         total = passed + failed
 
         if failed == 0:
@@ -317,8 +330,8 @@ def cmd_scan(args):
     log = setup_logging()
     if not build(log):
         return 1
-    scan_all(log)
-    return 0
+    results = scan_all(log)
+    return 0 if results and all(r.get("passed") is True for r in results) else 1
 
 
 def cmd_test(args):
@@ -326,13 +339,15 @@ def cmd_test(args):
     if not build(log):
         return 1
     name = Path(args.wav).stem
+    results = []
     for br in BITRATES:
         r = run_test(name, br)
+        results.append(r)
         status = "PASS" if r["passed"] else "FAIL"
         log.info(f"  {status}: {name} @{br}")
         if not r["passed"]:
             log.info(f"    {r['output'][:300]}")
-    return 0
+    return 0 if results and all(r.get("passed") is True for r in results) else 1
 
 
 def main():
