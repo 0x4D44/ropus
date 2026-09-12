@@ -7,25 +7,56 @@
 
 use std::collections::VecDeque;
 use std::io::{self, Read};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread;
+use std::time::{Duration, Instant};
 
 /// Maximum retained bytes per captured stream, including the truncation note.
 pub const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
+
+/// Maximum lifetime for a subprocess launched by the full-test runner.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 const TRUNCATION_MARKER: &[u8] = b"\n[full-test: output truncated; kept prefix and tail]\n";
 const PREFIX_BYTES: usize = (MAX_CAPTURE_BYTES - TRUNCATION_MARKER.len()) / 2;
 const TAIL_BYTES: usize = MAX_CAPTURE_BYTES - TRUNCATION_MARKER.len() - PREFIX_BYTES;
 const READ_CHUNK_BYTES: usize = 16 * 1024;
+const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
-/// Run a command with both output pipes drained concurrently and bounded.
-pub fn output(command: &mut Command) -> io::Result<Output> {
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let child = command.spawn()?;
-    collect(child)
+/// The result of a supervised subprocess, including captured output after a
+/// timeout-triggered process-tree termination.
+#[derive(Debug)]
+pub enum CaptureResult {
+    Completed(Output),
+    TimedOut(Output),
 }
 
-fn collect(mut child: Child) -> io::Result<Output> {
+/// Run a command with both output pipes drained concurrently and bounded by
+/// [`DEFAULT_TIMEOUT`].
+pub fn output(command: &mut Command) -> io::Result<Output> {
+    match output_with_timeout(command, DEFAULT_TIMEOUT)? {
+        CaptureResult::Completed(output) => Ok(output),
+        CaptureResult::TimedOut(_output) => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "child process timed out after {} seconds",
+                DEFAULT_TIMEOUT.as_secs()
+            ),
+        )),
+    }
+}
+
+/// Run a command with both output pipes drained concurrently and a caller-
+/// supplied lifetime. A timeout kills the whole process tree before waiting
+/// for the direct child, so descendants cannot keep the capture pipes open.
+pub fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Result<CaptureResult> {
+    configure_process_group(command);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let child = command.spawn()?;
+    collect(child, timeout)
+}
+
+fn collect(mut child: Child, timeout: Duration) -> io::Result<CaptureResult> {
     let stdout = child
         .stdout
         .take()
@@ -46,15 +77,127 @@ fn collect(mut child: Child) -> io::Result<Output> {
 
     let stdout_thread = thread::spawn(move || read_bounded_bytes(stdout));
     let stderr_thread = thread::spawn(move || read_bounded_bytes(stderr));
-    let status = child.wait();
+    let deadline = Instant::now() + timeout;
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if Instant::now() >= deadline => {
+                timed_out = true;
+                break terminate_process_tree(&mut child);
+            }
+            Ok(None) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                thread::sleep(remaining.min(POLL_INTERVAL));
+            }
+            Err(error) => {
+                let cleanup = terminate_process_tree(&mut child);
+                let _ = join_reader(stdout_thread);
+                let _ = join_reader(stderr_thread);
+                return Err(combine_wait_error(error, cleanup));
+            }
+        }
+    }?;
     let stdout = join_reader(stdout_thread)?;
     let stderr = join_reader(stderr_thread)?;
 
-    Ok(Output {
-        status: status?,
+    let output = Output {
+        status,
         stdout,
         stderr,
+    };
+    Ok(if timed_out {
+        CaptureResult::TimedOut(output)
+    } else {
+        CaptureResult::Completed(output)
     })
+}
+
+fn combine_wait_error(wait_error: io::Error, cleanup: io::Result<ExitStatus>) -> io::Error {
+    match cleanup {
+        Ok(_) => wait_error,
+        Err(cleanup_error) => io::Error::other(format!(
+            "failed while waiting for child: {wait_error}; process-tree cleanup also failed: \
+             {cleanup_error}"
+        )),
+    }
+}
+
+fn terminate_process_tree(child: &mut Child) -> io::Result<ExitStatus> {
+    let tree_error = kill_process_tree(child.id()).err();
+    if let Some(tree_error) = tree_error {
+        let direct_error = child.kill().err();
+        let status = child.wait();
+        return match status {
+            Ok(status) => Err(io::Error::other(format!(
+                "process-tree cleanup failed: {tree_error}; direct child was reaped with {status}{}",
+                direct_error
+                    .as_ref()
+                    .map(|error| format!("; direct kill also failed: {error}"))
+                    .unwrap_or_default()
+            ))),
+            Err(wait_error) => Err(io::Error::other(format!(
+                "process-tree cleanup failed: {tree_error}; waiting for direct child also failed: \
+                 {wait_error}{}",
+                direct_error
+                    .as_ref()
+                    .map(|error| format!("; direct kill also failed: {error}"))
+                    .unwrap_or_default()
+            ))),
+        };
+    }
+    child.wait()
+}
+
+#[cfg(unix)]
+fn configure_process_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn configure_process_group(_command: &mut Command) {}
+
+#[cfg(unix)]
+fn kill_process_tree(pid: u32) -> io::Result<()> {
+    let group = format!("-{pid}");
+    let status = Command::new("kill")
+        .arg("-KILL")
+        .arg(group)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "kill process group for child {pid} exited with {status}"
+        )))
+    }
+}
+
+#[cfg(windows)]
+fn kill_process_tree(pid: u32) -> io::Result<()> {
+    let status = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "taskkill for child {pid} exited with {status}"
+        )))
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn kill_process_tree(pid: u32) -> io::Result<()> {
+    Err(io::Error::other(format!(
+        "process-tree termination is unsupported for child {pid}"
+    )))
 }
 
 fn join_reader(handle: thread::JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Vec<u8>> {
@@ -201,5 +344,47 @@ mod tests {
         assert_eq!(output.status.code(), Some(7));
         assert_eq!(output.stdout, b"stdout-start");
         assert_eq!(output.stderr, b"stderr-tail");
+    }
+
+    #[test]
+    fn hanging_child_is_killed_and_reports_a_distinct_timeout() {
+        let mut command = hanging_command();
+        let started = Instant::now();
+        let result = output_with_timeout(&mut command, Duration::from_millis(100))
+            .expect("supervisor should return a timeout result");
+
+        match result {
+            CaptureResult::TimedOut(output) => {
+                assert!(!output.status.success());
+                assert!(
+                    started.elapsed() < Duration::from_secs(1),
+                    "timeout took too long: {:?}",
+                    started.elapsed()
+                );
+            }
+            CaptureResult::Completed(output) => {
+                panic!("hanging child completed unexpectedly: {:?}", output.status);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn hanging_command() -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 2 & wait"]);
+        command
+    }
+
+    #[cfg(windows)]
+    fn hanging_command() -> Command {
+        let mut command = Command::new("powershell");
+        command.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Process -FilePath powershell -ArgumentList '-NoLogo','-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 2' -Wait",
+        ]);
+        command
     }
 }
