@@ -27,6 +27,24 @@ Observation: tools/overnight_fuzz_launch.sh and tools/fuzz_24h_launch_v2.sh laun
 
 ## Fix
 
-<unfixed — raised only>
+Integrated code commit `10a0102dd42c1184ceacb6f7749e69677744d55d` now validates
+both launcher durations as positive decimal values from 1 through 86400 seconds
+before arithmetic, retains every worker PID, waits on every worker, and returns
+nonzero with target-labelled failure details when any worker fails. Focused
+coverage lives in `tools/test_fuzz_launchers.py`.
+
+Validation evidence:
+
+- Regression proof: mutating the v2 worker-status branch to `if false` made
+  `test_mixed_worker_outcomes_fail_for_both_launchers` fail because the v2
+  launcher returned zero after a fake target exited 7. Mutating its duration
+  bound to `if false` made `test_duration_rejects_zero_and_values_above_the_day_limit`
+  fail for both rejected inputs. Mutating the overnight status branch likewise
+  made the mixed-outcome test fail because that launcher returned zero.
+- The same fake-cargo harness also rejected a command-substitution duration
+  without creating its marker file, proving the input was not evaluated.
+- After restoration, `python -m unittest -v tools.test_fuzz_launchers` passed all
+  four tests, covering both launchers, mixed outcomes, success, bounds, and injection-shaped input.
+- Normalized `bash -n` parses passed for both launcher scripts.
 
 ## Notes
