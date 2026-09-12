@@ -6,15 +6,15 @@
 - **Area:** harness-control/loss-pattern
 - **Raised:** 2026-08-16T07:49:45Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260912T233905Z-2a8132f9
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KILN-00016-run-fix-20260912T233905Z-2a8132f9
+- **Owner base:** 40f4cacf220b85e52fbdf5dd2ece194471fbce34
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-12T23:39:05Z
+- **Owner until:** 2026-09-13T01:39:05Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
