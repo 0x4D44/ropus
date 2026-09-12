@@ -27,6 +27,22 @@ Observation: tools/integrate.py rebinds results locally after each fix-loop rete
 
 ## Fix
 
-<unfixed — raised only>
+Integrated code commit `c1ed1b7016405e6261d08d8a189f0e60aae808fe` now replaces
+the caller-owned result list in place after every fix-loop retest. `cmd_run`
+therefore saves the verified post-fix results instead of its original failing
+list. Regression coverage is in `tools/test_integrity.py`.
+
+Validation evidence:
+
+- Before the fix, an isolated mocked retest returned success while the caller
+  still held `[{'passed': False, ...}]` instead of the verified passing result.
+- Regression proof: mutating the in-place update back to a local rebinding made
+  `$null | python -m unittest -v
+  tools.test_integrity.IntegrateIntegrityTests.test_fix_loop_updates_caller_results_after_retest`
+  fail with exit code 1.
+- After restoration, `$null | deltic timeout 120 python -m unittest -v
+  tools.test_integrity tools.test_checkpoint` passed all 16 tests.
+- `$null | deltic timeout 120 python -m py_compile tools/integrate.py
+  tools/bisect_fix.py tools/test_integrity.py` passed.
 
 ## Notes
