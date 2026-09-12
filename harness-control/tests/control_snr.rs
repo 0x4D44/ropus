@@ -34,7 +34,8 @@ use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Instant;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use ropus::{OPUS_APPLICATION_VOIP, OPUS_OK, OpusEncoder};
 
@@ -230,9 +231,8 @@ fn first_divergent(a: &[i16], b: &[i16]) -> Option<usize> {
 }
 
 // ---------------------------------------------------------------------------
-// Tempfile management — we keep the paths under `target/tmp/` so they survive
-// the test's working-directory reset across `cargo` invocations and aren't
-// scattered under the OS tempdir.
+// Tempfile management — each control invocation gets its own OS-temp directory
+// so concurrent cargo test processes never share packet or PCM artifacts.
 // ---------------------------------------------------------------------------
 
 fn workspace_root() -> PathBuf {
@@ -245,11 +245,62 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn ctrl_tmp_dir() -> PathBuf {
-    let root = workspace_root();
-    let dir = root.join("target").join("harness-control-tmp");
-    std::fs::create_dir_all(&dir).expect("create target/harness-control-tmp");
-    dir
+static NEXT_TMP_ID: AtomicU64 = AtomicU64::new(0);
+
+struct CtrlTempDir {
+    path: PathBuf,
+}
+
+impl CtrlTempDir {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for CtrlTempDir {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.path) {
+            eprintln!("failed to clean {}: {error}", self.path.display());
+        }
+    }
+}
+
+fn ctrl_tmp_dir() -> CtrlTempDir {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let process_id = std::process::id();
+    let sequence = NEXT_TMP_ID.fetch_add(1, Ordering::Relaxed);
+    let root = env::temp_dir();
+
+    for attempt in 0..16 {
+        let dir = root.join(format!(
+            "ropus-harness-control-{process_id}-{now}-{sequence}-{attempt}"
+        ));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return CtrlTempDir { path: dir },
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("create {}: {error}", dir.display()),
+        }
+    }
+    panic!("failed to create a unique control temp directory after 16 attempts");
+}
+
+#[test]
+fn control_temp_dirs_are_unique_and_cleaned_up() {
+    let (first_path, second_path);
+    {
+        let first = ctrl_tmp_dir();
+        let second = ctrl_tmp_dir();
+        assert_ne!(first.path(), second.path());
+        assert!(first.path().is_dir());
+        assert!(second.path().is_dir());
+        first_path = first.path().to_path_buf();
+        second_path = second.path().to_path_buf();
+    }
+    assert!(!first_path.exists());
+    assert!(!second_path.exists());
 }
 
 fn run_decoder(package: &str, bin: &str, packets: &Path, pcm_out: &Path, mode_marker: &str) {
@@ -335,7 +386,7 @@ fn ctrl_fixed_vs_float_classical_snr() {
     // 2. Write packets to a tempfile. Both decoders read the same bytes so
     // there's no chance the two sides see a different frame-by-frame stream.
     let tmp = ctrl_tmp_dir();
-    let packets_path = tmp.join("ctrl_packets.bin");
+    let packets_path = tmp.path().join("ctrl_packets.bin");
     write_packets_file(&packets_path, &packets, is_lost).expect("write packets file");
     let packet_file_before = std::fs::read(&packets_path).expect("read control packet file");
     eprintln!(
@@ -346,8 +397,8 @@ fn ctrl_fixed_vs_float_classical_snr() {
     );
 
     // 3. Run both decoders.
-    let fixed_pcm_path = tmp.join("ctrl_fixed.pcm");
-    let float_pcm_path = tmp.join("ctrl_float.pcm");
+    let fixed_pcm_path = tmp.path().join("ctrl_fixed.pcm");
+    let float_pcm_path = tmp.path().join("ctrl_float.pcm");
     run_decoder(
         "ropus-harness",
         "ctrl_decode_fixed",
@@ -436,12 +487,12 @@ fn ctrl_fixed_vs_float_classical_snr_lossless() {
     );
 
     let tmp = ctrl_tmp_dir();
-    let packets_path = tmp.join("ctrl_packets_lossless.bin");
+    let packets_path = tmp.path().join("ctrl_packets_lossless.bin");
     write_packets_file(&packets_path, &packets, |_| false).expect("write packets");
     let packet_file_before = std::fs::read(&packets_path).expect("read lossless packet file");
 
-    let fixed_pcm_path = tmp.join("ctrl_fixed_lossless.pcm");
-    let float_pcm_path = tmp.join("ctrl_float_lossless.pcm");
+    let fixed_pcm_path = tmp.path().join("ctrl_fixed_lossless.pcm");
+    let float_pcm_path = tmp.path().join("ctrl_float_lossless.pcm");
     run_decoder(
         "ropus-harness",
         "ctrl_decode_fixed",
