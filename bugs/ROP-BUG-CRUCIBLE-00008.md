@@ -6,15 +6,15 @@
 - **Area:** full-test/fuzz-gate
 - **Raised:** 2026-08-14T15:50:23Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260912T210803Z-0eec838b
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00008-run-fix-20260912T210803Z-0eec838b
+- **Owner base:** f4b815f7cd71161551c8b840dc085b43542e7018
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-12T21:08:03Z
+- **Owner until:** 2026-09-12T23:08:03Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
