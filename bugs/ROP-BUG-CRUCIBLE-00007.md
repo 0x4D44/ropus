@@ -6,15 +6,15 @@
 - **Area:** full-test/windows-preflight
 - **Raised:** 2026-08-14T15:50:23Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260912T210409Z-0ca7c43d
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00007-run-fix-20260912T210409Z-0ca7c43d
+- **Owner base:** fa7f985773e887f3105c83947f9c7063288d6cdd
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-12T21:04:09Z
+- **Owner until:** 2026-09-12T23:04:09Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
