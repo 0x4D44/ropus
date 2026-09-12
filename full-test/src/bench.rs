@@ -424,6 +424,22 @@ pub struct BenchTimings {
     pub rust_decode_ms: Option<f64>,
 }
 
+impl BenchTimings {
+    /// A successful benchmark process must report all four finite timings.
+    /// `parse_bench_stdout` stays permissive so diagnostics can retain partial
+    /// output, but the row classifier must not treat that output as green.
+    fn has_complete_finite_values(self) -> bool {
+        [
+            self.c_encode_ms,
+            self.rust_encode_ms,
+            self.c_decode_ms,
+            self.rust_decode_ms,
+        ]
+        .into_iter()
+        .all(|timing| matches!(timing, Some(ms) if ms.is_finite()))
+    }
+}
+
 /// Per-vector bench row used by the report.
 ///
 /// Two distinct failure modes are tracked separately:
@@ -431,9 +447,9 @@ pub struct BenchTimings {
 /// - `skipped=true`, `crashed=false` — fixture missing on disk. Expected on
 ///   assets-not-fetched environments; the row is informational.
 /// - `skipped=false`, `crashed=true` — `ropus-compare` was invoked but failed
-///   (non-zero exit, parser drift, spawn error). Elevates the stage to WARN
-///   per HLD § PASS/FAIL/WARN ("bench is WARN-only on regressions; only
-///   crashes elevate").
+///   (non-zero exit, incomplete/malformed output, spawn error). Elevates the
+///   stage to WARN per HLD § PASS/FAIL/WARN ("bench is WARN-only on
+///   regressions; only crashes elevate").
 #[derive(Debug, Clone, Serialize)]
 pub struct VectorBench {
     pub label: String,
@@ -902,9 +918,10 @@ fn run_one_vector(bin: &Path, spec: &VectorSpec, wav: &Path) -> VectorBench {
 ///
 /// `crash_reason` being `Some` means `ropus-compare` was invoked but failed
 /// (non-zero exit, parser drift, spawn error) — distinct from the
-/// fixture-missing path in `run()`, which never reaches this function. The
-/// crash path flips `crashed=true` so `all_passed()` can surface WARNs per
-/// HLD § PASS/FAIL/WARN.
+/// fixture-missing path in `run()`, which never reaches this function. A
+/// successful process with incomplete output receives a synthetic parser-drift
+/// reason here. The crash path flips `crashed=true` so `all_passed()` can
+/// surface WARNs per HLD § PASS/FAIL/WARN.
 ///
 /// TODO: if `harness::print_bench_report` (`harness/src/main.rs`) changes its
 /// column widths or swaps the Unicode box chars, `SAMPLE_BENCH_STDOUT` and
@@ -915,6 +932,12 @@ fn build_vector_row(
     timings: BenchTimings,
     crash_reason: Option<String>,
 ) -> VectorBench {
+    let crash_reason = crash_reason.or_else(|| {
+        (!timings.has_complete_finite_values()).then(|| {
+            "ropus-compare exited successfully but produced incomplete benchmark timings"
+                .to_string()
+        })
+    });
     let enc_ratio = match (timings.rust_encode_ms, timings.c_encode_ms) {
         (Some(r), Some(c)) if c > 0.0 => Some(r / c),
         _ => None,
@@ -1098,13 +1121,45 @@ thread 'main' panicked at 'decode crash'
     }
 
     #[test]
-    fn build_vector_row_missing_timings_are_none() {
+    fn build_vector_row_missing_timings_are_anomalous() {
         let spec = VECTORS[0];
         let row = build_vector_row(&spec, BenchTimings::default(), None);
         assert!(row.enc_ratio.is_none());
         assert!(row.dec_ratio.is_none());
         assert!(row.c_encode_ms.is_none());
         assert!(row.rust_encode_ms.is_none());
+        assert!(row.crashed);
+        assert!(
+            row.crash_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("incomplete benchmark timings"))
+        );
+    }
+
+    #[test]
+    fn incomplete_successful_bench_output_fails_default_stage() {
+        let spec = VECTORS[0];
+        let timings = BenchTimings {
+            c_encode_ms: Some(100.0),
+            rust_encode_ms: Some(80.0),
+            c_decode_ms: None,
+            rust_decode_ms: None,
+        };
+        let row = build_vector_row(&spec, timings, None);
+        assert!(row.crashed, "partial successful output must be anomalous");
+
+        let result = BenchResult {
+            profile: BenchProfile::ObservedWarnOnly,
+            skipped: false,
+            skip_reason: None,
+            build_failed: false,
+            duration_ms: 1000,
+            vectors: vec![row],
+        };
+        assert!(
+            !result.all_passed(),
+            "partial successful output must not pass the default benchmark stage"
+        );
     }
 
     #[test]
@@ -1337,7 +1392,7 @@ thread 'main' panicked at 'decode crash'
     }
 
     #[test]
-    fn release_thresholded_missing_timings_are_blocking() {
+    fn release_thresholded_incomplete_output_is_crashed_and_blocking() {
         let spec = VECTORS[0];
         let row = build_vector_row(
             &spec,
@@ -1361,10 +1416,10 @@ thread 'main' panicked at 'decode crash'
         assert!(
             r.release_blocking_issues()
                 .iter()
-                .any(|issue| issue.contains("incomplete timings"))
+                .any(|issue| issue.contains("benchmark row crashed"))
         );
         let rows = r.threshold_rows();
-        assert_eq!(rows[0].dec_status, BenchThresholdStatus::MissingTiming);
+        assert_eq!(rows[0].dec_status, BenchThresholdStatus::Crashed);
     }
 
     #[test]
