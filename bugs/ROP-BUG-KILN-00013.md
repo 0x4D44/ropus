@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00013 — Benchmark sweep parser no longer matches harness output
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** tools/bench-sweep
 - **Raised:** 2026-08-13T17:17:40Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260912T231226Z-df922e2e
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00013-run-fix-20260912T231226Z-df922e2e
-- **Owner base:** b990b49ac29de1abc0a55aa0c06e1b3fa3640f50
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-12T23:12:26Z
-- **Owner until:** 2026-09-13T01:12:26Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-13T17:17:40Z, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-08-13T17:17:40Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T23:18:28Z, deltic:auto role=fix run=fix-20260912T231226Z-df922e2e branch=task/bug-ROP-BUG-KILN-00013-run-fix-20260912T231226Z-df922e2e code=ceb21caa6c1638619319fee2d06b2681288231b4 gate=manual)
 
 ## Observation
 
