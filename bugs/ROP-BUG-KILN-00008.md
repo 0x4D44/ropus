@@ -27,6 +27,22 @@ Observation: tools/fuzz_run.sh captures every cargo-fuzz exit status but the fin
 
 ## Fix
 
-<unfixed — raised only>
+Integrated code commit `75ae57c27f69e412188a328c19f56a4962a229a8` now counts
+nonzero cargo-fuzz target exits separately from findings and fails the campaign
+when either condition occurs. The shell and Windows PowerShell runners reject
+the documented but unsupported `--no-diff` option instead of silently ignoring it.
+Focused coverage lives in `tools/test_fuzz_run.py`.
+
+Validation evidence:
+
+- Before the fix, the isolated fake-cargo harness ran four tests and failed its
+  child-failure assertion (the runner returned zero for exit 7 with no artifact)
+  and its `--no-diff` assertion (the option was accepted and cargo started).
+- Regression proof: restoring the artifact-only final decision made
+  `test_child_failure_without_artifact_is_nonzero` fail; restoring the ignored
+  `--no-diff` parser made `test_no_diff_is_rejected_before_starting_cargo` fail.
+- After the fix, `python -m unittest -v tools.test_fuzz_run` passed all four tests.
+- A normalized `bash -n` parse passed, and the PowerShell runner rejected
+  `--no-diff` with exit status 1 before starting cargo.
 
 ## Notes
