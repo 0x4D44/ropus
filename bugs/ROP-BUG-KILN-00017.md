@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00017 — Concurrent control tests race through shared artifact paths
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-control/artifact-isolation
 - **Raised:** 2026-08-16T07:49:54Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260912T234409Z-29934271
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00017-run-fix-20260912T234409Z-29934271
-- **Owner base:** b3f8c45f99c998fda84c517a2f890d969f5b7e0d
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-12T23:44:09Z
-- **Owner until:** 2026-09-13T01:44:09Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-16T07:49:54Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-16T07:49:54Z, raised via `deltic bugs new`) -> Fixed (2026-09-12T23:48:32Z, deltic:auto role=fix run=fix-20260912T234409Z-29934271 branch=task/bug-ROP-BUG-KILN-00017-run-fix-20260912T234409Z-29934271 code=3f5469608ca0e5722746a2d26b24c2bd28de551d gate=manual)
 
 ## Observation
 
