@@ -6,15 +6,15 @@
 - **Area:** tools/test-integrity
 - **Raised:** 2026-08-13T17:17:35Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260912T213422Z-1ed60022
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KILN-00004-run-fix-20260912T213422Z-1ed60022
+- **Owner base:** 486d400497ad83c7228aba67acadd4cc73a653bd
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-12T21:34:22Z
+- **Owner until:** 2026-09-12T23:34:22Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
