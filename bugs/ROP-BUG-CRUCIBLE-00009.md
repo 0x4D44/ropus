@@ -27,6 +27,26 @@ Static review at origin/main bb54eb50. A zero-exit ropus-compare with malformed 
 
 ## Fix
 
-<unfixed — raised only>
+Implemented in `full-test/src/bench.rs` and integrated at code commit
+`954c6d6979d4d830cecead7357721b351d317f69`.
+
+- `BenchTimings::has_complete_finite_values` requires all four parsed timing
+  values to be present and finite.
+- `build_vector_row` now turns an incomplete successful parse into a structured
+  crash anomaly, preserving any partial timings for diagnostics. This makes
+  `BenchResult::all_passed` reject the false-green default result while keeping
+  missing fixtures as informational skips.
+- Added coverage for the default observed profile and release-thresholded
+  reporting.
+
+Verification:
+
+- `$null | deltic timeout 180 cargo test -p full-test bench::tests` — 25 passed,
+  0 failed.
+- `deltic timeout 120 cargo fmt --all -- --check` — passed.
+- `git diff --check` — passed.
+- Red proof: temporarily disabled the new classifier guard; the regression test
+  failed with `partial successful output must be anomalous`. The guard was then
+  restored and the focused suite passed.
 
 ## Notes
