@@ -233,6 +233,11 @@ pub fn opus_packet_parse_impl_with_padding(
     if len == 0 {
         return OPUS_INVALID_PACKET;
     }
+    let len_usize = len as usize;
+    if len_usize > data.len() {
+        return OPUS_BAD_ARG;
+    }
+    let data = &data[..len_usize];
 
     let framesize = opus_packet_get_samples_per_frame(data, 48000);
 
@@ -404,6 +409,17 @@ pub fn opus_packet_parse_impl_with_padding(
 /// Check if a packet contains LBRR (FEC) data.
 /// Matches C `opus_packet_has_lbrr`.
 pub fn opus_packet_has_lbrr(packet: &[u8], len: i32) -> Result<bool, i32> {
+    if len < 0 {
+        return Err(OPUS_BAD_ARG);
+    }
+    if len == 0 {
+        return Err(OPUS_INVALID_PACKET);
+    }
+    let len_usize = len as usize;
+    if len_usize > packet.len() {
+        return Err(OPUS_BAD_ARG);
+    }
+    let packet = &packet[..len_usize];
     let packet_mode = opus_packet_get_mode(packet);
     if packet_mode == MODE_CELT_ONLY {
         return Ok(false);
@@ -3821,6 +3837,37 @@ mod tests {
     }
 
     #[test]
+    fn test_packet_parse_rejects_len_beyond_slice() {
+        let data = [0x80u8, 0xAA];
+        let mut toc = 0u8;
+        let mut sizes = [0i16; MAX_FRAMES];
+        let mut offset = 0i32;
+
+        assert_eq!(
+            opus_packet_parse_impl(&data, 3, false, &mut toc, &mut sizes, &mut offset, None,),
+            OPUS_BAD_ARG
+        );
+
+        let mut padding = PaddingInfo {
+            offset: 99,
+            len: 99,
+        };
+        assert_eq!(
+            opus_packet_parse_impl_with_padding(
+                &data,
+                3,
+                false,
+                &mut toc,
+                &mut sizes,
+                &mut offset,
+                None,
+                Some(&mut padding),
+            ),
+            OPUS_BAD_ARG
+        );
+    }
+
+    #[test]
     fn test_packet_parse_code2_parse_size_error() {
         // Line 231: Code 2 (VBR) where parse_size returns error (only TOC, no size byte)
         let pkt = [0x82u8]; // TOC code=2, but no size byte follows
@@ -4098,6 +4145,11 @@ mod tests {
         let pkt = [0x0Au8, 0x00, 0x00, 0x00]; // size[0]=0, rest is frame 2
         let ret = opus_packet_has_lbrr(&pkt, pkt.len() as i32);
         assert_eq!(ret, Ok(false));
+    }
+
+    #[test]
+    fn test_packet_has_lbrr_rejects_len_beyond_slice() {
+        assert_eq!(opus_packet_has_lbrr(&[0x80u8], 2), Err(OPUS_BAD_ARG));
     }
 
     // -----------------------------------------------------------------------

@@ -86,6 +86,11 @@ fn parse_packet<'a>(
     if len == 0 {
         return Err(OPUS_INVALID_PACKET);
     }
+    let len_usize = len as usize;
+    if len_usize > data.len() {
+        return Err(OPUS_BAD_ARG);
+    }
+    let data = &data[..len_usize];
 
     let mut result = PacketParseResult::new();
     let framesize = opus_packet_get_samples_per_frame(data, 48000);
@@ -1036,6 +1041,11 @@ impl<'a> OpusRepacketizer<'a> {
         if len < 1 {
             return OPUS_INVALID_PACKET;
         }
+        let len_usize = len as usize;
+        if len_usize > data.len() {
+            return OPUS_BAD_ARG;
+        }
+        let data = &data[..len_usize];
         // Validate/set TOC
         if self.nb_frames == 0 {
             self.toc = data[0];
@@ -1106,6 +1116,12 @@ impl<'a> OpusRepacketizer<'a> {
     ) -> i32 {
         if begin >= end || end > self.nb_frames {
             return OPUS_BAD_ARG;
+        }
+        if maxlen < 0 {
+            return OPUS_BAD_ARG;
+        }
+        if maxlen as usize > data.len() {
+            return OPUS_BUFFER_TOO_SMALL;
         }
         let count = end - begin;
         let len = &self.len[begin..end];
@@ -1366,11 +1382,17 @@ pub(crate) fn opus_packet_pad_impl(
     if len < 1 {
         return OPUS_BAD_ARG;
     }
+    if len as usize > data.len() {
+        return OPUS_BAD_ARG;
+    }
     if len == new_len {
         return OPUS_OK;
     }
     if len > new_len {
         return OPUS_BAD_ARG;
+    }
+    if new_len as usize > data.len() {
+        return OPUS_BUFFER_TOO_SMALL;
     }
     // Copy original packet to temp buffer so frame pointers don't alias output
     let copy = data[..len as usize].to_vec();
@@ -1396,6 +1418,9 @@ pub fn opus_packet_pad(data: &mut [u8], len: i32, new_len: i32) -> i32 {
 /// Matches C `opus_packet_unpad`.
 pub fn opus_packet_unpad(data: &mut [u8], len: i32) -> i32 {
     if len < 1 {
+        return OPUS_BAD_ARG;
+    }
+    if len as usize > data.len() {
         return OPUS_BAD_ARG;
     }
     // Copy original so frame pointers don't alias the output buffer
@@ -1431,11 +1456,17 @@ pub fn opus_multistream_packet_pad(
     if len < 1 {
         return OPUS_BAD_ARG;
     }
+    if len as usize > data.len() {
+        return OPUS_BAD_ARG;
+    }
     if len == new_len {
         return OPUS_OK;
     }
     if len > new_len {
         return OPUS_BAD_ARG;
+    }
+    if new_len as usize > data.len() {
+        return OPUS_BUFFER_TOO_SMALL;
     }
     let amount = new_len - len;
 
@@ -1463,6 +1494,9 @@ pub fn opus_multistream_packet_pad(
 /// Matches C `opus_multistream_packet_unpad`.
 pub fn opus_multistream_packet_unpad(data: &mut [u8], len: i32, nb_streams: i32) -> i32 {
     if len < 1 {
+        return OPUS_BAD_ARG;
+    }
+    if len as usize > data.len() {
         return OPUS_BAD_ARG;
     }
     // Copy entire buffer so frame references don't alias the output
@@ -1973,7 +2007,8 @@ mod tests {
         );
 
         // Multistream pad requires self-delimited prefix streams; this one is not.
-        let mut multi = [0x08u8, 0xAA, 0xBB];
+        let mut multi = [0u8; 12];
+        multi[..3].copy_from_slice(&[0x08u8, 0xAA, 0xBB]);
         assert_eq!(
             opus_multistream_packet_pad(&mut multi, 3, 12, 2),
             OPUS_INVALID_PACKET
@@ -2123,7 +2158,8 @@ mod tests {
             OPUS_INVALID_PACKET
         );
 
-        let mut pad_buf = [0x08u8, 0xAA, 0xBB, 0xCC];
+        let mut pad_buf = [0u8; 64];
+        pad_buf[..4].copy_from_slice(&[0x08u8, 0xAA, 0xBB, 0xCC]);
         let bad_ext = OpusExtensionData {
             id: 5,
             frame: 0,
@@ -2826,8 +2862,10 @@ mod tests {
 
     #[test]
     fn test_multistream_pad_and_unpad_require_additional_streams() {
-        let mut pad_buf = [0x08u8, 2, 0xAA, 0xBB];
-        let pad_len = pad_buf.len() as i32;
+        let mut pad_buf = [0u8; 8];
+        pad_buf[..4].copy_from_slice(&[0x08u8, 2, 0xAA, 0xBB]);
+        pad_buf[4..6].copy_from_slice(&[0x08, 10]);
+        let pad_len = 4;
         assert_eq!(
             opus_multistream_packet_pad(&mut pad_buf, pad_len, 8, 3),
             OPUS_INVALID_PACKET
@@ -3674,6 +3712,12 @@ mod tests {
         }
 
         #[test]
+        fn cat_rejects_len_beyond_slice() {
+            let mut rp = OpusRepacketizer::new();
+            assert_eq!(rp.cat(&[0x08u8, 0xAA], 3), OPUS_BAD_ARG);
+        }
+
+        #[test]
         fn cat_rejects_mismatched_toc() {
             // First pkt SILK-WB, second pkt CELT-only — TOC top bits differ.
             let mut enc1 = OpusEncoder::new(16000, 1, OPUS_APPLICATION_AUDIO).unwrap();
@@ -3809,6 +3853,39 @@ mod tests {
             );
             assert_eq!(
                 opus_multistream_packet_pad(&mut buf, 10, 5, 1),
+                OPUS_BAD_ARG
+            );
+        }
+
+        #[test]
+        fn length_claims_cannot_exceed_repacketizer_slices() {
+            let pkt = [0x08u8, 0xAA];
+            let mut rp = OpusRepacketizer::new();
+            assert_eq!(rp.cat(&pkt, pkt.len() as i32), OPUS_OK);
+
+            let mut out = [0u8; 1];
+            assert_eq!(rp.out(&mut out, 2), OPUS_BUFFER_TOO_SMALL);
+            assert_eq!(rp.out_range(0, 1, &mut out, 2), OPUS_BUFFER_TOO_SMALL);
+            assert_eq!(
+                rp.out_range_impl(0, 1, &mut out, 2, false, false, &[]),
+                OPUS_BUFFER_TOO_SMALL
+            );
+
+            let mut packet = [0x08u8];
+            assert_eq!(opus_packet_pad(&mut packet, 2, 2), OPUS_BAD_ARG);
+            assert_eq!(opus_packet_pad(&mut packet, 1, 2), OPUS_BUFFER_TOO_SMALL);
+            assert_eq!(opus_packet_unpad(&mut packet, 2), OPUS_BAD_ARG);
+
+            assert_eq!(
+                opus_multistream_packet_pad(&mut packet, 2, 2, 1),
+                OPUS_BAD_ARG
+            );
+            assert_eq!(
+                opus_multistream_packet_pad(&mut packet, 1, 2, 1),
+                OPUS_BUFFER_TOO_SMALL
+            );
+            assert_eq!(
+                opus_multistream_packet_unpad(&mut packet, 2, 1),
                 OPUS_BAD_ARG
             );
         }
