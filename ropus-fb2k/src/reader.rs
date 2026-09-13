@@ -1190,10 +1190,7 @@ fn scan_pages<R: Read + Seek>(
     let mut eligible_ordinal: u64 = 0;
     let mut stride: u64 = 1;
 
-    loop {
-        let Some(header_end) = offset.checked_add(OGG_HEADER_LEN as u64) else {
-            break;
-        };
+    while let Some(header_end) = offset.checked_add(OGG_HEADER_LEN as u64) {
         if header_end > file_size {
             break;
         }
@@ -1248,7 +1245,7 @@ fn scan_pages<R: Read + Seek>(
                     ReaderError::InvalidStream("page index ordinal overflow".into())
                 })?;
 
-                if ordinal % stride == 0 {
+                if ordinal.is_multiple_of(stride) {
                     if entries.len() == MAX_PAGE_INDEX_ENTRIES {
                         // Thin the existing entries in place. The retained
                         // entries are already ordered and correspond to
@@ -1269,7 +1266,7 @@ fn scan_pages<R: Read + Seek>(
                     // The current ordinal may have become ineligible after
                     // thinning. Reconsider it under the new stride instead
                     // of pushing beyond the fixed capacity.
-                    if ordinal % stride == 0 {
+                    if ordinal.is_multiple_of(stride) {
                         entries.push(PageIndexEntry {
                             start_granule: running_granule,
                             byte_offset: offset,
