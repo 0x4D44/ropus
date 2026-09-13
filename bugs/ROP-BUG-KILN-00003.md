@@ -6,15 +6,15 @@
 - **Area:** tools/coordinator-review
 - **Raised:** 2026-08-13T17:17:35Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T170327Z-67746778
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KILN-00003-run-verify-20260913T170327Z-67746778
+- **Owner base:** d0c03fcfd737cec728baedc0309f0b59d8b69ef0
+- **Owner fingerprint:** sha256:2f053987bf17f085030487ce1b0af095bc39a4d6f7b1e0472f75681630642ec1
+- **Owner since:** 2026-09-13T17:03:27Z
+- **Owner until:** 2026-09-13T19:03:27Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
