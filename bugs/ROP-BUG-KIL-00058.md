@@ -6,15 +6,15 @@
 - **Area:** ropusenc/cli-output
 - **Raised:** 2026-08-22T11:25:51Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T082236Z-5e65a9c7
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00058-run-fix-20260913T082236Z-5e65a9c7
+- **Owner base:** 6fd4004c380e9d067164b5785778d703dffe0a53
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T08:22:36Z
+- **Owner until:** 2026-09-13T10:22:36Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
