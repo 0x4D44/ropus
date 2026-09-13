@@ -184,14 +184,13 @@ fn play_with_io<W: Write, E: Write>(
             if interactive {
                 let stem = path
                     .file_stem()
-                    .map(|s| escape_terminal_text(&s.to_string_lossy()))
-                    .unwrap_or_else(|| escape_terminal_path(path));
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.to_string_lossy().into_owned());
                 let cols = crossterm::terminal::size()
                     .map(|(w, _)| w as usize)
                     .unwrap_or(80);
-                let prefix = format!("decoding {}/{}  ", idx + 1, playlist_len);
-                let stem_fit = truncate_to_fit(&stem, cols, prefix.width(), 0);
-                write_output(stdout, format_args!("\r{prefix}{stem_fit}"))?;
+                let line = format_decoding_line(cols, &stem, idx, playlist_len);
+                write_output(stdout, format_args!("\r{line}"))?;
             }
 
             let (decoded, tags) = match decode_track(path, opts.gain_db) {
@@ -684,7 +683,7 @@ pub(crate) fn resolve_display_name(tags: &OpusTags, path: &Path) -> String {
 /// Render the single repainting status line. Pure: takes all inputs by value
 /// and returns the final string with no trailing newline. Respects `cols` —
 /// truncates the display name with `…` when the full render would overflow,
-/// and drops the bar+bitrate entirely when `cols < 50`.
+/// and progressively drops optional fields when fixed fields do not fit.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn format_status_line(
     cols: usize,
@@ -704,20 +703,68 @@ pub(crate) fn format_status_line(
     let pos_str = format_duration(pos, dur);
     let dur_str = format_duration(dur, dur);
 
-    if cols < 50 {
-        // Minimal fallback: glyph + track + name + clock, truncating the name
-        // with `…` to fit the exact width.
-        let prefix = format!("{glyph} {track}  ");
-        let suffix = format!("  {pos_str} / {dur_str}");
-        let name = truncate_to_fit(&display_name, cols, prefix.width(), suffix.width());
-        return format!("{prefix}{name}{suffix}");
+    if cols >= 50 {
+        let bar = progress_bar(pos, dur);
+        let prefix = format!("{glyph} {track}{loop_ind}  ");
+        let suffix = format!("  [{bar}]  {pos_str} / {dur_str}  {avg_kbps:.0} kbps");
+        if let Some(line) = render_named_line(cols, &prefix, &display_name, &suffix) {
+            return line;
+        }
     }
 
-    let bar = progress_bar(pos, dur);
-    let prefix = format!("{glyph} {track}{loop_ind}  ");
-    let suffix = format!("  [{bar}]  {pos_str} / {dur_str}  {avg_kbps:.0} kbps");
-    let name = truncate_to_fit(&display_name, cols, prefix.width(), suffix.width());
-    format!("{prefix}{name}{suffix}")
+    // Compact layout: retain the glyph, track number, title, and duration.
+    let prefix = format!("{glyph} {track}  ");
+    let suffix = format!("  {pos_str} / {dur_str}");
+    if let Some(line) = render_named_line(cols, &prefix, &display_name, &suffix) {
+        return line;
+    }
+
+    // Drop duration, then the track count, then the glyph as the terminal
+    // narrows. The title is the final content retained before an empty line.
+    let prefix = format!("{glyph} {track}  ");
+    if let Some(line) = render_named_line(cols, &prefix, &display_name, "") {
+        return line;
+    }
+    let prefix = format!("{glyph} ");
+    if let Some(line) = render_named_line(cols, &prefix, &display_name, "") {
+        return line;
+    }
+    let prefix = format!("{track} ");
+    if let Some(line) = render_named_line(cols, &prefix, &display_name, "") {
+        return line;
+    }
+    truncate_to_fit(&display_name, cols, 0, 0)
+}
+
+/// Render the ephemeral decode-progress line. It follows the same progressive
+/// layout as the status line so even a zero-width terminal receives no bytes.
+pub(crate) fn format_decoding_line(
+    cols: usize,
+    stem: &str,
+    track_idx: usize,
+    playlist_len: usize,
+) -> String {
+    let stem = escape_terminal_text(stem);
+    let track = format!("{}/{}", track_idx + 1, playlist_len);
+    let prefix = format!("decoding {track}  ");
+    if let Some(line) = render_named_line(cols, &prefix, &stem, "") {
+        return line;
+    }
+    if let Some(line) = render_named_line(cols, "decoding ", &stem, "") {
+        return line;
+    }
+    truncate_to_fit(&stem, cols, 0, 0)
+}
+
+/// Render a title between fixed fields only when those fields fit. Returning
+/// `None` lets callers drop optional fields before truncating the title.
+fn render_named_line(cols: usize, prefix: &str, name: &str, suffix: &str) -> Option<String> {
+    let fixed_cols = prefix.width().saturating_add(suffix.width());
+    if fixed_cols > cols {
+        return None;
+    }
+    let name = truncate_to_fit(name, cols, prefix.width(), suffix.width());
+    Some(format!("{prefix}{name}{suffix}"))
 }
 
 /// `NN/MM`, zero-padded to the width of the larger side. `len < 10` means
@@ -1371,6 +1418,99 @@ mod tests {
     }
 
     // -- format_status_line: width handling -------------------------------
+
+    #[test]
+    fn interactive_render_width_oracle_covers_tiny_widths() {
+        let title = "東京 👩\u{200D}💻 e\u{301} ".repeat(30);
+        for cols in 0..=50 {
+            let status = format_status_line(
+                cols,
+                false,
+                LoopMode::All,
+                &title,
+                2,
+                17,
+                Duration::from_secs(30),
+                Duration::from_secs(240),
+                192.0,
+            );
+            assert!(
+                status.width() <= cols,
+                "status rendered {} cells at cols={cols}: {status}",
+                status.width()
+            );
+
+            let decoding = format_decoding_line(cols, &title, 2, 17);
+            assert!(
+                decoding.width() <= cols,
+                "decoding rendered {} cells at cols={cols}: {decoding}",
+                decoding.width()
+            );
+        }
+    }
+
+    #[test]
+    fn interactive_render_resize_recomputes_unicode_budgets() {
+        let title = "東京 👩\u{200D}💻 e\u{301} ".repeat(30);
+        let widths = [0, 1, 2, 7, 14, 20, 40, 49, 50, 80, 120];
+        for cols in widths {
+            let status = format_status_line(
+                cols,
+                true,
+                LoopMode::Single,
+                &title,
+                0,
+                1,
+                Duration::from_secs(30),
+                Duration::from_secs(240),
+                192.0,
+            );
+            assert!(
+                status.width() <= cols,
+                "status overflow after resize: {cols}: {status}"
+            );
+
+            let decoding = format_decoding_line(cols, &title, 0, 1);
+            assert!(
+                decoding.width() <= cols,
+                "decoding overflow after resize: {cols}: {decoding}"
+            );
+        }
+
+        let narrow_status = format_status_line(
+            40,
+            false,
+            LoopMode::Off,
+            &title,
+            0,
+            1,
+            Duration::from_secs(30),
+            Duration::from_secs(240),
+            192.0,
+        );
+        let wide_status = format_status_line(
+            120,
+            false,
+            LoopMode::Off,
+            &title,
+            0,
+            1,
+            Duration::from_secs(30),
+            Duration::from_secs(240),
+            192.0,
+        );
+        assert_ne!(
+            narrow_status, wide_status,
+            "status resize must change the render"
+        );
+
+        let narrow_decoding = format_decoding_line(20, &title, 0, 1);
+        let wide_decoding = format_decoding_line(80, &title, 0, 1);
+        assert_ne!(
+            narrow_decoding, wide_decoding,
+            "decoding resize must change the render"
+        );
+    }
 
     #[test]
     fn status_line_truncates_long_title_to_fit_cols() {
