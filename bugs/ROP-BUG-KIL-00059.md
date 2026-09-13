@@ -6,15 +6,15 @@
 - **Area:** ropusinfo/input-limits
 - **Raised:** 2026-08-22T12:29:57Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T080515Z-7df35780
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00059-run-fix-20260913T080515Z-7df35780
+- **Owner base:** 4485f02d1dfbd3adcd50c2688351efad29c50381
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T08:05:15Z
+- **Owner until:** 2026-09-13T10:05:15Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
