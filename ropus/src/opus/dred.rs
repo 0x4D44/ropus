@@ -18,8 +18,8 @@
 use crate::dnn::core::parse_weights;
 use crate::dnn::dred::{
     DRED_EXPERIMENTAL_BYTES, DRED_EXPERIMENTAL_VERSION, DRED_EXTENSION_ID, DRED_LATENT_DIM,
-    DRED_NUM_FEATURES, DRED_NUM_REDUNDANCY_FRAMES, OpusDred, RDOVAEDec, RDOVAEDecState,
-    init_rdovaedec,
+    DRED_MAX_LATENTS, DRED_NUM_FEATURES, DRED_NUM_REDUNDANCY_FRAMES, OpusDred, RDOVAEDec,
+    RDOVAEDecState, init_rdovaedec,
 };
 use crate::dnn::embedded_weights::WEIGHTS_BLOB;
 use crate::opus::decoder::{
@@ -119,6 +119,9 @@ impl OpusDREDDecoder {
         max_dred_samples: i32,
         sampling_rate: i32,
     ) -> Result<OpusDred, i32> {
+        if !matches!(sampling_rate, 8000 | 12000 | 16000 | 24000 | 48000) {
+            return Err(OPUS_BAD_ARG);
+        }
         if !self.loaded {
             return Err(OPUS_UNIMPLEMENTED);
         }
@@ -165,6 +168,9 @@ impl OpusDREDDecoder {
         }
         if dred.process_stage == 2 {
             return OPUS_OK;
+        }
+        if !(0..=DRED_MAX_LATENTS as i32).contains(&dred.nb_latents) {
+            return OPUS_BAD_ARG;
         }
         // Mirrors C `DRED_rdovae_decode_all`: zero a fresh RDOVAEDecState,
         // seed GRUs from `dred.state`, then walk the latents newest→oldest
@@ -366,6 +372,7 @@ mod tests {
     use crate::dnn::dred_stats::{
         dred_state_dead_zone_q8, dred_state_p0_q8, dred_state_quant_scales_q8, dred_state_r_q8,
     };
+    use crate::opus::repacketizer::{OpusExtensionData, OpusRepacketizer};
 
     /// Stage 8.7 Rust round-trip at the `OpusDRED` level — same oracle as
     /// the in-`dnn::dred` round-trip but routed through the public
@@ -522,6 +529,81 @@ mod tests {
         let packet = [0x00u8; 1];
         let err = dec.parse(&packet, 1920, 48000).unwrap_err();
         assert_eq!(err, OPUS_UNIMPLEMENTED);
+    }
+
+    fn packet_with_dred_extension() -> Vec<u8> {
+        let frame = [0x00u8, 0x00];
+        let mut repacketizer = OpusRepacketizer::new();
+        assert_eq!(repacketizer.cat(&frame, frame.len() as i32), OPUS_OK);
+
+        let extension_data = [b'D', DRED_EXPERIMENTAL_VERSION as u8, 0];
+        let extension = OpusExtensionData {
+            id: DRED_EXTENSION_ID as i32,
+            frame: 0,
+            data: &extension_data,
+            len: extension_data.len() as i32,
+        };
+        let mut packet = vec![0u8; 64];
+        let packet_capacity = packet.len() as i32;
+        let packet_len = repacketizer.out_range_impl(
+            0,
+            1,
+            &mut packet,
+            packet_capacity,
+            false,
+            false,
+            &[extension],
+        );
+        assert!(packet_len > 0);
+        packet.truncate(packet_len as usize);
+        packet
+    }
+
+    #[test]
+    fn parse_rejects_invalid_sample_rates_without_panic() {
+        let decoder = OpusDREDDecoder {
+            model: RDOVAEDec::default(),
+            loaded: true,
+        };
+        let packet = packet_with_dred_extension();
+
+        for sampling_rate in [0, -1, 44100] {
+            let result = std::panic::catch_unwind(|| decoder.parse(&packet, 1920, sampling_rate));
+            assert!(
+                result.is_ok(),
+                "parse panicked for sample rate {sampling_rate}"
+            );
+            assert_eq!(result.unwrap().err(), Some(OPUS_BAD_ARG));
+        }
+    }
+
+    #[test]
+    fn process_rejects_invalid_latent_counts_without_mutation() {
+        let decoder = OpusDREDDecoder {
+            model: RDOVAEDec::default(),
+            loaded: true,
+        };
+
+        for nb_latents in [-1, DRED_MAX_LATENTS as i32 + 1] {
+            let mut dred = OpusDred {
+                nb_latents,
+                process_stage: 1,
+                fec_features: [1.0; 2 * DRED_NUM_REDUNDANCY_FRAMES * DRED_NUM_FEATURES],
+                ..OpusDred::default()
+            };
+            let original_features = dred.fec_features;
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                decoder.process(&mut dred)
+            }));
+
+            assert!(
+                result.is_ok(),
+                "process panicked for nb_latents {nb_latents}"
+            );
+            assert_eq!(result.unwrap(), OPUS_BAD_ARG);
+            assert_eq!(dred.process_stage, 1);
+            assert_eq!(dred.fec_features, original_features);
+        }
     }
 
     // Test covering `compute_quantizer` unchanged (just to keep the
