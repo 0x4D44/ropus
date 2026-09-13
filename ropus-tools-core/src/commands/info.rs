@@ -787,7 +787,7 @@ fn format_output_gain(gain_q8: i16) -> String {
 /// `Hh` prefix for files over one hour. Minutes are omitted for sub-minute
 /// files. Matches opusinfo's display shape.
 fn format_playback_length(seconds: f64) -> String {
-    let total_secs = seconds;
+    let total_secs = (seconds * 100.0).round() / 100.0;
     let hours = (total_secs / 3600.0).floor() as u64;
     let after_hours = total_secs - (hours as f64) * 3600.0;
     let minutes = (after_hours / 60.0).floor() as u64;
@@ -1260,5 +1260,24 @@ mod tests {
             .expect("completed interleaved header packet");
         assert_eq!(packet.stream_serial(), completed_other);
         assert_eq!(packet.data.len(), 16);
+    }
+
+    #[test]
+    fn playback_length_rounds_before_minute_carry() {
+        let one_sample = 1.0 / 48_000.0;
+
+        assert_eq!(format_playback_length(60.0 - one_sample), "1m 0.00s");
+    }
+
+    #[test]
+    fn playback_length_rounds_before_hour_carry() {
+        let one_sample = 1.0 / 48_000.0;
+
+        assert_eq!(format_playback_length(3600.0 - one_sample), "1h 0m 0.00s");
+    }
+
+    #[test]
+    fn playback_length_preserves_sub_minute_shape() {
+        assert_eq!(format_playback_length(12.345), "12.35s");
     }
 }
