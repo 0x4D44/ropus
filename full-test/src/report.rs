@@ -57,6 +57,7 @@ fn setup_to_json(s: &SetupInfo) -> Value {
         "preflight": preflight_to_json(&s.preflight),
         "flags": {
             "quick": s.options_snapshot.quick,
+            "emit_json": s.options_snapshot.emit_json,
             "skip_quality": s.options_snapshot.skip_quality,
             "skip_coverage": s.options_snapshot.skip_coverage,
             "skip_benchmarks": s.options_snapshot.skip_benchmarks,
@@ -511,6 +512,7 @@ mod tests {
             6
         );
         assert_eq!(v["setup"]["flags"]["quick"], false);
+        assert_eq!(v["setup"]["flags"]["emit_json"], false);
         assert_eq!(v["setup"]["flags"]["release_preflight"], false);
 
         let checks = v["stages"]["quality"]["checks"].as_array().unwrap();
@@ -592,6 +594,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut setup = dummy_setup();
         setup.options_snapshot.quick = true;
+        setup.options_snapshot.emit_json = true;
         setup.options_snapshot.release_preflight = true;
         setup.preflight = crate::preflight::capture(
             tmp.path(),
@@ -634,6 +637,7 @@ mod tests {
         assert_eq!(dnn["status"], "missing_optional");
         assert_eq!(dnn["banner_blocking"], false);
         assert!(dnn["note"].as_str().unwrap().contains("not claimed"));
+        assert_eq!(v["setup"]["flags"]["emit_json"], true);
     }
 
     #[test]
