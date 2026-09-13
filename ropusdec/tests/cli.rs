@@ -412,6 +412,42 @@ fn stdin_opus_to_stdout_wav() {
 }
 
 #[test]
+fn clap_errors_escape_invalid_values_before_formatting() {
+    let hostile =
+        "not-a-number\u{0007}\u{001B}]0;title\u{0085}\u{009B}\r\n\u{061C}\u{200E}\u{200F}\u{202E}";
+    let output = Command::new(ropusdec_bin())
+        .args(["--no-color", "--gain", hostile, "input.opus"])
+        .output()
+        .expect("spawn ropusdec with invalid hostile gain");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!output.stderr.contains(&0));
+    assert!(!output.stderr.contains(&0x07));
+    assert!(!output.stderr.contains(&0x1B));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for escaped in [
+        r"\u{0007}",
+        r"\u{001B}",
+        r"\u{0085}",
+        r"\u{009B}",
+        r"\u{000D}",
+        r"\u{000A}",
+        r"\u{061C}",
+        r"\u{200E}",
+        r"\u{200F}",
+        r"\u{202E}",
+    ] {
+        assert!(stderr.contains(escaped), "missing {escaped} in {stderr:?}");
+    }
+    assert!(!stderr.chars().any(|c| {
+        matches!(
+            c,
+            '\u{0085}' | '\u{009B}' | '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202E}'
+        )
+    }));
+}
+
+#[test]
 fn stdin_opus_to_stdout_with_o_attached() {
     // Regression for the argv sniffer: `-o-` (short flag with attached `-`
     // value) must route the banner to stderr and leave stdout as the clean

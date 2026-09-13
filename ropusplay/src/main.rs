@@ -117,7 +117,7 @@ fn parse_args() -> Args {
     } else {
         ColorChoice::Auto
     };
-    let matches = command_with_color(color).get_matches();
+    let matches = ropus_tools_core::try_get_matches!(|| command_with_color(color));
     Args::from_arg_matches(&matches).expect("Clap already validated the command line")
 }
 

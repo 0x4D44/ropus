@@ -118,6 +118,42 @@ fn stdin_to_stdout_round_trip() {
 }
 
 #[test]
+fn clap_errors_escape_invalid_values_before_formatting() {
+    let hostile =
+        "not-a-number\u{0007}\u{001B}]0;title\u{0085}\u{009B}\r\n\u{061C}\u{200E}\u{200F}\u{202E}";
+    let output = Command::new(ropusenc_bin())
+        .args(["--no-color", "--bitrate", hostile, "input.wav"])
+        .output()
+        .expect("spawn ropusenc with invalid hostile bitrate");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!output.stderr.contains(&0));
+    assert!(!output.stderr.contains(&0x07));
+    assert!(!output.stderr.contains(&0x1B));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for escaped in [
+        r"\u{0007}",
+        r"\u{001B}",
+        r"\u{0085}",
+        r"\u{009B}",
+        r"\u{000D}",
+        r"\u{000A}",
+        r"\u{061C}",
+        r"\u{200E}",
+        r"\u{200F}",
+        r"\u{202E}",
+    ] {
+        assert!(stderr.contains(escaped), "missing {escaped} in {stderr:?}");
+    }
+    assert!(!stderr.chars().any(|c| {
+        matches!(
+            c,
+            '\u{0085}' | '\u{009B}' | '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202E}'
+        )
+    }));
+}
+
+#[test]
 fn stdin_to_stdout_round_trip_with_o_attached() {
     // Regression for the argv sniffer: clap accepts `-o-` as the short flag
     // with an attached `-` value. The earlier sniffer missed it and routed

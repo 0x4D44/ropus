@@ -79,6 +79,42 @@ fn run_ropusinfo(args: &[&str]) -> (String, String, i32) {
     (stdout, stderr, code)
 }
 
+#[test]
+fn clap_errors_escape_unknown_dash_argument_before_formatting() {
+    let hostile =
+        "--bad\u{0007}\u{001B}]0;title\u{0085}\u{009B}\r\n\u{061C}\u{200E}\u{200F}\u{202E}";
+    let output = Command::new(env!("CARGO_BIN_EXE_ropusinfo"))
+        .args(["--no-color", hostile])
+        .output()
+        .expect("spawn ropusinfo with unknown hostile argument");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!output.stderr.contains(&0));
+    assert!(!output.stderr.contains(&0x07));
+    assert!(!output.stderr.contains(&0x1B));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for escaped in [
+        r"\u{0007}",
+        r"\u{001B}",
+        r"\u{0085}",
+        r"\u{009B}",
+        r"\u{000D}",
+        r"\u{000A}",
+        r"\u{061C}",
+        r"\u{200E}",
+        r"\u{200F}",
+        r"\u{202E}",
+    ] {
+        assert!(stderr.contains(escaped), "missing {escaped} in {stderr:?}");
+    }
+    assert!(!stderr.chars().any(|c| {
+        matches!(
+            c,
+            '\u{0085}' | '\u{009B}' | '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202E}'
+        )
+    }));
+}
+
 fn ogg_crc32(page: &[u8]) -> u32 {
     const POLY: u32 = 0x04C1_1DB7;
     let mut crc = 0u32;

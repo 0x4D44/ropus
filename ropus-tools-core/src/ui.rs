@@ -62,10 +62,13 @@ fn is_terminal_control(c: char) -> bool {
     c.is_control()
         || matches!(
             c,
-            '\u{2028}'
+                '\u{2028}'
                 | '\u{2029}'
                 | '\u{202A}'..='\u{202E}'
                 | '\u{2066}'..='\u{2069}'
+                | '\u{061C}'
+                | '\u{200E}'
+                | '\u{200F}'
         )
 }
 
@@ -105,10 +108,10 @@ mod tests {
 
     #[test]
     fn escape_terminal_text_covers_c0_c1_and_backslash() {
-        let input = "ok\\line\0\x07\x1B]0;title\r\n\u{0085}\u{009B}\u{2028}\u{202E}31m";
+        let input = "ok\\line\0\x07\x1B]0;title\r\n\u{0085}\u{009B}\u{061C}\u{200E}\u{200F}\u{2028}\u{202E}31m";
         assert_eq!(
             escape_terminal_text(input),
-            r"ok\\line\u{0000}\u{0007}\u{001B}]0;title\u{000D}\u{000A}\u{0085}\u{009B}\u{2028}\u{202E}31m"
+            r"ok\\line\u{0000}\u{0007}\u{001B}]0;title\u{000D}\u{000A}\u{0085}\u{009B}\u{061C}\u{200E}\u{200F}\u{2028}\u{202E}31m"
         );
     }
 
