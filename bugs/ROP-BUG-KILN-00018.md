@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00018 — Control decoder subprocesses have no execution deadline
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-control/subprocess-supervision
 - **Raised:** 2026-08-16T07:50:04Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T142841Z-88e04929
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00018-run-verify-20260913T142841Z-88e04929
-- **Owner base:** f59274c7b5de0a13451ae21f634612a148b9e1eb
-- **Owner fingerprint:** sha256:561e208fe8c16b809b53a3d9d62daff34be19f77a154b6afd28966986f318980
-- **Owner since:** 2026-09-13T14:28:41Z
-- **Owner until:** 2026-09-13T16:28:41Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-16T07:50:04Z, raised via `deltic bugs new`) -> Fixed (2026-09-12T23:56:44Z, deltic:auto role=fix run=fix-20260912T235011Z-6ec2c4c6 branch=task/bug-ROP-BUG-KILN-00018-run-fix-20260912T235011Z-6ec2c4c6 code=89ff8918d856a2812318da2d1a9e3cada7074217 gate=manual)
+- **State history:** Open (2026-08-16T07:50:04Z, raised via `deltic bugs new`) -> Fixed (2026-09-12T23:56:44Z, deltic:auto role=fix run=fix-20260912T235011Z-6ec2c4c6 branch=task/bug-ROP-BUG-KILN-00018-run-fix-20260912T235011Z-6ec2c4c6 code=89ff8918d856a2812318da2d1a9e3cada7074217 gate=manual) -> Closed (2026-09-13T14:33:07Z, independent two-eyes verification on host CRUCIBLE, model=codex@xhigh, at origin/main 19c6ac33c0e5148c5443ea062567b0154ff05fc0; fixer was a different actor)
 
 ## Observation
 

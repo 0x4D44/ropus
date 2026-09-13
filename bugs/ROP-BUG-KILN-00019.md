@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00019 — Lossless control accepts incomplete matching PCM outputs
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-control/lossless-oracle
 - **Raised:** 2026-08-16T07:50:15Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T142914Z-2d9312c2
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00019-run-verify-20260913T142914Z-2d9312c2
-- **Owner base:** 45fe8d93b3b7f78ea399d27d23f2126562a13caf
-- **Owner fingerprint:** sha256:61ef5ae8eeb169794fa7f1c6d7d6b69f87e822ee1da93a737c098ccf0fdce73a
-- **Owner since:** 2026-09-13T14:29:14Z
-- **Owner until:** 2026-09-13T16:29:14Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-16T07:50:15Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T00:10:24Z, deltic:auto role=fix run=fix-20260912T235836Z-974d1259 branch=task/bug-ROP-BUG-KILN-00019-run-fix-20260912T235836Z-974d1259 code=cbb6717cb3939751f33866ad354d96a7c16dccc7 gate=manual)
+- **State history:** Open (2026-08-16T07:50:15Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T00:10:24Z, deltic:auto role=fix run=fix-20260912T235836Z-974d1259 branch=task/bug-ROP-BUG-KILN-00019-run-fix-20260912T235836Z-974d1259 code=cbb6717cb3939751f33866ad354d96a7c16dccc7 gate=manual) -> Closed (2026-09-13T14:33:07Z, independent two-eyes verification on host CRUCIBLE, model=codex@xhigh, at origin/main 19c6ac33c0e5148c5443ea062567b0154ff05fc0; fixer was a different actor)
 
 ## Observation
 
