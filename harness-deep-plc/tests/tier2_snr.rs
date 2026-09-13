@@ -196,8 +196,9 @@ fn decode_with_ropus(packets: &[Vec<u8>], drop_pattern: impl Fn(usize) -> bool) 
 }
 
 /// SNR of `test` relative to `ref_pcm`. Uses the standard formula:
-/// 10 * log10( mean(ref^2) / mean((test - ref)^2) ). Returns `f64::INFINITY`
-/// when the two signals are identical (zero noise).
+/// 10 * log10( mean(ref^2) / mean((test - ref)^2) ). Degenerate zero signal
+/// or zero noise returns `f64::NEG_INFINITY` so identical or silent output
+/// cannot pass a gate.
 fn compute_snr_db(ref_pcm: &[i16], test: &[i16]) -> f64 {
     assert_eq!(
         ref_pcm.len(),
@@ -218,10 +219,29 @@ fn compute_snr_db(ref_pcm: &[i16], test: &[i16]) -> f64 {
     let n = ref_pcm.len() as f64;
     signal_power /= n;
     noise_power /= n;
-    if noise_power == 0.0 {
-        return f64::INFINITY;
+    if signal_power == 0.0 || noise_power == 0.0 {
+        return f64::NEG_INFINITY;
     }
     10.0 * (signal_power / noise_power).log10()
+}
+
+#[cfg(test)]
+mod snr_tests {
+    use super::compute_snr_db;
+
+    #[test]
+    fn identical_non_silent_pcm_is_not_a_passing_snr() {
+        let pcm = [120i16, -240, 360];
+
+        assert_eq!(compute_snr_db(&pcm, &pcm), f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn both_silent_pcm_is_not_a_passing_snr() {
+        let silent = [0i16; 3];
+
+        assert_eq!(compute_snr_db(&silent, &silent), f64::NEG_INFINITY);
+    }
 }
 
 /// First sample index where the two signals diverge. Returns `None` when

@@ -245,8 +245,8 @@ fn decode_all_rust(packets: &[Vec<u8>]) -> Vec<i16> {
     out
 }
 
-/// Compute SNR in dB between two PCM streams. Returns +inf when they
-/// match exactly. Caller decides the threshold.
+/// Compute SNR in dB between two PCM streams. Degenerate zero-signal or
+/// zero-noise results return -inf so they cannot satisfy the release floor.
 fn snr_db(reference: &[i16], test: &[i16]) -> f64 {
     assert_eq!(reference.len(), test.len(), "SNR needs equal-length input");
     let mut sig: f64 = 0.0;
@@ -258,13 +258,32 @@ fn snr_db(reference: &[i16], test: &[i16]) -> f64 {
         let d = rf - tf;
         noise += d * d;
     }
-    if noise == 0.0 {
-        return f64::INFINITY;
-    }
     if sig == 0.0 {
         return f64::NEG_INFINITY;
     }
+    if noise == 0.0 {
+        return f64::NEG_INFINITY;
+    }
     10.0 * (sig / noise).log10()
+}
+
+#[cfg(test)]
+mod snr_tests {
+    use super::snr_db;
+
+    #[test]
+    fn identical_non_silent_pcm_is_not_a_passing_snr() {
+        let pcm = [120i16, -240, 360];
+
+        assert_eq!(snr_db(&pcm, &pcm), f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn both_silent_pcm_returns_negative_infinity() {
+        let silent = [0i16; 3];
+
+        assert_eq!(snr_db(&silent, &silent), f64::NEG_INFINITY);
+    }
 }
 
 /// Parse every packet in one stream and require at least one populated DRED
