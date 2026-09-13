@@ -6,15 +6,15 @@
 - **Area:** tools/automation-checkpoints
 - **Raised:** 2026-08-13T17:16:40Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T165823Z-d789baa1
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KILN-00001-run-verify-20260913T165823Z-d789baa1
+- **Owner base:** 8a9df8c5ed2bb03747c8d25e6679f83d1900fc42
+- **Owner fingerprint:** sha256:469e5650dca1fbaedfe5cb31fd58e9249a2741e6872ddf1d8b1e9b7f446d4aac
+- **Owner since:** 2026-09-13T16:58:23Z
+- **Owner until:** 2026-09-13T18:58:23Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
