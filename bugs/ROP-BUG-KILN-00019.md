@@ -27,6 +27,29 @@ Static review at origin/main a97b6f11. The lossy control requires exactly TOTAL_
 
 ## Fix
 
-<unfixed — raised only>
+Implemented in `harness-control/tests/control_snr.rs` and integrated at code
+commit `cbb6717cb3939751f33866ad354d96a7c16dccc7`.
+
+- `expected_frame_count` now requires input PCM to align to
+  `FRAME_SIZE * CHANNELS`; `encode_with_ropus` uses it instead of silently
+  truncating a partial final frame.
+- `assert_expected_packet_stream` requires the exact frame count and rejects
+  every empty packet. Both lossy and lossless controls call it directly.
+- `assert_exact_pcm_length` requires each decoder to produce exactly
+  `TOTAL_FRAMES * FRAME_SIZE * CHANNELS` samples before energy or SNR checks.
+  Both controls call it, so matching truncated PCM cannot pass the lossless
+  oracle.
+- Replaced the nonzero FNV-fingerprint checks with direct packet-shape checks
+  and added `control_shape_oracles_reject_truncated_data` for the two failure
+  shapes.
+
+Verification:
+
+- `$null | deltic timeout 180 cargo test -p ropus-harness-control --test control_snr control_shape_oracles_reject_truncated_data` — 1 passed, 0 failed.
+- `$null | deltic timeout 900 cargo test -p ropus-harness-control --test control_snr ctrl_fixed_vs_float_classical_snr_lossless -- --nocapture` — 1 passed, 0 failed; lossless SNR 90.14 dB and 96,000 output samples.
+- `$null | deltic timeout 900 cargo test -p ropus-harness-control --test control_snr ctrl_fixed_vs_float_classical_snr -- --nocapture` — 2 passed, 0 failed; lossy SNR 42.35 dB and 96,000 output samples.
+- `cargo check -p ropus-harness-control`, `cargo fmt --all -- --check`, and `git diff --check` — passed.
+- Red proof: temporarily made `assert_exact_pcm_length` a no-op; the focused shape test failed. The guard was restored before the green runs.
+- Test setup fetched the pinned C reference and DNN weights with `cargo run -p fetch-assets -- reference` and `cargo run -p fetch-assets -- weights`.
 
 ## Notes
