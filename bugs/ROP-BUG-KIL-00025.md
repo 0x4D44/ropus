@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00025 — peek.c layout mirror compiles without config.h and has no drift guard
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-deep-plc/shims
 - **Raised:** 2026-08-19T10:46:15Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T012600Z-05633c07
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00025-run-fix-20260913T012600Z-05633c07
-- **Owner base:** 17e7d4c7a19156e679244115c95c6d23670e8b17
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T01:26:00Z
-- **Owner until:** 2026-09-13T03:26:00Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-19T10:46:15Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-19T10:46:15Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T01:47:53Z, deltic:auto role=fix run=fix-20260913T012600Z-05633c07 branch=task/bug-ROP-BUG-KIL-00025-run-fix-20260913T012600Z-05633c07 code=57d33ac9f8d38de0adc600f1d25a9f9ce9ab449b gate=manual)
 
 ## Observation
 
