@@ -6,15 +6,15 @@
 - **Area:** ropus-tools-core/atomic-output
 - **Raised:** 2026-08-22T11:25:31Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T074833Z-168a90bc
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00056-run-fix-20260913T074833Z-168a90bc
+- **Owner base:** b23ede182e354981eaa0378472f169c5e26019d8
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T07:48:33Z
+- **Owner until:** 2026-09-13T09:48:33Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
