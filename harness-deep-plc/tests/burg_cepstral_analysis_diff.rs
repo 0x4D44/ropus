@@ -21,7 +21,22 @@
 use ropus::dnn::lpcnet::{FRAME_SIZE, NB_BANDS, burg_cepstral_analysis};
 use ropus_harness_deep_plc::ropus_test_burg_cepstral_analysis;
 
+#[path = "support/finite_oracle.rs"]
+#[allow(dead_code)] // The shared module also exposes slice-only guards.
+mod finite_oracle;
+use finite_oracle::assert_finite_pair;
+
 const NB_OUTPUTS: usize = 2 * NB_BANDS;
+
+fn first_f32_divergence(a: &[f32], b: &[f32]) -> Option<(usize, f32, f32)> {
+    assert_finite_pair("Burg cepstral differential output", a, b);
+    for (i, (&x, &y)) in a.iter().zip(b.iter()).enumerate() {
+        if x.to_bits() != y.to_bits() {
+            return Some((i, x, y));
+        }
+    }
+    None
+}
 
 fn run_diff(fixture_name: &str, x: &[f32; FRAME_SIZE]) {
     let mut ceps_rust = [0.0f32; NB_OUTPUTS];
@@ -32,16 +47,34 @@ fn run_diff(fixture_name: &str, x: &[f32; FRAME_SIZE]) {
         ropus_test_burg_cepstral_analysis(x.as_ptr(), ceps_c.as_mut_ptr());
     }
 
-    for i in 0..NB_OUTPUTS {
-        let r_bits = ceps_rust[i].to_bits();
-        let c_bits = ceps_c[i].to_bits();
+    if let Some((i, rust_value, c_value)) = first_f32_divergence(&ceps_rust, &ceps_c) {
+        let r_bits = rust_value.to_bits();
+        let c_bits = c_value.to_bits();
         assert_eq!(
             r_bits,
             c_bits,
             "fixture={fixture_name}: ceps[{i}] f32 bits differ (rust=0x{r_bits:08x} = {r:?}, c=0x{c_bits:08x} = {c:?})",
-            r = ceps_rust[i],
-            c = ceps_c[i],
+            r = rust_value,
+            c = c_value,
         );
+    }
+}
+
+#[cfg(test)]
+mod oracle_tests {
+    use super::first_f32_divergence;
+
+    #[test]
+    #[should_panic(expected = "non-finite")]
+    fn first_f32_divergence_rejects_same_nan() {
+        let nan = f32::NAN;
+        let _ = first_f32_divergence(&[nan], &[nan]);
+    }
+
+    #[test]
+    #[should_panic(expected = "equal lengths")]
+    fn first_f32_divergence_rejects_unequal_lengths() {
+        let _ = first_f32_divergence(&[0.0], &[]);
     }
 }
 

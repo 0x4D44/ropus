@@ -33,6 +33,11 @@ use ropus_harness_deep_plc::{
     ropus_test_dredenc_set_latents_buffer, ropus_test_dredenc_set_state_buffer,
 };
 
+#[path = "support/finite_oracle.rs"]
+#[allow(dead_code)] // The shared module also exposes slice-only guards.
+mod finite_oracle;
+use finite_oracle::assert_finite_pair;
+
 /// Deterministic xorshift-driven latent magnitudes. Mildly scaled so the
 /// quantiser produces a mix of positive, negative, and zero outputs.
 fn synth_float(seed: &mut u32) -> f32 {
@@ -44,14 +49,33 @@ fn synth_float(seed: &mut u32) -> f32 {
 }
 
 /// Convenience: index into `a` / `b` and return the first differing
-/// f32 (via `to_bits()` for NaN / -0.0 robustness). `None` if bit-exact.
+/// f32 (via `to_bits()` for -0.0 robustness). `None` if bit-exact.
 fn first_f32_divergence(a: &[f32], b: &[f32]) -> Option<(usize, f32, f32)> {
+    assert_finite_pair("DRED decoder differential output", a, b);
     for (i, (&x, &y)) in a.iter().zip(b.iter()).enumerate() {
         if x.to_bits() != y.to_bits() {
             return Some((i, x, y));
         }
     }
     None
+}
+
+#[cfg(test)]
+mod oracle_tests {
+    use super::first_f32_divergence;
+
+    #[test]
+    #[should_panic(expected = "non-finite")]
+    fn first_f32_divergence_rejects_same_nan() {
+        let nan = f32::NAN;
+        let _ = first_f32_divergence(&[nan], &[nan]);
+    }
+
+    #[test]
+    #[should_panic(expected = "equal lengths")]
+    fn first_f32_divergence_rejects_unequal_lengths() {
+        let _ = first_f32_divergence(&[0.0], &[]);
+    }
 }
 
 #[test]

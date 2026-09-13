@@ -36,6 +36,11 @@ use ropus_harness_deep_plc::{
     ropus_test_c_encoder_free, ropus_test_c_encoder_new,
 };
 
+#[path = "support/finite_oracle.rs"]
+#[allow(dead_code)] // The shared module also exposes pair-only guards.
+mod finite_oracle;
+use finite_oracle::assert_finite_slice;
+
 // ---------------------------------------------------------------------------
 // WAV utility + fixtures (copied from the 8.6 test — pure-tone input keeps
 // the VAD mostly active so DRED always has something to emit).
@@ -175,9 +180,22 @@ fn validate_rust_dred_frame(frame: usize, dred: &OpusDred) -> Result<bool, Strin
     Ok(true)
 }
 
+fn assert_live_fec_features(frame: usize, features: &[f32]) {
+    assert_finite_slice(&format!("fec_features on frame {frame}"), features);
+    let any_nonzero = features
+        .iter()
+        .any(|feature| feature.is_finite() && *feature != 0.0);
+    assert!(
+        any_nonzero,
+        "fec_features all-zero after process on frame {frame} — RDOVAE decoder not driven"
+    );
+}
+
 #[cfg(test)]
 mod validation_tests {
-    use super::{OpusDred, validate_c_parse_frame, validate_rust_dred_frame};
+    use super::{
+        OpusDred, assert_live_fec_features, validate_c_parse_frame, validate_rust_dred_frame,
+    };
 
     #[test]
     fn malformed_packet_after_valid_packet_is_not_masked() {
@@ -203,6 +221,17 @@ mod validation_tests {
     fn ordinary_packet_without_dred_is_valid_but_not_presence_evidence() {
         assert!(!validate_c_parse_frame(0, 0, 0, -1).unwrap());
         assert!(!validate_rust_dred_frame(0, &OpusDred::default()).unwrap());
+    }
+
+    #[test]
+    #[should_panic(expected = "non-finite")]
+    fn all_nan_fec_features_are_rejected() {
+        assert_live_fec_features(0, &[f32::NAN, f32::NAN]);
+    }
+
+    #[test]
+    fn finite_nonzero_fec_features_remain_presence_evidence() {
+        assert_live_fec_features(0, &[0.0, -1.0, 0.0]);
     }
 }
 
@@ -424,12 +453,7 @@ fn rust_encoder_decoder_dred_roundtrip() {
                 "process should succeed on parsed packet (frame {i})"
             );
             assert_eq!(dred.process_stage, 2);
-            // At least one feature must be nonzero on a live signal frame.
-            let any_nonzero = dred.fec_features.iter().any(|f| *f != 0.0);
-            assert!(
-                any_nonzero,
-                "fec_features all-zero after process on frame {i} — RDOVAE decoder not driven"
-            );
+            assert_live_fec_features(i, &dred.fec_features);
             found_with_latents = true;
         }
     }

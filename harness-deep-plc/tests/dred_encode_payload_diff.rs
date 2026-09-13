@@ -36,6 +36,11 @@ use ropus_harness_deep_plc::{
     ropus_test_dredenc_latents_buffer_fill, ropus_test_dredenc_new,
 };
 
+#[path = "support/finite_oracle.rs"]
+#[allow(dead_code)] // The shared module also exposes slice-only guards.
+mod finite_oracle;
+use finite_oracle::assert_finite_pair;
+
 /// Convert a 16-bit PCM sample to the f32 scale the DRED encoder expects
 /// (same convention `opus_encoder.c` uses — divide by 32768 before
 /// invoking `dred_compute_latents`).
@@ -139,12 +144,31 @@ fn first_byte_divergent(a: &[u8], b: &[u8]) -> Option<(usize, u8, u8)> {
 /// bit-exact. Used to diagnose where divergence starts (resampler vs
 /// features vs RDOVAE) when the payload bytes don't line up.
 fn first_f32_divergent(a: &[f32], b: &[f32]) -> Option<(usize, f32, f32)> {
+    assert_finite_pair("DRED encoder differential output", a, b);
     for (i, (&x, &y)) in a.iter().zip(b.iter()).enumerate() {
         if x.to_bits() != y.to_bits() {
             return Some((i, x, y));
         }
     }
     None
+}
+
+#[cfg(test)]
+mod oracle_tests {
+    use super::first_f32_divergent;
+
+    #[test]
+    #[should_panic(expected = "non-finite")]
+    fn first_f32_divergent_rejects_same_nan() {
+        let nan = f32::NAN;
+        let _ = first_f32_divergent(&[nan], &[nan]);
+    }
+
+    #[test]
+    #[should_panic(expected = "equal lengths")]
+    fn first_f32_divergent_rejects_unequal_lengths() {
+        let _ = first_f32_divergent(&[0.0], &[]);
+    }
 }
 
 #[test]
