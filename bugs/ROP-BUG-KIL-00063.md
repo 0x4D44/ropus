@@ -6,15 +6,15 @@
 - **Area:** ropusplay/terminal-layout
 - **Raised:** 2026-08-22T12:55:44Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T094216Z-e0af6809
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00063-run-fix-20260913T094216Z-e0af6809
+- **Owner base:** c7f93e6600c72503763acf2d26df151a0cab8526
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T09:42:16Z
+- **Owner until:** 2026-09-13T11:42:16Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
