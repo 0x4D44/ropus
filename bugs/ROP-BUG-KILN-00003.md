@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00003 — Coordinator can mark failed or collided reviews complete
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** tools/coordinator-review
 - **Raised:** 2026-08-13T17:17:35Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T042804Z-c2488a79
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00003-run-fix-20260913T042804Z-c2488a79
-- **Owner base:** 2317498964c1eb946d072e4f70dab95810123398
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T04:28:04Z
-- **Owner until:** 2026-09-13T06:28:04Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-13T17:17:35Z, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-08-13T17:17:35Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T04:32:34Z, deltic:auto role=fix run=fix-20260913T042804Z-c2488a79 branch=task/bug-ROP-BUG-KILN-00003-run-fix-20260913T042804Z-c2488a79 code=2fab4b0e9f54cc7b7e396b3c957836c8ac67319f gate=manual)
 
 ## Observation
 
