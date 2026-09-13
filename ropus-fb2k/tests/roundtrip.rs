@@ -34,6 +34,112 @@ use ropus_fb2k::{
     ROPUS_FB2K_UNSUPPORTED, RopusFb2kInfo, RopusFb2kIo, RopusFb2kReader,
 };
 
+fn build_header_sequence(
+    head_end: PacketWriteEndInfo,
+    head_granule: u64,
+    tags_serial: u32,
+    tags_end: PacketWriteEndInfo,
+    tags_granule: u64,
+) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut writer = PacketWriter::new(&mut bytes);
+    writer
+        .write_packet(
+            build_opus_head(2, 48_000, 312),
+            FIXTURE_STREAM_SERIAL,
+            head_end,
+            head_granule,
+        )
+        .expect("write OpusHead");
+    writer
+        .write_packet(
+            common::build_opus_tags("ropus-fb2k-test", &[]),
+            tags_serial,
+            tags_end,
+            tags_granule,
+        )
+        .expect("write OpusTags");
+    writer
+        .write_packet(
+            vec![0x00],
+            FIXTURE_STREAM_SERIAL,
+            PacketWriteEndInfo::EndStream,
+            960,
+        )
+        .expect("write audio packet");
+    drop(writer);
+    bytes
+}
+
+fn assert_header_rejected(bytes: Vec<u8>) {
+    let (_io, handle) = open_from_bytes(bytes);
+    assert!(
+        handle.is_null(),
+        "malformed header sequence must be rejected"
+    );
+    assert_eq!(
+        unsafe { ropus_fb2k::ropus_fb2k_last_error_code() },
+        ROPUS_FB2K_INVALID_STREAM,
+        "malformed header sequence must surface INVALID_STREAM: {}",
+        last_error_string()
+    );
+}
+
+#[test]
+fn open_rejects_id_header_not_alone_on_bos_page() {
+    assert_header_rejected(build_header_sequence(
+        PacketWriteEndInfo::NormalPacket,
+        0,
+        FIXTURE_STREAM_SERIAL,
+        PacketWriteEndInfo::EndPage,
+        0,
+    ));
+}
+
+#[test]
+fn open_rejects_nonzero_id_header_granule() {
+    assert_header_rejected(build_header_sequence(
+        PacketWriteEndInfo::EndPage,
+        1,
+        FIXTURE_STREAM_SERIAL,
+        PacketWriteEndInfo::EndPage,
+        0,
+    ));
+}
+
+#[test]
+fn open_rejects_nonzero_comment_header_granule() {
+    assert_header_rejected(build_header_sequence(
+        PacketWriteEndInfo::EndPage,
+        0,
+        FIXTURE_STREAM_SERIAL,
+        PacketWriteEndInfo::EndPage,
+        1,
+    ));
+}
+
+#[test]
+fn open_rejects_comment_header_on_different_stream() {
+    assert_header_rejected(build_header_sequence(
+        PacketWriteEndInfo::EndPage,
+        0,
+        FIXTURE_STREAM_SERIAL.wrapping_add(1),
+        PacketWriteEndInfo::EndPage,
+        0,
+    ));
+}
+
+#[test]
+fn open_rejects_comment_header_not_ending_page() {
+    assert_header_rejected(build_header_sequence(
+        PacketWriteEndInfo::EndPage,
+        0,
+        FIXTURE_STREAM_SERIAL,
+        PacketWriteEndInfo::NormalPacket,
+        0,
+    ));
+}
+
 // ---------------------------------------------------------------------------
 // Garbage input is rejected as INVALID_STREAM.
 // ---------------------------------------------------------------------------
@@ -365,7 +471,7 @@ fn open_enforces_metadata_packet_budget_at_public_boundary() {
     let mut writer = PacketWriter::new(&mut bytes);
     writer
         .write_packet(
-            build_opus_head(2, 48_000, 312),
+            build_opus_head(2, 48_000, 0),
             FIXTURE_STREAM_SERIAL,
             PacketWriteEndInfo::EndPage,
             0,
@@ -376,7 +482,7 @@ fn open_enforces_metadata_packet_budget_at_public_boundary() {
             at_limit,
             FIXTURE_STREAM_SERIAL,
             PacketWriteEndInfo::EndStream,
-            312,
+            0,
         )
         .expect("write metadata packet at limit");
     drop(writer);
@@ -394,7 +500,7 @@ fn open_enforces_metadata_packet_budget_at_public_boundary() {
     let mut writer = PacketWriter::new(&mut bytes);
     writer
         .write_packet(
-            build_opus_head(2, 48_000, 312),
+            build_opus_head(2, 48_000, 0),
             FIXTURE_STREAM_SERIAL,
             PacketWriteEndInfo::EndPage,
             0,
@@ -405,7 +511,7 @@ fn open_enforces_metadata_packet_budget_at_public_boundary() {
             over_limit,
             FIXTURE_STREAM_SERIAL,
             PacketWriteEndInfo::EndStream,
-            312,
+            0,
         )
         .expect("write oversized metadata packet");
     drop(writer);

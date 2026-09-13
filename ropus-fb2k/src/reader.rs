@@ -513,6 +513,16 @@ impl<R: Read + Seek> OggOpusReader<R> {
         let head_pkt = packet_reader
             .read_packet()?
             .ok_or_else(|| ReaderError::InvalidStream("empty stream".into()))?;
+        if !head_pkt.first_in_stream()
+            || !head_pkt.first_in_page()
+            || !head_pkt.last_in_page()
+            || head_pkt.last_in_stream()
+            || head_pkt.absgp_page() != 0
+        {
+            return Err(ReaderError::InvalidStream(
+                "OpusHead must be the sole packet on the BOS page with granule 0".into(),
+            ));
+        }
         let stream_serial = head_pkt.stream_serial();
         let head = parse_opus_head(&head_pkt.data)?;
 
@@ -533,6 +543,16 @@ impl<R: Read + Seek> OggOpusReader<R> {
         let tags_pkt = packet_reader
             .read_packet()?
             .ok_or_else(|| ReaderError::InvalidStream("missing OpusTags page".into()))?;
+        if tags_pkt.stream_serial() != stream_serial
+            || tags_pkt.first_in_stream()
+            || !tags_pkt.last_in_page()
+            || tags_pkt.absgp_page() != 0
+        {
+            return Err(ReaderError::InvalidStream(
+                "OpusTags must be the second stream packet, finish its page, and have granule 0"
+                    .into(),
+            ));
+        }
         let tags = tags::parse(&tags_pkt.data)?;
         packet_reader.set_audio_mode();
 
@@ -1626,9 +1646,8 @@ fn ogg_page_crc32(page: &[u8]) -> u32 {
     crc
 }
 
-/// Parse the first 19 bytes of an OpusHead packet. Deliberately accepts any
-/// `version >= 1` because `OpusHead` was designed to be forward-compatible
-/// by bumping the *high* nibble only (RFC 7845 sec. 5.1).
+/// Parse the fixed OpusHead prefix. Version 1 family-0 packets are exactly
+/// 19 bytes; later compatible minor versions may append extension fields.
 fn parse_opus_head(data: &[u8]) -> Result<OpusHead, ReaderError> {
     if data.len() < OPUS_HEAD_MIN_LEN {
         return Err(ReaderError::InvalidStream(format!(
@@ -1648,6 +1667,11 @@ fn parse_opus_head(data: &[u8]) -> Result<OpusHead, ReaderError> {
         return Err(ReaderError::Unsupported(format!(
             "OpusHead version 0x{version:02x} unsupported"
         )));
+    }
+    if version == 1 && data[18] == SUPPORTED_MAPPING_FAMILY && data.len() != OPUS_HEAD_MIN_LEN {
+        return Err(ReaderError::InvalidStream(
+            "version-1 family-0 OpusHead must be exactly 19 bytes".into(),
+        ));
     }
     Ok(OpusHead {
         version,
@@ -1715,6 +1739,23 @@ mod tests {
         h[8] = 0x10; // major nibble set
         let err = parse_opus_head(&h).unwrap_err();
         assert!(matches!(err, ReaderError::Unsupported(_)));
+    }
+
+    #[test]
+    fn parse_opus_head_rejects_trailing_bytes_for_version_one() {
+        let mut h = build_opus_head(2, 312, 0);
+        h.push(0xA5);
+        let err = parse_opus_head(&h).unwrap_err();
+        assert!(matches!(err, ReaderError::InvalidStream(_)));
+    }
+
+    #[test]
+    fn parse_opus_head_accepts_minor_version_extensions() {
+        let mut h = build_opus_head(2, 312, 0);
+        h[8] = 2;
+        h.extend_from_slice(&[0xA5, 0x5A]);
+        let parsed = parse_opus_head(&h).expect("minor-version extensions are compatible");
+        assert_eq!(parsed.version, 2);
     }
 
     #[test]
