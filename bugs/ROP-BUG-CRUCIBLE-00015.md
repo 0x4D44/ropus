@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00015 — Ambisonics parse failures render as zero failures in HTML
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** full-test/html-report
 - **Raised:** 2026-08-14T15:50:30Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T042425Z-28ef7170
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00015-run-fix-20260913T042425Z-28ef7170
-- **Owner base:** 2045230d1eaa7ed20ea346721ff8d871cff756e5
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T04:24:25Z
-- **Owner until:** 2026-09-13T06:24:25Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T15:50:30Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-08-14T15:50:30Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T04:29:12Z, deltic:auto role=fix run=fix-20260913T042425Z-28ef7170 branch=task/bug-ROP-BUG-CRUCIBLE-00015-run-fix-20260913T042425Z-28ef7170 code=f1d39d9fecbcfd47d9afd9ac3e55801171a6d472 gate=manual)
 
 ## Observation
 
