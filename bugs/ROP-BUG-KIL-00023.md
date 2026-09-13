@@ -27,6 +27,26 @@ Static review. Three test files run bit-exact `to_bits()` comparisons without th
 
 ## Fix
 
-<unfixed — raised only>
+Implemented in four `harness-deep-plc/tests/` files and integrated at code
+commit `c0715f0560034ad0fec0130c652d9ce808d718b7`.
+
+- Added the shared `finite_oracle::assert_finite_pair` guard to the DRED decode,
+  DRED encode, and Burg cepstral comparison helpers. It rejects non-finite
+  values before `to_bits()` parity checks and rejects unequal lengths before
+  `.zip()` can truncate the comparison.
+- Hardened the integrated DRED decoder check with
+  `finite_oracle::assert_finite_slice` and a finite nonzero-feature predicate,
+  so all-NaN features cannot satisfy the liveness gate.
+- Added focused same-NaN and unequal-length helper tests, plus finite-feature
+  acceptance and all-NaN rejection tests. The existing ignored encoder parity
+  gate remains ignored for its documented LPCNet drift, but its helper is now
+  protected when explicitly run.
+
+Verification:
+
+- `$null | deltic timeout 900 cargo test -p ropus-harness-deep-plc --test dred_decode_payload_diff --test dred_encode_payload_diff --test burg_cepstral_analysis_diff --test dred_integrated_encode` — 32 passed, 0 failed; 1 existing encoder parity test remained ignored.
+- `$null | deltic timeout 900 cargo check -p ropus-harness-deep-plc`, `cargo fmt --all -- --check`, and `git diff --check` — passed.
+- Red proof: temporarily removed the finite guard from the Burg helper; its same-NaN and unequal-length `#[should_panic]` tests failed. Removing the integrated finite-slice guard also made `all_nan_fec_features_are_rejected` fail at the weaker all-zero assertion. Both guards were restored before the green suite.
+- Test setup fetched the pinned C reference and DNN weights with `cargo run -p fetch-assets -- all`.
 
 ## Notes
