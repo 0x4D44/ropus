@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00041 — fb2k applies malformed R128 gain tags
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Could
 - **Severity:** Medium
 - **Area:** ropus-fb2k/tags
 - **Raised:** 2026-08-22T06:10:46Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T054837Z-0da42b8a
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00041-run-fix-20260913T054837Z-0da42b8a
-- **Owner base:** 2526066650a1e8d05af96ae4dae5a24b8ba51c04
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T05:48:37Z
-- **Owner until:** 2026-09-13T07:48:37Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T06:10:46Z, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-08-22T06:10:46Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T05:59:53Z, deltic:auto role=fix run=fix-20260913T054837Z-0da42b8a branch=task/bug-ROP-BUG-KIL-00041-run-fix-20260913T054837Z-0da42b8a code=4218c1a0f206d87739a7ae291331f25c1035d496 gate=manual)
 
 ## Observation
 
