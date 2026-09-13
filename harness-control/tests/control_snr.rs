@@ -110,14 +110,65 @@ fn synth_reference_pcm() -> Vec<i16> {
     pcm
 }
 
+fn expected_frame_count(input_samples: usize) -> usize {
+    let frame_samples = FRAME_SIZE as usize * CHANNELS as usize;
+    assert!(
+        input_samples.is_multiple_of(frame_samples),
+        "input PCM length {input_samples} is not aligned to {frame_samples} samples per frame"
+    );
+    input_samples / frame_samples
+}
+
+fn expected_pcm_samples() -> usize {
+    (TOTAL_FRAMES as usize) * (FRAME_SIZE as usize) * (CHANNELS as usize)
+}
+
+fn assert_expected_packet_stream(label: &str, input_samples: usize, packets: &[Vec<u8>]) {
+    assert_eq!(
+        packets.len(),
+        expected_frame_count(input_samples),
+        "{label} emitted an unexpected packet count"
+    );
+    assert!(
+        packets.iter().all(|packet| !packet.is_empty()),
+        "{label} emitted an empty packet"
+    );
+}
+
+fn assert_exact_pcm_length(label: &str, pcm: &[i16]) {
+    assert_eq!(
+        pcm.len(),
+        expected_pcm_samples(),
+        "{label} output length is inconsistent with expected frames*frame_size*channels"
+    );
+}
+
+#[test]
+fn control_shape_oracles_reject_truncated_data() {
+    let expected_samples = expected_pcm_samples();
+    let truncated_pcm = vec![0i16; expected_samples - 1];
+    assert!(
+        std::panic::catch_unwind(|| assert_exact_pcm_length("truncated", &truncated_pcm)).is_err()
+    );
+
+    let mut packets = vec![vec![1u8]; expected_frame_count(expected_samples)];
+    packets.pop();
+    assert!(
+        std::panic::catch_unwind(|| {
+            assert_expected_packet_stream("truncated", expected_samples, &packets)
+        })
+        .is_err()
+    );
+}
+
 fn encode_with_ropus(pcm: &[i16]) -> Vec<Vec<u8>> {
     let mut enc =
         OpusEncoder::new(FS, CHANNELS, OPUS_APPLICATION_VOIP).expect("ropus encoder_create failed");
     assert_eq!(enc.set_bitrate(BITRATE), OPUS_OK);
     assert_eq!(enc.set_complexity(ENC_COMPLEXITY), OPUS_OK);
 
-    let frame_samples = FRAME_SIZE as usize;
-    let expected_frames = pcm.len() / frame_samples;
+    let frame_samples = FRAME_SIZE as usize * CHANNELS as usize;
+    let expected_frames = expected_frame_count(pcm.len());
     let mut packets = Vec::with_capacity(expected_frames);
     for frame_idx in 0..expected_frames {
         let start = frame_idx * frame_samples;
@@ -576,6 +627,7 @@ fn ctrl_fixed_vs_float_classical_snr() {
     // 1. Reference PCM + encode — identical to tier2_snr.rs's preamble.
     let pcm_in = synth_reference_pcm();
     let packets = encode_with_ropus(&pcm_in);
+    assert_expected_packet_stream("lossy control", pcm_in.len(), &packets);
     assert_eq!(
         packets.len() as i32,
         TOTAL_FRAMES,
@@ -599,10 +651,6 @@ fn ctrl_fixed_vs_float_classical_snr() {
         "control input is not energetic enough: mean-square={input_energy:.1}"
     );
     let packet_fingerprint = packet_stream_fingerprint(&packets);
-    assert_ne!(
-        packet_fingerprint, 0,
-        "encoded control packet stream is empty"
-    );
 
     // 2. Write packets to a tempfile. Both decoders read the same bytes so
     // there's no chance the two sides see a different frame-by-frame stream.
@@ -644,18 +692,9 @@ fn ctrl_fixed_vs_float_classical_snr() {
     // 4. Read back + compute SNR.
     let pcm_fixed = read_pcm_file(&fixed_pcm_path).expect("read fixed pcm");
     let pcm_float = read_pcm_file(&float_pcm_path).expect("read float pcm");
-    assert_eq!(
-        pcm_fixed.len(),
-        pcm_float.len(),
-        "PCM lengths differ: fixed={} float={}",
-        pcm_fixed.len(),
-        pcm_float.len()
-    );
-    assert_eq!(
-        pcm_fixed.len(),
-        (TOTAL_FRAMES as usize) * (FRAME_SIZE as usize) * (CHANNELS as usize),
-        "PCM length inconsistent with expected frames*frame_size*channels"
-    );
+    assert_exact_pcm_length("lossy fixed", &pcm_fixed);
+    assert_exact_pcm_length("lossy float", &pcm_float);
+    assert_eq!(pcm_fixed.len(), pcm_float.len(), "lossy PCM lengths differ");
     let fixed_energy = mean_square_energy(&pcm_fixed);
     let float_energy = mean_square_energy(&pcm_float);
     assert!(
@@ -697,15 +736,12 @@ fn ctrl_fixed_vs_float_classical_snr_lossless() {
 
     let pcm_in = synth_reference_pcm();
     let packets = encode_with_ropus(&pcm_in);
+    assert_expected_packet_stream("lossless control", pcm_in.len(), &packets);
     assert!(
         mean_square_energy(&pcm_in) > CONTROL_SIGNAL_MIN_MEAN_SQUARE,
         "lossless control input is not energetic"
     );
     let packet_fingerprint = packet_stream_fingerprint(&packets);
-    assert_ne!(
-        packet_fingerprint, 0,
-        "encoded lossless packet stream is empty"
-    );
 
     let tmp = ctrl_tmp_dir();
     let packets_path = tmp.path().join("ctrl_packets_lossless.bin");
@@ -737,6 +773,13 @@ fn ctrl_fixed_vs_float_classical_snr_lossless() {
 
     let pcm_fixed = read_pcm_file(&fixed_pcm_path).expect("read fixed pcm");
     let pcm_float = read_pcm_file(&float_pcm_path).expect("read float pcm");
+    assert_exact_pcm_length("lossless fixed", &pcm_fixed);
+    assert_exact_pcm_length("lossless float", &pcm_float);
+    assert_eq!(
+        pcm_fixed.len(),
+        pcm_float.len(),
+        "lossless PCM lengths differ"
+    );
     let snr = compute_snr_db(&pcm_float, &pcm_fixed);
     let first_diverge = first_divergent(&pcm_float, &pcm_fixed);
     let fixed_energy = mean_square_energy(&pcm_fixed);
