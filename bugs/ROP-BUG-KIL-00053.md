@@ -6,15 +6,15 @@
 - **Area:** ropus/opus-dred
 - **Raised:** 2026-08-22T08:29:02Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T072248Z-cd39eaea
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00053-run-fix-20260913T072248Z-cd39eaea
+- **Owner base:** 100dea6292e75ad2f44762947829f369d7134bc5
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T07:22:48Z
+- **Owner until:** 2026-09-13T09:22:48Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
