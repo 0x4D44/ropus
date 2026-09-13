@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00002 — Coordinator targets obsolete paths and a nonexistent integration test
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** tools/coordinator-layout
 - **Raised:** 2026-08-13T17:17:34Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T041557Z-7a283f3a
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00002-run-fix-20260913T041557Z-7a283f3a
-- **Owner base:** 4eb9b98c56adb5d27a51e3feb34fc2be8ac8ff67
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T04:15:57Z
-- **Owner until:** 2026-09-13T06:15:57Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-13T17:17:34Z, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-08-13T17:17:34Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T04:26:58Z, deltic:auto role=fix run=fix-20260913T041557Z-7a283f3a branch=task/bug-ROP-BUG-KILN-00002-run-fix-20260913T041557Z-7a283f3a code=6adf91311c54ae19fb2c9fb3cc856db956a56142 gate=manual)
 
 ## Observation
 
