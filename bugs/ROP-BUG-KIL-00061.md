@@ -6,15 +6,15 @@
 - **Area:** ropusplay/tests
 - **Raised:** 2026-08-22T12:55:34Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T141503Z-a056b67d
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00061-run-fix-20260913T141503Z-a056b67d
+- **Owner base:** 7ef00c4ae45f4b7ff38329d45424f4d71a54386f
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T14:15:03Z
+- **Owner until:** 2026-09-13T16:15:03Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
