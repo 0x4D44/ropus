@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00039 — fb2k decode FFI constructs slices from an unchecked caller length
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** ropus-fb2k/ffi
 - **Raised:** 2026-08-22T06:10:46Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T053344Z-b3540b17
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00039-run-fix-20260913T053344Z-b3540b17
-- **Owner base:** 49ede9c4ccd2e32a28b28b2a996e1d30dc93c684
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T05:33:44Z
-- **Owner until:** 2026-09-13T07:33:44Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T06:10:46Z, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-08-22T06:10:46Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T05:47:02Z, deltic:auto role=fix run=fix-20260913T053344Z-b3540b17 branch=task/bug-ROP-BUG-KIL-00039-run-fix-20260913T053344Z-b3540b17 code=52e564d49df573c6848bbd7fefb3cbd1e8e3a6dd gate=manual)
 
 ## Observation
 
