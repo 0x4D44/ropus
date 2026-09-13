@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00038 — fb2k float decode allocates on every audio packet
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-fb2k/realtime
 - **Raised:** 2026-08-22T06:10:45Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T052001Z-4b7e6dfe
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00038-run-fix-20260913T052001Z-4b7e6dfe
-- **Owner base:** 63d3232c384c0abc52325f84425396b40f2d5fda
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T05:20:01Z
-- **Owner until:** 2026-09-13T07:20:01Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T06:10:45Z, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-08-22T06:10:45Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T05:41:32Z, deltic:auto role=fix run=fix-20260913T052001Z-4b7e6dfe branch=task/bug-ROP-BUG-KIL-00038-run-fix-20260913T052001Z-4b7e6dfe code=f77319fd27aca6843cde9a0bedb150a1d9182d66 gate=manual)
 
 ## Observation
 
