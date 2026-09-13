@@ -53,8 +53,20 @@ fn proj_enc_size_for(channels: c_int) -> c_int {
     16 * 1024 * channels.max(1)
 }
 
-fn proj_dec_size_for(streams: c_int) -> c_int {
-    16 * 1024 * streams.max(1)
+fn valid_projection_decoder_dimensions(
+    channels: c_int,
+    streams: c_int,
+    coupled_streams: c_int,
+) -> bool {
+    (1..=255).contains(&channels)
+        && streams >= 1
+        && coupled_streams >= 0
+        && coupled_streams <= streams
+        && streams <= 255 - coupled_streams
+}
+
+fn proj_dec_size_for(streams: c_int) -> Option<c_int> {
+    streams.checked_mul(16 * 1024)
 }
 
 fn alloc_enc_handle_storage() -> Option<*mut OpusProjectionEncoderHandle> {
@@ -431,14 +443,10 @@ pub unsafe extern "C" fn opus_projection_decoder_get_size(
     coupled_streams: c_int,
 ) -> c_int {
     ffi_guard!(0, {
-        if streams < 1
-            || coupled_streams < 0
-            || coupled_streams > streams
-            || !(1..=255).contains(&channels)
-        {
+        if !valid_projection_decoder_dimensions(channels, streams, coupled_streams) {
             return 0;
         }
-        proj_dec_size_for(streams)
+        proj_dec_size_for(streams).unwrap_or(0)
     })
 }
 
@@ -620,4 +628,27 @@ pub unsafe extern "C" fn opus_projection_decode_float(
         }
         OPUS_UNIMPLEMENTED
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{opus_projection_decoder_get_size, proj_dec_size_for};
+
+    #[test]
+    fn projection_decoder_size_rejects_impossible_stream_counts() {
+        assert!(unsafe { opus_projection_decoder_get_size(1, 255, 0) } > 0);
+        assert_eq!(unsafe { opus_projection_decoder_get_size(1, 256, 0) }, 0);
+        assert!(unsafe { opus_projection_decoder_get_size(1, 254, 1) } > 0);
+        assert_eq!(unsafe { opus_projection_decoder_get_size(1, 255, 1) }, 0);
+        assert_eq!(
+            unsafe { opus_projection_decoder_get_size(1, i32::MAX, 0) },
+            0
+        );
+    }
+
+    #[test]
+    fn projection_decoder_size_checks_storage_size_overflow() {
+        assert_eq!(proj_dec_size_for(131_071), Some(2_147_467_264));
+        assert_eq!(proj_dec_size_for(131_072), None);
+    }
 }
