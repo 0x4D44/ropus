@@ -458,7 +458,12 @@ fn render_phase_summary(out: &mut String, ctx: &ReportContext<'_>) {
     } else {
         let total = a.per_order.len() as u32;
         let passed = a.per_order.iter().filter(|o| o.passed).count() as u32;
-        (total, passed, total - passed)
+        let failed = if total == 0 && !a.overall_pass {
+            1
+        } else {
+            total - passed
+        };
+        (total, passed, failed)
     };
     let a_failed_disp = if a.build_failed {
         "build-failed".to_string()
@@ -1437,6 +1442,36 @@ mod tests {
                 "<td class=\"num\">2</td><td class=\"num\">0</td><td class=\"num warn\">warn</td><td class=\"num\">2</td>"
             ),
             "unchecked inventory targets must be skipped, not passed: {row}"
+        );
+    }
+
+    #[test]
+    fn phase_summary_marks_ambisonics_no_summary_failure() {
+        let opts = Options::default();
+        let q = quality_ok();
+        let t = populated_tests();
+        let a = AmbisonicsResult {
+            skipped: false,
+            skip_reason: None,
+            build_failed: false,
+            duration_ms: 1,
+            overall_pass: false,
+            per_order: Vec::new(),
+        };
+        let b = bench_ok();
+        let c = ctx(Banner::Fail, &opts, &q, &t, &a, &b);
+        let mut html = String::new();
+        render_phase_summary(&mut html, &c);
+        let row = html
+            .lines()
+            .find(|line| line.contains("<td>Ambisonics</td>"))
+            .expect("ambisonics phase summary row");
+
+        assert!(
+            row.contains(
+                "<td class=\"num\">0</td><td class=\"num\">0</td><td class=\"num fail\">1</td>"
+            ),
+            "an enabled Ambisonics failure without order rows must be visible: {row}"
         );
     }
 
