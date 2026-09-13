@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00052 — Public FEC queue accepts short vectors and overflows its fixed capacity
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus/dnn-fec
 - **Raised:** 2026-08-22T08:28:50Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T072127Z-e1d5e2fc
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00052-run-fix-20260913T072127Z-e1d5e2fc
-- **Owner base:** 80d762b57ac42d298dcb75f9535b8b2a831ccfb8
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T07:21:27Z
-- **Owner until:** 2026-09-13T09:21:27Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T08:28:50Z, raised via `deltic bugs new` model=gpt-5.6-sol@max)
+- **State history:** Open (2026-08-22T08:28:50Z, raised via `deltic bugs new` model=gpt-5.6-sol@max) -> Fixed (2026-09-13T07:36:07Z, deltic:auto role=fix run=fix-20260913T072127Z-e1d5e2fc branch=task/bug-ROP-BUG-KIL-00052-run-fix-20260913T072127Z-e1d5e2fc code=3fd7739a39901394fa321119b739b049d3418f43 gate=manual)
 
 ## Observation
 
