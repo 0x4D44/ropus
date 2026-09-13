@@ -645,7 +645,7 @@ pub fn run(profile: BenchProfile) -> BenchResult {
     // One-time build of `ropus-compare`. Spawning `cargo run` per vector
     // round-trips through cargo's lock each time; a single prebuild keeps
     // the hot loop pure process invocations.
-    if let Some(err) = prebuild_ropus_compare() {
+    if let Some(err) = prebuild_ropus_compare(&root) {
         let duration_ms = start.elapsed().as_millis() as u64;
         eprintln!("  {} ropus-compare build failed: {err}", "BUILD-FAIL".red());
         return BenchResult {
@@ -817,13 +817,14 @@ fn release_row_issue(row: &VectorBench, threshold: Option<&ThresholdSpec>) -> Op
 
 /// Prebuild `ropus-compare` in release mode. Returns `Some(err)` on failure
 /// so the caller can short-circuit the per-vector loop.
-fn prebuild_ropus_compare() -> Option<String> {
+fn prebuild_ropus_compare(root: &Path) -> Option<String> {
     // `CARGO_TERM_COLOR=never` suppresses ANSI escapes in cargo's own output
     // regardless of terminal detection on the developer box. Keeps stderr
     // parsing (e.g. `detect_build_failure`) robust.
     let mut command = Command::new("cargo");
     command
         .env("CARGO_TERM_COLOR", "never")
+        .current_dir(root)
         .args(["build", "--release", "--bin", "ropus-compare"]);
     let output = crate::process_capture::output(&mut command);
     match output {
@@ -849,13 +850,31 @@ fn prebuild_ropus_compare() -> Option<String> {
 /// Location of the prebuilt `ropus-compare` binary. Windows uses `.exe`; Unix
 /// doesn't. Matching `bench_sweep.sh`'s `ropus-compare.exe` suffix on Windows.
 fn ropus_compare_path(root: &Path) -> PathBuf {
-    let mut p = root.join("target").join("release");
+    ropus_compare_path_with_target(root, configured_target_dir().as_deref())
+}
+
+fn ropus_compare_path_with_target(root: &Path, configured: Option<&Path>) -> PathBuf {
+    let mut p = resolve_target_dir(root, configured).join("release");
     if cfg!(windows) {
         p.push("ropus-compare.exe");
     } else {
         p.push("ropus-compare");
     }
     p
+}
+
+fn resolve_target_dir(root: &Path, configured: Option<&Path>) -> PathBuf {
+    match configured {
+        Some(path) if path.is_absolute() => path.to_path_buf(),
+        Some(path) => root.join(path),
+        None => root.join("target"),
+    }
+}
+
+fn configured_target_dir() -> Option<PathBuf> {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 /// Run a single vector through `ropus-compare bench` and parse the timings.
@@ -1562,5 +1581,34 @@ thread 'main' panicked at 'decode crash'
         }
         assert!(s.contains("target"));
         assert!(s.contains("release"));
+    }
+
+    #[test]
+    fn custom_target_dir_is_resolved_from_workspace_root() {
+        let root = Path::new("workspace");
+        let custom = Path::new("custom-target");
+        assert_eq!(
+            resolve_target_dir(root, Some(custom)),
+            root.join(custom),
+            "relative CARGO_TARGET_DIR must be rooted at the workspace"
+        );
+        let path = ropus_compare_path_with_target(root, Some(custom));
+        let expected_name = if cfg!(windows) {
+            "ropus-compare.exe"
+        } else {
+            "ropus-compare"
+        };
+        assert_eq!(
+            path,
+            root.join(custom).join("release").join(expected_name),
+            "binary lookup must follow the custom Cargo target directory"
+        );
+
+        let absolute = std::env::temp_dir().join("ropus-custom-target");
+        assert_eq!(
+            resolve_target_dir(root, Some(&absolute)),
+            absolute,
+            "absolute CARGO_TARGET_DIR must not be rebased"
+        );
     }
 }
