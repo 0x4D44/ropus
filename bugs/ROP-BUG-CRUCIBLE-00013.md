@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00013 — ANSI-colored Cargo diagnostics disappear from full-test reports
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** full-test/diagnostics
 - **Raised:** 2026-08-14T15:50:28Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T040222Z-7a6d28d7
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00013-run-fix-20260913T040222Z-7a6d28d7
-- **Owner base:** a24b5428d6b49ae6e5102f71bd308d6b9f6c43cc
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T04:02:22Z
-- **Owner until:** 2026-09-13T06:02:22Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T15:50:28Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-08-14T15:50:28Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T04:14:38Z, deltic:auto role=fix run=fix-20260913T040222Z-7a6d28d7 branch=task/bug-ROP-BUG-CRUCIBLE-00013-run-fix-20260913T040222Z-7a6d28d7 code=5f696be1c74754fc5f36f3cf384465aed2102a3d gate=manual)
 
 ## Observation
 
