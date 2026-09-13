@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00063 — Playback status overflows very narrow terminals
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** ropusplay/terminal-layout
 - **Raised:** 2026-08-22T12:55:44Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T094216Z-e0af6809
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00063-run-fix-20260913T094216Z-e0af6809
-- **Owner base:** c7f93e6600c72503763acf2d26df151a0cab8526
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T09:42:16Z
-- **Owner until:** 2026-09-13T11:42:16Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T12:55:44Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-22T12:55:44Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T09:52:27Z, deltic:auto role=fix run=fix-20260913T094216Z-e0af6809 branch=task/bug-ROP-BUG-KIL-00063-run-fix-20260913T094216Z-e0af6809 code=7d4e806110910f6ca3ab36316fb518e93d38f069 gate=manual)
 
 ## Observation
 
