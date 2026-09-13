@@ -232,8 +232,25 @@ fn collect_summary(input: &std::path::Path, retain_packets: bool) -> Result<Info
 
     let mut packet_idx: u64 = 0;
     while let Some(pkt) = reader.read_packet()? {
-        validate_opus_audio_packet(&pkt.data)
-            .with_context(|| format!("validating Opus audio packet {packet_idx}"))?;
+        if let Err(error) = validate_opus_audio_packet(&pkt.data) {
+            if pkt.data.is_empty() || retain_packets {
+                return Err(error)
+                    .with_context(|| format!("validating Opus audio packet {packet_idx}"));
+            }
+
+            // Default human output may retain a labelled estimate when a
+            // malformed nonempty packet cannot contribute decoded samples.
+            // Extended output and strict queries take the error path above.
+            packet_errors += 1;
+            eprintln!(
+                "{} packet {}: {}",
+                "warning:".yellow(),
+                packet_idx,
+                escape_terminal_text(&error.to_string())
+            );
+            packet_idx += 1;
+            continue;
+        }
         let b0 = pkt.data.first().copied().unwrap_or(0);
         let b1 = pkt.data.get(1).copied();
         if let Some(tocs) = packets.as_mut() {
@@ -365,12 +382,18 @@ fn print_extended(s: &InfoSummary) {
             .unwrap_or_else(|| "?".to_string());
         // Per-frame duration * frame count = packet duration. Use integer
         // arithmetic on cms so we avoid float-format drift; print the sum as a
-        // trimmed ms value when the total is a whole ms.
-        let total_cms = (toc.frame_size_cms as u64) * toc.frames.unwrap_or(1) as u64;
-        let dur_str = if total_cms.is_multiple_of(100) {
-            format!("{}ms", total_cms / 100)
-        } else {
-            format!("{}.{}ms", total_cms / 100, (total_cms % 100) / 10)
+        // trimmed ms value when the total is a whole ms. Keep the duration
+        // unknown if a future TOC source cannot provide its frame count.
+        let dur_str = match toc.frames {
+            Some(frames) => {
+                let total_cms = (toc.frame_size_cms as u64) * u64::from(frames);
+                if total_cms.is_multiple_of(100) {
+                    format!("{}ms", total_cms / 100)
+                } else {
+                    format!("{}.{}ms", total_cms / 100, (total_cms % 100) / 10)
+                }
+            }
+            None => "?".to_string(),
         };
         println!(
             "  #{:04}: TOC=0x{:02X} mode={} bw={} ch={} frames={} dur={}",

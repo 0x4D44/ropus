@@ -190,6 +190,38 @@ fn write_cross_stream_header_opus(tag: &str) -> PathBuf {
     path
 }
 
+fn write_malformed_eos_opus(tag: &str, audio: &[u8]) -> PathBuf {
+    let nonce = format!(
+        "{}_{}_{}",
+        tag,
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let path = std::env::temp_dir().join(format!("ropusinfo_cli_{nonce}.opus"));
+    let serial = 0x1234_5678;
+
+    let mut head = b"OpusHead".to_vec();
+    head.extend_from_slice(&[1, 1]); // version, mono channel count
+    head.extend_from_slice(&0u16.to_le_bytes()); // pre-skip
+    head.extend_from_slice(&48_000u32.to_le_bytes());
+    head.extend_from_slice(&0i16.to_le_bytes()); // output gain
+    head.push(0); // family 0 mapping
+
+    let mut tags = b"OpusTags".to_vec();
+    tags.extend_from_slice(&0u32.to_le_bytes()); // empty vendor
+    tags.extend_from_slice(&0u32.to_le_bytes()); // zero comments
+
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&build_ogg_page(serial, 0, 0x02, 0, &head));
+    bytes.extend_from_slice(&build_ogg_page(serial, 1, 0, 0, &tags));
+    bytes.extend_from_slice(&build_ogg_page(serial, 2, 0x04, 960, audio));
+    std::fs::write(&path, bytes).expect("write malformed EOS Opus fixture");
+    path
+}
+
 #[test]
 fn info_default_output_contains_expected_fields() {
     let opus = encode_tmp_opus("default", Vec::new());
@@ -478,8 +510,8 @@ fn strict_duration_and_bitrate_reject_incomplete_decode_without_scalar() {
             String::from_utf8_lossy(&out.stdout)
         );
         assert!(
-            String::from_utf8_lossy(&out.stderr).contains("decoding Opus audio packet"),
-            "{query} error must identify strict packet decoding: {:?}",
+            String::from_utf8_lossy(&out.stderr).contains("validating Opus audio packet"),
+            "{query} error must identify strict packet validation: {:?}",
             String::from_utf8_lossy(&out.stderr)
         );
     }
@@ -500,4 +532,41 @@ fn strict_duration_and_bitrate_reject_incomplete_decode_without_scalar() {
     );
 
     let _ = std::fs::remove_file(opus);
+}
+
+#[test]
+fn strict_info_rejects_zero_frame_and_truncated_code3_with_eos() {
+    for (tag, audio) in [
+        ("zero_frame_code3", vec![0x83, 0x00]),
+        ("truncated_code3", vec![0x83]),
+    ] {
+        let opus = write_malformed_eos_opus(tag, &audio);
+
+        for query in ["duration", "bitrate"] {
+            let (stdout, stderr, code) =
+                run_ropusinfo(&["--query", query, opus.to_str().expect("path utf8")]);
+            assert_ne!(code, 0, "{query} must reject {tag}; stdout={stdout:?}");
+            assert!(
+                stdout.is_empty(),
+                "{query} must not emit a scalar: {stdout:?}"
+            );
+            assert!(
+                stderr.contains("validating Opus audio packet"),
+                "{query} should identify packet validation: {stderr:?}"
+            );
+        }
+
+        let (stdout, stderr, code) =
+            run_ropusinfo(&["--extended", opus.to_str().expect("path utf8")]);
+        assert_ne!(
+            code, 0,
+            "extended info must reject {tag}; stdout={stdout:?}"
+        );
+        assert!(
+            stderr.contains("validating Opus audio packet"),
+            "extended error should identify packet validation: {stderr:?}"
+        );
+
+        let _ = std::fs::remove_file(opus);
+    }
 }

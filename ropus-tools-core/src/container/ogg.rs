@@ -6,6 +6,7 @@ use std::cell::Cell;
 use std::io::{Error, ErrorKind, Read, Seek, SeekFrom};
 
 use anyhow::{Result, anyhow, bail};
+use ropus::opus::decoder::{MAX_FRAMES, opus_packet_parse_impl};
 
 const OGG_CAPTURE: &[u8; 4] = b"OggS";
 const OGG_HEADER_LEN: usize = 27;
@@ -229,6 +230,30 @@ pub fn parse_opus_head(data: &[u8]) -> Result<OpusHead> {
 pub fn validate_opus_audio_packet(data: &[u8]) -> Result<()> {
     if data.is_empty() {
         bail!("empty Opus audio packet");
+    }
+
+    // Use the codec's framing parser, but do not decode: this validates the
+    // packet's TOC, frame count, frame lengths, padding, and 120 ms limit
+    // while preserving the decoder's empty-slice PLC contract.
+    let len = i32::try_from(data.len()).map_err(|_| anyhow!("Opus audio packet is too large"))?;
+    let mut toc = 0u8;
+    let mut sizes = [0i16; MAX_FRAMES];
+    let mut payload_offset = 0i32;
+    let mut packet_offset = 0i32;
+    let frame_count = opus_packet_parse_impl(
+        data,
+        len,
+        false,
+        &mut toc,
+        &mut sizes,
+        &mut payload_offset,
+        Some(&mut packet_offset),
+    );
+    if frame_count < 0 {
+        bail!("invalid Opus audio packet layout");
+    }
+    if packet_offset != len {
+        bail!("Opus audio packet layout does not consume the packet");
     }
     Ok(())
 }
@@ -836,6 +861,28 @@ mod tests {
         );
         validate_opus_header_stream(0x1111_1111, 0x1111_1111)
             .expect("matching header serials must be accepted");
+    }
+
+    #[test]
+    fn opus_audio_packet_layout_rejects_malformed_nonempty_packets() {
+        for (name, packet) in [
+            ("zero code-3 frames", vec![0x83, 0x00]),
+            ("truncated code-3 header", vec![0x83]),
+            ("odd code-1 payload", vec![0x81, 0, 0, 0]),
+            ("truncated code-2 length", vec![0x82]),
+            ("code-3 VBR length exceeds payload", vec![0x83, 0x82, 5, 0]),
+            ("truncated code-3 padding", vec![0x83, 0x42]),
+            ("code-3 packet exceeds 120 ms", vec![0x9B, 7]),
+        ] {
+            assert!(
+                validate_opus_audio_packet(&packet).is_err(),
+                "{name} must be rejected"
+            );
+        }
+
+        // A one-byte code-0 packet remains accepted; libopus uses this shape
+        // for valid zero-length/DTX frames and callers rely on that contract.
+        validate_opus_audio_packet(&[0x00]).expect("valid code-0 packet");
     }
 
     #[test]

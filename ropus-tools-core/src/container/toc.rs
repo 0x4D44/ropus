@@ -125,12 +125,11 @@ impl OpusToc {
 /// Decode the TOC byte + optional byte 1 of an Opus packet.
 ///
 /// `packet` must be at least 1 byte long (the TOC byte itself). For
-/// frame-count code 3 we additionally read byte 1 when it exists, to recover
-/// the 6-bit frame count. A code-3 packet with only 1 byte is legal to parse
-/// (the RFC says the encoder is buggy, but info tools shouldn't refuse to
-/// display it) — we surface that as `frames: None`.
+/// frame-count code 3 we additionally read byte 1 when available to recover
+/// the 6-bit frame count. A missing byte leaves the count unknown for callers
+/// that only have a TOC prefix; an explicit zero count is rejected.
 ///
-/// Returns `None` if the packet is empty.
+/// Returns `None` if the packet is empty or has an explicit zero code-3 count.
 pub fn decode_toc(packet: &[u8]) -> Option<OpusToc> {
     let byte0 = *packet.first()?;
     let config = (byte0 >> 3) & 0x1F;
@@ -146,9 +145,16 @@ pub fn decode_toc(packet: &[u8]) -> Option<OpusToc> {
     let frames = match code {
         0 => Some(1),
         1 | 2 => Some(2),
-        3 => packet.get(1).map(|b| b & 0x3F),
+        3 => packet
+            .get(1)
+            .map(|b| b & 0x3F)
+            .and_then(|count| (count != 0).then_some(count)),
         _ => unreachable!("code is masked to 2 bits"),
     };
+
+    if code == 3 && packet.get(1).is_some() && frames.is_none() {
+        return None;
+    }
 
     Some(OpusToc {
         config,
@@ -330,11 +336,17 @@ mod tests {
 
     #[test]
     fn toc_frame_count_code_3_without_byte1_is_unknown() {
-        // Truncated packet (just the TOC byte) with code 3: we can't know the
-        // frame count; surface that as None rather than fabricating a 1.
+        // A TOC-only prefix cannot reveal the frame count. Full packet
+        // callers must use validate_opus_audio_packet before trusting it.
         let toc = decode_toc(&[toc_byte(0, false, 3)]).expect("non-empty");
         assert_eq!(toc.code, 3);
         assert!(toc.frames.is_none());
+    }
+
+    #[test]
+    fn toc_frame_count_code_3_zero_is_rejected() {
+        // RFC 6716 requires at least one frame in a code-3 packet.
+        assert!(decode_toc(&[toc_byte(0, false, 3), 0]).is_none());
     }
 
     #[test]
