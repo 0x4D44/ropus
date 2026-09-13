@@ -6,15 +6,15 @@
 - **Area:** ropus-fb2k/input-limits
 - **Raised:** 2026-08-22T06:10:44Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T043003Z-2ba26a6c
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00033-run-fix-20260913T043003Z-2ba26a6c
+- **Owner base:** 64fef86f600d3e7b5aadb057dbbc1cea99c45058
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T04:30:03Z
+- **Owner until:** 2026-09-13T06:30:03Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
