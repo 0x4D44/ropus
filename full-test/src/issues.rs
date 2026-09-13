@@ -33,7 +33,9 @@ pub fn extract(stderr: &str) -> Vec<String> {
             break;
         }
         let trimmed = line.trim_start();
-        if re.is_match(trimmed) {
+        let classification = ansi_sgr_regex().replace_all(line, "");
+        let classification = classification.trim_start();
+        if re.is_match(&classification) {
             out.push(trimmed.trim_end().to_string());
         }
     }
@@ -62,6 +64,13 @@ fn diag_regex() -> &'static Regex {
     // disambiguates from words that merely start with "error" or "warning".
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"^(?:error(?:\[[^\]]+\])?:|warning:)").expect("static regex"))
+}
+
+fn ansi_sgr_regex() -> &'static Regex {
+    // Cargo's colored diagnostics use SGR sequences such as `\x1b[1;31m` and
+    // `\x1b[0m`; strip them only from the classification copy.
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\x1b\[[0-9;]*m").expect("static regex"))
 }
 
 #[cfg(test)]
@@ -116,6 +125,20 @@ the word error appears but not at line start\n";
         let issues = extract(sample);
         assert_eq!(issues.len(), 1);
         assert!(issues[0].starts_with("error[E0433]:"));
+    }
+
+    #[test]
+    fn pulls_ansi_colored_error_and_warning_lines() {
+        let sample = "  \x1b[1;31merror[E0308]:\x1b[0m mismatched types\n\
+\x1b[1;33mwarning:\x1b[0m unused variable: `foo`\n";
+        let issues = extract(sample);
+        assert_eq!(
+            issues,
+            vec![
+                "\x1b[1;31merror[E0308]:\x1b[0m mismatched types",
+                "\x1b[1;33mwarning:\x1b[0m unused variable: `foo`",
+            ]
+        );
     }
 
     #[test]
