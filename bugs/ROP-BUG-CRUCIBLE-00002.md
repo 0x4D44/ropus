@@ -6,15 +6,15 @@
 - **Area:** capi/projection-size
 - **Raised:** 2026-08-14T14:26:12Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T144908Z-e79ad037
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00002-run-verify-20260913T144908Z-e79ad037
+- **Owner base:** df45dd194f5ae9ef65cffeb1ffef63414f237285
+- **Owner fingerprint:** sha256:ed4300e6b48cabd9a77163bcd7e3a2d6f68978ac8ee633b29ecdef0dd6feeba9
+- **Owner since:** 2026-09-13T14:49:08Z
+- **Owner until:** 2026-09-13T16:49:08Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
