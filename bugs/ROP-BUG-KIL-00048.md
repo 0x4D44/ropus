@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00048 — Decode alias guard can be raced into truncating the input
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** ropus-tools-core/path-safety
 - **Raised:** 2026-08-22T07:33:52Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T064335Z-3cad2e56
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00048-run-fix-20260913T064335Z-3cad2e56
-- **Owner base:** 302a189f1c9c9b856aba2b5dfc38546c8010de6e
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T06:43:35Z
-- **Owner until:** 2026-09-13T08:43:35Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T07:33:52Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-08-22T07:33:52Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T06:56:22Z, deltic:auto role=fix run=fix-20260913T064335Z-3cad2e56 branch=task/bug-ROP-BUG-KIL-00048-run-fix-20260913T064335Z-3cad2e56 code=30db9faac35d8f8777fae84499d1bf4102c9a53a gate=manual)
 
 ## Observation
 
