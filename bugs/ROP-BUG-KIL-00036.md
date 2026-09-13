@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00036 — fb2k reports clean EOF when the selected Ogg stream is truncated
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-fb2k/truncation
 - **Raised:** 2026-08-22T06:10:45Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T050657Z-bf299d0b
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00036-run-fix-20260913T050657Z-bf299d0b
-- **Owner base:** e99179c11f63ba08f0829e4d0bc661f0e11ff42a
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T05:06:57Z
-- **Owner until:** 2026-09-13T07:06:57Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T06:10:45Z, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-08-22T06:10:45Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T05:18:53Z, deltic:auto role=fix run=fix-20260913T050657Z-bf299d0b branch=task/bug-ROP-BUG-KIL-00036-run-fix-20260913T050657Z-bf299d0b code=368c469 gate=manual)
 
 ## Observation
 
