@@ -6,15 +6,15 @@
 - **Area:** ropus-fb2k/realtime
 - **Raised:** 2026-08-22T06:10:45Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T152408Z-f4fa9fc5
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00038-run-verify-20260913T152408Z-f4fa9fc5
+- **Owner base:** a011399f31b201cc94bc8137bb770904db58aba2
+- **Owner fingerprint:** sha256:0eb014342943ae6129b1d0b2fefd79855c9b5a427e348420b265056c788022b1
+- **Owner since:** 2026-09-13T15:24:08Z
+- **Owner until:** 2026-09-13T17:24:08Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
