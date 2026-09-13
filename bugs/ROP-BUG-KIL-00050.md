@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00050 — Low-level codec methods trust PCM slice capacities and unbounded frame sizes
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** ropus/opus-codec-api
 - **Raised:** 2026-08-22T08:28:29Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T065719Z-06137e14
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00050-run-fix-20260913T065719Z-06137e14
-- **Owner base:** 93c420f0c8b3f96e23cdae6e589d20ae40047dc7
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T06:57:19Z
-- **Owner until:** 2026-09-13T08:57:19Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T08:28:29Z, raised via `deltic bugs new` model=gpt-5.6-sol@max)
+- **State history:** Open (2026-08-22T08:28:29Z, raised via `deltic bugs new` model=gpt-5.6-sol@max) -> Fixed (2026-09-13T07:20:39Z, deltic:auto role=fix run=fix-20260913T065719Z-06137e14 branch=task/bug-ROP-BUG-KIL-00050-run-fix-20260913T065719Z-06137e14 code=714b1d5aa44dc510f4cb851691f2e1c407356681 gate=manual)
 
 ## Observation
 
