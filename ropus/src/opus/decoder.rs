@@ -16,6 +16,8 @@ use crate::dnn::lpcnet::LPCNetPLCState;
 use crate::silk::decoder::{SilkDecControl, SilkDecoder, silk_decode};
 use crate::types::*;
 
+use super::{checked_sample_count, max_frame_size};
+
 // ===========================================================================
 // Constants
 // ===========================================================================
@@ -547,6 +549,14 @@ pub struct OpusDecoder {
 // ===========================================================================
 
 impl OpusDecoder {
+    fn validate_frame_size(&self, frame_size: i32) -> Result<usize, i32> {
+        let max_frame_size = max_frame_size(self.fs).ok_or(OPUS_BAD_ARG)?;
+        if frame_size <= 0 || frame_size > max_frame_size {
+            return Err(OPUS_BAD_ARG);
+        }
+        checked_sample_count(frame_size, self.channels).ok_or(OPUS_BAD_ARG)
+    }
+
     /// Create and initialize a new Opus decoder.
     /// `fs`: output sample rate (8000, 12000, 16000, 24000, or 48000).
     /// `channels`: 1 (mono) or 2 (stereo).
@@ -564,9 +574,10 @@ impl OpusDecoder {
         // complexity 0 while CELT starts at 5 and can take neural PLC by default.
         let _ = celt_dec.set_complexity(0);
         let silk_dec = SilkDecoder::try_new().map_err(|_| OPUS_ALLOC_FAIL)?;
+        let max_frame_size = max_frame_size(fs).ok_or(OPUS_BAD_ARG)?;
+        let scratch_samples = checked_sample_count(max_frame_size, channels).ok_or(OPUS_BAD_ARG)?;
         let decode_float_scratch =
-            try_vec_with_len((fs / 25 * 3) as usize * channels as usize, 0i16)
-                .map_err(|_| OPUS_ALLOC_FAIL)?;
+            try_vec_with_len(scratch_samples, 0i16).map_err(|_| OPUS_ALLOC_FAIL)?;
 
         let dec_control = SilkDecControl {
             n_channels_api: channels as usize,
@@ -1214,6 +1225,11 @@ impl OpusDecoder {
         self_delimited: bool,
         packet_offset: Option<&mut i32>,
     ) -> Result<i32, i32> {
+        let max_frame_limit = max_frame_size(self.fs).ok_or(OPUS_BAD_ARG)?;
+        let output_samples = self.validate_frame_size(frame_size)?;
+        if pcm.len() < output_samples {
+            return Err(OPUS_BUFFER_TOO_SMALL);
+        }
         if !(0..=1).contains(&(decode_fec as i32)) {
             return Err(OPUS_BAD_ARG);
         }
@@ -1230,9 +1246,11 @@ impl OpusDecoder {
                 // PLC: decode frames until frame_size is filled
                 let mut pcm_count = 0i32;
                 loop {
+                    let pcm_offset =
+                        checked_sample_count(pcm_count, self.channels).ok_or(OPUS_BAD_ARG)?;
                     let ret = self.decode_frame(
                         None,
-                        &mut pcm[pcm_count as usize * self.channels as usize..],
+                        &mut pcm[pcm_offset..],
                         frame_size - pcm_count,
                         false,
                     )?;
@@ -1247,9 +1265,15 @@ impl OpusDecoder {
         };
 
         // --- Parse the packet ---
+        if packet_data.len() > i32::MAX as usize {
+            return Err(OPUS_BAD_ARG);
+        }
         let packet_mode = opus_packet_get_mode(packet_data);
         let packet_bandwidth = opus_packet_get_bandwidth(packet_data);
         let packet_frame_size = opus_packet_get_samples_per_frame(packet_data, self.fs);
+        if packet_frame_size <= 0 || packet_frame_size > max_frame_limit {
+            return Err(OPUS_INVALID_PACKET);
+        }
         let packet_stream_channels = opus_packet_get_nb_channels(packet_data);
 
         let mut toc = 0u8;
@@ -1295,7 +1319,8 @@ impl OpusDecoder {
             self.bandwidth = packet_bandwidth;
             self.frame_size = packet_frame_size;
             self.stream_channels = packet_stream_channels;
-            let fec_offset = (frame_size - packet_frame_size) as usize * self.channels as usize;
+            let fec_offset = checked_sample_count(frame_size - packet_frame_size, self.channels)
+                .ok_or(OPUS_BAD_ARG)?;
             let ret = self.decode_frame(
                 Some(&payload[..sizes[0] as usize]),
                 &mut pcm[fec_offset..],
@@ -1308,7 +1333,8 @@ impl OpusDecoder {
         }
 
         // --- Normal decode path ---
-        if count * packet_frame_size > frame_size {
+        let decoded_frame_size = count.checked_mul(packet_frame_size).ok_or(OPUS_BAD_ARG)?;
+        if decoded_frame_size > frame_size {
             return Err(OPUS_BUFFER_TOO_SMALL);
         }
 
@@ -1329,9 +1355,10 @@ impl OpusDecoder {
             } else {
                 Some(&payload[data_offset..data_offset + sizes[i] as usize])
             };
+            let pcm_offset = checked_sample_count(nb_samples, self.channels).ok_or(OPUS_BAD_ARG)?;
             let ret = self.decode_frame(
                 frame_arg,
-                &mut pcm[nb_samples as usize * self.channels as usize..],
+                &mut pcm[pcm_offset..],
                 frame_size - nb_samples,
                 false,
             )?;
@@ -1363,8 +1390,9 @@ impl OpusDecoder {
         frame_size: i32,
         decode_fec: bool,
     ) -> Result<i32, i32> {
-        if frame_size <= 0 {
-            return Err(OPUS_BAD_ARG);
+        let output_samples = self.validate_frame_size(frame_size)?;
+        if pcm.len() < output_samples {
+            return Err(OPUS_BUFFER_TOO_SMALL);
         }
         self.decode_native(data, pcm, frame_size, decode_fec, false, None)
     }
@@ -1378,9 +1406,7 @@ impl OpusDecoder {
         frame_size: i32,
         decode_fec: bool,
     ) -> Result<i32, i32> {
-        if frame_size <= 0 {
-            return Err(OPUS_BAD_ARG);
-        }
+        self.validate_frame_size(frame_size)?;
         // Determine actual frame count to minimize allocation
         let mut actual_frame_size = frame_size;
         if let Some(d) = data {
@@ -1391,10 +1417,14 @@ impl OpusDecoder {
                 }
             }
         }
-        let mut out = vec![0i16; actual_frame_size as usize * self.channels as usize];
+        let sample_count = self.validate_frame_size(actual_frame_size)?;
+        if pcm.len() < sample_count {
+            return Err(OPUS_BUFFER_TOO_SMALL);
+        }
+        let mut out = try_vec_with_len(sample_count, 0i16).map_err(|_| OPUS_ALLOC_FAIL)?;
         let ret = self.decode_native(data, &mut out, actual_frame_size, decode_fec, false, None)?;
         // Convert i16 → i32 (24-bit): SHL32(EXTEND32(a), 8)
-        let n = ret as usize * self.channels as usize;
+        let n = checked_sample_count(ret, self.channels).ok_or(OPUS_BAD_ARG)?;
         for i in 0..n {
             pcm[i] = shl32(out[i] as i32, 8);
         }
@@ -1410,9 +1440,7 @@ impl OpusDecoder {
         frame_size: i32,
         decode_fec: bool,
     ) -> Result<i32, i32> {
-        if frame_size <= 0 {
-            return Err(OPUS_BAD_ARG);
-        }
+        self.validate_frame_size(frame_size)?;
         // Determine actual frame count to minimize allocation
         let mut actual_frame_size = frame_size;
         if let Some(d) = data {
@@ -1423,14 +1451,15 @@ impl OpusDecoder {
                 }
             }
         }
-        let sample_count = actual_frame_size as usize * self.channels as usize;
-        let mut out = std::mem::take(&mut self.decode_float_scratch);
-        if out.len() < sample_count {
-            // Normal Opus packets are bounded to 120 ms and fit the
-            // constructor-sized buffer. Retain the existing API behavior for
-            // larger PLC requests by growing the scratch only when required.
-            out.resize(sample_count, 0);
+        let sample_count = self.validate_frame_size(actual_frame_size)?;
+        if pcm.len() < sample_count {
+            return Err(OPUS_BUFFER_TOO_SMALL);
         }
+        if self.decode_float_scratch.len() < sample_count {
+            self.decode_float_scratch =
+                try_vec_with_len(sample_count, 0i16).map_err(|_| OPUS_ALLOC_FAIL)?;
+        }
+        let mut out = std::mem::take(&mut self.decode_float_scratch);
         // The old per-call Vec was zero-initialized. Clear the active region to
         // preserve that behavior for PLC, DTX, and partial decode paths.
         out[..sample_count].fill(0);
@@ -1444,7 +1473,7 @@ impl OpusDecoder {
         ) {
             Ok(ret) => {
                 // Convert i16 → f32: a / 32768.0
-                let n = ret as usize * self.channels as usize;
+                let n = checked_sample_count(ret, self.channels).ok_or(OPUS_BAD_ARG)?;
                 for i in 0..n {
                     pcm[i] = out[i] as f32 * (1.0 / 32768.0);
                 }
@@ -2363,6 +2392,64 @@ mod tests {
             dec.decode24(Some(packet), &mut pcm24, 480, false).unwrap(),
             480
         );
+    }
+
+    #[test]
+    fn test_low_level_decoder_bounds_output_and_frame_sizes() {
+        let max_frame_size = max_frame_size(48000).unwrap();
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+
+        assert_eq!(
+            dec.decode(None, &mut [], 120, false),
+            Err(OPUS_BUFFER_TOO_SMALL)
+        );
+        assert_eq!(
+            dec.decode24(None, &mut [], 120, false),
+            Err(OPUS_BUFFER_TOO_SMALL)
+        );
+        assert_eq!(
+            dec.decode_float(None, &mut [], 120, false),
+            Err(OPUS_BUFFER_TOO_SMALL)
+        );
+
+        let mut pcm = [0i16; 1];
+        assert_eq!(
+            dec.decode_native(None, &mut pcm, 120, false, false, None),
+            Err(OPUS_BUFFER_TOO_SMALL)
+        );
+        assert_eq!(
+            dec.decode(None, &mut pcm, max_frame_size + 1, false),
+            Err(OPUS_BAD_ARG)
+        );
+        assert_eq!(
+            dec.decode24(None, &mut [0i32; 1], i32::MAX, false),
+            Err(OPUS_BAD_ARG)
+        );
+        assert_eq!(
+            dec.decode_float(None, &mut [0.0f32; 1], i32::MAX, false),
+            Err(OPUS_BAD_ARG)
+        );
+    }
+
+    #[test]
+    fn test_decode24_temporary_allocation_is_fallible() {
+        let mut dec24 = OpusDecoder::new(48000, 1).unwrap();
+        let mut pcm24 = [0i32; 960];
+        crate::allocation::test_support::fail_after(0);
+        let result24 = dec24.decode24(None, &mut pcm24, 960, false);
+        crate::allocation::test_support::clear_failpoint();
+        assert_eq!(result24, Err(OPUS_ALLOC_FAIL));
+    }
+
+    #[test]
+    fn test_decode_float_scratch_allocation_is_fallible() {
+        let mut dec_float = OpusDecoder::new(48000, 1).unwrap();
+        dec_float.decode_float_scratch.clear();
+        let mut pcm_float = [0.0f32; 960];
+        crate::allocation::test_support::fail_after(0);
+        let result_float = dec_float.decode_float(None, &mut pcm_float, 960, false);
+        crate::allocation::test_support::clear_failpoint();
+        assert_eq!(result_float, Err(OPUS_ALLOC_FAIL));
     }
 
     #[test]

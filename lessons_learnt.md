@@ -1,3 +1,5 @@
+- Low-level Opus calls can panic on short slices; check frame products and use fallible temps (`ropus/src/opus/decoder.rs`).
+
 - Decode regular-file outputs must use a same-directory temp and post-flush rename; alias preflight cannot stop later replacement (`ropus-tools-core/src/util.rs:107`).
 
 - OpusHead and OpusTags must share a logical stream serial; validate the pair before trusting metadata (`ropus-tools-core/src/container/ogg.rs:240`).

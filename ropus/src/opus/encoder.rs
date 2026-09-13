@@ -40,6 +40,7 @@ use super::decoder::{
 use super::repacketizer::{
     OpusExtensionData, OpusRepacketizer, opus_packet_pad, opus_packet_pad_impl,
 };
+use super::{checked_sample_count, max_frame_size};
 
 // ===========================================================================
 // Constants
@@ -422,7 +423,10 @@ fn gen_toc(mode: i32, framerate: i32, bandwidth: i32, channels: i32) -> u8 {
 /// Returns frame size in samples or -1 on error.
 /// Matches C `frame_size_select`.
 pub(crate) fn frame_size_select(frame_size: i32, variable_duration: i32, fs: i32) -> i32 {
-    if frame_size < fs / 400 {
+    let Some(max_frame_size) = max_frame_size(fs) else {
+        return -1;
+    };
+    if frame_size < fs / 400 || frame_size > max_frame_size {
         return -1;
     }
     let new_size = if variable_duration == OPUS_FRAMESIZE_ARG {
@@ -431,29 +435,47 @@ pub(crate) fn frame_size_select(frame_size: i32, variable_duration: i32, fs: i32
         && variable_duration <= OPUS_FRAMESIZE_120_MS
     {
         if variable_duration <= OPUS_FRAMESIZE_40_MS {
-            (fs / 400) << (variable_duration - OPUS_FRAMESIZE_2_5_MS)
+            let Some(shift) = u32::try_from(variable_duration - OPUS_FRAMESIZE_2_5_MS).ok() else {
+                return -1;
+            };
+            let Some(new_size) = (fs / 400).checked_shl(shift) else {
+                return -1;
+            };
+            new_size
         } else {
-            (variable_duration - OPUS_FRAMESIZE_2_5_MS - 2) * fs / 50
+            let Some(duration) = variable_duration
+                .checked_sub(OPUS_FRAMESIZE_2_5_MS)
+                .and_then(|duration| duration.checked_sub(2))
+            else {
+                return -1;
+            };
+            let Some(new_size) = duration
+                .checked_mul(fs)
+                .and_then(|size| size.checked_div(50))
+            else {
+                return -1;
+            };
+            new_size
         }
     } else {
         return -1;
     };
 
-    if new_size > frame_size {
+    if new_size <= 0 || new_size > frame_size || new_size > max_frame_size {
         return -1;
     }
 
     // Validate frame size
     let ns = new_size;
-    if !(400 * ns == fs
-        || 200 * ns == fs
-        || 100 * ns == fs
-        || 50 * ns == fs
-        || 25 * ns == fs
-        || 50 * ns == 3 * fs
-        || 50 * ns == 4 * fs
-        || 50 * ns == 5 * fs
-        || 50 * ns == 6 * fs)
+    if !(ns.checked_mul(400) == Some(fs)
+        || ns.checked_mul(200) == Some(fs)
+        || ns.checked_mul(100) == Some(fs)
+        || ns.checked_mul(50) == Some(fs)
+        || ns.checked_mul(25) == Some(fs)
+        || ns.checked_mul(50) == fs.checked_mul(3)
+        || ns.checked_mul(50) == fs.checked_mul(4)
+        || ns.checked_mul(50) == fs.checked_mul(5)
+        || ns.checked_mul(50) == fs.checked_mul(6))
     {
         return -1;
     }
@@ -644,6 +666,19 @@ fn is_digital_silence(pcm: &[i16], frame_size: i32, channels: i32, _lsb_depth: i
         }
     }
     true
+}
+
+fn validate_declared_output(data: &[u8], max_data_bytes: i32) -> Result<(), i32> {
+    if max_data_bytes <= 0 {
+        return Err(OPUS_BAD_ARG);
+    }
+    let Ok(max_data_bytes) = usize::try_from(max_data_bytes) else {
+        return Err(OPUS_BAD_ARG);
+    };
+    if max_data_bytes > data.len() {
+        return Err(OPUS_BAD_ARG);
+    }
+    Ok(())
 }
 
 /// Compute frame energy for DTX activity detection.
@@ -1671,10 +1706,20 @@ impl OpusEncoder {
         // which takes the pre-`frame_size_select` value — matches C
         // `opus_encoder.c:2666-2668`.
         let analysis_frame_size = frame_size;
+        let Some(max_frame_size) = max_frame_size(self.fs) else {
+            return Err(OPUS_BAD_ARG);
+        };
+        let Some(input_samples) = checked_sample_count(frame_size, self.channels) else {
+            return Err(OPUS_BAD_ARG);
+        };
+        if frame_size > max_frame_size || pcm.len() < input_samples {
+            return Err(OPUS_BAD_ARG);
+        }
         let frame_size = frame_size_select(frame_size, self.variable_duration, self.fs);
         if frame_size < 0 {
             return Err(OPUS_BAD_ARG);
         }
+        validate_declared_output(data, max_data_bytes)?;
         // Build the byte view of `pcm` for the downmix callback; the i16
         // samples are passed straight through — no conversion.
         let pcm_bytes = unsafe {
@@ -1707,13 +1752,25 @@ impl OpusEncoder {
         max_data_bytes: i32,
     ) -> Result<i32, i32> {
         let analysis_frame_size = frame_size;
+        let Some(max_frame_size) = max_frame_size(self.fs) else {
+            return Err(OPUS_BAD_ARG);
+        };
+        let Some(input_samples) = checked_sample_count(frame_size, self.channels) else {
+            return Err(OPUS_BAD_ARG);
+        };
+        if frame_size > max_frame_size || pcm.len() < input_samples {
+            return Err(OPUS_BAD_ARG);
+        }
         let frame_size = frame_size_select(frame_size, self.variable_duration, self.fs);
         if frame_size < 0 {
             return Err(OPUS_BAD_ARG);
         }
+        validate_declared_output(data, max_data_bytes)?;
         // Convert float to i16 for the main encode path.
-        let n = (frame_size * self.channels) as usize;
-        let mut pcm16 = vec![0i16; n];
+        let Some(n) = checked_sample_count(frame_size, self.channels) else {
+            return Err(OPUS_BAD_ARG);
+        };
+        let mut pcm16 = try_vec_with_len(n, 0i16).map_err(|_| OPUS_ALLOC_FAIL)?;
         for i in 0..n {
             pcm16[i] = float2int16(pcm[i]);
         }
@@ -1775,12 +1832,19 @@ impl OpusEncoder {
         lsb_depth: i32,
         analysis: Option<EncodeAnalysisInput<'_>>,
     ) -> Result<i32, i32> {
+        let Some(max_frame_size) = max_frame_size(self.fs) else {
+            return Err(OPUS_BAD_ARG);
+        };
+        let Some(pcm_samples) = checked_sample_count(frame_size, self.channels) else {
+            return Err(OPUS_BAD_ARG);
+        };
+        if frame_size <= 0 || frame_size > max_frame_size || pcm.len() < pcm_samples {
+            return Err(OPUS_BAD_ARG);
+        }
+        validate_declared_output(data, out_data_bytes)?;
         let max_data_bytes = imin(1276 * 6, out_data_bytes);
         self.range_final = 0;
 
-        if frame_size <= 0 || max_data_bytes <= 0 {
-            return Err(OPUS_BAD_ARG);
-        }
         // Can't encode 100ms in 1 byte
         if max_data_bytes == 1 && self.fs == frame_size * 10 {
             return Err(OPUS_BUFFER_TOO_SMALL);
@@ -4307,6 +4371,52 @@ mod tests {
         assert_eq!(frame_size_select(480, OPUS_FRAMESIZE_20_MS, 48000), -1);
         // Invalid duration selector.
         assert_eq!(frame_size_select(960, 4999, 48000), -1);
+    }
+
+    #[test]
+    fn test_low_level_encoder_bounds_pcm_output_and_frame_sizes() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        let mut packet = [0u8; 1500];
+        let packet_capacity = packet.len() as i32;
+
+        assert_eq!(
+            enc.encode(&[0i16; 959], 960, &mut packet, packet_capacity),
+            Err(OPUS_BAD_ARG)
+        );
+        assert_eq!(
+            enc.encode_float(&[0.0f32; 959], 960, &mut packet, packet_capacity),
+            Err(OPUS_BAD_ARG)
+        );
+
+        let pcm = [0i16; 960];
+        let mut short_packet = [0u8; 8];
+        assert_eq!(
+            enc.encode(&pcm, 960, &mut short_packet, 1500),
+            Err(OPUS_BAD_ARG)
+        );
+        assert_eq!(
+            enc.encode(&pcm, 5761, &mut packet, packet_capacity),
+            Err(OPUS_BAD_ARG)
+        );
+    }
+
+    #[test]
+    fn test_frame_size_select_rejects_overflowing_request() {
+        assert_eq!(frame_size_select(i32::MAX, OPUS_FRAMESIZE_ARG, 48000), -1);
+    }
+
+    #[test]
+    fn test_encode_float_conversion_allocation_is_fallible() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        let pcm = [0.0f32; 960];
+        let mut packet = [0u8; 1500];
+        let packet_capacity = packet.len() as i32;
+
+        crate::allocation::test_support::fail_after(0);
+        let result = enc.encode_float(&pcm, 960, &mut packet, packet_capacity);
+        crate::allocation::test_support::clear_failpoint();
+
+        assert_eq!(result, Err(OPUS_ALLOC_FAIL));
     }
 
     #[test]
