@@ -342,17 +342,24 @@ fn main() {
         // Defines
         .define("HAVE_CONFIG_H", "1")
         .define("OPUS_BUILD", None)
-        // Rust's DNN port uses the scalar evaluation order on AArch64.
-        // `dnn/vec.h` otherwise selects inline NEON kernels despite the source
-        // manifest excluding platform-specific DNN translation units. Their
-        // reciprocal/accumulation rounding makes the recurrent oracle
-        // architecture-dependent, so compare the matching scalar C path.
+        // Rust's DNN port uses the scalar evaluation order. `dnn/vec.h`
+        // selects inline x86 kernels from compiler feature macros before it
+        // considers DISABLE_NEON, so clear those two selector macros in this
+        // harness. Use the compiler's native undefine spelling so the rule
+        // works with both GCC/Clang and MSVC/clang-cl without changing the
+        // macros seen by unrelated builds.
         .define("DISABLE_NEON", "1")
         // Suppress xiph's `#pragma message "...opus will be very slow."`
         // in opus_decoder.c when compiling without -O. See harness/build.rs
         // for the rationale (cc-rs would otherwise forward the note as a
         // cargo:warning=).
         .define("OPUS_WILL_BE_SLOW", None);
+
+    let compiler = build.get_compiler();
+    let undefine_prefix = if compiler.is_like_msvc() { "/U" } else { "-U" };
+    for macro_name in ["__AVX__", "__SSE2__"] {
+        build.flag(format!("{undefine_prefix}{macro_name}"));
+    }
 
     // Disable compiler-driven multiply-add fusion so the C reference and the
     // Rust side agree bit-for-bit on scalar float paths. MSVC `/fp:precise`
@@ -385,6 +392,8 @@ fn main() {
         "dred_encode_shim.c",
         "c/peek.c",
         "c/burg_thunk.c",
+        // Compile-time guard: dnn/vec.h must have selected its scalar branch.
+        "c/scalar_vec_guard.c",
     ];
     register_local_sources(&mut build, &harness_dir, &local_sources);
     verify_copied_dred_bitrate_oracle(&ref_dir);

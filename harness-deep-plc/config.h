@@ -23,9 +23,10 @@
 /* We have C99 lrintf */
 #define HAVE_LRINTF 1
 
-/* Keep SIMD off in this harness — scalar only, same choice as the sibling
- * fixed-point harness. Avoids pulling in x86/ARM source files and keeps
- * C/Rust comparison focused on the scalar reference path. */
+/* Keep the DNN vector dispatch scalar on every host. build.rs removes the
+ * compiler's __AVX__/__SSE2__ feature macros before dnn/vec.h selects its
+ * implementation, while DISABLE_NEON suppresses the ARM branch. This is a
+ * harness-local comparison choice; it does not change the upstream sources. */
 
 /* Enable DEEP_PLC and its companion flags. DRED + OSCE sources are linked
  * transitively but their top-level features are NOT enabled — Stage 8 scope. */
