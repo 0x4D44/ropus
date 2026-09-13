@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00001 — C ABI allocation failure reporting misses nested codec construction
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Could
 - **Severity:** Medium
 - **Area:** capi/allocation-errors
 - **Raised:** 2026-08-14T14:26:03Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T022358Z-e9856244
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00001-run-fix-20260913T022358Z-e9856244
-- **Owner base:** ea8d8ba9c6fe0acad2f8a8181f009f43e1317792
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T02:23:58Z
-- **Owner until:** 2026-09-13T04:23:58Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T14:26:03Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-14T14:26:03Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T03:01:22Z, deltic:auto role=fix run=fix-20260913T022358Z-e9856244 branch=task/bug-ROP-BUG-CRUCIBLE-00001-run-fix-20260913T022358Z-e9856244 code=a4a5fd4f70c850e7420fb44a36e44849da77b0c2 gate=manual)
 
 ## Observation
 
