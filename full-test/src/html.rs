@@ -525,14 +525,27 @@ fn render_phase_summary(out: &mut String, ctx: &ReportContext<'_>) {
     let f_total = f.targets.len() as u32;
     let f_failed = if f.status == FuzzStatus::Fail { 1 } else { 0 };
     let f_passed = if f.status == FuzzStatus::Pass || f.status == FuzzStatus::Warn {
-        f_total.saturating_sub(f_failed)
+        f.targets
+            .iter()
+            .filter(|target| {
+                target.build == "pass"
+                    && if target.crashes == 0 {
+                        target.replay == "skip"
+                    } else {
+                        target.replay == "pass"
+                    }
+            })
+            .count() as u32
     } else {
         0
     };
     let f_skipped = if f.status == FuzzStatus::NotRequested {
         1
     } else {
-        0
+        f.targets
+            .iter()
+            .filter(|target| target.build == "not_checked" || target.replay == "not_checked")
+            .count() as u32
     };
     let f_fail_cls = match f.status {
         FuzzStatus::Fail => " fail",
@@ -1355,6 +1368,76 @@ mod tests {
             ambisonics: amb,
             bench,
         }
+    }
+
+    fn phase_summary_with_fuzz(fuzz: FuzzOutcome) -> String {
+        let opts = Options::default();
+        let q = quality_ok();
+        let t = populated_tests();
+        let a = ambisonics_ok();
+        let b = bench_ok();
+        let corpus = crate::corpus::Outcome::not_claimed_for_tests();
+        let platform = crate::platform::Outcome::not_claimed_for_tests();
+        let ctx = ReportContext {
+            commit_sha: "dd3fb17",
+            branch: "main",
+            version: "0.9.0",
+            commit_subject: "test",
+            timestamp: now(),
+            banner: Banner::Warn,
+            ietf_vectors: IetfVectorProvision::present(),
+            ietf_vectors_present: true,
+            preflight: crate::preflight::Outcome::inactive(&IetfVectorProvision::present()),
+            options: &opts,
+            quality: &q,
+            tests: &t,
+            fuzz: &fuzz,
+            corpus: &corpus,
+            platform: &platform,
+            ambisonics: &a,
+            bench: &b,
+        };
+        let mut html = String::new();
+        render_phase_summary(&mut html, &ctx);
+        html
+    }
+
+    #[test]
+    fn phase_summary_marks_unchecked_inventory_targets_skipped() {
+        let html = phase_summary_with_fuzz(FuzzOutcome {
+            mode: crate::fuzz::Mode::InventoryOnly,
+            status: FuzzStatus::Warn,
+            duration_ms: 1,
+            command: Vec::new(),
+            targets: vec![
+                crate::fuzz::TargetSummary {
+                    name: "fuzz_decode".to_string(),
+                    build: "not_checked".to_string(),
+                    crashes: 0,
+                    replay: "skip".to_string(),
+                },
+                crate::fuzz::TargetSummary {
+                    name: "fuzz_encode".to_string(),
+                    build: "not_checked".to_string(),
+                    crashes: 1,
+                    replay: "not_checked".to_string(),
+                },
+            ],
+            issues: vec!["cargo-fuzz unavailable".to_string()],
+            stdout: String::new(),
+            stderr: String::new(),
+        });
+        let row = html
+            .lines()
+            .find(|line| line.contains("<td>Fuzz sanity</td>"))
+            .expect("fuzz phase summary row");
+
+        assert!(
+            row.contains(
+                "<td class=\"num\">2</td><td class=\"num\">0</td><td class=\"num warn\">warn</td><td class=\"num\">2</td>"
+            ),
+            "unchecked inventory targets must be skipped, not passed: {row}"
+        );
     }
 
     #[test]
