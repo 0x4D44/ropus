@@ -53,6 +53,11 @@ pub const FARGAN_CONT_SAMPLES: usize = 320;
 const PREEMPH: f32 = 0.85;
 const FFT_SCALE: f32 = 1.0 / WINDOW_SIZE as f32;
 
+// Keep the low-level FEC staging errors aligned with the public Opus error
+// codes without making this DNN module depend on the decoder module.
+const FEC_ADD_BAD_ARG: i32 = -1;
+const FEC_ADD_BUFFER_TOO_SMALL: i32 = -2;
+
 const SILK_MAX_ORDER_LPC: usize = 16;
 const FIND_LPC_COND_FAC: f64 = 1e-5;
 
@@ -2398,17 +2403,30 @@ impl LPCNetPLCState {
         }
     }
 
-    pub fn fec_add(&mut self, features: Option<&[f32]>) {
+    /// Add one DRED feature vector or one unavailable feature slot.
+    ///
+    /// The queue is a fixed-size staging buffer, so malformed vectors and
+    /// additions after PLC_MAX_FEC return before changing any state.
+    pub fn fec_add(&mut self, features: Option<&[f32]>) -> Result<(), i32> {
         match features {
             None => {
-                self.fec_skip += 1;
+                self.fec_skip = self.fec_skip.checked_add(1).ok_or(FEC_ADD_BAD_ARG)?;
             }
             Some(f) => {
-                debug_assert!(self.fec_fill_pos < PLC_MAX_FEC);
-                self.fec[self.fec_fill_pos][..NB_FEATURES].copy_from_slice(&f[..NB_FEATURES]);
-                self.fec_fill_pos += 1;
+                if f.len() != NB_FEATURES {
+                    return Err(FEC_ADD_BAD_ARG);
+                }
+                if self.fec_fill_pos >= PLC_MAX_FEC || self.fec_fill_pos >= self.fec.len() {
+                    return Err(FEC_ADD_BUFFER_TOO_SMALL);
+                }
+                self.fec[self.fec_fill_pos].copy_from_slice(f);
+                self.fec_fill_pos = self
+                    .fec_fill_pos
+                    .checked_add(1)
+                    .ok_or(FEC_ADD_BUFFER_TOO_SMALL)?;
             }
         }
+        Ok(())
     }
 
     pub fn fec_clear(&mut self) {
@@ -3615,8 +3633,8 @@ mod tests {
         let mut plc = LPCNetPLCState::new();
         let features = [0.0f32; NB_FEATURES];
 
-        plc.fec_add(Some(&features));
-        plc.fec_add(None);
+        plc.fec_add(Some(&features)).unwrap();
+        plc.fec_add(None).unwrap();
         assert_eq!(plc.fec_fill_pos, 1);
         assert_eq!(plc.fec_skip, 1);
         plc.fec_clear();
@@ -3743,7 +3761,7 @@ mod tests {
         assert!(plc.cont_features.iter().all(|v| v.is_finite()));
 
         let fec = [0.25f32; NB_FEATURES];
-        plc.fec_add(Some(&fec));
+        plc.fec_add(Some(&fec)).unwrap();
         plc.loss_count = 4;
         let mut with_fec = [0i16; FRAME_SIZE];
         assert_eq!(plc.conceal(&mut with_fec), 0);

@@ -699,9 +699,18 @@ impl OpusDecoder {
     /// (rdovae) ships with Stage 8. Passing `None` increments the skip
     /// counter so the queue stays aligned when the caller knows a slot
     /// exists but the features aren't reconstructible.
+    ///
+    /// Returns OPUS_BAD_ARG when a supplied vector is not exactly NB_FEATURES
+    /// floats, or when the skip counter would overflow. Returns
+    /// OPUS_BUFFER_TOO_SMALL when the fixed FEC queue is full. Rejected
+    /// additions leave the queue unchanged.
     // TODO(stage-8): wire to the real DRED decoder once `rdovae` lands.
-    pub fn fec_add(&mut self, features: Option<&[f32]>) {
-        self.lpcnet.fec_add(features);
+    pub fn fec_add(&mut self, features: Option<&[f32]>) -> Result<(), i32> {
+        self.lpcnet.fec_add(features).map_err(|error| match error {
+            -1 => OPUS_BAD_ARG,
+            -2 => OPUS_BUFFER_TOO_SMALL,
+            _ => OPUS_INTERNAL_ERROR,
+        })
     }
 
     /// Drop all queued DRED features. Typically called after a good frame
@@ -2313,8 +2322,8 @@ mod tests {
         dec.set_dnn_blob(&blob).expect("weight blob should load");
         assert!(dec.lpcnet.loaded);
         let features = vec![0.25; crate::dnn::lpcnet::NB_FEATURES];
-        dec.fec_add(Some(&features));
-        dec.fec_add(None);
+        dec.fec_add(Some(&features)).unwrap();
+        dec.fec_add(None).unwrap();
         assert_eq!(dec.lpcnet.fec_fill_pos, 1);
         assert_eq!(dec.lpcnet.fec_skip, 1);
 
@@ -2324,6 +2333,51 @@ mod tests {
         assert_eq!(dec.lpcnet.fec_read_pos, 0);
         assert_eq!(dec.lpcnet.fec_skip, 0);
         assert!(dec.lpcnet.loaded, "reset must preserve neural model state");
+    }
+
+    #[test]
+    fn test_fec_add_rejects_wrong_width_without_mutating_queue() {
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        let short = vec![0.25; crate::dnn::lpcnet::NB_FEATURES - 1];
+        assert_eq!(dec.fec_add(Some(&short)), Err(OPUS_BAD_ARG));
+        assert_eq!(dec.lpcnet.fec_fill_pos, 0);
+        assert_eq!(dec.lpcnet.fec_read_pos, 0);
+        assert_eq!(dec.lpcnet.fec_skip, 0);
+        assert!(dec.lpcnet.fec[0].iter().all(|&value| value == 0.0));
+
+        let long = vec![0.5; crate::dnn::lpcnet::NB_FEATURES + 1];
+        assert_eq!(dec.fec_add(Some(&long)), Err(OPUS_BAD_ARG));
+        assert_eq!(dec.lpcnet.fec_fill_pos, 0);
+        assert_eq!(dec.lpcnet.fec_skip, 0);
+        assert!(dec.lpcnet.fec[0].iter().all(|&value| value == 0.0));
+
+        let valid = vec![0.75; crate::dnn::lpcnet::NB_FEATURES];
+        assert_eq!(dec.fec_add(Some(&valid)), Ok(()));
+        assert_eq!(dec.lpcnet.fec_fill_pos, 1);
+        assert_eq!(dec.fec_add(None), Ok(()));
+        assert_eq!(dec.lpcnet.fec_skip, 1);
+    }
+
+    #[test]
+    fn test_fec_add_rejects_full_queue_without_mutating_queue() {
+        let mut dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut features = [0.0f32; crate::dnn::lpcnet::NB_FEATURES];
+        for index in 0..crate::dnn::lpcnet::PLC_MAX_FEC {
+            features[0] = index as f32;
+            assert_eq!(dec.fec_add(Some(&features)), Ok(()));
+        }
+
+        let last = dec.lpcnet.fec[crate::dnn::lpcnet::PLC_MAX_FEC - 1];
+        features[0] = 1234.0;
+        assert_eq!(dec.fec_add(Some(&features)), Err(OPUS_BUFFER_TOO_SMALL));
+        assert_eq!(dec.lpcnet.fec_fill_pos, crate::dnn::lpcnet::PLC_MAX_FEC);
+        assert_eq!(dec.lpcnet.fec_read_pos, 0);
+        assert_eq!(dec.lpcnet.fec[crate::dnn::lpcnet::PLC_MAX_FEC - 1], last);
+
+        dec.fec_clear();
+        assert_eq!(dec.lpcnet.fec_fill_pos, 0);
+        assert_eq!(dec.fec_add(Some(&features)), Ok(()));
+        assert_eq!(dec.lpcnet.fec_fill_pos, 1);
     }
 
     #[test]

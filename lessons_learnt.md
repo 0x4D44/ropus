@@ -1,3 +1,5 @@
+- Public DNN FEC queues must validate exact feature width and capacity before copying (ropus/src/dnn/lpcnet.rs:fec_add).
+
 - Low-level Opus calls can panic on short slices; check frame products and use fallible temps (`ropus/src/opus/decoder.rs`).
 
 - Decode regular-file outputs must use a same-directory temp and post-flush rename; alias preflight cannot stop later replacement (`ropus-tools-core/src/util.rs:107`).
