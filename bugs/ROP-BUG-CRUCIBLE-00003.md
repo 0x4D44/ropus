@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00003 — Encoder size queries ignore mapping-family validity
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** capi/encoder-size
 - **Raised:** 2026-08-14T14:26:19Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T030923Z-b691a808
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00003-run-fix-20260913T030923Z-b691a808
-- **Owner base:** eab0924f97279ef4c472584a03fbc1d80f632443
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T03:09:23Z
-- **Owner until:** 2026-09-13T05:09:23Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T14:26:19Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-14T14:26:19Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T03:16:11Z, deltic:auto role=fix run=fix-20260913T030923Z-b691a808 branch=task/bug-ROP-BUG-CRUCIBLE-00003-run-fix-20260913T030923Z-b691a808 code=5e28a369f43a655078477042d7cc03a311008ea6 gate=manual)
 
 ## Observation
 
