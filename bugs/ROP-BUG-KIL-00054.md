@@ -6,15 +6,15 @@
 - **Area:** ropusdec/cli-output
 - **Raised:** 2026-08-22T09:55:50Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T153211Z-9dd83a85
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00054-run-verify-20260913T153211Z-9dd83a85
+- **Owner base:** 9421c6fc360262802ebeaf84e3a44f46b2344198
+- **Owner fingerprint:** sha256:5cadce57f59229f629774c62e92c392c0fa770beab5098885a894c5b4c051cf8
+- **Owner since:** 2026-09-13T15:32:11Z
+- **Owner until:** 2026-09-13T17:32:11Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
