@@ -6,15 +6,15 @@
 - **Area:** tools/fuzz-seeds
 - **Raised:** 2026-08-13T17:17:36Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T171454Z-59cacd56
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KILN-00006-run-verify-20260913T171454Z-59cacd56
+- **Owner base:** 1fcfc978e31707ffc44d7a9b3dd61cf1d8ae38d1
+- **Owner fingerprint:** sha256:fdfc6bafd40b2ce112b81938eed6f946292aab2c19e0023beab083e7d57f3516
+- **Owner since:** 2026-09-13T17:14:54Z
+- **Owner until:** 2026-09-13T19:14:54Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
