@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00056 — Atomic encode replacement can weaken destination permissions
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/atomic-output
 - **Raised:** 2026-08-22T11:25:31Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T074833Z-168a90bc
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00056-run-fix-20260913T074833Z-168a90bc
-- **Owner base:** b23ede182e354981eaa0378472f169c5e26019d8
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T07:48:33Z
-- **Owner until:** 2026-09-13T09:48:33Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T11:25:31Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-22T11:25:31Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T08:03:35Z, deltic:auto role=fix run=fix-20260913T074833Z-168a90bc branch=task/bug-ROP-BUG-KIL-00056-run-fix-20260913T074833Z-168a90bc code=76093062b5b608a3e75b6d79472b5e8aa7be09c6 gate=manual)
 
 ## Observation
 
