@@ -27,6 +27,24 @@ Static review. harness-deep-plc/tests/tier2_snr.rs:221-223 returns `f64::INFINIT
 
 ## Fix
 
-<unfixed — raised only>
+Implemented in `harness-deep-plc/tests/tier2_snr.rs` and
+`harness-deep-plc/tests/dred_bitrate_plumbing_nonzero_diff.rs`, integrated at
+code commit `45442c80dc736b6fa5c7f833a288c750b984d7fe`.
+
+- The tier-2 `compute_snr_db` helper now returns `NEG_INFINITY` for zero signal
+  or zero noise, so identical, silent, or otherwise degenerate output cannot
+  satisfy either SNR threshold.
+- The nonzero-DRED `snr_db` helper checks zero signal before zero noise and
+  returns `NEG_INFINITY` for both degenerate cases.
+- Added four focused unit tests covering identical non-silent and both-silent
+  PCM in both helpers.
+
+Verification:
+
+- `$null | deltic timeout 300 cargo test -p ropus-harness-deep-plc --test tier2_snr --test dred_bitrate_plumbing_nonzero_diff snr_tests -- --nocapture` — 4 passed, 0 failed.
+- `$null | deltic timeout 600 cargo test -p ropus-harness-deep-plc --test tier2_snr --test dred_bitrate_plumbing_nonzero_diff` — 9 passed, 0 failed, including both tier-2 gates, the calibration matrix, and the nonzero-DRED gate.
+- `$null | deltic timeout 900 cargo check -p ropus-harness-deep-plc`, `cargo fmt --all -- --check`, and `git diff --check` — passed.
+- Red proof: temporarily restored the old zero-noise `INFINITY` behavior in both helpers. The identical non-silent and both-silent regression tests failed with `left: inf` and `right: -inf`. The fixed guards were restored before the green runs.
+- Test setup fetched the pinned C reference and DNN weights with `cargo run -p fetch-assets -- all`.
 
 ## Notes
