@@ -24,10 +24,28 @@
 #include "dred_config.h"
 #include "dred_rdovae_constants.h"
 #include "lpcnet.h"
+#include "opus_defines.h"
 
 /* Defined by `dred_rdovae_enc_data.c`. */
 extern const WeightArray rdovaeenc_arrays[];
 /* Defined by `pitchdnn_data.c` (via lpcnet_encoder_init fallback). */
+
+static int ropus_copy_floats(
+    float *dst,
+    const float *src,
+    int n,
+    size_t capacity
+) {
+    if (n < 0 || (size_t)n > capacity) return OPUS_BAD_ARG;
+    if (n > 0 && (dst == NULL || src == NULL)) return OPUS_BAD_ARG;
+    if (n > 0) memcpy(dst, src, (size_t)n * sizeof(*dst));
+    return OPUS_OK;
+}
+
+static int ropus_output_len_valid(const void *out, int out_len, size_t capacity) {
+    if (out == NULL) return out_len == 0;
+    return out_len >= 0 && (size_t)out_len == capacity;
+}
 
 void *ropus_test_dredenc_new(int fs, int channels) {
     DREDEnc *enc = (DREDEnc *)calloc(1, sizeof(*enc));
@@ -99,43 +117,75 @@ int ropus_test_dredenc_latent_offset(const void *enc) {
     return ((const DREDEnc *)enc)->latent_offset;
 }
 
-/* Copy the first `n` floats of the latents buffer out to `dst`. */
-void ropus_test_dredenc_copy_latents(const void *enc, float *dst, int n) {
+/* Copy the first `n` floats of the latents buffer out to `dst`.
+ * Returns OPUS_OK or OPUS_BAD_ARG. */
+int ropus_test_dredenc_copy_latents(const void *enc, float *dst, int n) {
+    if (enc == NULL) return OPUS_BAD_ARG;
     const DREDEnc *e = (const DREDEnc *)enc;
-    memcpy(dst, e->latents_buffer, n * sizeof(float));
+    return ropus_copy_floats(
+        dst,
+        e->latents_buffer,
+        n,
+        sizeof(e->latents_buffer) / sizeof(e->latents_buffer[0])
+    );
 }
 
-/* Copy the first `n` floats of the state buffer out to `dst`. */
-void ropus_test_dredenc_copy_state(const void *enc, float *dst, int n) {
+/* Copy the first `n` floats of the state buffer out to `dst`.
+ * Returns OPUS_OK or OPUS_BAD_ARG. */
+int ropus_test_dredenc_copy_state(const void *enc, float *dst, int n) {
+    if (enc == NULL) return OPUS_BAD_ARG;
     const DREDEnc *e = (const DREDEnc *)enc;
-    memcpy(dst, e->state_buffer, n * sizeof(float));
+    return ropus_copy_floats(
+        dst,
+        e->state_buffer,
+        n,
+        sizeof(e->state_buffer) / sizeof(e->state_buffer[0])
+    );
 }
 
 /* Copy the first `n` floats of the 16 kHz input buffer — useful for
  * isolating whether divergence starts in the resampler (input_buffer
  * differs), the LPCNet feature extractor (input_buffer matches but
  * features differ), or the RDOVAE encoder. */
-void ropus_test_dredenc_copy_input_buffer(const void *enc, float *dst, int n) {
+int ropus_test_dredenc_copy_input_buffer(const void *enc, float *dst, int n) {
+    if (enc == NULL) return OPUS_BAD_ARG;
     const DREDEnc *e = (const DREDEnc *)enc;
-    memcpy(dst, e->input_buffer, n * sizeof(float));
+    return ropus_copy_floats(
+        dst,
+        e->input_buffer,
+        n,
+        sizeof(e->input_buffer) / sizeof(e->input_buffer[0])
+    );
 }
 
 /* Copy the 9-wide resampler memory. Diverging `resample_mem` immediately
  * after one `convert_to_16k` call means the filter itself drifts; a
  * diverging `input_buffer` but matching `resample_mem` means the filter
  * matches and the divergence is in the output scatter. */
-void ropus_test_dredenc_copy_resample_mem(const void *enc, float *dst, int n) {
+int ropus_test_dredenc_copy_resample_mem(const void *enc, float *dst, int n) {
+    if (enc == NULL) return OPUS_BAD_ARG;
     const DREDEnc *e = (const DREDEnc *)enc;
-    memcpy(dst, e->resample_mem, n * sizeof(float));
+    return ropus_copy_floats(
+        dst,
+        e->resample_mem,
+        n,
+        sizeof(e->resample_mem) / sizeof(e->resample_mem[0])
+    );
 }
 
 /* Copy the latest LPCNet feature vector out of the encoder's embedded
  * state (`lpcnet_enc_state.features[0..n]`). Diagnostic hook for
  * isolating feature-extractor drift vs RDOVAE drift. The C features
  * array is 36 floats wide (NB_TOTAL_FEATURES); DRED reads 20 of them. */
-void ropus_test_dredenc_copy_lpcnet_features(const void *enc, float *dst, int n) {
+int ropus_test_dredenc_copy_lpcnet_features(const void *enc, float *dst, int n) {
+    if (enc == NULL) return OPUS_BAD_ARG;
     const DREDEnc *e = (const DREDEnc *)enc;
-    memcpy(dst, e->lpcnet_enc_state.features, n * sizeof(float));
+    return ropus_copy_floats(
+        dst,
+        e->lpcnet_enc_state.features,
+        n,
+        sizeof(e->lpcnet_enc_state.features) / sizeof(e->lpcnet_enc_state.features[0])
+    );
 }
 
 /* ========================================================================
@@ -153,17 +203,29 @@ void ropus_test_dredenc_copy_lpcnet_features(const void *enc, float *dst, int n)
 /* Overwrite the encoder's `state_buffer` with user-supplied floats.
  * Only the first DRED_STATE_DIM floats are populated (the chunk being
  * emitted starts at offset 0 when `latent_offset == 0`). */
-void ropus_test_dredenc_set_state_buffer(void *enc, const float *src, int n) {
+int ropus_test_dredenc_set_state_buffer(void *enc, const float *src, int n) {
+    if (enc == NULL) return OPUS_BAD_ARG;
     DREDEnc *e = (DREDEnc *)enc;
-    memcpy(e->state_buffer, src, n * sizeof(float));
+    return ropus_copy_floats(
+        e->state_buffer,
+        src,
+        n,
+        sizeof(e->state_buffer) / sizeof(e->state_buffer[0])
+    );
 }
 
 /* Overwrite the encoder's `latents_buffer` with user-supplied floats.
  * Caller owns the layout (chunk `i` lives at `2 * i * DRED_LATENT_DIM`
  * per the encoder's interleave). */
-void ropus_test_dredenc_set_latents_buffer(void *enc, const float *src, int n) {
+int ropus_test_dredenc_set_latents_buffer(void *enc, const float *src, int n) {
+    if (enc == NULL) return OPUS_BAD_ARG;
     DREDEnc *e = (DREDEnc *)enc;
-    memcpy(e->latents_buffer, src, n * sizeof(float));
+    return ropus_copy_floats(
+        e->latents_buffer,
+        src,
+        n,
+        sizeof(e->latents_buffer) / sizeof(e->latents_buffer[0])
+    );
 }
 
 /* Mutators for the non-RDOVAE bookkeeping that `dred_encode_silk_frame`
@@ -192,23 +254,38 @@ int ropus_test_dred_ec_decode(
     int num_bytes,
     int min_feature_frames,
     int dred_frame_offset,
-    float *out_state,           /* DRED_STATE_DIM floats */
-    float *out_latents,         /* (DRED_NUM_REDUNDANCY_FRAMES/2) * (DRED_LATENT_DIM+1) floats */
+    float *out_state,
+    int out_state_len,
+    float *out_latents,
+    int out_latents_len,
     int *out_nb_latents,
     int *out_process_stage,
     int *out_dred_offset
 ) {
     OpusDRED dred;
+    if (num_bytes < 0 || (num_bytes > 0 && bytes == NULL)) return OPUS_BAD_ARG;
+    if (!ropus_output_len_valid(
+            out_state,
+            out_state_len,
+            sizeof(dred.state) / sizeof(dred.state[0])
+        )
+        || !ropus_output_len_valid(
+            out_latents,
+            out_latents_len,
+            sizeof(dred.latents) / sizeof(dred.latents[0])
+        )) {
+        return OPUS_BAD_ARG;
+    }
     memset(&dred, 0, sizeof(dred));
     int ret = dred_ec_decode(&dred, bytes, num_bytes, min_feature_frames, dred_frame_offset);
     if (out_state) {
-        memcpy(out_state, dred.state, DRED_STATE_DIM * sizeof(float));
+        memcpy(out_state, dred.state, (size_t)out_state_len * sizeof(*out_state));
     }
     if (out_latents) {
         memcpy(
             out_latents,
             dred.latents,
-            (DRED_NUM_REDUNDANCY_FRAMES / 2) * (DRED_LATENT_DIM + 1) * sizeof(float)
+            (size_t)out_latents_len * sizeof(*out_latents)
         );
     }
     if (out_nb_latents) *out_nb_latents = dred.nb_latents;
@@ -252,32 +329,38 @@ void *ropus_test_c_encoder_new_ex(
 ) {
     int err = 0;
     OpusEncoder *enc = opus_encoder_create(fs, channels, application, &err);
-    if (err != OPUS_OK || !enc) return NULL;
-    opus_encoder_ctl(enc, OPUS_SET_BITRATE(bitrate_bps));
-    opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY(5));
+    if (!enc) return NULL;
+    if (err != OPUS_OK) {
+        opus_encoder_destroy(enc);
+        return NULL;
+    }
+#define ROPUS_ENCODER_CTL_OR_FAIL(...) \
+    do { \
+        if (opus_encoder_ctl(enc, __VA_ARGS__) != OPUS_OK) goto ctl_fail; \
+    } while (0)
+    ROPUS_ENCODER_CTL_OR_FAIL(OPUS_SET_BITRATE(bitrate_bps));
+    ROPUS_ENCODER_CTL_OR_FAIL(OPUS_SET_COMPLEXITY(5));
     /* Default (!USE_WEIGHTS_FILE) doesn't auto-load the FEC blob, but
      * `dred_encoder_init` wired into `opus_encoder_init` does the compile-
      * time load for us. */
-    opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC(loss_perc));
-    opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC(use_inband_fec));
+    ROPUS_ENCODER_CTL_OR_FAIL(OPUS_SET_PACKET_LOSS_PERC(loss_perc));
+    ROPUS_ENCODER_CTL_OR_FAIL(OPUS_SET_INBAND_FEC(use_inband_fec));
     if (use_vbr == 0 || use_vbr == 1) {
-        opus_encoder_ctl(enc, OPUS_SET_VBR(use_vbr));
+        ROPUS_ENCODER_CTL_OR_FAIL(OPUS_SET_VBR(use_vbr));
     }
     if (dred_duration > 0) {
-        int r = opus_encoder_ctl(enc, OPUS_SET_DRED_DURATION(dred_duration));
-        if (r != OPUS_OK) {
-            opus_encoder_destroy(enc);
-            return NULL;
-        }
+        ROPUS_ENCODER_CTL_OR_FAIL(OPUS_SET_DRED_DURATION(dred_duration));
         /* Verify the CTL took. */
         int check_dur = -1;
-        opus_encoder_ctl(enc, OPUS_GET_DRED_DURATION(&check_dur));
-        if (check_dur != dred_duration) {
-            opus_encoder_destroy(enc);
-            return NULL;
-        }
+        if (opus_encoder_ctl(enc, OPUS_GET_DRED_DURATION(&check_dur)) != OPUS_OK
+            || check_dur != dred_duration) goto ctl_fail;
     }
     return enc;
+
+ctl_fail:
+    opus_encoder_destroy(enc);
+#undef ROPUS_ENCODER_CTL_OR_FAIL
+    return NULL;
 }
 
 /* Backwards-compatible factory using the original hard-coded knobs

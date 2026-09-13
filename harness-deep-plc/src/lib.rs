@@ -70,7 +70,10 @@ unsafe extern "C" {
         latents: *mut f32,
         initial_state: *mut f32,
         input: *const f32,
-    );
+        latents_len: c_int,
+        initial_state_len: c_int,
+        input_len: c_int,
+    ) -> c_int;
 
     // --- Stage 8.5 DRED RDOVAE decoder shim ---
     // Defined in `harness-deep-plc/dred_dec_shim.c`. Same opaque-pointer
@@ -83,13 +86,16 @@ unsafe extern "C" {
         state: *mut c_void,
         model: *const c_void,
         initial_state: *const f32,
-    );
+        initial_state_len: c_int,
+    ) -> c_int;
     pub fn ropus_test_dred_rdovae_decode_qframe(
         state: *mut c_void,
         model: *const c_void,
         qframe: *mut f32,
         input: *const f32,
-    );
+        qframe_len: c_int,
+        input_len: c_int,
+    ) -> c_int;
 
     // --- Stage 8.6 DRED full encoder-side pipeline shim ---
     // Defined in `harness-deep-plc/dred_encode_shim.c`. Wraps
@@ -119,19 +125,39 @@ unsafe extern "C" {
     pub fn ropus_test_dredenc_latents_buffer_fill(enc: *const c_void) -> c_int;
     pub fn ropus_test_dredenc_dred_offset(enc: *const c_void) -> c_int;
     pub fn ropus_test_dredenc_latent_offset(enc: *const c_void) -> c_int;
-    pub fn ropus_test_dredenc_copy_latents(enc: *const c_void, dst: *mut f32, n: c_int);
-    pub fn ropus_test_dredenc_copy_state(enc: *const c_void, dst: *mut f32, n: c_int);
-    pub fn ropus_test_dredenc_copy_input_buffer(enc: *const c_void, dst: *mut f32, n: c_int);
-    pub fn ropus_test_dredenc_copy_resample_mem(enc: *const c_void, dst: *mut f32, n: c_int);
-    pub fn ropus_test_dredenc_copy_lpcnet_features(enc: *const c_void, dst: *mut f32, n: c_int);
+    pub fn ropus_test_dredenc_copy_latents(enc: *const c_void, dst: *mut f32, n: c_int) -> c_int;
+    pub fn ropus_test_dredenc_copy_state(enc: *const c_void, dst: *mut f32, n: c_int) -> c_int;
+    pub fn ropus_test_dredenc_copy_input_buffer(
+        enc: *const c_void,
+        dst: *mut f32,
+        n: c_int,
+    ) -> c_int;
+    pub fn ropus_test_dredenc_copy_resample_mem(
+        enc: *const c_void,
+        dst: *mut f32,
+        n: c_int,
+    ) -> c_int;
+    pub fn ropus_test_dredenc_copy_lpcnet_features(
+        enc: *const c_void,
+        dst: *mut f32,
+        n: c_int,
+    ) -> c_int;
 
     // --- Stage 8.7 payload-level shims: direct buffer poke + C decoder ---
     // Defined in `harness-deep-plc/dred_encode_shim.c`. Let the Rust
     // differential test drive `dred_encode_silk_frame` on hand-synthesised
     // latents/state (no RDOVAE upstream) and cross-check `dred_ec_decode`
     // between C and Rust on the resulting byte buffer.
-    pub fn ropus_test_dredenc_set_state_buffer(enc: *mut c_void, src: *const f32, n: c_int);
-    pub fn ropus_test_dredenc_set_latents_buffer(enc: *mut c_void, src: *const f32, n: c_int);
+    pub fn ropus_test_dredenc_set_state_buffer(
+        enc: *mut c_void,
+        src: *const f32,
+        n: c_int,
+    ) -> c_int;
+    pub fn ropus_test_dredenc_set_latents_buffer(
+        enc: *mut c_void,
+        src: *const f32,
+        n: c_int,
+    ) -> c_int;
     pub fn ropus_test_dredenc_set_bookkeeping(
         enc: *mut c_void,
         latent_offset: c_int,
@@ -145,7 +171,9 @@ unsafe extern "C" {
         min_feature_frames: c_int,
         dred_frame_offset: c_int,
         out_state: *mut f32,
+        out_state_len: c_int,
         out_latents: *mut f32,
+        out_latents_len: c_int,
         out_nb_latents: *mut c_int,
         out_process_stage: *mut c_int,
         out_dred_offset: *mut c_int,
@@ -254,7 +282,12 @@ unsafe extern "C" {
     // around the C reference's public `burg_cepstral_analysis` symbol
     // (`reference/dnn/freq.c:183`); accepts a FRAME_SIZE = 160-sample
     // f32 buffer and writes 2 * NB_BANDS = 36 cepstral outputs.
-    pub fn ropus_test_burg_cepstral_analysis(x: *const f32, ceps: *mut f32);
+    pub fn ropus_test_burg_cepstral_analysis(
+        x: *const f32,
+        ceps: *mut f32,
+        x_len: c_int,
+        ceps_len: c_int,
+    ) -> c_int;
 
     // --- Stage-5 (apply-feedback): direct FFI scalar fixture for the
     // DRED bitrate helpers ---

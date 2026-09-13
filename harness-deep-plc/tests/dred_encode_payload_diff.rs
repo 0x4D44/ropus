@@ -24,11 +24,13 @@ use std::fs;
 use std::os::raw::c_void;
 use std::path::PathBuf;
 
-use ropus::dnn::dred::{DRED_MAX_DATA_SIZE, DRED_MAX_FRAMES, DREDEnc};
+use ropus::dnn::dred::{
+    DRED_LATENT_DIM, DRED_MAX_DATA_SIZE, DRED_MAX_FRAMES, DRED_STATE_DIM, DREDEnc,
+};
 use ropus::dnn::embedded_weights::WEIGHTS_BLOB;
 
 use ropus_harness_deep_plc::{
-    ropus_test_dred_compute_latents, ropus_test_dred_encode_silk_frame,
+    OPUS_BAD_ARG, OPUS_OK, ropus_test_dred_compute_latents, ropus_test_dred_encode_silk_frame,
     ropus_test_dredenc_copy_input_buffer, ropus_test_dredenc_copy_latents,
     ropus_test_dredenc_copy_lpcnet_features, ropus_test_dredenc_copy_resample_mem,
     ropus_test_dredenc_copy_state, ropus_test_dredenc_dred_offset, ropus_test_dredenc_free,
@@ -155,7 +157,11 @@ fn first_f32_divergent(a: &[f32], b: &[f32]) -> Option<(usize, f32, f32)> {
 
 #[cfg(test)]
 mod oracle_tests {
-    use super::first_f32_divergent;
+    use super::{
+        DRED_LATENT_DIM, DRED_MAX_FRAMES, DRED_STATE_DIM, OPUS_BAD_ARG, first_f32_divergent,
+        ropus_test_dredenc_copy_latents, ropus_test_dredenc_copy_state, ropus_test_dredenc_free,
+        ropus_test_dredenc_new, weights_or_skip,
+    };
 
     #[test]
     #[should_panic(expected = "non-finite")]
@@ -168,6 +174,49 @@ mod oracle_tests {
     #[should_panic(expected = "equal lengths")]
     fn first_f32_divergent_rejects_unequal_lengths() {
         let _ = first_f32_divergent(&[0.0], &[]);
+    }
+
+    #[test]
+    fn c_copy_helpers_reject_negative_and_oversized_lengths() {
+        if !weights_or_skip() {
+            return;
+        }
+        let enc = unsafe { ropus_test_dredenc_new(48_000, 1) };
+        assert!(!enc.is_null(), "C DRED encoder setup failed");
+
+        let state_sentinel = f32::from_bits(0x5a5a5a5a);
+        let mut state_dst = [state_sentinel; 1];
+        assert_eq!(
+            unsafe { ropus_test_dredenc_copy_state(enc, state_dst.as_mut_ptr(), -1) },
+            OPUS_BAD_ARG
+        );
+        assert_eq!(state_dst[0].to_bits(), state_sentinel.to_bits());
+        assert_eq!(
+            unsafe {
+                ropus_test_dredenc_copy_state(
+                    enc,
+                    state_dst.as_mut_ptr(),
+                    (DRED_MAX_FRAMES * DRED_STATE_DIM + 1) as i32,
+                )
+            },
+            OPUS_BAD_ARG
+        );
+
+        let latent_sentinel = f32::from_bits(0x6b6b6b6b);
+        let mut latent_dst = [latent_sentinel; 1];
+        assert_eq!(
+            unsafe {
+                ropus_test_dredenc_copy_latents(
+                    enc,
+                    latent_dst.as_mut_ptr(),
+                    (DRED_MAX_FRAMES * DRED_LATENT_DIM + 1) as i32,
+                )
+            },
+            OPUS_BAD_ARG
+        );
+        assert_eq!(latent_dst[0].to_bits(), latent_sentinel.to_bits());
+
+        unsafe { ropus_test_dredenc_free(enc) };
     }
 }
 
@@ -273,10 +322,14 @@ fn dred_encode_silk_frame_bytes_match_c_reference() {
         // is wasted effort.
         let mut c_resample = [0.0f32; 9];
         unsafe {
-            ropus_test_dredenc_copy_resample_mem(
-                c_enc as *const c_void,
-                c_resample.as_mut_ptr(),
-                9,
+            assert_eq!(
+                ropus_test_dredenc_copy_resample_mem(
+                    c_enc as *const c_void,
+                    c_resample.as_mut_ptr(),
+                    9,
+                ),
+                OPUS_OK,
+                "C resample-memory copy rejected its valid length"
             );
         }
         if let Some((idx, cv, rv)) = first_f32_divergent(&c_resample, &r_enc.resample_mem) {
@@ -289,10 +342,14 @@ fn dred_encode_silk_frame_bytes_match_c_reference() {
             let n = 2 * ropus::dnn::dred::DRED_FRAME_SIZE;
             let mut c_in = vec![0.0f32; n];
             unsafe {
-                ropus_test_dredenc_copy_input_buffer(
-                    c_enc as *const c_void,
-                    c_in.as_mut_ptr(),
-                    n as i32,
+                assert_eq!(
+                    ropus_test_dredenc_copy_input_buffer(
+                        c_enc as *const c_void,
+                        c_in.as_mut_ptr(),
+                        n as i32,
+                    ),
+                    OPUS_OK,
+                    "C input-buffer copy rejected its valid length"
                 );
             }
             if let Some((idx, cv, rv)) = first_f32_divergent(&c_in, &r_enc.input_buffer[..n]) {
@@ -330,10 +387,14 @@ fn dred_encode_silk_frame_bytes_match_c_reference() {
         if c_fill > 0 {
             let mut c_feat = vec![0.0f32; 36];
             unsafe {
-                ropus_test_dredenc_copy_lpcnet_features(
-                    c_enc as *const c_void,
-                    c_feat.as_mut_ptr(),
-                    36,
+                assert_eq!(
+                    ropus_test_dredenc_copy_lpcnet_features(
+                        c_enc as *const c_void,
+                        c_feat.as_mut_ptr(),
+                        36,
+                    ),
+                    OPUS_OK,
+                    "C LPCNet-feature copy rejected its valid length"
                 );
             }
             let r_feat = &r_enc.lpcnet_enc_state.features[..36];
@@ -349,7 +410,11 @@ fn dred_encode_silk_frame_bytes_match_c_reference() {
         if c_fill > 0 {
             let mut c_lat = vec![0.0f32; 25];
             unsafe {
-                ropus_test_dredenc_copy_latents(c_enc as *const c_void, c_lat.as_mut_ptr(), 25);
+                assert_eq!(
+                    ropus_test_dredenc_copy_latents(c_enc as *const c_void, c_lat.as_mut_ptr(), 25,),
+                    OPUS_OK,
+                    "C latent copy rejected its valid length"
+                );
             }
             let r_lat = &r_enc.latents_buffer[..25];
             if let Some((idx, cv, rv)) = first_f32_divergent(&c_lat, r_lat) {
@@ -361,7 +426,11 @@ fn dred_encode_silk_frame_bytes_match_c_reference() {
             // Also spot-check state bank.
             let mut c_state = vec![0.0f32; 50];
             unsafe {
-                ropus_test_dredenc_copy_state(c_enc as *const c_void, c_state.as_mut_ptr(), 50);
+                assert_eq!(
+                    ropus_test_dredenc_copy_state(c_enc as *const c_void, c_state.as_mut_ptr(), 50,),
+                    OPUS_OK,
+                    "C state copy rejected its valid length"
+                );
             }
             let r_state = &r_enc.state_buffer[..50];
             if let Some((idx, cv, rv)) = first_f32_divergent(&c_state, r_state) {

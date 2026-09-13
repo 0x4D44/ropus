@@ -32,7 +32,7 @@ use ropus::dnn::dred_stats::{
 use ropus::dnn::embedded_weights::WEIGHTS_BLOB;
 
 use ropus_harness_deep_plc::{
-    ropus_test_dred_rdovae_dec_init_states, ropus_test_dred_rdovae_decode_qframe,
+    OPUS_OK, ropus_test_dred_rdovae_dec_init_states, ropus_test_dred_rdovae_decode_qframe,
     ropus_test_rdovae_dec_state_free, ropus_test_rdovae_dec_state_new, ropus_test_rdovaedec_free,
     ropus_test_rdovaedec_new,
 };
@@ -162,9 +162,18 @@ fn rdovae_decode_qframe_matches_c_reference() {
     // start of each DRED payload.
     let initial_state = synth_initial_state();
     assert_finite_slice("RDOVAE decoder initial state", &initial_state);
-    unsafe {
-        ropus_test_dred_rdovae_dec_init_states(c_state, c_model, initial_state.as_ptr());
-    }
+    let c_init_ret = unsafe {
+        ropus_test_dred_rdovae_dec_init_states(
+            c_state,
+            c_model,
+            initial_state.as_ptr(),
+            initial_state.len() as i32,
+        )
+    };
+    assert_eq!(
+        c_init_ret, OPUS_OK,
+        "C RDOVAE decoder rejected valid state length"
+    );
     rust_state.init_states(&rust_model, &initial_state);
 
     // Track running tier-1 / tier-2 outcomes across frames.
@@ -179,14 +188,20 @@ fn rdovae_decode_qframe_matches_c_reference() {
 
         // --- C forward pass ---
         let mut c_qframe = vec![0.0f32; DEC_QFRAME_WIDTH];
-        unsafe {
+        let c_ret = unsafe {
             ropus_test_dred_rdovae_decode_qframe(
                 c_state,
                 c_model,
                 c_qframe.as_mut_ptr(),
                 input.as_ptr(),
-            );
-        }
+                c_qframe.len() as i32,
+                input.len() as i32,
+            )
+        };
+        assert_eq!(
+            c_ret, OPUS_OK,
+            "C RDOVAE decoder rejected valid buffer lengths"
+        );
 
         // --- Rust forward pass ---
         let mut r_qframe = vec![0.0f32; DEC_QFRAME_WIDTH];
@@ -315,9 +330,18 @@ fn decode_qframe_diff_quantised_inputs() {
     let quantised_state = quantise_state(&seed_state, 0);
 
     // Seed both decoders from the same quantised state.
-    unsafe {
-        ropus_test_dred_rdovae_dec_init_states(c_dec_state, c_dec_model, quantised_state.as_ptr());
-    }
+    let c_init_ret = unsafe {
+        ropus_test_dred_rdovae_dec_init_states(
+            c_dec_state,
+            c_dec_model,
+            quantised_state.as_ptr(),
+            quantised_state.len() as i32,
+        )
+    };
+    assert_eq!(
+        c_init_ret, OPUS_OK,
+        "C RDOVAE decoder rejected valid state length"
+    );
     rust_dec_state.init_states(&rust_dec_model, &quantised_state);
 
     const NUM_FRAMES_QUANT: usize = 8;
@@ -355,14 +379,20 @@ fn decode_qframe_diff_quantised_inputs() {
 
         // --- C forward pass ---
         let mut c_qframe = vec![0.0f32; 80];
-        unsafe {
+        let c_ret = unsafe {
             ropus_test_dred_rdovae_decode_qframe(
                 c_dec_state,
                 c_dec_model,
                 c_qframe.as_mut_ptr(),
                 dec_input.as_ptr(),
-            );
-        }
+                c_qframe.len() as i32,
+                dec_input.len() as i32,
+            )
+        };
+        assert_eq!(
+            c_ret, OPUS_OK,
+            "C RDOVAE decoder rejected valid buffer lengths"
+        );
         // --- Rust forward pass ---
         let mut r_qframe = vec![0.0f32; 80];
         rust_dec_state.decode_qframe(&rust_dec_model, &mut r_qframe, &dec_input);

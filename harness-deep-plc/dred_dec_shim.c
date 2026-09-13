@@ -14,6 +14,7 @@
 #include "dred_rdovae_dec_data.h"
 #include "dred_rdovae_constants.h"
 #include "nnet.h"
+#include "opus_defines.h"
 
 /* Defined by `dred_rdovae_dec_data.c` (array of named weight descriptors
  * terminated by {NULL, 0, 0, NULL}). */
@@ -47,26 +48,40 @@ void ropus_test_rdovae_dec_state_free(void *state) {
 }
 
 /* Thin wrapper around the C init helper; fixed `arch = 0` (scalar). */
-void ropus_test_dred_rdovae_dec_init_states(
+int ropus_test_dred_rdovae_dec_init_states(
     void *state,
     const void *model,
-    const float *initial_state
+    const float *initial_state,
+    int initial_state_len
 ) {
+    if (state == NULL || model == NULL || initial_state == NULL
+        || initial_state_len < 0 || initial_state_len != DRED_STATE_DIM) {
+        return OPUS_BAD_ARG;
+    }
     dred_rdovae_dec_init_states(
         (RDOVAEDecState *)state,
         (const RDOVAEDec *)model,
         initial_state,
         /* arch = */ 0
     );
+    return OPUS_OK;
 }
 
 /* Thin wrapper around the C forward pass; fixed `arch = 0` (scalar). */
-void ropus_test_dred_rdovae_decode_qframe(
+int ropus_test_dred_rdovae_decode_qframe(
     void *state,
     const void *model,
     float *qframe,
-    const float *input
+    const float *input,
+    int qframe_len,
+    int input_len
 ) {
+    if (state == NULL || model == NULL || qframe == NULL || input == NULL
+        || qframe_len < 0 || input_len < 0
+        || qframe_len != 4 * DRED_NUM_FEATURES
+        || input_len != DRED_LATENT_DIM + 1) {
+        return OPUS_BAD_ARG;
+    }
     dred_rdovae_decode_qframe(
         (RDOVAEDecState *)state,
         (const RDOVAEDec *)model,
@@ -74,4 +89,5 @@ void ropus_test_dred_rdovae_decode_qframe(
         input,
         /* arch = */ 0
     );
+    return OPUS_OK;
 }

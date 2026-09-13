@@ -16,7 +16,7 @@ use ropus::dnn::embedded_weights::WEIGHTS_BLOB;
 use ropus::dnn::lpcnet::NB_TOTAL_FEATURES;
 
 use ropus_harness_deep_plc::{
-    ropus_test_dred_compute_latents, ropus_test_dredenc_copy_lpcnet_features,
+    OPUS_OK, ropus_test_dred_compute_latents, ropus_test_dredenc_copy_lpcnet_features,
     ropus_test_dredenc_free, ropus_test_dredenc_latents_buffer_fill, ropus_test_dredenc_new,
 };
 
@@ -488,10 +488,14 @@ fn test_dred_lpcnet_feature_drift_is_bounded_against_c_reference() {
         if c_fill > 0 {
             let mut c_feat = vec![0.0f32; NB_TOTAL_FEATURES];
             unsafe {
-                ropus_test_dredenc_copy_lpcnet_features(
-                    c_enc as *const c_void,
-                    c_feat.as_mut_ptr(),
-                    NB_TOTAL_FEATURES as i32,
+                assert_eq!(
+                    ropus_test_dredenc_copy_lpcnet_features(
+                        c_enc as *const c_void,
+                        c_feat.as_mut_ptr(),
+                        NB_TOTAL_FEATURES as i32,
+                    ),
+                    OPUS_OK,
+                    "C LPCNet-feature copy rejected its valid length"
                 );
             }
             let r_feat = r_enc.lpcnet_enc_state.features[..NB_TOTAL_FEATURES].to_vec();

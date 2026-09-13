@@ -13,6 +13,7 @@
 #include "dred_rdovae_enc_data.h"
 #include "dred_rdovae_constants.h"
 #include "nnet.h"
+#include "opus_defines.h"
 
 /* Defined by `dred_rdovae_enc_data.c` (array of named weight descriptors
  * terminated by {NULL, 0, 0, NULL}). */
@@ -46,13 +47,23 @@ void ropus_test_rdovae_enc_state_free(void *state) {
 }
 
 /* Thin wrapper around the C forward pass; fixed `arch = 0` (scalar). */
-void ropus_test_dred_rdovae_encode_dframe(
+int ropus_test_dred_rdovae_encode_dframe(
     void *state,
     const void *model,
     float *latents,
     float *initial_state,
-    const float *input
+    const float *input,
+    int latents_len,
+    int initial_state_len,
+    int input_len
 ) {
+    if (state == NULL || model == NULL || latents == NULL || initial_state == NULL
+        || input == NULL || latents_len < 0 || initial_state_len < 0
+        || input_len < 0 || latents_len != DRED_LATENT_DIM
+        || initial_state_len != DRED_STATE_DIM
+        || input_len != 2 * DRED_NUM_FEATURES) {
+        return OPUS_BAD_ARG;
+    }
     dred_rdovae_encode_dframe(
         (RDOVAEEncState *)state,
         (const RDOVAEEnc *)model,
@@ -61,4 +72,5 @@ void ropus_test_dred_rdovae_encode_dframe(
         input,
         /* arch = */ 0
     );
+    return OPUS_OK;
 }

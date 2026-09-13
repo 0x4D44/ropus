@@ -28,8 +28,8 @@ use ropus::dnn::dred::{
 };
 
 use ropus_harness_deep_plc::{
-    ropus_test_dred_ec_decode, ropus_test_dred_encode_silk_frame, ropus_test_dredenc_free,
-    ropus_test_dredenc_new, ropus_test_dredenc_set_bookkeeping,
+    OPUS_BAD_ARG, ropus_test_dred_ec_decode, ropus_test_dred_encode_silk_frame,
+    ropus_test_dredenc_free, ropus_test_dredenc_new, ropus_test_dredenc_set_bookkeeping,
     ropus_test_dredenc_set_latents_buffer, ropus_test_dredenc_set_state_buffer,
 };
 
@@ -62,7 +62,7 @@ fn first_f32_divergence(a: &[f32], b: &[f32]) -> Option<(usize, f32, f32)> {
 
 #[cfg(test)]
 mod oracle_tests {
-    use super::first_f32_divergence;
+    use super::{DRED_STATE_DIM, OPUS_BAD_ARG, first_f32_divergence, ropus_test_dred_ec_decode};
 
     #[test]
     #[should_panic(expected = "non-finite")]
@@ -75,6 +75,28 @@ mod oracle_tests {
     #[should_panic(expected = "equal lengths")]
     fn first_f32_divergence_rejects_unequal_lengths() {
         let _ = first_f32_divergence(&[0.0], &[]);
+    }
+
+    #[test]
+    fn c_decode_rejects_mismatched_output_lengths() {
+        let bytes = [0u8; 1];
+        let mut state = [0.0f32; DRED_STATE_DIM];
+        let ret = unsafe {
+            ropus_test_dred_ec_decode(
+                bytes.as_ptr(),
+                1,
+                0,
+                0,
+                state.as_mut_ptr(),
+                (DRED_STATE_DIM - 1) as i32,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(ret, OPUS_BAD_ARG);
     }
 }
 
@@ -103,7 +125,7 @@ fn dred_ec_decode_matches_c_on_c_emitted_payload() {
             latents_input[2 * chunk * DRED_LATENT_DIM + i] = synth_float(&mut seed);
         }
     }
-    let activity_mem = vec![1u8; 4 * DRED_MAX_FRAMES];
+    let mut activity_mem = vec![1u8; 4 * DRED_MAX_FRAMES];
 
     // --- C side: allocate, seed, encode ---
     let c_enc = unsafe { ropus_test_dredenc_new(48000, 1) };
@@ -112,11 +134,17 @@ fn dred_ec_decode_matches_c_on_c_emitted_payload() {
         "C dredenc_new failed (weights blob probably absent)"
     );
     unsafe {
-        ropus_test_dredenc_set_state_buffer(c_enc, state_input.as_ptr(), DRED_STATE_DIM as i32);
-        ropus_test_dredenc_set_latents_buffer(
-            c_enc,
-            latents_input.as_ptr(),
-            latents_input.len() as i32,
+        assert_eq!(
+            ropus_test_dredenc_set_state_buffer(c_enc, state_input.as_ptr(), DRED_STATE_DIM as i32,),
+            ropus_harness_deep_plc::OPUS_OK
+        );
+        assert_eq!(
+            ropus_test_dredenc_set_latents_buffer(
+                c_enc,
+                latents_input.as_ptr(),
+                latents_input.len() as i32,
+            ),
+            ropus_harness_deep_plc::OPUS_OK
         );
         ropus_test_dredenc_set_bookkeeping(
             c_enc,
@@ -136,7 +164,7 @@ fn dred_ec_decode_matches_c_on_c_emitted_payload() {
             q0,
             d_q,
             qmax,
-            activity_mem.as_ptr() as *mut _,
+            activity_mem.as_mut_ptr(),
         )
     };
     unsafe { ropus_test_dredenc_free(c_enc) };
@@ -198,7 +226,9 @@ fn dred_ec_decode_matches_c_on_c_emitted_payload() {
             2 * NUM_CHUNKS,
             0,
             c_state.as_mut_ptr(),
+            c_state.len() as i32,
             c_latents.as_mut_ptr(),
+            c_latents.len() as i32,
             &mut c_nb_latents,
             &mut c_process_stage,
             &mut c_dred_offset,

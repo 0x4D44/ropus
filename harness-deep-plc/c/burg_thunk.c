@@ -14,7 +14,18 @@
  */
 
 #include "freq.h"
+#include "opus_defines.h"
 
-void ropus_test_burg_cepstral_analysis(const float *x, float *ceps) {
+int ropus_test_burg_cepstral_analysis(
+    const float *x,
+    float *ceps,
+    int x_len,
+    int ceps_len
+) {
+    if (x == NULL || ceps == NULL || x_len < 0 || ceps_len < 0
+        || x_len != FRAME_SIZE || ceps_len != 2 * NB_BANDS) {
+        return OPUS_BAD_ARG;
+    }
     burg_cepstral_analysis(ceps, x);
+    return OPUS_OK;
 }

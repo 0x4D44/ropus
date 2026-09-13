@@ -23,7 +23,7 @@ use ropus::dnn::dred::{
 use ropus::dnn::embedded_weights::WEIGHTS_BLOB;
 
 use ropus_harness_deep_plc::{
-    ropus_test_dred_rdovae_encode_dframe, ropus_test_rdovae_enc_state_free,
+    OPUS_OK, ropus_test_dred_rdovae_encode_dframe, ropus_test_rdovae_enc_state_free,
     ropus_test_rdovae_enc_state_new, ropus_test_rdovaeenc_free, ropus_test_rdovaeenc_new,
 };
 
@@ -134,15 +134,22 @@ fn rdovae_encode_dframe_matches_c_reference() {
         // --- C forward pass ---
         let mut c_latents = vec![0.0f32; DRED_LATENT_DIM];
         let mut c_initial_state = vec![0.0f32; DRED_STATE_DIM];
-        unsafe {
+        let c_ret = unsafe {
             ropus_test_dred_rdovae_encode_dframe(
                 c_state,
                 c_model,
                 c_latents.as_mut_ptr(),
                 c_initial_state.as_mut_ptr(),
                 input.as_ptr(),
-            );
-        }
+                c_latents.len() as i32,
+                c_initial_state.len() as i32,
+                input.len() as i32,
+            )
+        };
+        assert_eq!(
+            c_ret, OPUS_OK,
+            "C RDOVAE encoder rejected valid buffer lengths"
+        );
 
         // --- Rust forward pass ---
         let mut r_latents = vec![0.0f32; DRED_LATENT_DIM];

@@ -19,7 +19,7 @@
 //! pointer. No priming or warm-up frame is required.
 
 use ropus::dnn::lpcnet::{FRAME_SIZE, NB_BANDS, burg_cepstral_analysis};
-use ropus_harness_deep_plc::ropus_test_burg_cepstral_analysis;
+use ropus_harness_deep_plc::{OPUS_OK, ropus_test_burg_cepstral_analysis};
 
 #[path = "support/finite_oracle.rs"]
 #[allow(dead_code)] // The shared module also exposes slice-only guards.
@@ -43,9 +43,15 @@ fn run_diff(fixture_name: &str, x: &[f32; FRAME_SIZE]) {
     burg_cepstral_analysis(&mut ceps_rust, x);
 
     let mut ceps_c = [0.0f32; NB_OUTPUTS];
-    unsafe {
-        ropus_test_burg_cepstral_analysis(x.as_ptr(), ceps_c.as_mut_ptr());
-    }
+    let c_ret = unsafe {
+        ropus_test_burg_cepstral_analysis(
+            x.as_ptr(),
+            ceps_c.as_mut_ptr(),
+            x.len() as i32,
+            ceps_c.len() as i32,
+        )
+    };
+    assert_eq!(c_ret, OPUS_OK, "C Burg shim rejected valid buffer lengths");
 
     if let Some((i, rust_value, c_value)) = first_f32_divergence(&ceps_rust, &ceps_c) {
         let r_bits = rust_value.to_bits();
