@@ -233,6 +233,17 @@ pub fn validate_opus_audio_packet(data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Require the OpusHead and OpusTags packets to belong to one logical Ogg
+/// stream. The tools do not support selecting metadata across multiplexed
+/// streams, so a cross-serial header pair must fail before any metadata is
+/// trusted or displayed.
+pub fn validate_opus_header_stream(head_serial: u32, tags_serial: u32) -> Result<()> {
+    if tags_serial != head_serial {
+        bail!("OpusTags packet belongs to a different Ogg stream");
+    }
+    Ok(())
+}
+
 /// Sentinel value meaning "unknown granule position" per RFC 3533 §6. Pages
 /// with this granule are excluded from `read_page_granules` so they don't
 /// masquerade as a huge backwards jump from a real absgp.
@@ -812,6 +823,19 @@ mod tests {
         let error = validate_opus_audio_packet(&[]).expect_err("empty packet must be malformed");
         assert!(error.to_string().contains("empty Opus audio packet"));
         validate_opus_audio_packet(&[0x00]).expect("a packet with a TOC byte is non-empty");
+    }
+
+    #[test]
+    fn opus_header_stream_rejects_cross_serial_tags() {
+        let error = validate_opus_header_stream(0x1111_1111, 0x2222_2222)
+            .expect_err("cross-stream headers must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("OpusTags packet belongs to a different Ogg stream")
+        );
+        validate_opus_header_stream(0x1111_1111, 0x1111_1111)
+            .expect("matching header serials must be accepted");
     }
 
     #[test]

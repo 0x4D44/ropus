@@ -20,7 +20,7 @@ use ogg::reading::PacketReader;
 use crate::consts::OPUS_SR;
 use crate::container::ogg::{
     GranuleGap, OpusHead, OpusTags, detect_granule_gaps, parse_opus_head, read_last_granule,
-    read_page_granules, validate_opus_audio_packet,
+    read_page_granules, validate_opus_audio_packet, validate_opus_header_stream,
 };
 use crate::container::toc::decode_toc;
 use crate::options::InfoOptions;
@@ -195,6 +195,7 @@ fn collect_summary(input: &std::path::Path, retain_packets: bool) -> Result<Info
     let tags_pkt = reader
         .read_packet()?
         .ok_or_else(|| anyhow!("expected OpusTags packet, got end of stream"))?;
+    validate_opus_header_stream(target_serial, tags_pkt.stream_serial())?;
     let tags = OpusTags::parse(&tags_pkt.data).context("parsing OpusTags packet")?;
 
     let opus_channels = channel_count_to_ropus(head.channels as usize)?;
@@ -450,6 +451,7 @@ fn read_head_and_tags(input: &std::path::Path) -> Result<(OpusHead, OpusTags, u3
     let tags_pkt = reader
         .read_packet()?
         .ok_or_else(|| anyhow!("expected OpusTags packet, got end of stream"))?;
+    validate_opus_header_stream(target_serial, tags_pkt.stream_serial())?;
     let tags = OpusTags::parse(&tags_pkt.data).context("parsing OpusTags packet")?;
     Ok((head, tags, target_serial, file_len))
 }
@@ -482,10 +484,11 @@ fn validate_query_packets(input: &std::path::Path, target_serial: u32) -> Result
     let file =
         File::open(input).with_context(|| format!("opening {}", escape_terminal_path(input)))?;
     let mut reader = PacketReader::new(BufReader::new(file));
-    reader.read_packet()?.ok_or_else(|| anyhow!("empty file"))?;
-    reader
+    let _head_pkt = reader.read_packet()?.ok_or_else(|| anyhow!("empty file"))?;
+    let tags_pkt = reader
         .read_packet()?
         .ok_or_else(|| anyhow!("expected OpusTags packet, got end of stream"))?;
+    validate_opus_header_stream(target_serial, tags_pkt.stream_serial())?;
 
     let mut packet_idx = 0u64;
     while let Some(pkt) = reader.read_packet()? {
@@ -506,10 +509,11 @@ fn decode_sample_count(input: &std::path::Path, head: OpusHead) -> Result<u64> {
     let mut reader = PacketReader::new(BufReader::new(file));
     // Skip OpusHead and OpusTags; the first packet is validated against the
     // caller's head, while the tags payload is intentionally not parsed.
-    reader.read_packet()?.ok_or_else(|| anyhow!("empty file"))?;
-    reader
+    let head_pkt = reader.read_packet()?.ok_or_else(|| anyhow!("empty file"))?;
+    let tags_pkt = reader
         .read_packet()?
         .ok_or_else(|| anyhow!("expected OpusTags packet, got end of stream"))?;
+    validate_opus_header_stream(head_pkt.stream_serial(), tags_pkt.stream_serial())?;
 
     let opus_channels = channel_count_to_ropus(head.channels as usize)?;
     let max_per_ch = (OPUS_SR / 1000 * 120) as usize;

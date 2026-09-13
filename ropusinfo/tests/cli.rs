@@ -12,6 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ropus_tools_core::audio::wav::write_wav_pcm16;
 use ropus_tools_core::commands;
+use ropus_tools_core::container::ogg::OpusTags;
 use ropus_tools_core::options::EncodeOptions;
 
 /// Produce a short `.opus` file in the system temp directory and return its
@@ -158,6 +159,34 @@ fn write_incomplete_invalid_opus(tag: &str) -> PathBuf {
         &invalid_audio,
     ));
     std::fs::write(&path, bytes).expect("write incomplete invalid Opus fixture");
+    path
+}
+
+fn write_cross_stream_header_opus(tag: &str) -> PathBuf {
+    let nonce = format!(
+        "{}_{}_{}",
+        tag,
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let path = std::env::temp_dir().join(format!("ropusinfo_cli_{nonce}.opus"));
+    let head_serial = 0x1111_1111;
+    let tags_serial = 0x2222_2222;
+    let head = [
+        b'O', b'p', b'u', b's', b'H', b'e', b'a', b'd', 1, 1, 0, 0, 0x80, 0xbb, 0, 0, 0, 0, 0,
+    ];
+    let tags = OpusTags {
+        vendor: "wrong-stream".to_owned(),
+        comments: vec!["ARTIST=Wrong".to_owned()],
+    }
+    .encode();
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&build_ogg_page(head_serial, 0, 0x02, 0, &head));
+    bytes.extend_from_slice(&build_ogg_page(tags_serial, 0, 0x02, 0, &tags));
+    std::fs::write(&path, bytes).expect("write cross-stream header fixture");
     path
 }
 
@@ -373,6 +402,54 @@ fn info_query_unknown_key_exits_2() {
     );
 
     let _ = std::fs::remove_file(&opus);
+}
+
+#[test]
+fn info_rejects_cross_stream_tags_before_strict_output() {
+    let opus = write_cross_stream_header_opus("cross_stream_headers");
+    let path = opus.to_str().expect("path utf8");
+
+    let (stdout, stderr, code) = run_ropusinfo(&[path]);
+    assert_ne!(code, 0, "default info must reject cross-stream tags");
+    assert!(
+        !stdout.contains("Vendor:"),
+        "default info must not print a partial metadata block; stdout={stdout:?}"
+    );
+    assert!(
+        stderr.contains("OpusTags packet belongs to a different Ogg stream"),
+        "default error must identify the stream mismatch; stderr={stderr:?}"
+    );
+
+    // Vendor/comment consume the tags packet directly. Duration/bitrate first
+    // use the EOS fast path, then validate the same header pair before output.
+    for query in ["vendor", "comment:artist", "duration", "bitrate"] {
+        let (stdout, stderr, code) = run_ropusinfo(&["--query", query, path]);
+        assert_ne!(code, 0, "{query} must reject cross-stream tags");
+        assert!(stdout.is_empty(), "{query} must not print a partial scalar");
+        assert!(
+            stderr.contains("OpusTags packet belongs to a different Ogg stream"),
+            "{query} error must identify the stream mismatch; stderr={stderr:?}"
+        );
+    }
+
+    // Fixed header queries intentionally stop after OpusHead and remain
+    // usable without loading or trusting the tags packet.
+    for (query, expected) in [
+        ("channels", "1"),
+        ("samplerate", "48000"),
+        ("preskip", "0"),
+        ("gain", "0.0"),
+    ] {
+        let (stdout, stderr, code) = run_ropusinfo(&["--query", query, path]);
+        assert_eq!(code, 0, "{query} should use the valid OpusHead");
+        assert_eq!(stdout.trim_end(), expected);
+        assert!(
+            stderr.is_empty(),
+            "{query} should not emit an error: {stderr:?}"
+        );
+    }
+
+    let _ = std::fs::remove_file(opus);
 }
 
 #[test]

@@ -25,7 +25,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::audio::decode::{DecodedAudio, MAX_GAIN_DB, MIN_GAIN_DB, decode_to_f32_with_gain};
-use crate::container::ogg::OpusTags;
+use crate::container::ogg::{OpusTags, validate_opus_header_stream};
 use crate::options::{LoopMode, PlayOptions};
 use crate::ui::{escape_terminal_path, escape_terminal_text};
 
@@ -624,9 +624,11 @@ fn read_opus_tags_from_file(path: &Path) -> Option<OpusTags> {
     }
     let file = File::open(path).ok()?;
     let mut reader = PacketReader::new(BufReader::new(file));
-    // First packet is OpusHead; skip it.
-    let _head = reader.read_packet().ok().flatten()?;
+    // First packet is OpusHead; retain its serial so tags cannot come from a
+    // different logical stream in a multiplexed Ogg file.
+    let head_pkt = reader.read_packet().ok().flatten()?;
     let tags_pkt = reader.read_packet().ok().flatten()?;
+    validate_opus_header_stream(head_pkt.stream_serial(), tags_pkt.stream_serial()).ok()?;
     OpusTags::parse(&tags_pkt.data).ok()
 }
 
@@ -840,6 +842,8 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::path::PathBuf;
+
+    use ogg::writing::{PacketWriteEndInfo, PacketWriter};
 
     /// Per-test scratch directory under `std::env::temp_dir()`. We avoid the
     /// `tempfile` crate (not a declared dep) and manage cleanup on Drop so a
@@ -1080,6 +1084,45 @@ mod tests {
         // An empty path has no file_stem → we emit "unknown" rather than
         // panicking or returning "".
         assert_eq!(resolve_display_name(&tags, Path::new("")), "unknown");
+    }
+
+    #[test]
+    fn mismatched_header_tags_fall_back_to_filename_stem() {
+        let scratch = ScratchDir::new("cross_stream_tags");
+        let path = scratch.path().join("track.opus");
+        let mut file = File::create(&path).expect("create fixture");
+        let mut writer = PacketWriter::new(&mut file);
+        writer
+            .write_packet(
+                crate::container::ogg::build_opus_head(1, 48_000, 0),
+                0x1111_1111,
+                PacketWriteEndInfo::EndPage,
+                0,
+            )
+            .expect("write OpusHead");
+        writer
+            .write_packet(
+                (OpusTags {
+                    vendor: "wrong-stream".into(),
+                    comments: vec!["TITLE=Wrong".into()],
+                })
+                .encode(),
+                0x2222_2222,
+                PacketWriteEndInfo::EndPage,
+                0,
+            )
+            .expect("write mismatched OpusTags");
+        drop(writer);
+
+        assert!(
+            read_opus_tags_from_file(&path).is_none(),
+            "playback must discard tags from another logical stream"
+        );
+        assert_eq!(
+            resolve_display_name(&OpusTags::default(), &path),
+            "track",
+            "discarded tags must use the filename stem"
+        );
     }
 
     // -- format_status_line: glyph ----------------------------------------

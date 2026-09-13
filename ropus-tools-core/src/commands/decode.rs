@@ -32,6 +32,7 @@ use crate::audio::wav::{
 use crate::consts::OPUS_SR;
 use crate::container::ogg::{
     OpusTags, UNKNOWN_GRANULE, parse_opus_head, validate_opus_audio_packet,
+    validate_opus_header_stream,
 };
 use crate::container::toc::decode_toc;
 use crate::options::{DecodeOptions, OutputPolicy};
@@ -203,9 +204,7 @@ pub fn decode_with_policy(opts: DecodeOptions, policy: OutputPolicy) -> Result<(
     let tags_pkt = reader
         .read_packet()?
         .ok_or_else(|| anyhow!("expected OpusTags packet, got end of stream"))?;
-    if tags_pkt.stream_serial() != stream_serial {
-        bail!("OpusTags packet belongs to a different Ogg stream");
-    }
+    validate_opus_header_stream(stream_serial, tags_pkt.stream_serial())?;
     let tags = OpusTags::parse(&tags_pkt.data).context("parsing OpusTags packet")?;
     report!(
         "tags     vendor={}, {} comments",
