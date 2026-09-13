@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00046 — Strict info queries accept malformed nonempty Opus packets
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/info-validation
 - **Raised:** 2026-08-22T07:33:50Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T062804Z-d5c7031e
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00046-run-fix-20260913T062804Z-d5c7031e
-- **Owner base:** 6b4c76b22d095be7c40c20933b832ae82cbf95cc
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T06:28:04Z
-- **Owner until:** 2026-09-13T08:28:04Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T07:33:50Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-08-22T07:33:50Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T06:46:44Z, deltic:auto role=fix run=fix-20260913T062804Z-d5c7031e branch=task/bug-ROP-BUG-KIL-00046-run-fix-20260913T062804Z-d5c7031e code=1fcd1765bd2961ef8157b902da62c4ac4c39d700 gate=manual)
 
 ## Observation
 
