@@ -6,15 +6,15 @@
 - **Area:** capi/allocation-errors
 - **Raised:** 2026-08-14T14:26:03Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T022358Z-e9856244
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00001-run-fix-20260913T022358Z-e9856244
+- **Owner base:** ea8d8ba9c6fe0acad2f8a8181f009f43e1317792
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T02:23:58Z
+- **Owner until:** 2026-09-13T04:23:58Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
