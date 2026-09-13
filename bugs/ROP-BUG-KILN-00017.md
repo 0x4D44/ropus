@@ -6,15 +6,15 @@
 - **Area:** harness-control/artifact-isolation
 - **Raised:** 2026-08-16T07:49:54Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T142808Z-17d42cd6
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KILN-00017-run-verify-20260913T142808Z-17d42cd6
+- **Owner base:** 8e946d8f28f87e0215a0545c04260043eb1d0597
+- **Owner fingerprint:** sha256:61a7b9712574a368b68b7e0169a30a2cf5e19909176d185a535534adfec4793a
+- **Owner since:** 2026-09-13T14:28:08Z
+- **Owner until:** 2026-09-13T16:28:08Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
