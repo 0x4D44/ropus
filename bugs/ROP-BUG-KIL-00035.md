@@ -6,15 +6,15 @@
 - **Area:** ropus-fb2k/malformed-audio
 - **Raised:** 2026-08-22T06:10:44Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T045820Z-394d7194
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00035-run-fix-20260913T045820Z-394d7194
+- **Owner base:** 5edc20247d0e5bea40c24bbe99bc7e29a36213ea
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T04:58:20Z
+- **Owner until:** 2026-09-13T06:58:20Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
