@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00027 — build.rs sentinel guard misses partially-extracted weights tarball
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** harness-deep-plc/build
 - **Raised:** 2026-08-19T10:46:21Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T015731Z-54a4eb27
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00027-run-fix-20260913T015731Z-54a4eb27
-- **Owner base:** 0f919bc8ba093ced305fef843bfa0cd576137576
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T01:57:31Z
-- **Owner until:** 2026-09-13T03:57:31Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-19T10:46:21Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-19T10:46:21Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T02:03:50Z, deltic:auto role=fix run=fix-20260913T015731Z-54a4eb27 branch=task/bug-ROP-BUG-KIL-00027-run-fix-20260913T015731Z-54a4eb27 code=2d8b1e7dabbac7b3e9ce532a1c63c3170e247080 gate=manual)
 
 ## Observation
 
