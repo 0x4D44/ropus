@@ -6,15 +6,15 @@
 - **Area:** full-test/diagnostics
 - **Raised:** 2026-08-14T15:50:28Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T150341Z-f7799433
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00013-run-verify-20260913T150341Z-f7799433
-- **Owner base:** 9a22fe6006e4a6712fff97903b59a090605b1292
-- **Owner fingerprint:** sha256:ae87349ea3f2904362e8bd2a1a81ac72d3b4f817276ab5c94555b95677a0f02d
-- **Owner since:** 2026-09-13T15:03:41Z
-- **Owner until:** 2026-09-13T17:03:41Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
