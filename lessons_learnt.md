@@ -1,3 +1,9 @@
+- Keep float scratch on `OpusDecoder` (`decoder.rs:decode_float`); compare post-warmup allocations with integer decode.
+
+  The integer path provides a stable baseline when the codec core itself has
+  legitimate temporary work. This isolates wrapper churn and proves that
+  steady-state float decoding does not add a heap allocation per packet.
+
 - Classical PLC SNR cannot calibrate neural PLC; use direct Rust-vs-C fixtures and loss patterns (tier2_snr.rs).
 
   Classical LPC/LTP and neural concealment propagate arithmetic error through

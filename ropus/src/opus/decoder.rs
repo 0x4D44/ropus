@@ -8,7 +8,7 @@
 //! weights; the classical (noise / periodic) PLC is still used for
 //! frames where DNN synthesis isn't selected.
 
-use crate::allocation::try_box;
+use crate::allocation::{try_box, try_vec_with_len};
 use crate::celt::decoder::CeltDecoder;
 use crate::celt::math_ops::celt_exp2;
 use crate::celt::range_coder::RangeDecoder;
@@ -514,6 +514,10 @@ pub struct OpusDecoder {
     last_packet_duration: i32,
     range_final: u32,
 
+    // Reused by decode_float so the audio-thread wrapper does not allocate a
+    // temporary integer PCM buffer for every packet.
+    decode_float_scratch: Vec<i16>,
+
     // --- Neural PLC / DRED FEC state ---
     // Boxed so adding this field doesn't grow `OpusDecoder`'s stack
     // footprint by the full LPCNet state (several tens of KB of arrays
@@ -544,6 +548,9 @@ impl OpusDecoder {
         // complexity 0 while CELT starts at 5 and can take neural PLC by default.
         let _ = celt_dec.set_complexity(0);
         let silk_dec = SilkDecoder::try_new().map_err(|_| OPUS_ALLOC_FAIL)?;
+        let decode_float_scratch =
+            try_vec_with_len((fs / 25 * 3) as usize * channels as usize, 0i16)
+                .map_err(|_| OPUS_ALLOC_FAIL)?;
 
         let dec_control = SilkDecControl {
             n_channels_api: channels as usize,
@@ -572,6 +579,7 @@ impl OpusDecoder {
             prev_redundancy: false,
             last_packet_duration: 0,
             range_final: 0,
+            decode_float_scratch,
             lpcnet: try_box(LPCNetPLCState::try_new().map_err(|_| OPUS_ALLOC_FAIL)?)
                 .map_err(|_| OPUS_ALLOC_FAIL)?,
         };
@@ -1399,14 +1407,37 @@ impl OpusDecoder {
                 }
             }
         }
-        let mut out = vec![0i16; actual_frame_size as usize * self.channels as usize];
-        let ret = self.decode_native(data, &mut out, actual_frame_size, decode_fec, false, None)?;
-        // Convert i16 → f32: a / 32768.0
-        let n = ret as usize * self.channels as usize;
-        for i in 0..n {
-            pcm[i] = out[i] as f32 * (1.0 / 32768.0);
+        let sample_count = actual_frame_size as usize * self.channels as usize;
+        let mut out = std::mem::take(&mut self.decode_float_scratch);
+        if out.len() < sample_count {
+            // Normal Opus packets are bounded to 120 ms and fit the
+            // constructor-sized buffer. Retain the existing API behavior for
+            // larger PLC requests by growing the scratch only when required.
+            out.resize(sample_count, 0);
         }
-        Ok(ret)
+        // The old per-call Vec was zero-initialized. Clear the active region to
+        // preserve that behavior for PLC, DTX, and partial decode paths.
+        out[..sample_count].fill(0);
+        let ret = match self.decode_native(
+            data,
+            &mut out[..sample_count],
+            actual_frame_size,
+            decode_fec,
+            false,
+            None,
+        ) {
+            Ok(ret) => {
+                // Convert i16 → f32: a / 32768.0
+                let n = ret as usize * self.channels as usize;
+                for i in 0..n {
+                    pcm[i] = out[i] as f32 * (1.0 / 32768.0);
+                }
+                Ok(ret)
+            }
+            Err(error) => Err(error),
+        };
+        self.decode_float_scratch = out;
+        ret
     }
 
     // -----------------------------------------------------------------------
@@ -1631,6 +1662,86 @@ impl OpusDecoder {
     pub(crate) fn celt_last_frame_type(&self) -> i32 {
         self.celt_dec.last_frame_type
     }
+}
+
+// ===========================================================================
+// Test-only allocation accounting
+// ===========================================================================
+
+#[cfg(test)]
+mod allocation_counter {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    thread_local! {
+        static ENABLED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+    fn record_allocation() {
+        ENABLED.with(|enabled| {
+            if enabled.get() {
+                ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+    }
+
+    pub(crate) struct AllocationScope;
+
+    impl AllocationScope {
+        pub(crate) fn start() -> Self {
+            ALLOCATIONS.store(0, Ordering::Relaxed);
+            ENABLED.with(|enabled| enabled.set(true));
+            Self
+        }
+
+        pub(crate) fn finish(self) -> usize {
+            let allocations = ALLOCATIONS.load(Ordering::Relaxed);
+            ENABLED.with(|enabled| enabled.set(false));
+            allocations
+        }
+    }
+
+    impl Drop for AllocationScope {
+        fn drop(&mut self) {
+            ENABLED.with(|enabled| enabled.set(false));
+        }
+    }
+
+    struct CountingAllocator;
+
+    // SAFETY: This allocator only counts operations before forwarding them to
+    // the standard system allocator, so it preserves the system allocator's
+    // allocation and deallocation contract.
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            record_allocation();
+            // SAFETY: The caller supplied a valid allocation layout.
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            record_allocation();
+            // SAFETY: The caller supplied a valid allocation layout.
+            unsafe { System.alloc_zeroed(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            // SAFETY: The pointer and layout came from a prior allocation.
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            record_allocation();
+            // SAFETY: The pointer and layout came from a prior allocation.
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    #[global_allocator]
+    static GLOBAL: CountingAllocator = CountingAllocator;
 }
 
 // ===========================================================================
@@ -2235,6 +2346,51 @@ mod tests {
         assert_eq!(
             dec.decode24(Some(packet), &mut pcm24, 480, false).unwrap(),
             480
+        );
+    }
+
+    #[test]
+    fn test_decode_float_does_not_allocate_after_warmup() {
+        let mut enc = OpusEncoder::new(48000, 1, OPUS_APPLICATION_RESTRICTED_LOWDELAY).unwrap();
+        let pcm = patterned_pcm_i16(960, 1, 137);
+        let mut packet_buf = vec![0u8; 1500];
+        let packet_capacity = packet_buf.len() as i32;
+        let len = enc
+            .encode(&pcm, 960, &mut packet_buf, packet_capacity)
+            .unwrap();
+        let packet = &packet_buf[..len as usize];
+
+        let mut int_dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut int_output = vec![0i16; 960];
+        int_dec
+            .decode(Some(packet), &mut int_output, 960, false)
+            .unwrap();
+
+        let int_allocations = allocation_counter::AllocationScope::start();
+        for _ in 0..8 {
+            int_dec
+                .decode(Some(packet), &mut int_output, 960, false)
+                .unwrap();
+        }
+        let int_allocation_count = int_allocations.finish();
+
+        let mut float_dec = OpusDecoder::new(48000, 1).unwrap();
+        let mut float_output = vec![0.0f32; 960];
+        float_dec
+            .decode_float(Some(packet), &mut float_output, 960, false)
+            .unwrap();
+
+        let float_allocations = allocation_counter::AllocationScope::start();
+        for _ in 0..8 {
+            float_dec
+                .decode_float(Some(packet), &mut float_output, 960, false)
+                .unwrap();
+        }
+        let float_allocation_count = float_allocations.finish();
+
+        assert_eq!(
+            float_allocation_count, int_allocation_count,
+            "warm decode_float allocated {float_allocation_count} times versus {int_allocation_count} for decode"
         );
     }
 
