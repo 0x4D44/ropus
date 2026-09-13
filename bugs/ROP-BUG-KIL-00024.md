@@ -6,15 +6,15 @@
 - **Area:** harness-deep-plc/shims
 - **Raised:** 2026-08-19T10:46:15Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T150714Z-5b836479
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00024-run-verify-20260913T150714Z-5b836479
+- **Owner base:** e94ce1b71080bdd56a6e6a108b7f7e950c49ea07
+- **Owner fingerprint:** sha256:f70afbcf9f5a9beebd12ae772a313cd13e5c97eddfe8e5d2b79c9ba20bb91d23
+- **Owner since:** 2026-09-13T15:07:14Z
+- **Owner until:** 2026-09-13T17:07:14Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
