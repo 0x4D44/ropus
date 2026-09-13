@@ -6,15 +6,15 @@
 - **Area:** ropus-fb2k/lint
 - **Raised:** 2026-09-13T05:57:45Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T055817Z-e16ac468
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-CRU-00017-run-fix-20260913T055817Z-e16ac468
+- **Owner base:** bae57b31baa1434ef6f04469cdf5c0f05d031257
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T05:58:17Z
+- **Owner until:** 2026-09-13T07:58:17Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
