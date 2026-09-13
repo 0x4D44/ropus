@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00023 — Bit-exact differential gates accept shared NaN and silently truncate on length mismatch
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-deep-plc/tests
 - **Raised:** 2026-08-19T10:46:14Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T003640Z-30a2db99
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00023-run-fix-20260913T003640Z-30a2db99
-- **Owner base:** cb1eb2d8f0a7faf2cd65ec29442ec3114e353519
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T00:36:40Z
-- **Owner until:** 2026-09-13T02:36:40Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-19T10:46:14Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-19T10:46:14Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T00:48:35Z, deltic:auto role=fix run=fix-20260913T003640Z-30a2db99 branch=task/bug-ROP-BUG-KIL-00023-run-fix-20260913T003640Z-30a2db99 code=c0715f0560034ad0fec0130c652d9ce808d718b7 gate=manual)
 
 ## Observation
 
