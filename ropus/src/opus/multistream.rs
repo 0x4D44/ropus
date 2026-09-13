@@ -2288,8 +2288,14 @@ impl OpusProjectionEncoder {
         let input_channels = self.ms_encoder.layout.nb_channels;
         let total_stream_channels = nb_streams + nb_coupled;
 
-        // Create a mixed PCM buffer
-        let mut mixed = vec![0i16; total_stream_channels as usize * frame_size as usize];
+        // Create a mixed PCM buffer only after applying the codec's 120 ms
+        // frame limit, matching the nested multistream encoder.
+        let frame_size = frame_size.min(self.ms_encoder.get_sample_rate() / 25 * 3);
+        let Some(n_samples) = (total_stream_channels as usize).checked_mul(frame_size as usize)
+        else {
+            return Err(OPUS_BAD_ARG);
+        };
+        let mut mixed = try_vec_with_len(n_samples, 0i16).map_err(|_| OPUS_ALLOC_FAIL)?;
 
         // Apply mixing matrix channel by channel
         for ch in 0..total_stream_channels as usize {
@@ -2366,6 +2372,10 @@ impl OpusProjectionEncoder {
     /// `st->layout.nb_channels` on the reference `OpusMSEncoder`).
     pub fn nb_channels(&self) -> i32 {
         self.ms_encoder.nb_channels()
+    }
+
+    pub fn get_sample_rate(&self) -> i32 {
+        self.ms_encoder.get_sample_rate()
     }
 }
 
@@ -2454,8 +2464,14 @@ impl OpusProjectionDecoder {
         let nb_coupled = self.ms_decoder.layout.nb_coupled_streams;
         let total_stream_channels = nb_streams + nb_coupled;
 
-        // Decode to an intermediate buffer with stream channel layout
-        let mut stream_pcm = vec![0i16; total_stream_channels as usize * frame_size as usize];
+        // Decode to an intermediate buffer with stream channel layout. The
+        // nested decoder clamps to 120 ms, so do that before allocation here.
+        let frame_size = frame_size.min(self.ms_decoder.get_sample_rate() / 25 * 3);
+        let Some(n_samples) = (total_stream_channels as usize).checked_mul(frame_size as usize)
+        else {
+            return Err(OPUS_BAD_ARG);
+        };
+        let mut stream_pcm = try_vec_with_len(n_samples, 0i16).map_err(|_| OPUS_ALLOC_FAIL)?;
         let ret = self
             .ms_decoder
             .decode(data, len, &mut stream_pcm, frame_size, decode_fec)?;

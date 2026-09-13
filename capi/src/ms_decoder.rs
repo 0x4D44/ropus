@@ -438,10 +438,15 @@ pub unsafe extern "C" fn opus_multistream_decode_float(
         // Same rationale as the i16 path above: size by total layout
         // channels (including muted), not the physically-routed count.
         let nb_channels = ms.nb_channels();
+        // The core decoder clamps to its 120 ms maximum before allocating.
+        // Apply the same bound before this float shim's temporary buffer.
+        let frame_size = frame_size.min(ms.get_sample_rate() / 25 * 3);
         let Some(n_samples) = (frame_size as usize).checked_mul(nb_channels as usize) else {
             return OPUS_BAD_ARG;
         };
-        let mut tmp = vec![0i16; n_samples];
+        let Ok(mut tmp) = crate::alloc::try_vec_with_len(n_samples, 0i16) else {
+            return OPUS_ALLOC_FAIL;
+        };
         let packet: Option<&[u8]> = if plc {
             None
         } else {

@@ -305,6 +305,151 @@ mod allocation_tests {
     }
 
     #[test]
+    fn multistream_float_decode_clamps_before_scratch_allocation() {
+        let _lock = ALLOCATION_TEST_LOCK.lock().unwrap();
+        let mapping = [0u8];
+        let mut error = OPUS_OK;
+        let decoder = unsafe {
+            ms_decoder::opus_multistream_decoder_create(
+                48000,
+                1,
+                1,
+                0,
+                mapping.as_ptr(),
+                &mut error,
+            )
+        };
+        assert!(!decoder.is_null());
+        assert_eq!(error, OPUS_OK);
+
+        let mut pcm = vec![0.0f32; 48000 / 25 * 3];
+        alloc::fail_after(0);
+        let _reset = FailpointReset;
+        let ret = unsafe {
+            ms_decoder::opus_multistream_decode_float(
+                decoder,
+                std::ptr::null(),
+                0,
+                pcm.as_mut_ptr(),
+                48000 / 25 * 3 + 1,
+                0,
+            )
+        };
+
+        assert_eq!(ret, OPUS_ALLOC_FAIL);
+    }
+
+    #[test]
+    fn projection_decode_clamps_before_scratch_allocation() {
+        let _lock = ALLOCATION_TEST_LOCK.lock().unwrap();
+        let matrix = [0u8; 2];
+        let mut error = OPUS_OK;
+        let decoder = unsafe {
+            projection::opus_projection_decoder_create(
+                48000,
+                1,
+                1,
+                0,
+                matrix.as_ptr(),
+                matrix.len() as i32,
+                &mut error,
+            )
+        };
+        assert!(!decoder.is_null());
+        assert_eq!(error, OPUS_OK);
+
+        let mut pcm = vec![0i16; 48000 / 25 * 3];
+        alloc::fail_after(0);
+        let _reset = FailpointReset;
+        let ret = unsafe {
+            projection::opus_projection_decode(
+                decoder,
+                std::ptr::null(),
+                0,
+                pcm.as_mut_ptr(),
+                48000 / 25 * 3 + 1,
+                0,
+            )
+        };
+
+        assert_eq!(ret, OPUS_ALLOC_FAIL);
+    }
+
+    #[test]
+    fn projection_float_encode_clamps_before_scratch_allocation() {
+        let _lock = ALLOCATION_TEST_LOCK.lock().unwrap();
+        let mut streams = 0;
+        let mut coupled_streams = 0;
+        let mut error = OPUS_OK;
+        let encoder = unsafe {
+            projection::opus_projection_ambisonics_encoder_create(
+                48000,
+                4,
+                3,
+                &mut streams,
+                &mut coupled_streams,
+                OPUS_APPLICATION_AUDIO,
+                &mut error,
+            )
+        };
+        assert!(!encoder.is_null());
+        assert_eq!(error, OPUS_OK);
+
+        let pcm = vec![0.0f32; (48000 / 25 * 3) * 4];
+        let mut packet = [0u8; 4000];
+        alloc::fail_after(0);
+        let _reset = FailpointReset;
+        let ret = unsafe {
+            projection::opus_projection_encode_float(
+                encoder,
+                pcm.as_ptr(),
+                48000 / 25 * 3 + 1,
+                packet.as_mut_ptr(),
+                packet.len() as i32,
+            )
+        };
+
+        assert_eq!(ret, OPUS_ALLOC_FAIL);
+    }
+
+    #[test]
+    fn projection_encode_clamps_before_mixed_buffer_allocation() {
+        let _lock = ALLOCATION_TEST_LOCK.lock().unwrap();
+        let mut streams = 0;
+        let mut coupled_streams = 0;
+        let mut error = OPUS_OK;
+        let encoder = unsafe {
+            projection::opus_projection_ambisonics_encoder_create(
+                48000,
+                4,
+                3,
+                &mut streams,
+                &mut coupled_streams,
+                OPUS_APPLICATION_AUDIO,
+                &mut error,
+            )
+        };
+        assert!(!encoder.is_null());
+        assert_eq!(error, OPUS_OK);
+
+        let pcm = vec![0i16; (48000 / 25 * 3) * 4];
+        let mut packet = [0u8; 4000];
+        alloc::fail_after(0);
+        let _reset = FailpointReset;
+        let ret = unsafe {
+            projection::opus_projection_encode(
+                encoder,
+                pcm.as_ptr(),
+                48000 / 25 * 3 + 1,
+                packet.as_mut_ptr(),
+                packet.len() as i32,
+            )
+        };
+
+        assert_eq!(ret, OPUS_ALLOC_FAIL);
+    }
+
+    #[test]
     fn extension_shims_report_temporary_allocation_failure() {
         let _lock = ALLOCATION_TEST_LOCK.lock().unwrap();
         let _reset = FailpointReset;

@@ -371,6 +371,7 @@ pub unsafe extern "C" fn opus_projection_encode(
             return OPUS_BAD_ARG;
         };
         let channels = enc.nb_channels();
+        let frame_size = frame_size.min(enc.get_sample_rate() / 25 * 3);
         let Some(n_samples) = (frame_size as usize).checked_mul(channels as usize) else {
             return OPUS_BAD_ARG;
         };
@@ -428,11 +429,17 @@ pub unsafe extern "C" fn opus_projection_encode_float(
             return OPUS_BAD_ARG;
         };
         let channels = enc.nb_channels();
+        let frame_size = frame_size.min(enc.get_sample_rate() / 25 * 3);
         let Some(n_samples) = (frame_size as usize).checked_mul(channels as usize) else {
             return OPUS_BAD_ARG;
         };
         let pcm_float = unsafe { std::slice::from_raw_parts(pcm, n_samples) };
-        let pcm_i16: Vec<i16> = pcm_float.iter().map(|&s| float_to_int16_sat(s)).collect();
+        let Ok(mut pcm_i16) = crate::alloc::try_vec_with_len(n_samples, 0i16) else {
+            return OPUS_ALLOC_FAIL;
+        };
+        for (dst, &src) in pcm_i16.iter_mut().zip(pcm_float) {
+            *dst = float_to_int16_sat(src);
+        }
         let out_slice = unsafe { std::slice::from_raw_parts_mut(data, max_data_bytes as usize) };
         match enc.encode(&pcm_i16, frame_size, out_slice, max_data_bytes) {
             Ok(n) => n,
@@ -599,6 +606,7 @@ pub unsafe extern "C" fn opus_projection_decode(
         // Output slice is sized by the output channel count (layout
         // nb_channels), matching the C reference.
         let nb_channels = dec.nb_channels();
+        let frame_size = frame_size.min(dec.get_sample_rate() / 25 * 3);
         let Some(n_samples) = (frame_size as usize).checked_mul(nb_channels as usize) else {
             return OPUS_BAD_ARG;
         };
