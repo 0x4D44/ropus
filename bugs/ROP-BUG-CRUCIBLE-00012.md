@@ -6,15 +6,15 @@
 - **Area:** full-test/json-report
 - **Raised:** 2026-08-14T15:50:27Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T150234Z-beb4cb70
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00012-run-verify-20260913T150234Z-beb4cb70
-- **Owner base:** 94bd198b4efcc162eba491ba444b50da78e9a4a5
-- **Owner fingerprint:** sha256:809947e7df14cf8d9a8ef5127c8ec37157901ab62d7dc47685e907cde8c133a8
-- **Owner since:** 2026-09-13T15:02:34Z
-- **Owner until:** 2026-09-13T17:02:34Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
