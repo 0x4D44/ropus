@@ -110,6 +110,8 @@ pub(crate) struct AtomicOutput {
     output_path: PathBuf,
     temp_path: PathBuf,
     committed: bool,
+    #[cfg(windows)]
+    destination_existed: bool,
 }
 
 impl AtomicOutput {
@@ -127,22 +129,44 @@ impl AtomicOutput {
             .unwrap_or(0);
         let pid = std::process::id();
 
+        #[cfg(windows)]
+        let destination_existed = match std::fs::metadata(output_path) {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "checking existing output {} before atomic replacement",
+                        crate::ui::escape_terminal_path(output_path)
+                    )
+                });
+            }
+        };
+
         for attempt in 0..100u32 {
             let mut temp_name = OsString::from(".");
             temp_name.push(file_name);
             temp_name.push(format!(".ropus-tmp-{pid}-{timestamp}-{attempt}"));
             let temp_path = parent.join(temp_name);
-            match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temp_path)
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
             {
+                use std::os::unix::fs::OpenOptionsExt;
+
+                // New outputs are owner-only until an existing destination's
+                // mode is copied immediately before publication.
+                options.mode(0o600);
+            }
+            match options.open(&temp_path) {
                 Ok(file) => {
                     return Ok((
                         Self {
                             output_path: output_path.to_path_buf(),
                             temp_path,
                             committed: false,
+                            #[cfg(windows)]
+                            destination_existed,
                         },
                         file,
                     ));
@@ -165,6 +189,12 @@ impl AtomicOutput {
     }
 
     pub(crate) fn commit(mut self) -> Result<()> {
+        #[cfg(unix)]
+        preserve_existing_permissions(&self.temp_path, &self.output_path)?;
+
+        #[cfg(windows)]
+        atomic_replace(&self.temp_path, &self.output_path, self.destination_existed)?;
+        #[cfg(not(windows))]
         atomic_replace(&self.temp_path, &self.output_path)?;
         self.committed = true;
         Ok(())
@@ -179,6 +209,33 @@ impl Drop for AtomicOutput {
     }
 }
 
+#[cfg(unix)]
+fn preserve_existing_permissions(temp_path: &Path, output_path: &Path) -> Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let metadata = match std::fs::metadata(output_path) {
+        Ok(metadata) => metadata,
+        // The destination may have been removed while the output was being
+        // produced. Keep the explicit secure new-file mode in that case.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "reading existing output permissions for {}",
+                    crate::ui::escape_terminal_path(output_path)
+                )
+            });
+        }
+    };
+    let mode = metadata.mode() & 0o7777;
+    std::fs::set_permissions(temp_path, std::fs::Permissions::from_mode(mode)).with_context(|| {
+        format!(
+            "applying existing output permissions before replacing {}",
+            crate::ui::escape_terminal_path(output_path)
+        )
+    })
+}
+
 #[cfg(not(windows))]
 fn atomic_replace(temp_path: &Path, output_path: &Path) -> Result<()> {
     std::fs::rename(temp_path, output_path).with_context(|| {
@@ -190,12 +247,22 @@ fn atomic_replace(temp_path: &Path, output_path: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn atomic_replace(temp_path: &Path, output_path: &Path) -> Result<()> {
+fn atomic_replace(temp_path: &Path, output_path: &Path, destination_existed: bool) -> Result<()> {
+    use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
 
     unsafe extern "system" {
         #[link_name = "MoveFileExW"]
         fn move_file_ex_w(from: *const u16, to: *const u16, flags: u32) -> i32;
+        #[link_name = "ReplaceFileW"]
+        fn replace_file_w(
+            replaced: *const u16,
+            replacement: *const u16,
+            backup: *const u16,
+            flags: u32,
+            exclude: *mut c_void,
+            reserved: *mut c_void,
+        ) -> i32;
     }
 
     let from: Vec<u16> = temp_path
@@ -208,19 +275,30 @@ fn atomic_replace(temp_path: &Path, output_path: &Path) -> Result<()> {
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
-    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
     const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
     let replaced = unsafe {
-        move_file_ex_w(
-            from.as_ptr(),
-            to.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
+        if destination_existed {
+            // ReplaceFileW carries the destination's security descriptor onto
+            // the replacement. Passing no ignore-ACL flag makes preservation
+            // failure abort the transaction instead of weakening the ACL.
+            replace_file_w(
+                to.as_ptr(),
+                from.as_ptr(),
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        } else {
+            // A new destination must not overwrite a file that appeared while
+            // the encoder was running with an ACL we never inspected.
+            move_file_ex_w(from.as_ptr(), to.as_ptr(), MOVEFILE_WRITE_THROUGH)
+        }
     };
     if replaced == 0 {
         return Err(std::io::Error::last_os_error()).with_context(|| {
             format!(
-                "replacing output {} with flushed temporary",
+                "publishing output {} while preserving destination security",
                 crate::ui::escape_terminal_path(output_path)
             )
         });
@@ -287,6 +365,7 @@ fn normalize_lexical_path(path: &Path) -> Result<PathBuf> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::io::Write;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn test_dir() -> PathBuf {
@@ -339,5 +418,241 @@ mod tests {
         assert_eq!(output, dir.join("song.encoded.opus"));
         assert!(reject_input_output_alias(&input, &output).is_ok());
         fs::remove_dir_all(dir).expect("remove identity-test directory");
+    }
+
+    #[test]
+    fn abandoned_atomic_output_preserves_existing_destination() {
+        let dir = test_dir();
+        let output = dir.join("output.opus");
+        fs::write(&output, b"original").expect("write original output");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{PermissionsExt, set_permissions};
+
+            set_permissions(&output, fs::Permissions::from_mode(0o640))
+                .expect("restrict original output");
+        }
+
+        #[cfg(windows)]
+        let security_before = security_descriptor(&output);
+
+        let (atomic, mut temp) = AtomicOutput::create(&output).expect("create atomic output");
+        temp.write_all(b"partial replacement")
+            .expect("write partial replacement");
+        drop(temp);
+        drop(atomic);
+
+        assert_eq!(
+            fs::read(&output).expect("read original output"),
+            b"original"
+        );
+        #[cfg(unix)]
+        assert_eq!(output_mode(&output), 0o640);
+        #[cfg(windows)]
+        assert_eq!(security_descriptor(&output), security_before);
+        fs::remove_dir_all(dir).expect("remove atomic-output directory");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_output_uses_safe_new_mode_and_preserves_existing_mode() {
+        use std::os::unix::fs::{PermissionsExt, set_permissions};
+
+        let dir = test_dir();
+        let existing = dir.join("existing.opus");
+        fs::write(&existing, b"original").expect("write original output");
+        set_permissions(&existing, fs::Permissions::from_mode(0o640))
+            .expect("set existing output mode");
+
+        let (atomic, mut temp) = AtomicOutput::create(&existing).expect("create existing output");
+        assert_eq!(output_mode_from_file(&temp), 0o600);
+        temp.write_all(b"replacement").expect("write replacement");
+        temp.flush().expect("flush replacement");
+        drop(temp);
+        atomic.commit().expect("commit replacement");
+        assert_eq!(
+            fs::read(&existing).expect("read replacement"),
+            b"replacement"
+        );
+        assert_eq!(output_mode(&existing), 0o640);
+
+        let new_output = dir.join("new.opus");
+        let (atomic, mut temp) = AtomicOutput::create(&new_output).expect("create new output");
+        assert_eq!(output_mode_from_file(&temp), 0o600);
+        temp.write_all(b"new output").expect("write new output");
+        temp.flush().expect("flush new output");
+        drop(temp);
+        atomic.commit().expect("commit new output");
+        assert_eq!(output_mode(&new_output), 0o600);
+        fs::remove_dir_all(dir).expect("remove atomic-output directory");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_output_preserves_existing_acl() {
+        let dir = test_dir();
+        let output = dir.join("existing.opus");
+        let inherited_reference = dir.join("inherited-reference.opus");
+        fs::write(&output, b"original").expect("write original output");
+        fs::write(&inherited_reference, b"reference").expect("write inherited reference");
+        restrict_file_acl_for_test(&output);
+        let restricted = security_descriptor(&output);
+        let inherited = security_descriptor(&inherited_reference);
+        assert_ne!(
+            restricted, inherited,
+            "test fixture must use an ACL different from the directory default"
+        );
+
+        let (atomic, mut temp) = AtomicOutput::create(&output).expect("create existing output");
+        temp.write_all(b"replacement").expect("write replacement");
+        temp.flush().expect("flush replacement");
+        drop(temp);
+        atomic.commit().expect("commit replacement");
+
+        assert_eq!(fs::read(&output).expect("read replacement"), b"replacement");
+        assert_eq!(security_descriptor(&output), restricted);
+        fs::remove_dir_all(dir).expect("remove atomic-output directory");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_output_new_file_inherits_directory_acl() {
+        let dir = test_dir();
+        let reference = dir.join("inherited-reference.opus");
+        let output = dir.join("new.opus");
+        fs::write(&reference, b"reference").expect("write inherited reference");
+        let inherited = security_descriptor(&reference);
+
+        let (atomic, mut temp) = AtomicOutput::create(&output).expect("create new output");
+        temp.write_all(b"new output").expect("write new output");
+        temp.flush().expect("flush new output");
+        drop(temp);
+        atomic.commit().expect("commit new output");
+
+        assert_eq!(security_descriptor(&output), inherited);
+        fs::remove_dir_all(dir).expect("remove atomic-output directory");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_output_does_not_replace_destination_that_appears_late() {
+        let dir = test_dir();
+        let output = dir.join("new.opus");
+        let (atomic, mut temp) = AtomicOutput::create(&output).expect("create new output");
+        temp.write_all(b"replacement").expect("write replacement");
+        temp.flush().expect("flush replacement");
+        drop(temp);
+
+        fs::write(&output, b"raced destination").expect("create raced destination");
+        let security_before = security_descriptor(&output);
+        assert!(
+            atomic.commit().is_err(),
+            "late destination must not be replaced"
+        );
+        assert_eq!(
+            fs::read(&output).expect("read raced destination"),
+            b"raced destination"
+        );
+        assert_eq!(security_descriptor(&output), security_before);
+        fs::remove_dir_all(dir).expect("remove atomic-output directory");
+    }
+
+    #[cfg(unix)]
+    fn output_mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+
+        output_mode_from_file(&fs::File::open(path).expect("open output for mode"))
+    }
+
+    #[cfg(unix)]
+    fn output_mode_from_file(file: &fs::File) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+
+        file.metadata()
+            .expect("read output mode")
+            .permissions()
+            .mode()
+            & 0o7777
+    }
+
+    #[cfg(windows)]
+    fn restrict_file_acl_for_test(path: &Path) {
+        use std::process::Command;
+
+        let whoami = Command::new("whoami")
+            .output()
+            .expect("resolve current Windows account");
+        assert!(whoami.status.success(), "whoami failed: {whoami:?}");
+        let account = String::from_utf8_lossy(&whoami.stdout).trim().to_owned();
+        assert!(!account.is_empty(), "whoami returned no account");
+        let grant = format!("{account}:F");
+        let result = Command::new("icacls")
+            .arg(path)
+            .arg("/inheritance:r")
+            .arg("/grant:r")
+            .arg(&grant)
+            .output()
+            .expect("run icacls");
+        assert!(
+            result.status.success(),
+            "icacls failed: {}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    #[cfg(windows)]
+    fn security_descriptor(path: &Path) -> Vec<u8> {
+        use std::ffi::c_void;
+        use std::os::windows::ffi::OsStrExt;
+
+        #[link(name = "advapi32")]
+        unsafe extern "system" {
+            #[link_name = "GetFileSecurityW"]
+            fn get_file_security_w(
+                file_name: *const u16,
+                requested_information: u32,
+                security_descriptor: *mut c_void,
+                descriptor_length: u32,
+                length_needed: *mut u32,
+            ) -> i32;
+        }
+
+        let file_name: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        const DACL_SECURITY_INFORMATION: u32 = 0x0000_0004;
+        let mut length_needed = 0;
+        let first = unsafe {
+            get_file_security_w(
+                file_name.as_ptr(),
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                0,
+                &mut length_needed,
+            )
+        };
+        assert_eq!(first, 0, "GetFileSecurityW unexpectedly succeeded");
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(122),
+            "GetFileSecurityW did not request a larger buffer"
+        );
+        let mut descriptor = vec![0u8; length_needed as usize];
+        let result = unsafe {
+            get_file_security_w(
+                file_name.as_ptr(),
+                DACL_SECURITY_INFORMATION,
+                descriptor.as_mut_ptr().cast(),
+                descriptor.len() as u32,
+                &mut length_needed,
+            )
+        };
+        assert_ne!(result, 0, "GetFileSecurityW failed");
+        descriptor.truncate(length_needed as usize);
+        descriptor
     }
 }
