@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00035 — fb2k decodes zero-octet Ogg audio packets as PLC
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-fb2k/malformed-audio
 - **Raised:** 2026-08-22T06:10:44Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T152230Z-45022563
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00035-run-verify-20260913T152230Z-45022563
-- **Owner base:** 64e97e40e5ddeb1b8ebac443df226de92653815a
-- **Owner fingerprint:** sha256:d0e7c6365722a4155942c3f2e77a53667573cc98986841654e8b3d6840a73cff
-- **Owner since:** 2026-09-13T15:22:30Z
-- **Owner until:** 2026-09-13T17:22:30Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T06:10:44Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T05:12:03Z, deltic:auto role=fix run=fix-20260913T045820Z-394d7194 branch=task/bug-ROP-BUG-KIL-00035-run-fix-20260913T045820Z-394d7194 code=737a1ef597985d986a58c27d594a90300f8a230d gate=manual)
+- **State history:** Open (2026-08-22T06:10:44Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T05:12:03Z, deltic:auto role=fix run=fix-20260913T045820Z-394d7194 branch=task/bug-ROP-BUG-KIL-00035-run-fix-20260913T045820Z-394d7194 code=737a1ef597985d986a58c27d594a90300f8a230d gate=manual) -> Closed (2026-09-13T16:33:35Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=737a1ef597985d986a58c27d594a90300f8a230d)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at HEAD 3e0f6c1. ropus-fb2k/src/reader.rs:550-558 passes Some(&pkt
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13, independent verifier)
+
+- Re-ran `decode_rejects_empty_ogg_audio_packet`; an empty Opus packet is rejected before PLC, and the `ropus-fb2k` package gate passed.
+- Red control: removing the empty-packet rejection made the regression accept the packet with status 0 instead of its expected error. The mutation was restored.
 
 ## Notes

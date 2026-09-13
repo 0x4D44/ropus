@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00038 — fb2k float decode allocates on every audio packet
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-fb2k/realtime
 - **Raised:** 2026-08-22T06:10:45Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T152408Z-f4fa9fc5
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00038-run-verify-20260913T152408Z-f4fa9fc5
-- **Owner base:** a011399f31b201cc94bc8137bb770904db58aba2
-- **Owner fingerprint:** sha256:0eb014342943ae6129b1d0b2fefd79855c9b5a427e348420b265056c788022b1
-- **Owner since:** 2026-09-13T15:24:08Z
-- **Owner until:** 2026-09-13T17:24:08Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T06:10:45Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T05:41:32Z, deltic:auto role=fix run=fix-20260913T052001Z-4b7e6dfe branch=task/bug-ROP-BUG-KIL-00038-run-fix-20260913T052001Z-4b7e6dfe code=f77319fd27aca6843cde9a0bedb150a1d9182d66 gate=manual)
+- **State history:** Open (2026-08-22T06:10:45Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T05:41:32Z, deltic:auto role=fix run=fix-20260913T052001Z-4b7e6dfe branch=task/bug-ROP-BUG-KIL-00038-run-fix-20260913T052001Z-4b7e6dfe code=f77319fd27aca6843cde9a0bedb150a1d9182d66 gate=manual) -> Closed (2026-09-13T16:43:36Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=f77319fd27aca6843cde9a0bedb150a1d9182d66)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at HEAD 3e0f6c1. ropus-fb2k/src/reader.rs:484-500 says the reusabl
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `test_decode_float_does_not_allocate_after_warmup`; it passed, and `cargo test -p ropus-fb2k --locked` passed all 111 tests.
+- A red control that forced scratch growth failed the allocation-count assertion; the fix was restored before validation.
 
 ## Notes

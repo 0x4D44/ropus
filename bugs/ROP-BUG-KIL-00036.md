@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00036 — fb2k reports clean EOF when the selected Ogg stream is truncated
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-fb2k/truncation
 - **Raised:** 2026-08-22T06:10:45Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T152305Z-8b88270d
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00036-run-verify-20260913T152305Z-8b88270d
-- **Owner base:** 0efb79f8f717fe08e48a8fa48afe81cdb967d03c
-- **Owner fingerprint:** sha256:6b8571da44f186ad2487a734e5787978d61f2a090f3f3ebb96e191a6cdd4472e
-- **Owner since:** 2026-09-13T15:23:05Z
-- **Owner until:** 2026-09-13T17:23:05Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T06:10:45Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T05:18:53Z, deltic:auto role=fix run=fix-20260913T050657Z-bf299d0b branch=task/bug-ROP-BUG-KIL-00036-run-fix-20260913T050657Z-bf299d0b code=368c469 gate=manual)
+- **State history:** Open (2026-08-22T06:10:45Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T05:18:53Z, deltic:auto role=fix run=fix-20260913T050657Z-bf299d0b branch=task/bug-ROP-BUG-KIL-00036-run-fix-20260913T050657Z-bf299d0b code=368c469 gate=manual) -> Closed (2026-09-13T16:33:35Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=368c469)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at HEAD 3e0f6c1. ropus-fb2k/src/reader.rs:534-540 maps physical EO
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13, independent verifier)
+
+- Re-ran `truncated_selected_stream_never_reports_clean_eof`; a selected stream without EOS is rejected, with the `ropus-fb2k` package gate passing.
+- Red control: changing the missing-EOS result to a clean empty result made the regression accept the truncated stream. The mutation was restored.
 
 ## Notes

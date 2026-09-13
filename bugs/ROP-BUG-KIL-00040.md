@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00040 — fb2k tag callbacks can invalidate the borrowed reader handle
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** ropus-fb2k/ffi-reentrancy
 - **Raised:** 2026-08-22T06:10:46Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T152510Z-28573cd2
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00040-run-verify-20260913T152510Z-28573cd2
-- **Owner base:** 70a53a97cdb21e28bcf7b6b65d8cc073f23c127b
-- **Owner fingerprint:** sha256:00ef2383b8c7508417487990c1236ec80821245314c8906f025fbdce9f7e236b
-- **Owner since:** 2026-09-13T15:25:10Z
-- **Owner until:** 2026-09-13T17:25:10Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T06:10:46Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T06:02:58Z, deltic:auto role=fix run=fix-20260913T054357Z-6ab93113 branch=task/bug-ROP-BUG-KIL-00040-run-fix-20260913T054357Z-6ab93113 code=cedc4bf51bf84fadbfb80134c4020e5bfa3aaa96 gate=manual)
+- **State history:** Open (2026-08-22T06:10:46Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T06:02:58Z, deltic:auto role=fix run=fix-20260913T054357Z-6ab93113 branch=task/bug-ROP-BUG-KIL-00040-run-fix-20260913T054357Z-6ab93113 code=cedc4bf51bf84fadbfb80134c4020e5bfa3aaa96 gate=manual) -> Closed (2026-09-13T16:33:35Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=cedc4bf51bf84fadbfb80134c4020e5bfa3aaa96)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at HEAD 3e0f6c1. ropus-fb2k/src/lib.rs:339-364 holds a shared Rust
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `read_tags_callback_can_close_handle_without_losing_snapshot` and the reentrant close/seek/decode callback regression; both passed, with the fb2k package gate passing all 111 tests.
+- A red control restored the old borrowed-reader loop; the original tag disappeared from the callback snapshot, and the fix was restored.
 
 ## Notes

@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00042 — fb2k open accepts malformed Opus header sequences
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-fb2k/headers
 - **Raised:** 2026-08-22T06:10:46Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T152632Z-4c9cb3ca
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00042-run-verify-20260913T152632Z-4c9cb3ca
-- **Owner base:** 7b77087804689e42e19c5463c4a4f6b3ff1cb881
-- **Owner fingerprint:** sha256:8e0dc4770d36f6b7e0e6a4cfc9fff066ec66e9215f3eed0e6d256898826d9cd9
-- **Owner since:** 2026-09-13T15:26:32Z
-- **Owner until:** 2026-09-13T17:26:32Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T06:10:46Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T06:23:36Z, deltic:auto role=fix run=fix-20260913T060050Z-4c1ccbb6 branch=task/bug-ROP-BUG-KIL-00042-run-fix-20260913T060050Z-4c1ccbb6 code=7415c6e9c940a0c0ebc1293a84b55e7c35b24b89 gate=manual)
+- **State history:** Open (2026-08-22T06:10:46Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T06:23:36Z, deltic:auto role=fix run=fix-20260913T060050Z-4c1ccbb6 branch=task/bug-ROP-BUG-KIL-00042-run-fix-20260913T060050Z-4c1ccbb6 code=7415c6e9c940a0c0ebc1293a84b55e7c35b24b89 gate=manual) -> Closed (2026-09-13T16:43:36Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=7415c6e9c940a0c0ebc1293a84b55e7c35b24b89)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at HEAD 3e0f6c1. ropus-fb2k/src/reader.rs:315-340 accepts the firs
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `open_rejects_nonzero_id_header_granule`; it passed, and the ropus-fb2k package gate passed all 111 tests.
+- A red control disabled the non-zero header-granule check; malformed-header rejection failed, and the fix was restored.
 
 ## Notes
