@@ -6,15 +6,15 @@
 - **Area:** ropus/opus-codec-api
 - **Raised:** 2026-08-22T08:28:29Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T065719Z-06137e14
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00050-run-fix-20260913T065719Z-06137e14
+- **Owner base:** 93c420f0c8b3f96e23cdae6e589d20ae40047dc7
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T06:57:19Z
+- **Owner until:** 2026-09-13T08:57:19Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
