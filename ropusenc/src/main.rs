@@ -290,20 +290,17 @@ fn main() -> ExitCode {
     // identify the input sentinel because value-taking options may precede it.
     let output_is_stdout = prelude::output_is_stdout(&cli.input, cli.output.as_deref());
     if !cli.quiet {
-        if output_is_stdout {
-            ui::print_banner_stderr(
+        let banner_result = ui::with_locked_writer(output_is_stdout, |writer| {
+            ui::write_banner(
+                writer,
                 env!("CARGO_PKG_NAME"),
                 env!("CARGO_PKG_VERSION"),
                 env!("BUILD_TIMESTAMP"),
                 env!("BUILD_GIT_SHA"),
-            );
-        } else {
-            ui::print_banner(
-                env!("CARGO_PKG_NAME"),
-                env!("CARGO_PKG_VERSION"),
-                env!("BUILD_TIMESTAMP"),
-                env!("BUILD_GIT_SHA"),
-            );
+            )
+        });
+        if let Err(error) = banner_result {
+            return prelude::run(Err(anyhow::Error::from(error)));
         }
     }
 

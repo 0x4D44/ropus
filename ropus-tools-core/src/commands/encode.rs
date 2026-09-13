@@ -22,7 +22,7 @@ use crate::container::picture::{
     MAX_PICTURE_BYTES, PictureFormat, base64_encode, build_picture_block, detect_format,
 };
 use crate::options::{EncodeOptions, OutputPolicy};
-use crate::ui::{escape_terminal_path, format_num, heading, ok};
+use crate::ui::{Ui, escape_terminal_path, format_num};
 use crate::util::{
     AtomicOutput, channel_count_to_ropus, is_stdio_sentinel, noncolliding_default_output,
     reject_input_output_alias,
@@ -132,6 +132,37 @@ pub fn encode(opts: EncodeOptions) -> Result<()> {
 pub fn encode_with_policy(opts: EncodeOptions, policy: OutputPolicy) -> Result<()> {
     validate_encode_options(&opts)?;
 
+    let output = resolve_output(&opts)?;
+    let mut ui = Ui::for_output(output.is_stdout);
+    encode_with_policy_and_writer(opts, policy, output, &mut ui)
+}
+
+struct ResolvedOutput {
+    input_is_stdin: bool,
+    path: std::path::PathBuf,
+    is_stdout: bool,
+}
+
+fn resolve_output(opts: &EncodeOptions) -> Result<ResolvedOutput> {
+    let input_is_stdin = is_stdio_sentinel(&opts.input);
+    let path = match opts.output.clone() {
+        Some(path) => path,
+        None if input_is_stdin => std::path::PathBuf::from("-"),
+        None => noncolliding_default_output(&opts.input, "opus", "encoded")?,
+    };
+    Ok(ResolvedOutput {
+        input_is_stdin,
+        is_stdout: is_stdio_sentinel(&path),
+        path,
+    })
+}
+
+fn encode_with_policy_and_writer(
+    opts: EncodeOptions,
+    policy: OutputPolicy,
+    output: ResolvedOutput,
+    ui: &mut Ui<'_>,
+) -> Result<()> {
     // Guard the encoder's output buffer sizing. At `--framesize` ≥ 40 ms,
     // libopus packs 2..6 sub-frames into a code-3 packet and uses the full
     // output buffer as its repacketise budget, so sizing the buffer for just
@@ -146,16 +177,14 @@ pub fn encode_with_policy(opts: EncodeOptions, policy: OutputPolicy) -> Result<(
 
     // Resolve the output path first. `-` and "input is stdin with no explicit
     // -o" both map to stdout (there's no sensible filename to derive from a
-    // pipe). Detect stdout early so every banner/progress `println!` below can
+    // pipe). Detect stdout early so every banner/progress write below can
     // route through `report!` and land on stderr instead — mixing progress
     // text with the Ogg bitstream on stdout corrupts downstream consumers.
-    let input_is_stdin = is_stdio_sentinel(&opts.input);
-    let output_path: std::path::PathBuf = match opts.output.clone() {
-        Some(p) => p,
-        None if input_is_stdin => std::path::PathBuf::from("-"),
-        None => noncolliding_default_output(&opts.input, "opus", "encoded")?,
-    };
-    let output_is_stdout = is_stdio_sentinel(&output_path);
+    let ResolvedOutput {
+        input_is_stdin,
+        path: output_path,
+        is_stdout: output_is_stdout,
+    } = output;
     reject_input_output_alias(&opts.input, &output_path)?;
     if let Some(pic_path) = opts.picture_path.as_ref() {
         reject_input_output_alias(pic_path, &output_path)?;
@@ -170,23 +199,26 @@ pub fn encode_with_policy(opts: EncodeOptions, policy: OutputPolicy) -> Result<(
         .map(|path| prepare_picture(path))
         .transpose()?;
 
-    // Print progress/banner lines. Gated on output-sink: stdout gets the
-    // bitstream, so progress must go to stderr in that case.
+    // Every progress write locks only for that line. In particular, do not
+    // hold stderr across decoding: the shared decoder also emits diagnostics
+    // to stderr and must be able to acquire its own lock.
     macro_rules! report {
         ($($arg:tt)*) => {
-            if !policy.quiet && output_is_stdout {
-                eprintln!($($arg)*);
-            } else if !policy.quiet {
-                println!($($arg)*);
+            if !policy.quiet {
+                ui.line(format_args!($($arg)*))?;
+            }
+        };
+    }
+    macro_rules! report_after_publication {
+        ($($arg:tt)*) => {
+            if !policy.quiet {
+                ui.line(format_args!($($arg)*))
+                    .context("writing progress after output publication")?;
             }
         };
     }
     if !policy.quiet {
-        if output_is_stdout {
-            eprintln!("{}", "encode".bright_yellow().bold());
-        } else {
-            heading("encode");
-        }
+        ui.heading("encode")?;
     }
     report!(
         "input    {}",
@@ -414,11 +446,18 @@ pub fn encode_with_policy(opts: EncodeOptions, policy: OutputPolicy) -> Result<(
     let mut sink = writer.into_inner();
     sink.flush().context("flushing Ogg output")?;
     drop(sink);
+    if !output_is_stdout && !policy.quiet {
+        // Flush diagnostic output before publishing a regular-file result.
+        // If this is a closed pipe, `atomic_output` is still uncommitted and
+        // its Drop implementation removes the temporary output.
+        ui.flush()
+            .context("flushing progress before output publication")?;
+    }
     if let Some(output) = atomic_output {
         output.commit()?;
     }
 
-    report!(
+    report_after_publication!(
         "wrote    {} packets, {} samples (granule)",
         format_num(packet_count).bright_white(),
         format_num(final_granule).bright_white(),
@@ -430,7 +469,7 @@ pub fn encode_with_policy(opts: EncodeOptions, policy: OutputPolicy) -> Result<(
     // are not audible source duration).
     if let Some(avg_bps) = (payload_bytes * 8 * (OPUS_SR as u64)).checked_div(source_samples_ch_u64)
     {
-        report!(
+        report_after_publication!(
             "bitrate  {} kbps avg (payload)",
             format!("{:.1}", avg_bps as f64 / 1000.0).bright_white(),
         );
@@ -442,9 +481,11 @@ pub fn encode_with_policy(opts: EncodeOptions, policy: OutputPolicy) -> Result<(
     };
     if !policy.quiet {
         if output_is_stdout {
-            eprintln!("{}", format!("encoded -> {dest}").green());
+            ui.line(format_args!("{}", format!("encoded -> {dest}").green()))
+                .context("writing progress after output publication")?;
         } else {
-            ok(&format!("encoded -> {dest}"));
+            ui.ok(&format!("encoded -> {dest}"))
+                .context("writing progress after output publication")?;
         }
     }
     Ok(())
@@ -455,7 +496,58 @@ mod tests {
     use super::*;
     use crate::{Application, Signal};
     use std::fs::OpenOptions;
+    use std::io;
     use std::path::PathBuf;
+
+    enum CloseProgressAt {
+        Flush,
+        AfterLines(usize),
+    }
+
+    struct CloseProgressWriter {
+        close_at: CloseProgressAt,
+        line_count: usize,
+        closed: bool,
+    }
+
+    impl CloseProgressWriter {
+        fn new(close_at: CloseProgressAt) -> Self {
+            Self {
+                close_at,
+                line_count: 0,
+                closed: false,
+            }
+        }
+
+        fn broken_pipe() -> io::Error {
+            io::Error::new(io::ErrorKind::BrokenPipe, "closed progress pipe")
+        }
+    }
+
+    impl Write for CloseProgressWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.closed {
+                return Err(Self::broken_pipe());
+            }
+            if let CloseProgressAt::AfterLines(line_count) = self.close_at
+                && self.line_count >= line_count
+                && buf != b"\n"
+            {
+                self.closed = true;
+                return Err(Self::broken_pipe());
+            }
+            self.line_count += buf.iter().filter(|&&byte| byte == b'\n').count();
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if matches!(self.close_at, CloseProgressAt::Flush) {
+                self.closed = true;
+                return Err(Self::broken_pipe());
+            }
+            Ok(())
+        }
+    }
 
     fn test_path(label: &str, extension: &str) -> PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -473,6 +565,28 @@ mod tests {
     fn write_test_input(path: &Path) {
         crate::audio::wav::write_wav_pcm16(path, &[0; 960], 48_000, 1)
             .expect("write tiny WAV input");
+    }
+
+    fn temporary_outputs_for(output: &Path) -> Vec<PathBuf> {
+        let parent = output
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let prefix = format!(
+            ".{}.ropus-tmp-",
+            output
+                .file_name()
+                .expect("test output has a file name")
+                .to_string_lossy()
+        );
+        std::fs::read_dir(parent)
+            .expect("read output directory")
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with(&prefix))
+            })
+            .collect()
     }
 
     fn picture_options(input: PathBuf, output: PathBuf, picture: PathBuf) -> EncodeOptions {
@@ -549,6 +663,71 @@ mod tests {
         assert!(encoded.starts_with(b"OggS"));
         let _ = std::fs::remove_file(input);
         let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn broken_progress_pipe_before_commit_preserves_destination_and_cleans_temp() {
+        let input = test_path("broken-progress-before-commit-input", "wav");
+        let output = test_path("broken-progress-before-commit", "opus");
+        let sentinel = b"existing destination";
+        write_test_input(&input);
+        std::fs::write(&output, sentinel).expect("write destination sentinel");
+
+        let mut opts = valid_options();
+        opts.input = input.clone();
+        opts.output = Some(output.clone());
+        let mut progress = CloseProgressWriter::new(CloseProgressAt::Flush);
+        let output_spec = resolve_output(&opts).expect("resolve output");
+        let mut ui = Ui::new(&mut progress);
+        let error =
+            encode_with_policy_and_writer(opts, OutputPolicy::default(), output_spec, &mut ui)
+                .expect_err("closed progress pipe must be reported by the encode path");
+        assert!(crate::prelude::is_broken_pipe(&error));
+        assert_eq!(
+            crate::prelude::run(Err(error)),
+            std::process::ExitCode::SUCCESS
+        );
+        assert_eq!(std::fs::read(&output).expect("read destination"), sentinel);
+        assert!(
+            temporary_outputs_for(&output).is_empty(),
+            "uncommitted temporary output must be removed"
+        );
+        std::fs::remove_file(input).expect("remove input");
+        std::fs::remove_file(output).expect("remove output");
+    }
+
+    #[test]
+    fn broken_progress_pipe_after_commit_preserves_published_output() {
+        let input = test_path("broken-progress-after-commit-input", "wav");
+        let output = test_path("broken-progress-after-commit", "opus");
+        write_test_input(&input);
+
+        let mut opts = valid_options();
+        opts.input = input.clone();
+        opts.output = Some(output.clone());
+        let mut progress = CloseProgressWriter::new(CloseProgressAt::AfterLines(5));
+        let output_spec = resolve_output(&opts).expect("resolve output");
+        let mut ui = Ui::new(&mut progress);
+        let error =
+            encode_with_policy_and_writer(opts, OutputPolicy::default(), output_spec, &mut ui)
+                .expect_err("closed progress pipe must be reported by the encode path");
+        assert!(crate::prelude::is_broken_pipe(&error));
+        assert_eq!(
+            crate::prelude::run(Err(error)),
+            std::process::ExitCode::SUCCESS
+        );
+        assert!(
+            std::fs::read(&output)
+                .expect("read published output")
+                .starts_with(b"OggS"),
+            "post-publication progress failure must preserve encoded output"
+        );
+        assert!(
+            temporary_outputs_for(&output).is_empty(),
+            "published output must not leave a temporary file"
+        );
+        std::fs::remove_file(input).expect("remove input");
+        std::fs::remove_file(output).expect("remove published output");
     }
 
     #[test]

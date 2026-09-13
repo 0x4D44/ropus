@@ -2,6 +2,7 @@
 //! `anyhow`-chain error printing across the four binaries.
 
 use std::ffi::OsString;
+use std::io::Write as _;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -128,14 +129,19 @@ pub fn output_is_stdout(input: &Path, output: Option<&Path>) -> bool {
 pub fn run(result: anyhow::Result<()>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
+        Err(e) if is_broken_pipe(&e) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!(
+            let stderr = std::io::stderr();
+            let mut stderr = stderr.lock();
+            let _ = writeln!(
+                stderr,
                 "{} {}",
                 "error:".red().bold(),
                 escape_terminal_text(&e.to_string())
             );
             for cause in e.chain().skip(1) {
-                eprintln!(
+                let _ = writeln!(
+                    stderr,
                     "  {} {}",
                     "caused by:".red(),
                     escape_terminal_text(&cause.to_string())
@@ -144,6 +150,18 @@ pub fn run(result: anyhow::Result<()>) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Return whether an error chain was caused by a downstream pipe closing.
+///
+/// Informational output is not a failed encode: the CLI should stop cleanly
+/// and leave any already-committed regular-file output in its current state.
+pub fn is_broken_pipe(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::BrokenPipe)
+    })
 }
 
 #[cfg(test)]
@@ -195,5 +213,14 @@ mod tests {
             Some(Path::new("output.opus"))
         ));
         assert!(!output_is_stdout(Path::new("input.wav"), None));
+    }
+
+    #[test]
+    fn broken_pipe_errors_are_graceful_at_the_cli_boundary() {
+        let error = anyhow::Error::from(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "closed diagnostic pipe",
+        ));
+        assert_eq!(run(Err(error)), ExitCode::SUCCESS);
     }
 }
