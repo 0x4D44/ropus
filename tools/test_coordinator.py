@@ -67,6 +67,50 @@ class CoordinatorLayoutTests(unittest.TestCase):
         self.assertIn('name = "ropus-harness"', (coordinator.ROOT / "harness" / "Cargo.toml").read_text())
         self.assertEqual(run.call_args.kwargs["cwd"], str(coordinator.ROOT))
 
+    def test_codex_review_output_paths_are_unique_within_one_second(self) -> None:
+        results = [
+            subprocess.CompletedProcess([], 0, stdout="first review\n", stderr=""),
+            subprocess.CompletedProcess([], 0, stdout="second review\n", stderr=""),
+        ]
+        with (
+            patch.object(coordinator.subprocess, "run", side_effect=results) as run,
+            patch.object(coordinator.time, "time", return_value=1234.0),
+        ):
+            first = coordinator.invoke_codex("first prompt")
+            second = coordinator.invoke_codex("second prompt")
+
+        self.assertEqual(first, (True, "first review\n"))
+        self.assertEqual(second, (True, "second review\n"))
+        output_paths = [
+            call.args[0][call.args[0].index("-o") + 1]
+            for call in run.call_args_list
+        ]
+        self.assertEqual(len(output_paths), 2)
+        self.assertNotEqual(output_paths[0], output_paths[1])
+
+    def test_failed_or_empty_review_does_not_advance_checkpoint(self) -> None:
+        for review_result in ((False, "codex unavailable"), (True, "  \n")):
+            with self.subTest(review_result=review_result):
+                state = {
+                    "module_status": {"range_coder": "implemented"},
+                    "attempts": {},
+                }
+                build_result = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+                with (
+                    patch.object(coordinator, "invoke_codex", return_value=review_result),
+                    patch.object(coordinator.subprocess, "run", return_value=build_result),
+                    patch.object(coordinator, "write_artifact") as write_artifact,
+                    patch.object(coordinator, "save_state") as save_state,
+                ):
+                    result = coordinator.implement_module(
+                        coordinator.MODULES[0], state, _logger()
+                    )
+
+                self.assertFalse(result)
+                self.assertEqual(state["module_status"]["range_coder"], "implemented")
+                write_artifact.assert_not_called()
+                save_state.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,7 @@ import time
 import logging
 import textwrap
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from datetime import datetime
@@ -625,7 +626,7 @@ def invoke_codex(prompt: str, cwd: Path = ROOT, timeout: int = MAX_AGENT_TIMEOUT
     Invoke Codex CLI in headless (exec) mode for review.
     Returns (success: bool, output: str).
     """
-    output_file = LOGS / f"codex_output_{int(time.time())}.txt"
+    output_file = LOGS / f"codex_output_{uuid.uuid4().hex}.txt"
     cmd = [
         "codex", "exec",
         "--model", model,
@@ -906,6 +907,13 @@ def implement_module(module: dict, state: dict, log: logging.Logger) -> bool:
             rust_module=module["rust_module"],
         )
         review_ok, review_output = invoke_codex(review_prompt, timeout=MAX_AGENT_TIMEOUT)
+        if not review_ok:
+            log.error(f"  [{name}] Review FAILED; module remains implemented")
+            log.debug(f"  Review output: {review_output[:1000]}")
+            return False
+        if not review_output.strip():
+            log.error(f"  [{name}] Review returned no attributable output")
+            return False
         review_path = write_artifact(f"{name}_review.md", review_output)
         log.info(f"  [{name}] Review saved to {review_path}")
 
