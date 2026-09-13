@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00002 — Projection decoder size query accepts impossible stream counts
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** capi/projection-size
 - **Raised:** 2026-08-14T14:26:12Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T030213Z-4e80ff37
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00002-run-fix-20260913T030213Z-4e80ff37
-- **Owner base:** 041f57c40c523e719c3958b7e0368ce3438d6386
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T03:02:13Z
-- **Owner until:** 2026-09-13T05:02:13Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T14:26:12Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-14T14:26:12Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T03:08:29Z, deltic:auto role=fix run=fix-20260913T030213Z-4e80ff37 branch=task/bug-ROP-BUG-CRUCIBLE-00002-run-fix-20260913T030213Z-4e80ff37 code=4efc3d4282c44912ff37bcf5330993558c413600 gate=manual)
 
 ## Observation
 
