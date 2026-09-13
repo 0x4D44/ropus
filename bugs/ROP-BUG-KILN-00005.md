@@ -6,15 +6,15 @@
 - **Area:** tools/integration-results
 - **Raised:** 2026-08-13T17:17:36Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T145423Z-a55da97e
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00005-run-verify-20260913T145423Z-a55da97e
-- **Owner base:** 9b2fb4a69f15570fa56b39ef36d8968c4b8492a5
-- **Owner fingerprint:** sha256:945657d10e7a0dbc48217d23280bfd912bc9b1d59af83b6f5caf61e2a7660042
-- **Owner since:** 2026-09-13T14:54:23Z
-- **Owner until:** 2026-09-13T16:54:23Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
