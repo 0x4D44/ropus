@@ -6,15 +6,15 @@
 - **Area:** tools/bench-sweep
 - **Raised:** 2026-08-13T17:17:40Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T173814Z-3e0df040
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KILN-00013-run-verify-20260913T173814Z-3e0df040
+- **Owner base:** 997602a3e1e7862b5da988080689b8efa1bdb85f
+- **Owner fingerprint:** sha256:c400359b79b99e880d0f1f26df3cc01b20de4884052220243f674e39539ab8b6
+- **Owner since:** 2026-09-13T17:38:14Z
+- **Owner until:** 2026-09-13T19:38:14Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
