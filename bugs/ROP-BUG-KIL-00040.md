@@ -6,15 +6,15 @@
 - **Area:** ropus-fb2k/ffi-reentrancy
 - **Raised:** 2026-08-22T06:10:46Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T152510Z-28573cd2
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00040-run-verify-20260913T152510Z-28573cd2
+- **Owner base:** 70a53a97cdb21e28bcf7b6b65d8cc073f23c127b
+- **Owner fingerprint:** sha256:00ef2383b8c7508417487990c1236ec80821245314c8906f025fbdce9f7e236b
+- **Owner since:** 2026-09-13T15:25:10Z
+- **Owner until:** 2026-09-13T17:25:10Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
