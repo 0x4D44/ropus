@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00022 — Tier-2 SNR oracles accept degenerate identical or silent output as passing
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-deep-plc/tests
 - **Raised:** 2026-08-19T10:46:14Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T002411Z-a6538224
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00022-run-fix-20260913T002411Z-a6538224
-- **Owner base:** 1f9ad6c7d15c45a97a998ee49f619c19c46a39f5
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T00:24:11Z
-- **Owner until:** 2026-09-13T02:24:11Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-19T10:46:14Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-19T10:46:14Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T00:34:45Z, deltic:auto role=fix run=fix-20260913T002411Z-a6538224 branch=task/bug-ROP-BUG-KIL-00022-run-fix-20260913T002411Z-a6538224 code=45442c80dc736b6fa5c7f833a288c750b984d7fe gate=manual)
 
 ## Observation
 
