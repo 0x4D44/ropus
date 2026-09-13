@@ -6,15 +6,15 @@
 - **Area:** ropus-tools-core/audio-output
 - **Raised:** 2026-08-22T07:33:48Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T060406Z-cf71a882
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00044-run-fix-20260913T060406Z-cf71a882
+- **Owner base:** 1bd822635bbc4525cc9f598b98a1edf92caefedf
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T06:04:06Z
+- **Owner until:** 2026-09-13T08:04:06Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
