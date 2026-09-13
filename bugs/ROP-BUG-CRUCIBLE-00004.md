@@ -6,15 +6,15 @@
 - **Area:** capi/extensions-allocation
 - **Raised:** 2026-08-14T14:26:28Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T145145Z-5cd86e1c
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00004-run-verify-20260913T145145Z-5cd86e1c
+- **Owner base:** df7b326d246ac1e747e622ffe30c55852814d657
+- **Owner fingerprint:** sha256:b92fa1b337fedb4fa0522d1e411da4b0f1b547973dff6dc66bcdc95a29d97259
+- **Owner since:** 2026-09-13T14:51:45Z
+- **Owner until:** 2026-09-13T16:51:45Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
