@@ -184,6 +184,27 @@ fn ms_size_for(streams: c_int) -> c_int {
     16 * 1024 * streams
 }
 
+fn valid_ambisonics_channels(channels: c_int) -> bool {
+    (1..=227).contains(&channels)
+        && (1..=15).any(|order_plus_one| {
+            let acn_channels = order_plus_one * order_plus_one;
+            channels == acn_channels || channels == acn_channels + 2
+        })
+}
+
+fn valid_surround_encoder_configuration(channels: c_int, mapping_family: c_int) -> bool {
+    if !(1..=255).contains(&channels) {
+        return false;
+    }
+    match mapping_family {
+        0 => channels <= 2,
+        1 => channels <= 8,
+        2 => valid_ambisonics_channels(channels),
+        255 => true,
+        _ => false,
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn opus_multistream_encoder_get_size(
     streams: c_int,
@@ -204,10 +225,10 @@ pub unsafe extern "C" fn opus_multistream_encoder_get_size(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn opus_multistream_surround_encoder_get_size(
     channels: c_int,
-    _mapping_family: c_int,
+    mapping_family: c_int,
 ) -> c_int {
     ffi_guard!(0, {
-        if !(1..=255).contains(&channels) {
+        if !valid_surround_encoder_configuration(channels, mapping_family) {
             return 0;
         }
         ms_size_for(channels.max(1))
@@ -546,4 +567,33 @@ pub unsafe extern "C" fn opus_multistream_encode_float(
         }
         crate::OPUS_UNIMPLEMENTED
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::opus_multistream_surround_encoder_get_size;
+
+    #[test]
+    fn surround_encoder_size_matches_mapping_family_and_channel_domain() {
+        assert!(unsafe { opus_multistream_surround_encoder_get_size(2, 0) } > 0);
+        assert!(unsafe { opus_multistream_surround_encoder_get_size(8, 1) } > 0);
+        assert!(unsafe { opus_multistream_surround_encoder_get_size(227, 2) } > 0);
+        assert!(unsafe { opus_multistream_surround_encoder_get_size(255, 255) } > 0);
+        assert_eq!(
+            unsafe { opus_multistream_surround_encoder_get_size(3, 0) },
+            0
+        );
+        assert_eq!(
+            unsafe { opus_multistream_surround_encoder_get_size(9, 1) },
+            0
+        );
+        assert_eq!(
+            unsafe { opus_multistream_surround_encoder_get_size(5, 2) },
+            0
+        );
+        assert_eq!(
+            unsafe { opus_multistream_surround_encoder_get_size(2, 99) },
+            0
+        );
+    }
 }
