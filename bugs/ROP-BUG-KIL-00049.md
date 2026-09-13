@@ -6,15 +6,15 @@
 - **Area:** ropus/opus-packet
 - **Raised:** 2026-08-22T08:28:17Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T064739Z-6d8940d7
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00049-run-fix-20260913T064739Z-6d8940d7
+- **Owner base:** e6bd8720afe6486d4d13e6589501c2bf5902ffe1
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T06:47:39Z
+- **Owner until:** 2026-09-13T08:47:39Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
