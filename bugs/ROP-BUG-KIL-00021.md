@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00021 — DRED differential gates skip-and-pass when WEIGHTS_BLOB is empty
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** harness-deep-plc/tests
 - **Raised:** 2026-08-19T10:45:49Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T001300Z-29800934
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00021-run-fix-20260913T001300Z-29800934
-- **Owner base:** 272f75ae112461a7a2848062edc02c4377d433a4
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T00:13:00Z
-- **Owner until:** 2026-09-13T02:13:00Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-19T10:45:49Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-19T10:45:49Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T00:22:10Z, deltic:auto role=fix run=fix-20260913T001300Z-29800934 branch=task/bug-ROP-BUG-KIL-00021-run-fix-20260913T001300Z-29800934 code=0959774e1aaf2ad36f99b259509a1657de843b57 gate=manual)
 
 ## Observation
 
