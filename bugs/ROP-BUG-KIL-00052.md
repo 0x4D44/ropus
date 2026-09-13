@@ -6,15 +6,15 @@
 - **Area:** ropus/dnn-fec
 - **Raised:** 2026-08-22T08:28:50Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T072127Z-e1d5e2fc
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00052-run-fix-20260913T072127Z-e1d5e2fc
+- **Owner base:** 80d762b57ac42d298dcb75f9535b8b2a831ccfb8
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T07:21:27Z
+- **Owner until:** 2026-09-13T09:21:27Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
