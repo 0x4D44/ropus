@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00045 — Reverse Ogg duration scan trusts CRC-valid pages nested in payload
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** ropus-tools-core/ogg-scan
 - **Raised:** 2026-08-22T07:33:49Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T061508Z-59d07029
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00045-run-fix-20260913T061508Z-59d07029
-- **Owner base:** b25f819e94a48ddeed93eb5c074be6f89a5dd4d9
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T06:15:08Z
-- **Owner until:** 2026-09-13T08:15:08Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T07:33:49Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-08-22T07:33:49Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T06:27:05Z, deltic:auto role=fix run=fix-20260913T061508Z-59d07029 branch=task/bug-ROP-BUG-KIL-00045-run-fix-20260913T061508Z-59d07029 code=c0a0ad64523b263b511dd601371bce037705b84d gate=manual)
 
 ## Observation
 
