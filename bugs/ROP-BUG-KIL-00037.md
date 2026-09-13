@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00037 — fb2k seek index can consume memory proportional to every Ogg page
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** ropus-fb2k/seek
 - **Raised:** 2026-08-22T06:10:45Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T051308Z-26fe97e8
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00037-run-fix-20260913T051308Z-26fe97e8
-- **Owner base:** 595967015ad2eafe060f0d31f61ef44643201f0b
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T05:13:08Z
-- **Owner until:** 2026-09-13T07:13:08Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T06:10:45Z, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-08-22T06:10:45Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T05:32:30Z, deltic:auto role=fix run=fix-20260913T051308Z-26fe97e8 branch=task/bug-ROP-BUG-KIL-00037-run-fix-20260913T051308Z-26fe97e8 code=b54ff049b1be16e0fb9b97b3c4cad1ff41f8ad82 gate=manual)
 
 ## Observation
 
