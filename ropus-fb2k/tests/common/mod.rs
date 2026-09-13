@@ -412,7 +412,7 @@ impl MemIo {
 
     /// Flip the abort flag after `open` has already succeeded, so the next
     /// `decode_next` is the call that trips. Used by
-    /// `decode_propagates_abort` because the reverse-scan inside open has a
+    /// `decode_propagates_abort` because the duration scan inside open has a
     /// variable read-count that would make `with_abort_after(n)` flaky.
     pub fn set_aborting(&self) {
         self.state.lock().unwrap().abort = true;

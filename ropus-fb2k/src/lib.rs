@@ -10,9 +10,8 @@
 //! C ABI surface:
 //!
 //! * `ropus_fb2k_open` — header + tags parse over a caller-supplied IO
-//!   callback struct, producing a `RopusFb2kReader` handle. Reverse-scans
-//!   the last Ogg page to populate duration and bitrate when the IO is
-//!   seekable.
+//!   callback struct, producing a `RopusFb2kReader` handle. Scans the tail
+//!   for duration and bitrate when the IO is seekable.
 //! * `ropus_fb2k_close` — destroy the handle.
 //! * `ropus_fb2k_get_info` — fill `RopusFb2kInfo` with `channels`,
 //!   `pre_skip`, `sample_rate` (always 48 kHz), `total_samples`,
@@ -85,11 +84,10 @@ pub const ROPUS_FB2K_UNSUPPORTED: c_int = -5;
 /// and prefer this code over the return value when they disagree.
 pub const ROPUS_FB2K_INTERNAL: c_int = -6;
 
-/// Info-only open hint — read the header + tags + last-granule reverse-scan
-/// but skip full page-walk. Today both paths reverse-scan identically, so
-/// the flag is accepted but not yet differentiated; a future release will
-/// replace the full path with a streaming page-walk that also populates
-/// the seek index, and the info-only path will keep the reverse-scan.
+/// Info-only open hint — read the header + tags + duration scan but skip the
+/// full page-walk. Today both paths use the same bounded scan and ambiguity
+/// fallback, so the flag is accepted but not yet differentiated; a future
+/// release may use it to skip additional work.
 pub const ROPUS_FB2K_OPEN_INFO_ONLY: u32 = 1 << 0;
 
 /// Tag keys that `ropus_fb2k_read_tags` silently drops before calling the
@@ -228,7 +226,7 @@ pub unsafe extern "C" fn ropus_fb2k_open(
             set_last_error_with_code("io.read callback is null", ROPUS_FB2K_BAD_ARG);
             return ptr::null_mut();
         };
-        // Capture the reverse-scan prerequisite once up front. An unseekable
+        // Capture the duration-scan prerequisite once up front. An unseekable
         // stream (no `seek` callback) or unknown size yields `None`, which
         // tells the reader to skip the scan and publish zeroed duration.
         let size_hint = reader.can_seek().then(|| reader.size()).flatten();

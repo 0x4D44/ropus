@@ -62,8 +62,8 @@ impl CallbackReader {
     }
 
     /// Whether the underlying stream advertised a `seek` callback. Used by
-    /// `ropus_fb2k_open` to decide whether to attempt the reverse-scan for
-    /// last-page granule; live HTTP streams with no `seek` get `false` and
+    /// `ropus_fb2k_open` to decide whether to attempt the duration scan for
+    /// the last-page granule; live HTTP streams with no `seek` get `false` and
     /// we fall through to the unseekable path (zero duration, no bitrate).
     pub(crate) fn can_seek(&self) -> bool {
         self.io.seek.is_some()

@@ -454,10 +454,9 @@ pub(crate) struct OggOpusReader<R: Read + Seek> {
     /// Initialised to `pre_skip` on open; set to `sample_pos + pre_skip` on
     /// seek.
     target_abs_pos: u64,
-    /// Set once the selected logical stream's EOS packet is returned, or
-    /// when the next packet belongs to a later chained stream. Subsequent
-    /// decode calls return sticky EOF without feeding another OpusHead into
-    /// the decoder.
+    /// Set once the selected logical stream's EOS packet is returned.
+    /// Subsequent decode calls return sticky EOF without feeding another
+    /// logical stream's OpusHead into the decoder.
     selected_stream_eos: bool,
     /// Page index for seek — built lazily on the first seek call to keep
     /// `open()` cheap (fb2k's library-scan path never needs it). `None`
@@ -539,7 +538,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
         let mut bare_reader = packet_reader.into_inner();
         let audio_start_offset = bare_reader.stream_position().map_err(classify_io_error)?;
 
-        // --- Reverse-scan for last granule ---------------------------------
+        // --- Duration scan for last granule ---------------------------------
         //
         // For a live HTTP stream the caller provides no `size` and no `seek`,
         // in which case we skip this and report `total_samples = 0`,
@@ -732,19 +731,21 @@ impl<R: Read + Seek> OggOpusReader<R> {
 
             let pkt = packet_reader.read_packet()?;
             let Some(pkt) = pkt else {
-                // Clean EOF. Per HLD §4.2 the EOF return reports
-                // `bytes_consumed == 0`. The C++ shim never reads the value
-                // when samples == 0, but the simpler contract is worth
-                // preserving.
-                return Ok((0, 0));
+                return Err(ReaderError::InvalidStream(
+                    "selected logical stream ended before EOS".into(),
+                ));
             };
 
             // PacketReader spans all physical pages and logical chains. The
             // component owns only the first Opus stream, so never feed a
             // later chain's OpusHead/OpusTags into the selected decoder.
             if pkt.stream_serial() != self.stream_serial {
-                self.selected_stream_eos = true;
-                return Ok((0, 0));
+                if self.selected_stream_eos {
+                    return Ok((0, 0));
+                }
+                return Err(ReaderError::InvalidStream(
+                    "selected logical stream ended before EOS".into(),
+                ));
             }
             if pkt.data.is_empty() {
                 return Err(ReaderError::InvalidStream(
@@ -1252,9 +1253,9 @@ fn scan_pages<R: Read + Seek>(
 ///
 /// Preserves the underlying reader's cursor: restores it to wherever it was
 /// before the scan so the caller's `PacketReader` state remains consistent
-/// when we hand back. Truncated files (file_size < 27 bytes or no matching
-/// page in the trailing window) silently produce `(0, -1, None)` — that's a
-/// degraded but non-fatal open.
+/// when we hand back. A missing selected-stream EOS is an invalid stream;
+/// only an EOS page carrying the unknown granule sentinel degrades duration to
+/// `(0, -1, None)`.
 fn compute_duration_and_bitrate<R: Read + Seek>(
     reader: &mut R,
     target_serial: u32,
@@ -1262,7 +1263,7 @@ fn compute_duration_and_bitrate<R: Read + Seek>(
     file_size: u64,
 ) -> Result<(u64, i32, Option<u64>), ReaderError> {
     let saved_pos = reader.stream_position().map_err(classify_io_error)?;
-    let absgp = read_last_granule(reader, target_serial, file_size, saved_pos)
+    let scan_result = read_last_granule(reader, target_serial, file_size, saved_pos)
         .map_err(classify_io_error)?;
     // Best-effort restore so PacketReader's view of the stream is unchanged.
     // If the restore fails the caller will surface the next IO error on its
@@ -1271,8 +1272,14 @@ fn compute_duration_and_bitrate<R: Read + Seek>(
         .seek(SeekFrom::Start(saved_pos))
         .map_err(classify_io_error)?;
 
-    let Some(absgp) = absgp else {
-        return Ok((0, -1, None));
+    let absgp = match scan_result {
+        DurationScanResult::Known(absgp) => absgp,
+        DurationScanResult::Unknown => return Ok((0, -1, None)),
+        DurationScanResult::Missing => {
+            return Err(ReaderError::InvalidStream(
+                "selected logical stream has no EOS page".into(),
+            ));
+        }
     };
     let pre_skip = pre_skip as u64;
     if absgp < pre_skip {
@@ -1303,24 +1310,31 @@ fn compute_duration_and_bitrate<R: Read + Seek>(
 /// structurally-valid candidates make the tail ambiguous, so those files use
 /// a forward page walk from that anchor instead of trusting any byte offset.
 ///
-/// Returns `Ok(None)` if the EOS granule is unknown, no complete matching page
-/// is found, or the tail is malformed. `file_size` is passed in rather than
-/// re-derived from `Seek::seek(End(0))` because `CallbackReader` already
-/// cached it at construction and another round-trip through the callback is
-/// pointless.
+/// Returns `Unknown` if the matching EOS granule is the unknown sentinel and
+/// `Missing` if no complete matching EOS page is found. `file_size` is passed
+/// in rather than re-derived from `Seek::seek(End(0))` because `CallbackReader`
+/// already cached it at construction and another round-trip through the
+/// callback is pointless.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DurationScanResult {
+    Known(u64),
+    Unknown,
+    Missing,
+}
+
 fn read_last_granule<R: Read + Seek>(
     reader: &mut R,
     target_serial: u32,
     file_size: u64,
     start_offset: u64,
-) -> std::io::Result<Option<u64>> {
+) -> std::io::Result<DurationScanResult> {
     /// Absolute cap on how far back we scan. RFC 3533 limits an Ogg page to
     /// ~65 KiB (27-byte header + 255 × 255 lacing bytes), so 128 KiB reliably
     /// spans a max-sized final page even with trailing junk.
     const SCAN_WINDOW: u64 = 128 * 1024;
 
     if file_size < OGG_HEADER_LEN as u64 {
-        return Ok(None);
+        return Ok(DurationScanResult::Missing);
     }
 
     let read_len = SCAN_WINDOW.min(file_size);
@@ -1369,12 +1383,12 @@ fn read_last_granule<R: Read + Seek>(
             continue;
         }
         if candidate.absgp == UNKNOWN_GRANULE {
-            return Ok(None);
+            return Ok(DurationScanResult::Unknown);
         }
-        return Ok(Some(candidate.absgp));
+        return Ok(DurationScanResult::Known(candidate.absgp));
     }
 
-    Ok(None)
+    Ok(DurationScanResult::Missing)
 }
 
 /// Forward-scan pages from a known physical boundary. The lacing table is
@@ -1385,9 +1399,9 @@ fn read_last_granule_from_anchor<R: Read + Seek>(
     target_serial: u32,
     file_size: u64,
     start_offset: u64,
-) -> std::io::Result<Option<u64>> {
+) -> std::io::Result<DurationScanResult> {
     if start_offset > file_size || file_size - start_offset < OGG_HEADER_LEN as u64 {
-        return Ok(None);
+        return Ok(DurationScanResult::Missing);
     }
 
     reader.seek(SeekFrom::Start(start_offset))?;
@@ -1398,22 +1412,26 @@ fn read_last_granule_from_anchor<R: Read + Seek>(
 
     loop {
         if file_size - offset < OGG_HEADER_LEN as u64 {
-            return Ok(None);
+            return Ok(DurationScanResult::Missing);
         }
         match reader.read_exact(&mut header) {
             Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return Ok(DurationScanResult::Missing);
+            }
             Err(e) => return Err(e),
         }
 
         if &header[..4] != OGG_CAPTURE || header[4] != 0 || header[5] & !0x07 != 0 {
-            return Ok(None);
+            return Ok(DurationScanResult::Missing);
         }
 
         let segment_count = header[26] as usize;
         match reader.read_exact(&mut lacing[..segment_count]) {
             Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return Ok(DurationScanResult::Missing);
+            }
             Err(e) => return Err(e),
         }
         let payload_len: usize = lacing[..segment_count]
@@ -1423,7 +1441,7 @@ fn read_last_granule_from_anchor<R: Read + Seek>(
         let page_len = OGG_HEADER_LEN + segment_count + payload_len;
         let next_offset = match offset.checked_add(page_len as u64) {
             Some(next) if next <= file_size => next,
-            _ => return Ok(None),
+            _ => return Ok(DurationScanResult::Missing),
         };
 
         page.clear();
@@ -1433,13 +1451,15 @@ fn read_last_granule_from_anchor<R: Read + Seek>(
         let payload_start = OGG_HEADER_LEN + segment_count;
         match reader.read_exact(&mut page[payload_start..]) {
             Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return Ok(DurationScanResult::Missing);
+            }
             Err(e) => return Err(e),
         }
 
         let expected_crc = u32::from_le_bytes([header[22], header[23], header[24], header[25]]);
         if ogg_page_crc32(&page) != expected_crc {
-            return Ok(None);
+            return Ok(DurationScanResult::Missing);
         }
 
         if header[14..18] == target_serial.to_le_bytes() && header[5] & 0x04 != 0 {
@@ -1448,9 +1468,9 @@ fn read_last_granule_from_anchor<R: Read + Seek>(
                 header[13],
             ]);
             if absgp == UNKNOWN_GRANULE {
-                return Ok(None);
+                return Ok(DurationScanResult::Unknown);
             }
-            return Ok(Some(absgp));
+            return Ok(DurationScanResult::Known(absgp));
         }
 
         offset = next_offset;
@@ -1742,7 +1762,11 @@ mod tests {
         let got =
             read_last_granule(&mut cursor, SERIAL, bytes.len() as u64, 0).expect("scan succeeds");
 
-        assert!(got.is_none(), "no physical page carries EOS");
+        assert_eq!(
+            got,
+            DurationScanResult::Missing,
+            "no physical page carries EOS"
+        );
         let crc_bytes = CRC_BYTES_PROCESSED.load(Ordering::Relaxed);
         assert!(
             crc_bytes <= bytes.len() * 2,

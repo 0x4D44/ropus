@@ -86,12 +86,9 @@ fn open_rejects_truncated_valid_fixture() {
     // ~50-byte audio page in practice, so total fixture is ~150 bytes.
     let full = build_opus_fixture_with_audio_packets("ropus-fb2k-test", &[], 5, Some(312));
     let len = full.len();
-    // Cuts spread across all parser stages. We deliberately do *not*
-    // include cuts that lop off only the trailing 1-4 bytes: the reader
-    // is intentionally lenient about a torn tail (the OpusHead +
-    // OpusTags pages plus a complete audio page are enough to open with
-    // valid metadata; the missing bytes just shorten the apparent
-    // duration). Tests for the parser-discipline cuts are what matter.
+    // Cuts spread across all parser stages. Tail truncation after the final
+    // complete page has its own regression below because it must distinguish
+    // a selected stream that never reached EOS from a clean end-of-stream.
     let cuts = [
         10usize, // mid first Ogg page header
         27,      // immediately after the first Ogg page header
@@ -119,6 +116,63 @@ fn open_rejects_truncated_valid_fixture() {
             last_error_string()
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// A selected stream that ends before an EOS page is malformed, even when its
+// complete prefix can be decoded. Seekable open must reject it, while an
+// unseekable open may defer the same decision until decode reaches physical EOF.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn truncated_selected_stream_never_reports_clean_eof() {
+    let full = build_opus_fixture_with_audio_packets("ropus-fb2k-test", &[], 20, Some(312));
+    let final_page_start = full
+        .windows(4)
+        .rposition(|window| window == b"OggS")
+        .expect("fixture has an audio page");
+    let truncated = full[..final_page_start].to_vec();
+
+    let (_io, handle) = open_from_bytes(truncated.clone());
+    assert!(
+        handle.is_null(),
+        "seekable open must reject a selected stream without EOS"
+    );
+    assert_eq!(
+        unsafe { ropus_fb2k::ropus_fb2k_last_error_code() },
+        ROPUS_FB2K_INVALID_STREAM,
+        "missing EOS must surface INVALID_STREAM (last_error={:?})",
+        last_error_string()
+    );
+
+    let (_io, handle) = open_from_bytes_without_seek(truncated, 0);
+    assert!(
+        !handle.is_null(),
+        "unseekable open can defer EOS validation until decode"
+    );
+    let mut scratch = vec![0f32; 5760 * 2];
+    let mut bytes_consumed = 0u64;
+    loop {
+        let rc = unsafe {
+            ropus_fb2k::ropus_fb2k_decode_next(
+                handle,
+                scratch.as_mut_ptr(),
+                5760,
+                &mut bytes_consumed,
+            )
+        };
+        assert_ne!(rc, 0, "truncated selected stream must not report clean EOF");
+        if rc < 0 {
+            assert_eq!(
+                unsafe { ropus_fb2k::ropus_fb2k_last_error_code() },
+                ROPUS_FB2K_INVALID_STREAM,
+                "missing EOS must surface INVALID_STREAM (last_error={:?})",
+                last_error_string()
+            );
+            break;
+        }
+    }
+    unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
 }
 
 // ---------------------------------------------------------------------------
