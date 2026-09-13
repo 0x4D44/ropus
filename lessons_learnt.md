@@ -1,5 +1,7 @@
 - Ogg page size is not a packet bound: `ropusinfo` must check continued-packet budgets before retaining laces (`ropus-tools-core/src/commands/info.rs:100`).
 
+- Shell-out tests need one finite helper that drains both pipes and kills/reaps the process tree; `Command::output()` can wait forever (`ropusplay/tests/cli.rs:21`).
+
 - Atomic replacement must preserve the existing destination's security metadata: use `0600` + mode copy on Unix and `ReplaceFileW` on Windows (`ropus-tools-core/src/util.rs:109`).
 
 - Child-process tests need concurrent pipe drains plus kill-and-reap deadlines; wait_with_output alone can wedge (ropusdec/tests/cli.rs:run_child_with_timeout).

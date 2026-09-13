@@ -10,7 +10,107 @@
 //! command's structured no-device error; panics, argument failures, and other
 //! enumeration errors remain test failures.
 
-use std::process::{Command, Stdio};
+use std::io::{self, Read};
+use std::process::{Child, Command, Output, Stdio};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+const PLAYER_CHILD_TIMEOUT: Duration = Duration::from_secs(30);
+const HANGING_CHILD_TIMEOUT: Duration = Duration::from_millis(250);
+
+fn run_child_with_timeout(
+    mut command: Command,
+    description: &str,
+    timeout: Duration,
+) -> io::Result<Output> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        command.process_group(0);
+    }
+
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let stdout_reader = spawn_reader(child.stdout.take().expect("stdout was piped"));
+    let stderr_reader = spawn_reader(child.stderr.take().expect("stderr was piped"));
+    let deadline = Instant::now() + timeout;
+
+    let status = loop {
+        match child.try_wait()? {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                terminate_process_tree(&mut child);
+                let _ = child.wait();
+                let _ = join_reader(stdout_reader);
+                let _ = join_reader(stderr_reader);
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "{description} timed out after {timeout:?}; process was killed and reaped"
+                    ),
+                ));
+            }
+            None => thread::sleep(Duration::from_millis(10)),
+        }
+    };
+
+    Ok(Output {
+        status,
+        stdout: join_reader(stdout_reader)?,
+        stderr: join_reader(stderr_reader)?,
+    })
+}
+
+fn run_player(args: &[&str], description: &str) -> io::Result<Output> {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ropusplay"));
+    command.args(args);
+    run_child_with_timeout(command, description, PLAYER_CHILD_TIMEOUT)
+}
+
+fn spawn_reader(mut pipe: impl Read + Send + 'static) -> JoinHandle<io::Result<Vec<u8>>> {
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    })
+}
+
+fn join_reader(reader: JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Vec<u8>> {
+    reader
+        .join()
+        .map_err(|_| io::Error::other("child output reader panicked"))?
+}
+
+fn terminate_process_tree(child: &mut Child) {
+    let pid = child.id().to_string();
+
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid, "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    #[cfg(unix)]
+    {
+        let process_group = format!("-{pid}");
+        let _ = Command::new("kill")
+            .args(["-KILL", &process_group])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    let _ = pid;
+
+    let _ = child.kill();
+}
 
 #[test]
 fn clap_errors_escape_invalid_values_before_formatting() {
@@ -53,13 +153,9 @@ fn clap_errors_escape_invalid_values_before_formatting() {
 /// documented "no devices" contract, not a test failure.
 #[test]
 fn list_devices_prints_lines_and_exits_zero() {
-    let bin = env!("CARGO_BIN_EXE_ropusplay");
     // `--quiet` suppresses the banner so stdout is purely the device list —
     // keeps this test focused on the flag's output, not banner formatting.
-    let out = Command::new(bin)
-        .args(["--quiet", "--list-devices"])
-        .stderr(Stdio::piped())
-        .output()
+    let out = run_player(&["--quiet", "--list-devices"], "ropusplay --list-devices")
         .expect("spawn ropusplay --list-devices");
 
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -88,12 +184,11 @@ fn list_devices_prints_lines_and_exits_zero() {
 
 #[test]
 fn list_devices_without_quiet_has_no_banner_pollution() {
-    let bin = env!("CARGO_BIN_EXE_ropusplay");
-    let out = Command::new(bin)
-        .args(["--no-color", "--list-devices"])
-        .stderr(Stdio::piped())
-        .output()
-        .expect("spawn ropusplay --list-devices without quiet");
+    let out = run_player(
+        &["--no-color", "--list-devices"],
+        "ropusplay --no-color --list-devices",
+    )
+    .expect("spawn ropusplay --list-devices without quiet");
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -128,20 +223,20 @@ fn list_devices_without_quiet_has_no_banner_pollution() {
 /// so the user can spot their typo without parsing a boilerplate wall.
 #[test]
 fn unknown_device_exits_nonzero() {
-    let bin = env!("CARGO_BIN_EXE_ropusplay");
     let bogus = "_definitely_not_a_device_";
     // We must supply a positional `input` so clap doesn't reject us before
     // the command body runs; the path is never opened because device
     // resolution fails first.
-    let out = Command::new(bin)
-        .args([
+    let out = run_player(
+        &[
             "--quiet",
             "--device",
             bogus,
             "C:/this/path/does/not/exist.opus",
-        ])
-        .output()
-        .expect("spawn ropusplay --device <bogus>");
+        ],
+        "ropusplay --device <bogus>",
+    )
+    .expect("spawn ropusplay --device <bogus>");
 
     assert!(
         !out.status.success(),
@@ -152,5 +247,39 @@ fn unknown_device_exits_nonzero() {
     assert!(
         stderr.contains(bogus),
         "stderr should mention the requested name '{bogus}', got: {stderr}"
+    );
+}
+
+#[test]
+fn hanging_helper_child() {
+    if std::env::var_os("ROPUSPLAY_HANG_HELPER").is_some() {
+        loop {
+            thread::sleep(Duration::from_secs(60));
+        }
+    }
+}
+
+#[test]
+fn child_timeout_reports_distinct_error_after_cleanup() {
+    let mut command = Command::new(std::env::current_exe().expect("locate CLI test binary"));
+    command
+        .args(["hanging_helper_child", "--exact", "--nocapture"])
+        .env("ROPUSPLAY_HANG_HELPER", "1");
+
+    let error = run_child_with_timeout(
+        command,
+        "ropusplay hanging test child",
+        HANGING_CHILD_TIMEOUT,
+    )
+    .expect_err("hanging child must time out");
+
+    assert_eq!(
+        error.kind(),
+        io::ErrorKind::TimedOut,
+        "timeout must have a distinct error kind: {error}"
+    );
+    assert!(
+        error.to_string().contains("timed out") && error.to_string().contains("killed and reaped"),
+        "timeout diagnostic must identify cleanup: {error}"
     );
 }
