@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00004 — Extension shims abort on large caller capacities
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Could
 - **Severity:** Medium
 - **Area:** capi/extensions-allocation
 - **Raised:** 2026-08-14T14:26:28Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T031705Z-c7a149f8
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00004-run-fix-20260913T031705Z-c7a149f8
-- **Owner base:** d170c08e80666fcfafa335f75950b3e2d4bfc977
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T03:17:05Z
-- **Owner until:** 2026-09-13T05:17:05Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T14:26:28Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-14T14:26:28Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T03:32:43Z, deltic:auto role=fix run=fix-20260913T031705Z-c7a149f8 branch=task/bug-ROP-BUG-CRUCIBLE-00004-run-fix-20260913T031705Z-c7a149f8 code=177fb542895f8ff33963f4da87b5e12523ce02c0 gate=manual)
 
 ## Observation
 
