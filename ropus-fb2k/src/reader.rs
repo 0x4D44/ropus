@@ -21,10 +21,11 @@
 //! pre_skip`. `decode_next` drops leading samples until the counter catches
 //! up to the target, unifying the two discard regimes.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
 
-use ogg::reading::PacketReader;
+use ogg::reading::{BasePacketReader, OggPage, PageParser};
 use ropus::OpusDecoder;
 
 use crate::io::AbortTag;
@@ -66,6 +67,193 @@ const OGG_CAPTURE: &[u8; 4] = b"OggS";
 /// Fixed Ogg page header length (capture + structure + flags + granule +
 /// serial + seq + crc + segment_count).
 const OGG_HEADER_LEN: usize = 27;
+const MAX_CAPTURE_SEARCH_BYTES: usize = 150 * 1024;
+
+/// RFC 7845 §6 recommends that an Ogg Opus demuxer accept family-0 packets up
+/// to 61,440 bytes. This is larger than the encoder's 7,650-byte buffer and
+/// preserves valid imported streams while still bounding page-spanning input.
+pub(crate) const MAX_AUDIO_PACKET_BYTES: usize = 61_440;
+
+/// Header packets are not Opus audio packets, so they need a separate bound
+/// for normal OpusTags metadata while still preventing unbounded Ogg packet
+/// buffering. One MiB is large enough for ordinary tags and cover-art text,
+/// while keeping the pre-validation allocation finite.
+pub(crate) const MAX_METADATA_PACKET_BYTES: usize = 1024 * 1024;
+
+/// Bounded replacement for `ogg::reading::PacketReader`. The upstream reader
+/// exposes `BasePacketReader` but performs page buffering before callers can
+/// inspect the assembled packet size. We inspect each page's lacing values
+/// first, so a packet spanning arbitrary pages is rejected before its page is
+/// handed to `BasePacketReader::push_page`.
+struct BoundedPacketReader<R: Read + Seek> {
+    rdr: R,
+    base_packet_reader: BasePacketReader,
+    read_some_page: bool,
+    unfinished_bytes: HashMap<u32, usize>,
+    max_packet_bytes: usize,
+}
+
+impl<R: Read + Seek> BoundedPacketReader<R> {
+    fn new(rdr: R, max_packet_bytes: usize) -> Self {
+        Self {
+            rdr,
+            base_packet_reader: BasePacketReader::new(),
+            read_some_page: false,
+            unfinished_bytes: HashMap::new(),
+            max_packet_bytes,
+        }
+    }
+
+    fn set_audio_mode(&mut self) {
+        self.max_packet_bytes = MAX_AUDIO_PACKET_BYTES;
+    }
+
+    fn into_inner(self) -> R {
+        self.rdr
+    }
+
+    fn read_packet(&mut self) -> Result<Option<ogg::Packet>, ReaderError> {
+        loop {
+            if let Some(packet) = self.base_packet_reader.read_packet() {
+                return Ok(Some(packet));
+            }
+            let page = self.read_ogg_page()?;
+            match page {
+                Some(page) => self
+                    .base_packet_reader
+                    .push_page(page)
+                    .map_err(ogg_err_to_reader)?,
+                None => return Ok(None),
+            }
+        }
+    }
+
+    fn seek_bytes(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        let result = self.rdr.seek(pos)?;
+        self.base_packet_reader.update_after_seek();
+        self.unfinished_bytes.clear();
+        Ok(result)
+    }
+
+    fn read_ogg_page(&mut self) -> Result<Option<OggPage>, ReaderError> {
+        let mut header = [0u8; OGG_HEADER_LEN];
+        let mut capture_window = [0u8; 4];
+        let mut searched = 0usize;
+        let mut initial = [0u8; 4];
+        let initial_read = self.rdr.read(&mut initial).map_err(classify_io_error)?;
+        if initial_read == 0 {
+            return if self.read_some_page {
+                Ok(None)
+            } else {
+                Err(ReaderError::InvalidStream(
+                    "Ogg capture pattern not found".into(),
+                ))
+            };
+        }
+        let mut capture_found = false;
+        for &byte in &initial[..initial_read] {
+            capture_window.copy_within(1.., 0);
+            capture_window[3] = byte;
+            searched += 1;
+            if searched > MAX_CAPTURE_SEARCH_BYTES {
+                return Err(ReaderError::InvalidStream(
+                    "Ogg capture pattern not found within 150 KiB".into(),
+                ));
+            }
+            if &capture_window == OGG_CAPTURE {
+                capture_found = true;
+                break;
+            }
+        }
+        while !capture_found {
+            capture_window.copy_within(1.., 0);
+            let read = self
+                .rdr
+                .read(&mut capture_window[3..4])
+                .map_err(classify_io_error)?;
+            if read == 0 {
+                return if self.read_some_page {
+                    Ok(None)
+                } else {
+                    Err(ReaderError::InvalidStream(
+                        "Ogg capture pattern not found".into(),
+                    ))
+                };
+            }
+            searched += 1;
+            if searched > MAX_CAPTURE_SEARCH_BYTES {
+                return Err(ReaderError::InvalidStream(
+                    "Ogg capture pattern not found within 150 KiB".into(),
+                ));
+            }
+            if &capture_window == OGG_CAPTURE {
+                capture_found = true;
+            }
+        }
+        header[..4].copy_from_slice(OGG_CAPTURE);
+        self.rdr
+            .read_exact(&mut header[4..])
+            .map_err(classify_io_error)?;
+        self.read_some_page = true;
+
+        let page_segments = header[26] as usize;
+        let mut segment_table = vec![0u8; page_segments];
+        self.rdr
+            .read_exact(&mut segment_table)
+            .map_err(classify_io_error)?;
+        self.check_packet_lengths(
+            u32::from_le_bytes([header[14], header[15], header[16], header[17]]),
+            header[5],
+            &segment_table,
+        )?;
+
+        let (mut parser, _) = PageParser::new(header).map_err(ogg_err_to_reader)?;
+        let page_size = parser.parse_segments(segment_table);
+        let mut packet_data = vec![0u8; page_size];
+        self.rdr
+            .read_exact(&mut packet_data)
+            .map_err(classify_io_error)?;
+        Ok(Some(
+            parser
+                .parse_packet_data(packet_data)
+                .map_err(ogg_err_to_reader)?,
+        ))
+    }
+
+    fn check_packet_lengths(
+        &mut self,
+        stream_serial: u32,
+        header_type: u8,
+        segment_table: &[u8],
+    ) -> Result<(), ReaderError> {
+        let mut packet_bytes = if header_type & 0x01 != 0 {
+            self.unfinished_bytes.remove(&stream_serial).unwrap_or(0)
+        } else {
+            self.unfinished_bytes.remove(&stream_serial);
+            0
+        };
+
+        for &segment_len in segment_table {
+            packet_bytes = packet_bytes
+                .checked_add(segment_len as usize)
+                .ok_or_else(|| ReaderError::InvalidStream("Ogg packet length overflow".into()))?;
+            if packet_bytes > self.max_packet_bytes {
+                return Err(ReaderError::InvalidStream(format!(
+                    "Ogg packet exceeds {} byte limit",
+                    self.max_packet_bytes
+                )));
+            }
+            if segment_len < 255 {
+                packet_bytes = 0;
+            }
+        }
+
+        if packet_bytes != 0 {
+            self.unfinished_bytes.insert(stream_serial, packet_bytes);
+        }
+        Ok(())
+    }
+}
 
 /// Parsed `OpusHead` fields we carry forward. Matches the RFC 7845 sec. 5.1
 /// layout (little-endian multi-byte fields, channel_mapping_family at the
@@ -193,7 +381,7 @@ struct ReaderState {
 }
 
 /// Top-level Ogg Opus reader. Holds the parsed header, the parsed tags, and
-/// the underlying `PacketReader<R>` positioned just after the OpusTags page
+/// the bounded packet reader positioned just after the OpusTags page
 /// (ready for the decode loop to start pulling audio packets).
 ///
 /// `PacketReader` doesn't derive `Debug`, so we hand-write the impl and skip
@@ -210,10 +398,10 @@ pub(crate) struct OggOpusReader<R: Read + Seek> {
     /// filter the reverse-scan and the page-index walk to the right stream
     /// (matches the pattern in `ropus-cli/src/container/ogg.rs`).
     stream_serial: u32,
-    /// `PacketReader` kept alive for the decode loop. It stays seated while
-    /// normal seeks use `PacketReader::seek_bytes`; the option is only needed
+    /// Bounded packet reader kept alive for the decode loop. It stays seated
+    /// while normal seeks use `seek_bytes`; the option is only needed
     /// while the lazy page-index scan temporarily owns the underlying reader.
-    packet_reader: Option<PacketReader<R>>,
+    packet_reader: Option<BoundedPacketReader<R>>,
     /// Byte offset of the first audio page — i.e. the stream position right
     /// after the OpusTags page was consumed. The page-index walk starts
     /// here. Cached at open time because we temporarily drop the
@@ -309,12 +497,11 @@ impl<R: Read + Seek> OggOpusReader<R> {
         _flags: u32,
         file_size_hint: Option<u64>,
     ) -> Result<Self, ReaderError> {
-        let mut packet_reader = PacketReader::new(reader);
+        let mut packet_reader = BoundedPacketReader::new(reader, MAX_METADATA_PACKET_BYTES);
 
         // --- Page 1: OpusHead ---------------------------------------
         let head_pkt = packet_reader
-            .read_packet()
-            .map_err(ogg_err_to_reader)?
+            .read_packet()?
             .ok_or_else(|| ReaderError::InvalidStream("empty stream".into()))?;
         let stream_serial = head_pkt.stream_serial();
         let head = parse_opus_head(&head_pkt.data)?;
@@ -334,10 +521,10 @@ impl<R: Read + Seek> OggOpusReader<R> {
 
         // --- Page 2: OpusTags ---------------------------------------
         let tags_pkt = packet_reader
-            .read_packet()
-            .map_err(ogg_err_to_reader)?
+            .read_packet()?
             .ok_or_else(|| ReaderError::InvalidStream("missing OpusTags page".into()))?;
         let tags = tags::parse(&tags_pkt.data)?;
+        packet_reader.set_audio_mode();
 
         // Capture the position right after the OpusTags page — the first
         // byte of the first audio page. Used by the seek path as the
@@ -359,7 +546,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
                     head.pre_skip,
                     size,
                 )?;
-                let mut fresh = PacketReader::new(bare_reader);
+                let mut fresh = BoundedPacketReader::new(bare_reader, MAX_AUDIO_PACKET_BYTES);
                 fresh
                     .seek_bytes(SeekFrom::Start(audio_start_offset))
                     .map_err(classify_io_error)?;
@@ -370,7 +557,12 @@ impl<R: Read + Seek> OggOpusReader<R> {
                 // without touching its cursor — PacketReader has already
                 // consumed the OpusTags page, so the bare reader sits at
                 // `audio_start_offset` which is exactly where we want.
-                (PacketReader::new(bare_reader), 0u64, -1i32, None)
+                (
+                    BoundedPacketReader::new(bare_reader, MAX_AUDIO_PACKET_BYTES),
+                    0u64,
+                    -1i32,
+                    None,
+                )
             }
         };
 
@@ -531,7 +723,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
                 return Ok((0, 0));
             }
 
-            let pkt = packet_reader.read_packet().map_err(ogg_err_to_reader)?;
+            let pkt = packet_reader.read_packet()?;
             let Some(pkt) = pkt else {
                 // Clean EOF. Per HLD §4.2 the EOF return reports
                 // `bytes_consumed == 0`. The C++ shim never reads the value
@@ -871,7 +1063,7 @@ impl<R: Read + Seek> OggOpusReader<R> {
         // fails. If cancellation is still active, the callback can reject
         // this rollback too; remember the intended position and retry it
         // before the next decode/seek after the caller clears cancellation.
-        let mut fresh = PacketReader::new(bare_reader);
+        let mut fresh = BoundedPacketReader::new(bare_reader, MAX_AUDIO_PACKET_BYTES);
         let restore_result = fresh
             .seek_bytes(SeekFrom::Start(resume_pos))
             .map_err(classify_io_error);
@@ -1272,6 +1464,7 @@ fn ogg_err_to_reader(e: ogg::OggReadError) -> ReaderError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ogg::writing::{PacketWriteEndInfo, PacketWriter};
     use std::io::Cursor;
 
     /// Build a minimal valid OpusHead packet.
@@ -1322,6 +1515,73 @@ mod tests {
     #[test]
     fn open_rejects_empty() {
         let err = OggOpusReader::open(Cursor::new(Vec::<u8>::new()), 0, Some(0)).unwrap_err();
+        assert!(matches!(err, ReaderError::InvalidStream(_)));
+    }
+
+    fn one_packet_ogg(packet_len: usize) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut writer = PacketWriter::new(&mut bytes);
+        writer
+            .write_packet(
+                vec![0xA5; packet_len],
+                0xC0DE_C0DE,
+                PacketWriteEndInfo::EndStream,
+                0,
+            )
+            .expect("write packet");
+        drop(writer);
+        bytes
+    }
+
+    #[test]
+    fn bounded_reader_accepts_audio_packet_at_limit() {
+        let mut reader = BoundedPacketReader::new(
+            Cursor::new(one_packet_ogg(MAX_AUDIO_PACKET_BYTES)),
+            MAX_AUDIO_PACKET_BYTES,
+        );
+        let packet = reader
+            .read_packet()
+            .expect("packet at limit must parse")
+            .expect("packet present");
+        assert_eq!(packet.data.len(), MAX_AUDIO_PACKET_BYTES);
+    }
+
+    #[test]
+    fn bounded_reader_rejects_audio_packet_one_byte_over_limit() {
+        let mut reader = BoundedPacketReader::new(
+            Cursor::new(one_packet_ogg(MAX_AUDIO_PACKET_BYTES + 1)),
+            MAX_AUDIO_PACKET_BYTES,
+        );
+        let err = match reader.read_packet() {
+            Ok(_) => panic!("packet over limit must reject before buffering"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, ReaderError::InvalidStream(_)));
+    }
+
+    #[test]
+    fn bounded_reader_accepts_metadata_packet_at_limit() {
+        let mut reader = BoundedPacketReader::new(
+            Cursor::new(one_packet_ogg(MAX_METADATA_PACKET_BYTES)),
+            MAX_METADATA_PACKET_BYTES,
+        );
+        let packet = reader
+            .read_packet()
+            .expect("metadata packet at limit must parse")
+            .expect("packet present");
+        assert_eq!(packet.data.len(), MAX_METADATA_PACKET_BYTES);
+    }
+
+    #[test]
+    fn bounded_reader_rejects_metadata_packet_one_byte_over_limit() {
+        let mut reader = BoundedPacketReader::new(
+            Cursor::new(one_packet_ogg(MAX_METADATA_PACKET_BYTES + 1)),
+            MAX_METADATA_PACKET_BYTES,
+        );
+        let err = match reader.read_packet() {
+            Ok(_) => panic!("metadata packet over limit must reject before buffering"),
+            Err(err) => err,
+        };
         assert!(matches!(err, ReaderError::InvalidStream(_)));
     }
 }

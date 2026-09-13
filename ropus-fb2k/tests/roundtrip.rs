@@ -15,6 +15,7 @@ mod common;
 use std::io::Cursor;
 
 use ogg::reading::PacketReader;
+use ogg::writing::{PacketWriteEndInfo, PacketWriter};
 use ropus::OpusDecoder;
 
 use common::{
@@ -180,6 +181,125 @@ fn corrupt_opus_tags_body_rejected_invalid_stream() {
 }
 
 // ---------------------------------------------------------------------------
+// A packet one byte over RFC 7845's family-0 import ceiling must be rejected
+// by the public decode API before the Ogg packet reader buffers its pages.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn decode_rejects_audio_packet_one_byte_over_import_limit() {
+    const MAX_AUDIO_PACKET_BYTES: usize = 61_440;
+    let mut bytes = Vec::new();
+    let mut writer = PacketWriter::new(&mut bytes);
+    writer
+        .write_packet(
+            build_opus_head(2, 48_000, 312),
+            FIXTURE_STREAM_SERIAL,
+            PacketWriteEndInfo::EndPage,
+            0,
+        )
+        .expect("write OpusHead");
+    writer
+        .write_packet(
+            common::build_opus_tags("ropus-fb2k-test", &[]),
+            FIXTURE_STREAM_SERIAL,
+            PacketWriteEndInfo::EndPage,
+            0,
+        )
+        .expect("write OpusTags");
+    writer
+        .write_packet(
+            vec![0xA5; MAX_AUDIO_PACKET_BYTES + 1],
+            FIXTURE_STREAM_SERIAL,
+            PacketWriteEndInfo::EndStream,
+            960,
+        )
+        .expect("write oversized audio packet");
+    drop(writer);
+
+    let (_io, handle) = open_from_bytes(bytes);
+    assert!(
+        !handle.is_null(),
+        "header-only open should defer audio reads"
+    );
+    let mut output = vec![0.0f32; 5760 * 2];
+    let mut bytes_consumed = 0u64;
+    let rc = unsafe {
+        ropus_fb2k::ropus_fb2k_decode_next(handle, output.as_mut_ptr(), 5760, &mut bytes_consumed)
+    };
+    assert_eq!(rc, ROPUS_FB2K_INVALID_STREAM);
+    assert_eq!(
+        unsafe { ropus_fb2k::ropus_fb2k_last_error_code() },
+        ROPUS_FB2K_INVALID_STREAM
+    );
+    unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+}
+
+#[test]
+fn open_enforces_metadata_packet_budget_at_public_boundary() {
+    const MAX_METADATA_PACKET_BYTES: usize = 1024 * 1024;
+
+    let mut at_limit = common::build_opus_tags("ropus-fb2k-test", &[]);
+    at_limit.resize(MAX_METADATA_PACKET_BYTES, 0);
+    let mut bytes = Vec::new();
+    let mut writer = PacketWriter::new(&mut bytes);
+    writer
+        .write_packet(
+            build_opus_head(2, 48_000, 312),
+            FIXTURE_STREAM_SERIAL,
+            PacketWriteEndInfo::EndPage,
+            0,
+        )
+        .expect("write OpusHead");
+    writer
+        .write_packet(
+            at_limit,
+            FIXTURE_STREAM_SERIAL,
+            PacketWriteEndInfo::EndStream,
+            312,
+        )
+        .expect("write metadata packet at limit");
+    drop(writer);
+    let (_io, handle) = open_from_bytes(bytes);
+    assert!(
+        !handle.is_null(),
+        "metadata packet at the limit must open: {:?}",
+        last_error_string()
+    );
+    unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+
+    let mut over_limit = common::build_opus_tags("ropus-fb2k-test", &[]);
+    over_limit.resize(MAX_METADATA_PACKET_BYTES + 1, 0);
+    let mut bytes = Vec::new();
+    let mut writer = PacketWriter::new(&mut bytes);
+    writer
+        .write_packet(
+            build_opus_head(2, 48_000, 312),
+            FIXTURE_STREAM_SERIAL,
+            PacketWriteEndInfo::EndPage,
+            0,
+        )
+        .expect("write OpusHead");
+    writer
+        .write_packet(
+            over_limit,
+            FIXTURE_STREAM_SERIAL,
+            PacketWriteEndInfo::EndStream,
+            312,
+        )
+        .expect("write oversized metadata packet");
+    drop(writer);
+    let (_io, handle) = open_from_bytes(bytes);
+    assert!(
+        handle.is_null(),
+        "metadata packet over the limit must reject"
+    );
+    assert_eq!(
+        unsafe { ropus_fb2k::ropus_fb2k_last_error_code() },
+        ROPUS_FB2K_INVALID_STREAM
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Valid file populates OpusHead fields in `RopusFb2kInfo`.
 // ---------------------------------------------------------------------------
 
@@ -273,7 +393,7 @@ fn metadata_block_picture_is_filtered_from_callback() {
     let bytes = build_opus_fixture(
         "ropus-fb2k-test",
         &[
-            ("METADATA_BLOCK_PICTURE", "base64-of-a-huge-image"),
+            ("Metadata_Block_Picture", "base64-of-a-huge-image"),
             ("ARTIST", "Alice"),
         ],
     );

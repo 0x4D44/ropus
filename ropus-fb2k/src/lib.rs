@@ -93,9 +93,8 @@ pub const ROPUS_FB2K_INTERNAL: c_int = -6;
 pub const ROPUS_FB2K_OPEN_INFO_ONLY: u32 = 1 << 0;
 
 /// Tag keys that `ropus_fb2k_read_tags` silently drops before calling the
-/// caller's tag callback. The parser still surfaces them on the raw
-/// `ParsedTags::iter()` path — filtering happens at the reporting boundary
-/// (HLD sec. 2 non-goals: fb2k has its own cover-art pipeline).
+/// caller's tag callback. The parser also skips these values before retaining
+/// them, so large cover-art blobs do not remain in `ParsedTags`.
 ///
 /// Matched case-insensitively.
 const FILTERED_TAG_KEYS: &[&str] = &["METADATA_BLOCK_PICTURE"];
@@ -348,9 +347,8 @@ pub unsafe extern "C" fn ropus_fb2k_read_tags(
         }
 
         for (k, v) in reader.inner.tags().iter() {
-            // Filter cover-art blobs at the reporting boundary (not in the
-            // parser), so the raw comment is still available to anyone
-            // pulling `ParsedTags::iter()` directly.
+            // Keep this boundary filter as a defensive compatibility guard;
+            // the parser already omits cover-art values before retention.
             if FILTERED_TAG_KEYS.iter().any(|f| k.eq_ignore_ascii_case(f)) {
                 continue;
             }

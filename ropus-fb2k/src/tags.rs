@@ -16,12 +16,9 @@
 //! because vorbis_comment keys are case-insensitive and consumers (fb2k,
 //! ReplayGain mapping) expect uppercase.
 //!
-//! The parser preserves *every* comment, including `METADATA_BLOCK_PICTURE`
-//! cover-art blobs. Dropping them happens at the reporting boundary in
-//! `lib.rs::ropus_fb2k_read_tags` (HLD sec. 2 non-goals: fb2k has its own
-//! cover-art pipeline). Keeping the parser complete means a future caller
-//! that *does* want the picture blob can get it from `ParsedTags::iter()`
-//! directly without re-parsing the packet.
+//! The parser drops `METADATA_BLOCK_PICTURE` cover-art blobs because the fb2k
+//! reporting boundary filters them. This keeps large filtered values out of
+//! the retained tag set while preserving every ordinary comment.
 //!
 //! ReplayGain tag conversion lives at the bottom of this file (see
 //! `extract_replaygain`) per HLD sec. 5.5: legacy `REPLAYGAIN_*` tags
@@ -35,6 +32,14 @@ use std::fmt;
 /// Magic at the start of an OpusTags packet.
 pub(crate) const OPUS_TAGS_MAGIC: &[u8; 8] = b"OpusTags";
 
+/// Bounds for the retained, user-visible OpusTags fields. These are separate
+/// from the packet bound in `reader.rs`: the whole header packet is bounded
+/// before Ogg buffering, then these limits bound the strings we retain.
+pub(crate) const MAX_VENDOR_BYTES: usize = 4 * 1024;
+pub(crate) const MAX_COMMENT_COUNT: usize = 64;
+pub(crate) const MAX_COMMENT_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_METADATA_BYTES: usize = 1024 * 1024;
+
 /// Everything we extract from an OpusTags packet. We preserve the raw
 /// bytes' order — some downstream tooling (the tag callback in
 /// `ropus_fb2k_read_tags`) assumes first-seen-first-emitted.
@@ -45,7 +50,7 @@ pub(crate) struct ParsedTags {
 }
 
 impl ParsedTags {
-    /// Iterate `(KEY, VALUE)` pairs in input order, skipping filtered keys.
+    /// Iterate `(KEY, VALUE)` pairs in input order.
     /// Keys are uppercased per vorbis_comment convention.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
         self.comments.iter().map(|(k, v)| (k.as_str(), v.as_str()))
@@ -67,6 +72,10 @@ pub(crate) enum TagError {
     /// A comment key contains a byte outside the RFC 7845 ASCII field-name
     /// range (0x20..=0x7D, excluding `=`).
     InvalidKey,
+    VendorTooLarge,
+    TooManyComments,
+    CommentTooLarge,
+    MetadataTooLarge,
 }
 
 impl fmt::Display for TagError {
@@ -81,6 +90,10 @@ impl fmt::Display for TagError {
             }
             TagError::EmptyKey => f.write_str("OpusTags comment has zero-length key"),
             TagError::InvalidKey => f.write_str("OpusTags comment has invalid field-name bytes"),
+            TagError::VendorTooLarge => f.write_str("OpusTags vendor exceeds 4096 bytes"),
+            TagError::TooManyComments => f.write_str("OpusTags has too many comments"),
+            TagError::CommentTooLarge => f.write_str("OpusTags comment exceeds 65536 bytes"),
+            TagError::MetadataTooLarge => f.write_str("OpusTags metadata exceeds 1048576 bytes"),
         }
     }
 }
@@ -103,15 +116,31 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ParsedTags, TagError> {
     let mut cur = &bytes[OPUS_TAGS_MAGIC.len()..];
 
     let vendor_len = read_u32_le(&mut cur)? as usize;
+    if vendor_len > MAX_VENDOR_BYTES {
+        return Err(TagError::VendorTooLarge);
+    }
     let vendor_bytes = take(&mut cur, vendor_len)?;
     let vendor = std::str::from_utf8(vendor_bytes)
         .map_err(|_| TagError::NonUtf8Vendor)?
         .to_owned();
 
     let comment_count = read_u32_le(&mut cur)? as usize;
-    let mut comments = Vec::with_capacity(comment_count.min(64));
+    if comment_count > MAX_COMMENT_COUNT {
+        return Err(TagError::TooManyComments);
+    }
+    let mut metadata_bytes = vendor_len;
+    let mut comments = Vec::with_capacity(comment_count);
     for _ in 0..comment_count {
         let len = read_u32_le(&mut cur)? as usize;
+        if len > MAX_COMMENT_BYTES {
+            return Err(TagError::CommentTooLarge);
+        }
+        metadata_bytes = metadata_bytes
+            .checked_add(len)
+            .ok_or(TagError::MetadataTooLarge)?;
+        if metadata_bytes > MAX_METADATA_BYTES {
+            return Err(TagError::MetadataTooLarge);
+        }
         let raw = take(&mut cur, len)?;
         let text = std::str::from_utf8(raw).map_err(|_| TagError::NonUtf8Comment)?;
 
@@ -136,7 +165,9 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ParsedTags, TagError> {
         // Keys are 7-bit ASCII per the spec; uppercase via ASCII table,
         // don't involve Unicode case folding.
         let key = key.to_ascii_uppercase();
-        comments.push((key, value.to_owned()));
+        if key != "METADATA_BLOCK_PICTURE" {
+            comments.push((key, value.to_owned()));
+        }
     }
 
     // Trailing bytes after the documented payload are legal and we ignore
@@ -392,21 +423,68 @@ mod tests {
     }
 
     #[test]
-    fn parser_preserves_metadata_block_picture() {
-        // The parser keeps every comment, including cover-art blobs. The
-        // FFI layer is what filters them out before the tag callback fires
-        // (see `lib.rs::FILTERED_TAG_KEYS`). A future caller that *does*
-        // want the picture blob can still get it from here.
+    fn parser_drops_metadata_block_picture_case_insensitively() {
+        // Cover art is filtered before retention because the reporting layer
+        // never exposes it. This must also handle mixed-case field names.
         let bytes = build("v", &["Metadata_Block_Picture=<huge blob>", "ARTIST=Alice"]);
         let parsed = parse(&bytes).expect("valid");
         let kv: Vec<(&str, &str)> = parsed.iter().collect();
-        assert_eq!(
-            kv,
-            vec![
-                ("METADATA_BLOCK_PICTURE", "<huge blob>"),
-                ("ARTIST", "Alice"),
-            ]
-        );
+        assert_eq!(kv, vec![("ARTIST", "Alice")]);
+    }
+
+    #[test]
+    fn vendor_limit_is_inclusive() {
+        let vendor = "v".repeat(MAX_VENDOR_BYTES);
+        assert!(parse(&build(&vendor, &[])).is_ok());
+        let vendor = "v".repeat(MAX_VENDOR_BYTES + 1);
+        assert!(matches!(
+            parse(&build(&vendor, &[])),
+            Err(TagError::VendorTooLarge)
+        ));
+    }
+
+    #[test]
+    fn comment_count_limit_is_inclusive() {
+        let comments: Vec<String> = (0..MAX_COMMENT_COUNT).map(|i| format!("K{i}=v")).collect();
+        let refs: Vec<&str> = comments.iter().map(String::as_str).collect();
+        assert!(parse(&build("v", &refs)).is_ok());
+        let comments: Vec<String> = (0..=MAX_COMMENT_COUNT).map(|i| format!("K{i}=v")).collect();
+        let refs: Vec<&str> = comments.iter().map(String::as_str).collect();
+        assert!(matches!(
+            parse(&build("v", &refs)),
+            Err(TagError::TooManyComments)
+        ));
+    }
+
+    #[test]
+    fn comment_size_limit_is_inclusive() {
+        let value = "v".repeat(MAX_COMMENT_BYTES - 2);
+        assert!(parse(&build("v", &[&format!("K={value}")])).is_ok());
+        let value = "v".repeat(MAX_COMMENT_BYTES - 1);
+        assert!(matches!(
+            parse(&build("v", &[&format!("K={value}")])),
+            Err(TagError::CommentTooLarge)
+        ));
+    }
+
+    #[test]
+    fn aggregate_metadata_limit_is_inclusive() {
+        let mut comments: Vec<String> = (0..15)
+            .map(|i| {
+                let prefix = format!("K{i}=");
+                prefix.clone() + &"x".repeat(MAX_COMMENT_BYTES - prefix.len())
+            })
+            .collect();
+        let prefix = "K15=";
+        comments.push(prefix.to_owned() + &"x".repeat(MAX_COMMENT_BYTES - 1 - prefix.len()));
+        let refs: Vec<&str> = comments.iter().map(String::as_str).collect();
+        assert!(parse(&build("v", &refs)).is_ok());
+        comments[15].push('x');
+        let refs: Vec<&str> = comments.iter().map(String::as_str).collect();
+        assert!(matches!(
+            parse(&build("v", &refs)),
+            Err(TagError::MetadataTooLarge)
+        ));
     }
 
     #[test]
