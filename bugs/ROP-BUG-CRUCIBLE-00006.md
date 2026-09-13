@@ -6,15 +6,15 @@
 - **Area:** full-test/subprocess-supervision
 - **Raised:** 2026-08-14T15:50:22Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T171250Z-d0b24109
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00006-run-verify-20260913T171250Z-d0b24109
+- **Owner base:** 1bf2254c7b724f861acdd61f9067b3a7fe6a96f8
+- **Owner fingerprint:** sha256:88aad1f7371d5784a019985455d10cca34bda6f5cb7da3bb6b9f0ce0705dbdb6
+- **Owner since:** 2026-09-13T17:12:50Z
+- **Owner until:** 2026-09-13T19:12:50Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
