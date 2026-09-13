@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00047 — Info and playback accept OpusTags from another logical stream
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/stream-validation
 - **Raised:** 2026-08-22T07:33:51Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T062858Z-edb924f9
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00047-run-fix-20260913T062858Z-edb924f9
-- **Owner base:** ee5a7be4f47617e273603d6438774eb4f46f9adb
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T06:28:58Z
-- **Owner until:** 2026-09-13T08:28:58Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T07:33:51Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-08-22T07:33:51Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T06:42:43Z, deltic:auto role=fix run=fix-20260913T062858Z-edb924f9 branch=task/bug-ROP-BUG-KIL-00047-run-fix-20260913T062858Z-edb924f9 code=511773653b40514fca21477f073ca6a47e504c1e gate=manual)
 
 ## Observation
 
