@@ -6,15 +6,15 @@
 - **Area:** ropus-tools-core/ogg-scan
 - **Raised:** 2026-08-22T07:33:49Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T061508Z-59d07029
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00045-run-fix-20260913T061508Z-59d07029
+- **Owner base:** b25f819e94a48ddeed93eb5c074be6f89a5dd4d9
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T06:15:08Z
+- **Owner until:** 2026-09-13T08:15:08Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
