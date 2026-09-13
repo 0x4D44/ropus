@@ -6,15 +6,15 @@
 - **Area:** ropus-fb2k/headers
 - **Raised:** 2026-08-22T06:10:46Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T152632Z-4c9cb3ca
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00042-run-verify-20260913T152632Z-4c9cb3ca
+- **Owner base:** 7b77087804689e42e19c5463c4a4f6b3ff1cb881
+- **Owner fingerprint:** sha256:8e0dc4770d36f6b7e0e6a4cfc9fff066ec66e9215f3eed0e6d256898826d9cd9
+- **Owner since:** 2026-09-13T15:26:32Z
+- **Owner until:** 2026-09-13T17:26:32Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
