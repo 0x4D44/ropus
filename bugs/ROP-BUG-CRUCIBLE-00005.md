@@ -6,15 +6,15 @@
 - **Area:** capi/frame-size-allocation
 - **Raised:** 2026-08-14T14:26:39Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T145351Z-b35d717a
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00005-run-verify-20260913T145351Z-b35d717a
-- **Owner base:** 7b23bca4dcd715e2227425ffbe377caec6838d36
-- **Owner fingerprint:** sha256:df225ba81764d63b894afedb46e35cfcc10717af98f7008a10bf8e6b6e511902
-- **Owner since:** 2026-09-13T14:53:51Z
-- **Owner until:** 2026-09-13T16:53:51Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
