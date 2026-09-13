@@ -19,6 +19,7 @@ import sys
 import time
 import logging
 import textwrap
+import tempfile
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -530,11 +531,27 @@ PROMPTS["fix_errors"] = textwrap.dedent("""\
 _state_lock = threading.Lock()
 _build_lock = threading.Lock()  # Serialize cargo build/test across threads
 
+
+class CoordinatorStateError(RuntimeError):
+    """Raised when the coordinator checkpoint cannot be safely loaded."""
+
+
 def load_state() -> dict:
     """Load coordinator state from disk."""
     if STATE_FILE.exists():
-        with open(STATE_FILE) as f:
-            return json.load(f)
+        try:
+            with open(STATE_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise CoordinatorStateError(
+                f"Coordinator checkpoint {STATE_FILE} is corrupt. "
+                "Restore valid JSON or remove the file to start over."
+            ) from exc
+        except OSError as exc:
+            raise CoordinatorStateError(
+                f"Unable to read coordinator checkpoint {STATE_FILE}: {exc}. "
+                "Restore the file or remove it to start over."
+            ) from exc
     return {
         "phase": "document",
         "completed_phases": [],
@@ -550,8 +567,28 @@ def save_state(state: dict):
     with _state_lock:
         state["last_updated"] = datetime.now().isoformat()
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(STATE_FILE, "w") as f:
-            json.dump(state, f, indent=2)
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=STATE_FILE.parent,
+                prefix=f".{STATE_FILE.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as f:
+                temporary_path = Path(f.name)
+                json.dump(state, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_path, STATE_FILE)
+        except BaseException:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink()
+                except OSError:
+                    pass
+            raise
 
 
 # ---------------------------------------------------------------------------
@@ -1210,7 +1247,11 @@ def main():
         "status": cmd_status,
         "resume": cmd_resume,
     }
-    return dispatch[args.command](args)
+    try:
+        return dispatch[args.command](args)
+    except CoordinatorStateError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

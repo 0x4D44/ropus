@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import contextlib
+import io
+import json
 import logging
 import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import tools.coordinator as coordinator
@@ -110,6 +115,66 @@ class CoordinatorLayoutTests(unittest.TestCase):
                 self.assertEqual(state["module_status"]["range_coder"], "implemented")
                 write_artifact.assert_not_called()
                 save_state.assert_not_called()
+
+    def test_save_state_preserves_existing_checkpoint_when_write_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_file = Path(directory) / "coordinator_state.json"
+            original = {"phase": "implement", "completed_phases": ["document"]}
+            original_bytes = json.dumps(original, indent=2).encode("utf-8")
+            state_file.write_bytes(original_bytes)
+
+            with patch.object(coordinator, "STATE_FILE", state_file):
+                with patch.object(
+                    coordinator.json,
+                    "dump",
+                    side_effect=OSError("disk full"),
+                ):
+                    with self.assertRaisesRegex(OSError, "disk full"):
+                        coordinator.save_state({"phase": "integrate"})
+
+            self.assertEqual(state_file.read_bytes(), original_bytes)
+            self.assertEqual(list(Path(directory).glob(".*.tmp")), [])
+
+    def test_save_state_writes_a_complete_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_file = Path(directory) / "coordinator_state.json"
+            state = {"phase": "integrate"}
+
+            with patch.object(coordinator, "STATE_FILE", state_file):
+                coordinator.save_state(state)
+
+            self.assertEqual(json.loads(state_file.read_text(encoding="utf-8")), state)
+            self.assertEqual(list(Path(directory).glob(".*.tmp")), [])
+
+    def test_load_state_reports_corrupt_checkpoint_with_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_file = Path(directory) / "coordinator_state.json"
+            state_file.write_text("{", encoding="utf-8")
+
+            with patch.object(coordinator, "STATE_FILE", state_file):
+                with self.assertRaisesRegex(
+                    coordinator.CoordinatorStateError,
+                    r"corrupt.*Restore valid JSON or remove the file",
+                ):
+                    coordinator.load_state()
+
+    def test_main_reports_corrupt_checkpoint_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_file = Path(directory) / "coordinator_state.json"
+            state_file.write_text("{", encoding="utf-8")
+            error = io.StringIO()
+
+            with (
+                patch.object(coordinator, "STATE_FILE", state_file),
+                patch.object(coordinator.sys, "argv", ["coordinator.py", "status"]),
+                contextlib.redirect_stderr(error),
+            ):
+                result = coordinator.main()
+
+            self.assertEqual(result, 1)
+            self.assertIn("ERROR:", error.getvalue())
+            self.assertIn("Restore valid JSON or remove the file", error.getvalue())
+            self.assertNotIn("Traceback", error.getvalue())
 
 
 if __name__ == "__main__":
