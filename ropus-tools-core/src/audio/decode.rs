@@ -3,7 +3,9 @@
 //! Opus tracks are routed through the `ropus` decoder; everything else uses
 //! symphonia's native decoder for the codec.
 
+use std::fmt::Display;
 use std::fs::File;
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -23,6 +25,7 @@ use symphonia::core::probe::Hint;
 
 use crate::consts::OPUS_SR;
 use crate::container::ogg::{parse_opus_head, validate_opus_audio_packet};
+use crate::options::OutputPolicy;
 use crate::ui::escape_terminal_path;
 use crate::util::channel_count_to_ropus;
 
@@ -55,6 +58,68 @@ enum CodecPipeline {
 
 pub(crate) const MIN_GAIN_DB: f32 = -128.0;
 pub(crate) const MAX_GAIN_DB: f32 = 32_767.0 / 256.0;
+/// Maximum number of individual malformed-packet diagnostics emitted per
+/// decode. The final summary still reports the complete rejected-packet count.
+pub(crate) const MAX_MALFORMED_PACKET_DIAGNOSTICS: usize = 4;
+
+struct MalformedPacketDiagnostics<'a> {
+    policy: OutputPolicy,
+    sink: &'a mut dyn Write,
+    total: u64,
+    shown: usize,
+}
+
+impl<'a> MalformedPacketDiagnostics<'a> {
+    fn new(policy: OutputPolicy, sink: &'a mut dyn Write) -> Self {
+        Self {
+            policy,
+            sink,
+            total: 0,
+            shown: 0,
+        }
+    }
+
+    fn record(&mut self, error: impl Display) {
+        self.total = self.total.saturating_add(1);
+        if self.policy.quiet || self.shown == MAX_MALFORMED_PACKET_DIAGNOSTICS {
+            return;
+        }
+
+        let _ = writeln!(
+            self.sink,
+            "{} opus packet: {}",
+            "warning:".yellow(),
+            crate::ui::escape_terminal_text(&error.to_string())
+        );
+        self.shown += 1;
+    }
+
+    fn finish(&mut self) {
+        if self.policy.quiet || self.total == 0 {
+            return;
+        }
+
+        let noun = if self.total == 1 { "packet" } else { "packets" };
+        if self.total > self.shown as u64 {
+            let suppressed = self.total.saturating_sub(self.shown as u64);
+            let _ = writeln!(
+                self.sink,
+                "{} skipped {} malformed Opus {noun}; showing first {} diagnostics ({} more suppressed)",
+                "warning:".yellow(),
+                self.total,
+                self.shown,
+                suppressed,
+            );
+        } else {
+            let _ = writeln!(
+                self.sink,
+                "{} skipped {} malformed Opus {noun}",
+                "warning:".yellow(),
+                self.total,
+            );
+        }
+    }
+}
 
 pub fn decode_to_f32(path: &Path) -> Result<DecodedAudio> {
     decode_to_f32_with_gain(path, 0.0)
@@ -65,13 +130,22 @@ pub fn decode_to_f32(path: &Path) -> Result<DecodedAudio> {
 /// `Decoder::set_gain`; other codecs use the same linear dB multiplier after
 /// native decoding.
 pub fn decode_to_f32_with_gain(path: &Path, gain_db: f32) -> Result<DecodedAudio> {
+    decode_to_f32_with_gain_and_policy(path, gain_db, OutputPolicy::default())
+}
+
+/// Decode a file to interleaved f32 PCM with a policy for decoder diagnostics.
+pub fn decode_to_f32_with_gain_and_policy(
+    path: &Path,
+    gain_db: f32,
+    policy: OutputPolicy,
+) -> Result<DecodedAudio> {
     let file =
         File::open(path).with_context(|| format!("opening {}", escape_terminal_path(path)))?;
     let hint_ext = path
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_string);
-    decode_reader_with_gain(Box::new(file), hint_ext.as_deref(), gain_db)
+    decode_reader_with_gain_and_policy(Box::new(file), hint_ext.as_deref(), gain_db, policy)
         .with_context(|| format!("decoding {}", escape_terminal_path(path)))
 }
 
@@ -96,6 +170,34 @@ pub fn decode_reader_with_gain(
     source: Box<dyn MediaSource>,
     hint_ext: Option<&str>,
     gain_db: f32,
+) -> Result<DecodedAudio> {
+    decode_reader_with_gain_and_policy(source, hint_ext, gain_db, OutputPolicy::default())
+}
+
+/// Decode an arbitrary media source with a policy for decoder diagnostics.
+pub fn decode_reader_with_gain_and_policy(
+    source: Box<dyn MediaSource>,
+    hint_ext: Option<&str>,
+    gain_db: f32,
+    policy: OutputPolicy,
+) -> Result<DecodedAudio> {
+    let stderr = std::io::stderr();
+    let mut diagnostics_sink = stderr.lock();
+    decode_reader_with_gain_and_policy_and_sink(
+        source,
+        hint_ext,
+        gain_db,
+        policy,
+        &mut diagnostics_sink,
+    )
+}
+
+fn decode_reader_with_gain_and_policy_and_sink(
+    source: Box<dyn MediaSource>,
+    hint_ext: Option<&str>,
+    gain_db: f32,
+    policy: OutputPolicy,
+    diagnostics_sink: &mut dyn Write,
 ) -> Result<DecodedAudio> {
     validate_gain_db(gain_db)?;
     let mss = MediaSourceStream::new(source, Default::default());
@@ -200,6 +302,7 @@ pub fn decode_reader_with_gain(
         CodecPipeline::Opus(state) => Some((state.pre_skip, state.end_granule, state.channels)),
         CodecPipeline::Native(_) => None,
     };
+    let mut malformed_diagnostics = MalformedPacketDiagnostics::new(policy, diagnostics_sink);
 
     loop {
         let packet = match format.next_packet() {
@@ -251,11 +354,7 @@ pub fn decode_reader_with_gain(
                     Err(e) => {
                         // Match the native path: swallow per-packet decode
                         // failures rather than aborting the whole file.
-                        eprintln!(
-                            "{} opus packet: {}",
-                            "warning:".yellow(),
-                            crate::ui::escape_terminal_text(&e.to_string())
-                        );
+                        malformed_diagnostics.record(e);
                         continue;
                     }
                 };
@@ -269,6 +368,7 @@ pub fn decode_reader_with_gain(
             }
         }
     }
+    malformed_diagnostics.finish();
 
     if let Some((pre_skip, end_granule, channels)) = opus_timeline {
         let start_samples = pre_skip
@@ -330,4 +430,49 @@ pub(crate) fn gain_db_to_q8(gain_db: f32) -> Result<i32> {
 
 fn gain_db_to_multiplier(gain_db: f32) -> f32 {
     10.0_f32.powf(gain_db / 20.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LAYOUT_VALID_PACKET: &[u8] = &[0x9b, 6, 0, 0, 0, 0, 0, 0];
+
+    #[test]
+    fn malformed_packet_diagnostics_are_bounded_and_aggregated() {
+        let packet_count = MAX_MALFORMED_PACKET_DIAGNOSTICS + 9;
+        assert!(validate_opus_audio_packet(LAYOUT_VALID_PACKET).is_ok());
+        let mut output = Vec::new();
+        let mut diagnostics = MalformedPacketDiagnostics::new(OutputPolicy::default(), &mut output);
+        for _ in 0..packet_count {
+            diagnostics.record("decoder rejected packet");
+        }
+        diagnostics.finish();
+        assert!(
+            output.len() < 2_048,
+            "diagnostics grew beyond the fixed output budget: {} bytes",
+            output.len()
+        );
+        let text = String::from_utf8(output).unwrap();
+        assert_eq!(
+            text.matches("opus packet:").count(),
+            MAX_MALFORMED_PACKET_DIAGNOSTICS,
+            "diagnostics={text:?}"
+        );
+        assert!(text.contains(&format!("skipped {packet_count} malformed Opus packets")));
+        assert!(text.contains("more suppressed"));
+    }
+
+    #[test]
+    fn quiet_mode_suppresses_malformed_packet_diagnostics() {
+        assert!(validate_opus_audio_packet(LAYOUT_VALID_PACKET).is_ok());
+        let mut output = Vec::new();
+        let mut diagnostics =
+            MalformedPacketDiagnostics::new(OutputPolicy { quiet: true }, &mut output);
+        for _ in 0..16 {
+            diagnostics.record("decoder rejected packet");
+        }
+        diagnostics.finish();
+        assert!(output.is_empty(), "quiet decode emitted: {:?}", output);
+    }
 }

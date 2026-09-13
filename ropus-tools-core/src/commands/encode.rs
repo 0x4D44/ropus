@@ -11,7 +11,9 @@ use ropus::{Bitrate, Encoder};
 
 use ogg::writing::{PacketWriteEndInfo, PacketWriter};
 
-use crate::audio::decode::{DecodedAudio, decode_reader, decode_to_f32};
+use crate::audio::decode::{
+    DecodedAudio, decode_reader_with_gain_and_policy, decode_to_f32_with_gain_and_policy,
+};
 use crate::audio::downmix::downmix_to_mono;
 use crate::audio::resample::resample;
 use crate::consts::{MAX_OPUS_FRAME_BYTES, MAX_PACKET_BYTES, MAX_SUBFRAMES_PER_PACKET, OPUS_SR};
@@ -216,9 +218,10 @@ pub fn encode_with_policy(opts: EncodeOptions, policy: OutputPolicy) -> Result<(
             .lock()
             .read_to_end(&mut buf)
             .context("reading stdin into buffer")?;
-        decode_reader(Box::new(Cursor::new(buf)), None).context("decoding stdin input")?
+        decode_reader_with_gain_and_policy(Box::new(Cursor::new(buf)), None, 0.0, policy)
+            .context("decoding stdin input")?
     } else {
-        decode_to_f32(&opts.input).context("decoding input")?
+        decode_to_f32_with_gain_and_policy(&opts.input, 0.0, policy).context("decoding input")?
     };
     report!(
         "decoded  {} samples, {} Hz, {} ch",
@@ -529,6 +532,23 @@ mod tests {
         let mut opts = valid_options();
         opts.expect_loss = 101;
         assert!(validate_encode_options(&opts).is_err());
+    }
+
+    #[test]
+    fn quiet_policy_keeps_the_real_encode_path_output_unchanged() {
+        let input = test_path("quiet-policy-input", "wav");
+        let output = test_path("quiet-policy-output", "opus");
+        write_test_input(&input);
+
+        let mut opts = valid_options();
+        opts.input = input.clone();
+        opts.output = Some(output.clone());
+        encode_with_policy(opts, OutputPolicy { quiet: true }).expect("quiet encode");
+
+        let encoded = std::fs::read(&output).expect("read quiet encode output");
+        assert!(encoded.starts_with(b"OggS"));
+        let _ = std::fs::remove_file(input);
+        let _ = std::fs::remove_file(output);
     }
 
     #[test]
