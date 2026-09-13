@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00055 — ropusdec CLI tests can wait forever on child processes
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropusdec/tests
 - **Raised:** 2026-08-22T09:55:56Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T073655Z-b222ba5e
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00055-run-fix-20260913T073655Z-b222ba5e
-- **Owner base:** 3d86b003265ff4f93e04c5c2f6d2486e04d50762
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T07:36:55Z
-- **Owner until:** 2026-09-13T09:36:55Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T09:55:56Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-22T09:55:56Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T07:47:37Z, deltic:auto role=fix run=fix-20260913T073655Z-b222ba5e branch=task/bug-ROP-BUG-KIL-00055-run-fix-20260913T073655Z-b222ba5e code=4234e4109e96571261674e6b315469868d9935ea gate=manual)
 
 ## Observation
 
