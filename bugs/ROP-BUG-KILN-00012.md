@@ -6,15 +6,15 @@
 - **Area:** tools/pgo
 - **Raised:** 2026-08-13T17:17:39Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T173459Z-376bc6ad
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KILN-00012-run-verify-20260913T173459Z-376bc6ad
+- **Owner base:** d3c047b2ee2a428f40f3d521c89b6df1532673fd
+- **Owner fingerprint:** sha256:c620830ac2ece353ab148f08f2de7ce1ed5fed11e66dcc9256c681042a680556
+- **Owner since:** 2026-09-13T17:34:59Z
+- **Owner until:** 2026-09-13T19:34:59Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
