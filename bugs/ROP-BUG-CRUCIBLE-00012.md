@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00012 — JSON envelope omits the emit-json option
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** full-test/json-report
 - **Raised:** 2026-08-14T15:50:27Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T035627Z-0a069269
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00012-run-fix-20260913T035627Z-0a069269
-- **Owner base:** f3ac38fd3daddcdd3524323927962392acab7522
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T03:56:27Z
-- **Owner until:** 2026-09-13T05:56:27Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T15:50:27Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-08-14T15:50:27Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T04:01:36Z, deltic:auto role=fix run=fix-20260913T035627Z-0a069269 branch=task/bug-ROP-BUG-CRUCIBLE-00012-run-fix-20260913T035627Z-0a069269 code=cf191aa7138723d0cdafe94b890c7e6cd4ca882f gate=manual)
 
 ## Observation
 
