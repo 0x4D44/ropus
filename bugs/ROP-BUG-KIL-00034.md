@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00034 — fb2k reverse duration scan trusts nested pages and permits quadratic CRC work
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** ropus-fb2k/ogg-scan
 - **Raised:** 2026-08-22T06:10:44Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T044247Z-1ac01d52
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00034-run-fix-20260913T044247Z-1ac01d52
-- **Owner base:** 1cb8a3ee117fdbfb8f6c9567e6f7aac2295bf2ca
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T04:42:47Z
-- **Owner until:** 2026-09-13T06:42:47Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T06:10:44Z, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-08-22T06:10:44Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T05:05:47Z, deltic:auto role=fix run=fix-20260913T044247Z-1ac01d52 branch=task/bug-ROP-BUG-KIL-00034-run-fix-20260913T044247Z-1ac01d52 code=b8465a5a28b2eca8f22fa7c28eaacc72490f11d7 gate=manual)
 
 ## Observation
 
