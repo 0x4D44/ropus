@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00062 — Headless device-list tests bypass stdout invariants
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Low
 - **Area:** ropusplay/tests
 - **Raised:** 2026-08-22T12:55:38Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T153623Z-d1ee9562
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00062-run-verify-20260913T153623Z-d1ee9562
-- **Owner base:** a91843db854066b5a9f1d22d4f0df836705db495
-- **Owner fingerprint:** sha256:46718248d2d4694d7c266876bb3c0b27d13463f1b3d45ce5d08bf4e949abe06d
-- **Owner since:** 2026-09-13T15:36:23Z
-- **Owner until:** 2026-09-13T17:36:23Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T12:55:38Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T14:34:50Z, deltic:auto role=fix run=fix-20260913T141805Z-60a7ec1e branch=task/bug-ROP-BUG-KIL-00062-run-fix-20260913T141805Z-60a7ec1e code=677ad6eea5075315fd045606a35641a44976caf7 gate=manual)
+- **State history:** Open (2026-08-22T12:55:38Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T14:34:50Z, deltic:auto role=fix run=fix-20260913T141805Z-60a7ec1e branch=task/bug-ROP-BUG-KIL-00062-run-fix-20260913T141805Z-60a7ec1e code=677ad6eea5075315fd045606a35641a44976caf7 gate=manual) -> Closed (2026-09-13T16:47:37Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=677ad6eea5075315fd045606a35641a44976caf7)
 
 ## Observation
 
@@ -40,6 +40,9 @@ test, build, device enumeration, or exploratory harness ran.
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `list_devices_without_quiet_has_no_banner_pollution`; it passed with the host's `Remote Audio` device, and the `ropusplay` package gate passed all 9 tests.
+- A red control restored the banner condition for `--list-devices`; the regression observed the banner in stdout and failed, so the fix was restored.
 
 ## Notes

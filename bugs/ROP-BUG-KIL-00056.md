@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00056 — Atomic encode replacement can weaken destination permissions
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/atomic-output
 - **Raised:** 2026-08-22T11:25:31Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T153320Z-83805f15
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00056-run-verify-20260913T153320Z-83805f15
-- **Owner base:** d57cc3a53a2e7e15cecd59133d26d0276e0be89c
-- **Owner fingerprint:** sha256:ccd8819393a96ff9f02d59b6710d5cc2b5eb158fe84398b376c95a86b030da16
-- **Owner since:** 2026-09-13T15:33:20Z
-- **Owner until:** 2026-09-13T17:33:20Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T11:25:31Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T08:03:35Z, deltic:auto role=fix run=fix-20260913T074833Z-168a90bc branch=task/bug-ROP-BUG-KIL-00056-run-fix-20260913T074833Z-168a90bc code=76093062b5b608a3e75b6d79472b5e8aa7be09c6 gate=manual)
+- **State history:** Open (2026-08-22T11:25:31Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T08:03:35Z, deltic:auto role=fix run=fix-20260913T074833Z-168a90bc branch=task/bug-ROP-BUG-KIL-00056-run-fix-20260913T074833Z-168a90bc code=76093062b5b608a3e75b6d79472b5e8aa7be09c6 gate=manual) -> Closed (2026-09-13T16:47:37Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=76093062b5b608a3e75b6d79472b5e8aa7be09c6)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at baseline a463e758 found that AtomicOutput::create creates a sam
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `atomic_output_preserves_existing_acl` on Windows; it passed, and the `ropus-tools-core` package gate passed all 197 tests.
+- A red control routed an existing destination through replacement semantics; the security-descriptor equality assertion failed, and the fix was restored.
 
 ## Notes

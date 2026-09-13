@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00049 — Packet and repacketizer lengths can exceed Rust slice bounds
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** ropus/opus-packet
 - **Raised:** 2026-08-22T08:28:17Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T152941Z-866a8287
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00049-run-verify-20260913T152941Z-866a8287
-- **Owner base:** 73d9a6409dea6413006d9fe9b0136d245f00fafe
-- **Owner fingerprint:** sha256:35069a2a1c111efba594f843d2fe5b7421f8bc1b7164131e317ccd6fb5a93849
-- **Owner since:** 2026-09-13T15:29:41Z
-- **Owner until:** 2026-09-13T17:29:41Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T08:28:17Z, raised via `deltic bugs new` model=gpt-5.6-sol@max) -> Fixed (2026-09-13T07:02:54Z, deltic:auto role=fix run=fix-20260913T064739Z-6d8940d7 branch=task/bug-ROP-BUG-KIL-00049-run-fix-20260913T064739Z-6d8940d7 code=2a9229badbdd69cc290a3d01835939068fdfe846 gate=manual)
+- **State history:** Open (2026-08-22T08:28:17Z, raised via `deltic bugs new` model=gpt-5.6-sol@max) -> Fixed (2026-09-13T07:02:54Z, deltic:auto role=fix run=fix-20260913T064739Z-6d8940d7 branch=task/bug-ROP-BUG-KIL-00049-run-fix-20260913T064739Z-6d8940d7 code=2a9229badbdd69cc290a3d01835939068fdfe846 gate=manual) -> Closed (2026-09-13T16:47:37Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=2a9229badbdd69cc290a3d01835939068fdfe846)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at HEAD 3972b03. ropus/src/opus/decoder.rs:208-243 accepts an expl
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `length_claims_cannot_exceed_repacketizer_slices`; it passed, and the `ropus` package gate passed all 1,907 tests.
+- A red control disabled the repacketizer slice bound; the test returned 0 instead of `-1`, and the fix was restored.
 
 ## Notes

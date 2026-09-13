@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00048 — Decode alias guard can be raced into truncating the input
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** ropus-tools-core/path-safety
 - **Raised:** 2026-08-22T07:33:52Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T152913Z-b7edd814
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00048-run-verify-20260913T152913Z-b7edd814
-- **Owner base:** b8cbd598b19b5c7b4cb75ab4715c1c6370f66bc5
-- **Owner fingerprint:** sha256:b649078658cdf159d1efc4184c8db0c07cab27a7296c96cb524a0b818d949bf3
-- **Owner since:** 2026-09-13T15:29:13Z
-- **Owner until:** 2026-09-13T17:29:13Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T07:33:52Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T06:56:22Z, deltic:auto role=fix run=fix-20260913T064335Z-3cad2e56 branch=task/bug-ROP-BUG-KIL-00048-run-fix-20260913T064335Z-3cad2e56 code=30db9faac35d8f8777fae84499d1bf4102c9a53a gate=manual)
+- **State history:** Open (2026-08-22T07:33:52Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T06:56:22Z, deltic:auto role=fix run=fix-20260913T064335Z-3cad2e56 branch=task/bug-ROP-BUG-KIL-00048-run-fix-20260913T064335Z-3cad2e56 code=30db9faac35d8f8777fae84499d1bf4102c9a53a gate=manual) -> Closed (2026-09-13T16:47:37Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=30db9faac35d8f8777fae84499d1bf4102c9a53)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at HEAD f9a3871. commands/decode.rs:122-134 checks input/output id
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `decode_success_after_raced_alias_preserves_source_and_prior_output`; it passed, and the `ropus-tools-core` package gate passed all 197 tests.
+- A red control made the atomic commit a no-op; the alias regression observed `OggS` instead of the expected `RIFF`, and the fix was restored.
 
 ## Notes

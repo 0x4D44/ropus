@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00052 — Public FEC queue accepts short vectors and overflows its fixed capacity
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus/dnn-fec
 - **Raised:** 2026-08-22T08:28:50Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T153107Z-374a28d1
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00052-run-verify-20260913T153107Z-374a28d1
-- **Owner base:** cec5c64f4797e5edfcc33733a44b19fc8f8596af
-- **Owner fingerprint:** sha256:15b20f781d6f445b18a8de8dc4fc84888619b509ec180ad4fc2760545a0707e8
-- **Owner since:** 2026-09-13T15:31:07Z
-- **Owner until:** 2026-09-13T17:31:07Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T08:28:50Z, raised via `deltic bugs new` model=gpt-5.6-sol@max) -> Fixed (2026-09-13T07:36:07Z, deltic:auto role=fix run=fix-20260913T072127Z-e1d5e2fc branch=task/bug-ROP-BUG-KIL-00052-run-fix-20260913T072127Z-e1d5e2fc code=3fd7739a39901394fa321119b739b049d3418f43 gate=manual)
+- **State history:** Open (2026-08-22T08:28:50Z, raised via `deltic bugs new` model=gpt-5.6-sol@max) -> Fixed (2026-09-13T07:36:07Z, deltic:auto role=fix run=fix-20260913T072127Z-e1d5e2fc branch=task/bug-ROP-BUG-KIL-00052-run-fix-20260913T072127Z-e1d5e2fc code=3fd7739a39901394fa321119b739b049d3418f43 gate=manual) -> Closed (2026-09-13T16:47:37Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=3fd7739a39901394fa321119b739b049d3418f43)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at HEAD 3972b03. OpusDecoder::fec_add at ropus/src/opus/decoder.rs
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `test_fec_add_rejects_wrong_width_without_mutating_queue`; it passed, and the `ropus` package gate passed all 1,907 tests.
+- A red control returned `Ok` for the wrong-width FEC input; the regression failed its expected `Err` assertion, and the fix was restored.
 
 ## Notes

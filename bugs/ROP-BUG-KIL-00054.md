@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00054 — Clap parse errors echo terminal controls from argv
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropusdec/cli-output
 - **Raised:** 2026-08-22T09:55:50Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T153211Z-9dd83a85
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00054-run-verify-20260913T153211Z-9dd83a85
-- **Owner base:** 9421c6fc360262802ebeaf84e3a44f46b2344198
-- **Owner fingerprint:** sha256:5cadce57f59229f629774c62e92c392c0fa770beab5098885a894c5b4c051cf8
-- **Owner since:** 2026-09-13T15:32:11Z
-- **Owner until:** 2026-09-13T17:32:11Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T09:55:50Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T07:53:28Z, deltic:auto role=fix run=fix-20260913T073325Z-269e9feb branch=task/bug-ROP-BUG-KIL-00054-run-fix-20260913T073325Z-269e9feb code=3ab884d7f9e9a63c100c910481feca98a739e51f gate=manual)
+- **State history:** Open (2026-08-22T09:55:50Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T07:53:28Z, deltic:auto role=fix run=fix-20260913T073325Z-269e9feb branch=task/bug-ROP-BUG-KIL-00054-run-fix-20260913T073325Z-269e9feb code=3ab884d7f9e9a63c100c910481feca98a739e51f gate=manual) -> Closed (2026-09-13T16:47:37Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=3ab884d7f9e9a63c100c910481feca98a739e51f)
 
 ## Observation
 
@@ -41,6 +41,9 @@ inspection only; no binary or test ran.
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran the escaping regressions in `ropusenc`, `ropusdec`, and `ropusplay`; all three passed, and the package gates passed.
+- A red control made terminal-argument escaping an identity operation; each CLI test failed its control-character assertion, and the fix was restored.
 
 ## Notes

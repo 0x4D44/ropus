@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00045 — Reverse Ogg duration scan trusts CRC-valid pages nested in payload
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** ropus-tools-core/ogg-scan
 - **Raised:** 2026-08-22T07:33:49Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T152739Z-73e442cb
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00045-run-verify-20260913T152739Z-73e442cb
-- **Owner base:** 9330432cc1696c9e6d6068111c00c665ab1df6cc
-- **Owner fingerprint:** sha256:bf85bf4d55531fdc8d1e69de390ca1fda40190a3bc534f1b67c3fd92bb928155
-- **Owner since:** 2026-09-13T15:27:39Z
-- **Owner until:** 2026-09-13T17:27:39Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T07:33:49Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T06:27:05Z, deltic:auto role=fix run=fix-20260913T061508Z-59d07029 branch=task/bug-ROP-BUG-KIL-00045-run-fix-20260913T061508Z-59d07029 code=c0a0ad64523b263b511dd601371bce037705b84d gate=manual)
+- **State history:** Open (2026-08-22T07:33:49Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T06:27:05Z, deltic:auto role=fix run=fix-20260913T061508Z-59d07029 branch=task/bug-ROP-BUG-KIL-00045-run-fix-20260913T061508Z-59d07029 code=c0a0ad64523b263b511dd601371bce037705b84d gate=manual) -> Closed (2026-09-13T16:47:37Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=c0a0ad64523b263b511dd601371bce037705b84d)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at HEAD f9a3871. ropus-tools-core/src/container/ogg.rs:391-412 tes
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `read_last_granule_skips_crc_valid_page_shaped_payload`; it passed, and the `ropus-tools-core` package gate passed all 197 tests.
+- A red control changed the final-page seek from `Start(0)` to `End(0)`; the regression returned `None` instead of granule 42, and the fix was restored.
 
 ## Notes

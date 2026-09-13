@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00053 — DRED decoder trusts zero sample rates and mutable latent counts
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus/opus-dred
 - **Raised:** 2026-08-22T08:29:02Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T153137Z-494dadf4
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00053-run-verify-20260913T153137Z-494dadf4
-- **Owner base:** 423fe3d80fb5787e654d4a503f5f7c6b91c1a746
-- **Owner fingerprint:** sha256:683a01317c4ad669409905758ac71924fe7e2a341b5ba443893678595c4c2679
-- **Owner since:** 2026-09-13T15:31:37Z
-- **Owner until:** 2026-09-13T17:31:37Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T08:29:02Z, raised via `deltic bugs new` model=gpt-5.6-sol@max) -> Fixed (2026-09-13T07:32:09Z, deltic:auto role=fix run=fix-20260913T072248Z-cd39eaea branch=task/bug-ROP-BUG-KIL-00053-run-fix-20260913T072248Z-cd39eaea code=09268fca39046c1815c5def42523f3d6b599510c gate=manual)
+- **State history:** Open (2026-08-22T08:29:02Z, raised via `deltic bugs new` model=gpt-5.6-sol@max) -> Fixed (2026-09-13T07:32:09Z, deltic:auto role=fix run=fix-20260913T072248Z-cd39eaea branch=task/bug-ROP-BUG-KIL-00053-run-fix-20260913T072248Z-cd39eaea code=09268fca39046c1815c5def42523f3d6b599510c gate=manual) -> Closed (2026-09-13T16:47:37Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=09268fca39046c1815c5def42523f3d6b599510c)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at HEAD 3972b03. For a packet containing a DRED payload, OpusDREDD
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `parse_rejects_invalid_sample_rates_without_panic`; it passed, and the `ropus` package gate passed all 1,907 tests.
+- A red control disabled valid-sample-rate validation; parsing sample rate 0 panicked and the regression failed, so the fix was restored.
 
 ## Notes

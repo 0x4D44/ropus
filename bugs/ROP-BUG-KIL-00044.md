@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00044 — Dither quantizer uses integer noise that preserves rounding bias
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/audio-output
 - **Raised:** 2026-08-22T07:33:48Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T152708Z-48984981
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00044-run-verify-20260913T152708Z-48984981
-- **Owner base:** 88ed3e3bb4132013ee5ef9d8fa52414df8ebc2a0
-- **Owner fingerprint:** sha256:b80d29f29764f9a5ef35b6c88249af944b15503b91e03aef07647886a766f7a2
-- **Owner since:** 2026-09-13T15:27:08Z
-- **Owner until:** 2026-09-13T17:27:08Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T07:33:48Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T06:13:22Z, deltic:auto role=fix run=fix-20260913T060406Z-cf71a882 branch=task/bug-ROP-BUG-KIL-00044-run-fix-20260913T060406Z-cf71a882 code=961bbe4480cd57e3305e1d5907aa4d8838f2ba11 gate=manual)
+- **State history:** Open (2026-08-22T07:33:48Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T06:13:22Z, deltic:auto role=fix run=fix-20260913T060406Z-cf71a882 branch=task/bug-ROP-BUG-KIL-00044-run-fix-20260913T060406Z-cf71a882 code=961bbe4480cd57e3305e1d5907aa4d8838f2ba11 gate=manual) -> Closed (2026-09-13T16:47:37Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=961bbe4480cd57e3305e1d5907aa4d8838f2ba11)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at HEAD f9a3871. ropus-tools-core/src/audio/dither.rs:65-73 claims
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `dither_enabled_tracks_unquantized_fractional_input`; it passed, and the `ropus-tools-core` package gate passed all 197 tests.
+- A red control replaced full-width uniform random draws with one-bit draws; the upper-tail assertion failed, and the fix was restored.
 
 ## Notes

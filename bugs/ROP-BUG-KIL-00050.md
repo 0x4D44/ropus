@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00050 — Low-level codec methods trust PCM slice capacities and unbounded frame sizes
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** ropus/opus-codec-api
 - **Raised:** 2026-08-22T08:28:29Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T153010Z-dfc89717
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00050-run-verify-20260913T153010Z-dfc89717
-- **Owner base:** 78754800982e87c9a2e62a65904a45df8b216625
-- **Owner fingerprint:** sha256:58a0be638f37655036e6759c41650b2e0605b3c1714e36f5e987e4d06d034b4a
-- **Owner since:** 2026-09-13T15:30:10Z
-- **Owner until:** 2026-09-13T17:30:10Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T08:28:29Z, raised via `deltic bugs new` model=gpt-5.6-sol@max) -> Fixed (2026-09-13T07:20:39Z, deltic:auto role=fix run=fix-20260913T065719Z-06137e14 branch=task/bug-ROP-BUG-KIL-00050-run-fix-20260913T065719Z-06137e14 code=714b1d5aa44dc510f4cb851691f2e1c407356681 gate=manual)
+- **State history:** Open (2026-08-22T08:28:29Z, raised via `deltic bugs new` model=gpt-5.6-sol@max) -> Fixed (2026-09-13T07:20:39Z, deltic:auto role=fix run=fix-20260913T065719Z-06137e14 branch=task/bug-ROP-BUG-KIL-00050-run-fix-20260913T065719Z-06137e14 code=714b1d5aa44dc510f4cb851691f2e1c407356681 gate=manual) -> Closed (2026-09-13T16:47:37Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=714b1d5aa44dc510f4cb851691f2e1c407356681)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at HEAD 3972b03. OpusEncoder::encode and encode_float do not prove
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `test_low_level_encoder_bounds_pcm_output_and_frame_sizes`; it passed, and the `ropus` package gate passed all 1,907 tests.
+- A red control changed the short-input error from `OPUS_BAD_ARG` to `OPUS_OK`; the regression failed its expected error assertion, and the fix was restored.
 
 ## Notes

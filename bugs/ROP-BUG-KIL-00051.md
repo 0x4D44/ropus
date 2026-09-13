@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00051 — Extension generation trusts negative frame counts and short payload spans
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** ropus/opus-extensions
 - **Raised:** 2026-08-22T08:28:39Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T153038Z-20cdcb0a
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00051-run-verify-20260913T153038Z-20cdcb0a
-- **Owner base:** c45299db08e96d55a4162b7214c8f9222f001b06
-- **Owner fingerprint:** sha256:4d32a5c2d0b86de1afe060c94540bc9e1de2f5b9e3654859fdd5e9336b694a4d
-- **Owner since:** 2026-09-13T15:30:38Z
-- **Owner until:** 2026-09-13T17:30:38Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T08:28:39Z, raised via `deltic bugs new` model=gpt-5.6-sol@max) -> Fixed (2026-09-13T07:21:39Z, deltic:auto role=fix run=fix-20260913T070347Z-0cbf3f34 branch=task/bug-ROP-BUG-KIL-00051-run-fix-20260913T070347Z-0cbf3f34 code=80d762b57ac42d298dcb75f9535b8b2a831ccfb8 gate=manual)
+- **State history:** Open (2026-08-22T08:28:39Z, raised via `deltic bugs new` model=gpt-5.6-sol@max) -> Fixed (2026-09-13T07:21:39Z, deltic:auto role=fix run=fix-20260913T070347Z-0cbf3f34 branch=task/bug-ROP-BUG-KIL-00051-run-fix-20260913T070347Z-0cbf3f34 code=80d762b57ac42d298dcb75f9535b8b2a831ccfb8 gate=manual) -> Closed (2026-09-13T16:47:37Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=80d762b57ac42d298dcb75f9535b8b2a831ccfb8)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at HEAD 3972b03. opus_packet_extensions_generate at ropus/src/opus
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `test_packet_extensions_generate_rejects_invalid_args_without_partial_output`; it passed, and the `ropus` package gate passed all 1,907 tests.
+- A red control changed invalid-descriptor handling from `OPUS_BAD_ARG` to `OPUS_BUFFER_TOO_SMALL`; the regression failed its own expected-error assertion, and the fix was restored.
 
 ## Notes

@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00061 — ropusplay CLI tests can wait forever on child processes
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropusplay/tests
 - **Raised:** 2026-08-22T12:55:34Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T153555Z-087971ad
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00061-run-verify-20260913T153555Z-087971ad
-- **Owner base:** a14e84b7a8568a61a4bf2fe0650c5488d05394b1
-- **Owner fingerprint:** sha256:430708781df740ff19851ac1797c5c4ec37faf8cccce141d1712c5f8cc75c1c1
-- **Owner since:** 2026-09-13T15:35:55Z
-- **Owner until:** 2026-09-13T17:35:55Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T12:55:34Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T14:16:46Z, deltic:auto role=fix run=fix-20260913T141503Z-a056b67d branch=task/bug-ROP-BUG-KIL-00061-run-fix-20260913T141503Z-a056b67d code=a05a40fe2446f74ae1cbe488e03f98eca11fa744 gate=manual)
+- **State history:** Open (2026-08-22T12:55:34Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T14:16:46Z, deltic:auto role=fix run=fix-20260913T141503Z-a056b67d branch=task/bug-ROP-BUG-KIL-00061-run-fix-20260913T141503Z-a056b67d code=a05a40fe2446f74ae1cbe488e03f98eca11fa744 gate=manual) -> Closed (2026-09-13T16:47:37Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=a05a40fe2446f74ae1cbe488e03f98eca11fa744)
 
 ## Observation
 
@@ -38,6 +38,9 @@ application, test, build, or exploratory harness ran.
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `child_timeout_reports_distinct_error_after_cleanup`; it passed, and the `ropusplay` package gate passed all 9 tests.
+- A red control changed the timeout error kind to `Other`; the regression expected `TimedOut` and failed, so the fix was restored.
 
 ## Notes

@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00046 — Strict info queries accept malformed nonempty Opus packets
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/info-validation
 - **Raised:** 2026-08-22T07:33:50Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T152809Z-fde98d36
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00046-run-verify-20260913T152809Z-fde98d36
-- **Owner base:** fdcf45c1463142f340d922897bfeee1533c98671
-- **Owner fingerprint:** sha256:41a9591338a81fb79cda5ee0b3eaeb479c2795ef9cb056bd50eb5a320b41a2ed
-- **Owner since:** 2026-09-13T15:28:09Z
-- **Owner until:** 2026-09-13T17:28:09Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T07:33:50Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T06:46:44Z, deltic:auto role=fix run=fix-20260913T062804Z-d5c7031e branch=task/bug-ROP-BUG-KIL-00046-run-fix-20260913T062804Z-d5c7031e code=1fcd1765bd2961ef8157b902da62c4ac4c39d700 gate=manual)
+- **State history:** Open (2026-08-22T07:33:50Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T06:46:44Z, deltic:auto role=fix run=fix-20260913T062804Z-d5c7031e branch=task/bug-ROP-BUG-KIL-00046-run-fix-20260913T062804Z-d5c7031e code=1fcd1765bd2961ef8157b902da62c4ac4c39d700 gate=manual) -> Closed (2026-09-13T16:47:37Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=1fcd1765bd2961ef8157b902da62c4ac4c39d700)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at HEAD f9a3871. ropus-tools-core/src/container/ogg.rs:216-226 nam
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran the strict info regression `strict_info_rejects_zero_frame_and_truncated_code3_with_eos`; it passed, and the `ropusinfo` package gate passed all 14 tests.
+- A red control removed the strict packet parser body; the test accepted a zero-frame code-3 stream (`0.020000`), and the fix was restored.
 
 ## Notes

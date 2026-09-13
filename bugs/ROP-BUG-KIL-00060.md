@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00060 — Playback length formatting misses minute and hour carries
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** ropusinfo/output-format
 - **Raised:** 2026-08-22T12:30:10Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T153526Z-7997107e
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00060-run-verify-20260913T153526Z-7997107e
-- **Owner base:** 33a76bb1803e0119e789c9f814841c816d5ae34e
-- **Owner fingerprint:** sha256:2cc55602ed8d55758ac640feec790e606d59abff59fc2316163c56d427fdd18c
-- **Owner since:** 2026-09-13T15:35:26Z
-- **Owner until:** 2026-09-13T17:35:26Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T12:30:10Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T09:41:17Z, deltic:auto role=fix run=fix-20260913T093557Z-4ede6a37 branch=task/bug-ROP-BUG-KIL-00060-run-fix-20260913T093557Z-4ede6a37 code=d22f1fb7b5f4010ef70041e8cf8dc35f2cfc6463 gate=manual)
+- **State history:** Open (2026-08-22T12:30:10Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T09:41:17Z, deltic:auto role=fix run=fix-20260913T093557Z-4ede6a37 branch=task/bug-ROP-BUG-KIL-00060-run-fix-20260913T093557Z-4ede6a37 code=d22f1fb7b5f4010ef70041e8cf8dc35f2cfc6463 gate=manual) -> Closed (2026-09-13T16:47:37Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=d22f1fb7b5f4010ef70041e8cf8dc35f2cfc646)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at HEAD 1c8b85f. ropus-tools-core/src/commands/info.rs:408-419 dec
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `playback_length_rounds_before_hour_carry`; it passed, and the `ropusplay` package gate passed all 9 tests.
+- A red control removed centisecond rounding; the formatter produced `59m 60.00s` instead of `1h 0m 0.00s`, and the fix was restored.
 
 ## Notes

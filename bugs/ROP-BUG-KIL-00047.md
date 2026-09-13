@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00047 — Info and playback accept OpusTags from another logical stream
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-tools-core/stream-validation
 - **Raised:** 2026-08-22T07:33:51Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T152838Z-9ab9e347
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00047-run-verify-20260913T152838Z-9ab9e347
-- **Owner base:** fae63e0046ac99bbf09565219b6cfb9650322ea7
-- **Owner fingerprint:** sha256:97b50e92d17dbc60b3f0d4b5b2da48a819b8b6b2072067473cd8a8c8573e9c4d
-- **Owner since:** 2026-09-13T15:28:38Z
-- **Owner until:** 2026-09-13T17:28:38Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T07:33:51Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T06:42:43Z, deltic:auto role=fix run=fix-20260913T062858Z-edb924f9 branch=task/bug-ROP-BUG-KIL-00047-run-fix-20260913T062858Z-edb924f9 code=511773653b40514fca21477f073ca6a47e504c1e gate=manual)
+- **State history:** Open (2026-08-22T07:33:51Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T06:42:43Z, deltic:auto role=fix run=fix-20260913T062858Z-edb924f9 branch=task/bug-ROP-BUG-KIL-00047-run-fix-20260913T062858Z-edb924f9 code=511773653b40514fca21477f073ca6a47e504c1e gate=manual) -> Closed (2026-09-13T16:47:37Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=511773653b40514fca21477f073ca6a47e504c1e)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at HEAD f9a3871. commands/info.rs:189-198 records the OpusHead str
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `info_rejects_cross_stream_tags_before_strict_output`; it passed, and the `ropusinfo` package gate passed all 14 tests.
+- A red control disabled the shared serial-number mismatch check; cross-stream tags were accepted, so the regression assertion failed. The fix was restored.
 
 ## Notes

@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00063 — Playback status overflows very narrow terminals
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** ropusplay/terminal-layout
 - **Raised:** 2026-08-22T12:55:44Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T153652Z-ab5b0c4e
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00063-run-verify-20260913T153652Z-ab5b0c4e
-- **Owner base:** 14df511e3ba8e92260f4171d8947c4c0310b4cbf
-- **Owner fingerprint:** sha256:313e2639f519d706f4ed48e103fdf3596ecbb2eb01b3a1668c26b35f5a976fce
-- **Owner since:** 2026-09-13T15:36:52Z
-- **Owner until:** 2026-09-13T17:36:52Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T12:55:44Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T09:52:27Z, deltic:auto role=fix run=fix-20260913T094216Z-e0af6809 branch=task/bug-ROP-BUG-KIL-00063-run-fix-20260913T094216Z-e0af6809 code=7d4e806110910f6ca3ab36316fb518e93d38f069 gate=manual)
+- **State history:** Open (2026-08-22T12:55:44Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T09:52:27Z, deltic:auto role=fix run=fix-20260913T094216Z-e0af6809 branch=task/bug-ROP-BUG-KIL-00063-run-fix-20260913T094216Z-e0af6809 code=7d4e806110910f6ca3ab36316fb518e93d38f069 gate=manual) -> Closed (2026-09-13T16:47:37Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=7d4e806110910f6ca3ab36316fb518e93d38f069)
 
 ## Observation
 
@@ -40,6 +40,9 @@ harness ran.
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `interactive_render_width_oracle_covers_tiny_widths`; it passed, and the `ropusplay` package gate passed all 9 tests.
+- A red control disabled zero-width budget handling; the regression rendered an ellipsis at width 0 and failed, so the fix was restored.
 
 ## Notes

@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00059 — ropusinfo Ogg packet assembly has no memory bound
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** ropusinfo/input-limits
 - **Raised:** 2026-08-22T12:29:57Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T153758Z-3cb111b0
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00059-run-verify-20260913T153758Z-3cb111b0
-- **Owner base:** 08e2207e39193985415be3fe9299cdde96ddef18
-- **Owner fingerprint:** sha256:a35b4eda3c913e86d6791bc0405e7e4679fb2bb9fb2a361a2607edfd1ae2d8ef
-- **Owner since:** 2026-09-13T15:37:58Z
-- **Owner until:** 2026-09-13T17:37:58Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T12:29:57Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T08:33:44Z, deltic:auto role=fix run=fix-20260913T080515Z-7df35780 branch=task/bug-ROP-BUG-KIL-00059-run-fix-20260913T080515Z-7df35780 code=1e6486c2365da3dfcd09e8bdd6745ddd03814086 gate=manual)
+- **State history:** Open (2026-08-22T12:29:57Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T08:33:44Z, deltic:auto role=fix run=fix-20260913T080515Z-7df35780 branch=task/bug-ROP-BUG-KIL-00059-run-fix-20260913T080515Z-7df35780 code=1e6486c2365da3dfcd09e8bdd6745ddd03814086 gate=manual) -> Closed (2026-09-13T16:47:37Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=1e6486c2365da3dfcd09e8bdd6745ddd03814086)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at HEAD 1c8b85f. ropus-tools-core/src/commands/info.rs:187-198,233
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13)
+
+- Re-ran `bounded_reader_rejects_oversized_continued_audio_packet`; it passed, and the relevant package gates passed.
+- A red control raised the audio packet limit by one byte; the oversized continued packet was accepted and the regression panicked, so the fix was restored.
 
 ## Notes
