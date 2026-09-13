@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00053 — DRED decoder trusts zero sample rates and mutable latent counts
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus/opus-dred
 - **Raised:** 2026-08-22T08:29:02Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T072248Z-cd39eaea
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00053-run-fix-20260913T072248Z-cd39eaea
-- **Owner base:** 100dea6292e75ad2f44762947829f369d7134bc5
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T07:22:48Z
-- **Owner until:** 2026-09-13T09:22:48Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T08:29:02Z, raised via `deltic bugs new` model=gpt-5.6-sol@max)
+- **State history:** Open (2026-08-22T08:29:02Z, raised via `deltic bugs new` model=gpt-5.6-sol@max) -> Fixed (2026-09-13T07:32:09Z, deltic:auto role=fix run=fix-20260913T072248Z-cd39eaea branch=task/bug-ROP-BUG-KIL-00053-run-fix-20260913T072248Z-cd39eaea code=09268fca39046c1815c5def42523f3d6b599510c gate=manual)
 
 ## Observation
 
