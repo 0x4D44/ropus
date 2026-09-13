@@ -57,18 +57,19 @@ pub const PACKET_LOSS_SEED: u32 = 0x1234_5678;
 ///   is what `opus-tools opusdec` uses — bare `as i16` truncates toward zero
 ///   and biases negative samples by +0.5 LSB.
 /// * When `dither` is `true`, a ±1 LSB triangular-PDF noise is added before
-///   the rounding clamp. `rng` is advanced twice per output sample.
+///   the rounding clamp. Each noise sample is the difference of two
+///   full-width uniform draws; `rng` is advanced twice per output sample.
 pub fn quantize_to_i16(samples: &[f32], dither: bool, rng: &mut Xorshift32) -> Vec<i16> {
     let mut out = Vec::with_capacity(samples.len());
     if dither {
         for &s in samples {
-            // TPDF: sum of two independent uniform [0,1] samples, scaled to ±1
-            // LSB. Using `u32 & 1` gives a single fair coin flip per draw; the
-            // difference of two such flips is in {-1, 0, 0, +1} with triangular
-            // envelope once scaled to the ±1-LSB range.
-            let a = (rng.next_u32() & 1) as i32;
-            let b = (rng.next_u32() & 1) as i32;
-            let noise = (a - b) as f32;
+            // TPDF: difference of two independent uniform [0,1) draws gives
+            // a triangular sample in (-1, 1) LSB. Use the full PRNG width;
+            // taking only one bit would preserve the rounding bias this
+            // dither is meant to decorrelate.
+            let a = next_uniform(rng);
+            let b = next_uniform(rng);
+            let noise = a - b;
             let scaled = s * 32768.0 + noise;
             out.push(scaled.clamp(-32768.0, 32767.0).round() as i16);
         }
@@ -79,6 +80,14 @@ pub fn quantize_to_i16(samples: &[f32], dither: bool, rng: &mut Xorshift32) -> V
         }
     }
     out
+}
+
+/// Map one full-width xorshift draw to a uniform `[0, 1)` float. The division
+/// is performed in `f64` so the `u32::MAX` endpoint remains below one before
+/// the result is narrowed for the f32 audio calculation.
+#[inline]
+fn next_uniform(rng: &mut Xorshift32) -> f32 {
+    (f64::from(rng.next_u32()) / 4_294_967_296.0) as f32
 }
 
 #[cfg(test)]
@@ -128,16 +137,15 @@ mod tests {
     }
 
     #[test]
-    fn dither_enabled_stays_within_one_lsb() {
+    fn dither_enabled_tracks_unquantized_fractional_input() {
         // Constant input: a small non-zero value. Dither-on output must
         // differ from the rounded no-dither value by at most 1 LSB per
-        // sample, and the mean across many samples must stay close to it
-        // (TPDF noise is zero-mean by construction).
+        // sample, and the mean across many samples must stay close to the
+        // unquantized scaled input (TPDF decorrelates rounding error).
         //
-        // We compare against the rounded quantisation (`(value * 32768.0)
-        // .round()`) rather than truncation — after the rounding fix,
-        // adding symmetric dither to 0.1 (→ 3276.8) will round to 3276 or
-        // 3277, with the mean pulled toward the true value 3276.8.
+        // The old one-bit draws could only add -1, 0, or +1, and therefore
+        // left the fractional part at 0.8 unchanged. Full-width uniform
+        // draws make the output distribution track the true 3276.8 value.
         let value = 0.1_f32;
         let n = 8192usize;
         let input = vec![value; n];
@@ -155,10 +163,15 @@ mod tests {
         }
         let sum: f64 = out.iter().map(|&s| s as f64).sum();
         let mean = sum / n as f64;
-        let rounded_f = rounded as f64;
+        let upper_count = out.iter().filter(|&&sample| sample > rounded).count();
         assert!(
-            (mean - rounded_f).abs() < 1.0,
-            "mean {mean} should stay within 1 LSB of rounded {rounded_f} (dither is zero-mean)"
+            upper_count < n / 10,
+            "upper tail {upper_count}/{n} is too large for fractional TPDF dither"
+        );
+        let scaled = f64::from(value) * 32768.0;
+        assert!(
+            (mean - scaled).abs() < 0.1,
+            "mean {mean} should track unquantized scaled input {scaled}"
         );
     }
 

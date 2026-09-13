@@ -1,3 +1,5 @@
+- TPDF dither needs full-width uniform draws before differencing; one-bit RNG noise only shifts an already-rounded sample (`ropus-tools-core/src/audio/dither.rs:65`).
+
 - FFI callbacks must snapshot reader-owned strings before re-entry; end the borrow before callbacks so seek/decode/one-shot close cannot resume through it (`ropus-fb2k/src/lib.rs:324`).
 
 - Keep float scratch on `OpusDecoder` (`decoder.rs:decode_float`); compare post-warmup allocations with integer decode.
