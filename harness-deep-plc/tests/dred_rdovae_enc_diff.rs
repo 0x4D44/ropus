@@ -3,7 +3,7 @@
 //!
 //! Tier 1 target (per `wrk_docs/2026.04.19 - HLD - dred-port.md` staging
 //! row 8.4): bit-exact against the xiph C reference on a synthetic input.
-//! Tier 2 fallback: SNR ≥ 60 dB.
+//! Any bit drift fails the test; SNR remains available as a diagnostic.
 //!
 //! Setup:
 //! - C side: `dred_rdovae_enc.c` linked via `harness-deep-plc/build.rs`,
@@ -208,33 +208,19 @@ fn rdovae_encode_dframe_matches_c_reference() {
         return;
     }
 
-    // Tier-1 miss — fall back to tier-2 SNR check.
+    // Tier-1 miss — retain both drift and SNR diagnostics in the hard failure.
     eprintln!(
         "Tier 1 drift: first divergence at frame {:?}, detail {:?}",
         first_drift_frame, first_drift_details
     );
     eprintln!(
-        "Tier 2 guard: worst SNR latents = {:.2} dB, worst SNR state = {:.2} dB",
+        "SNR diagnostics: worst latents = {:.2} dB, worst state = {:.2} dB",
         worst_snr_latents, worst_snr_state
     );
-
-    const TIER2_THRESHOLD_DB: f64 = 60.0;
     assert!(
-        worst_snr_latents >= TIER2_THRESHOLD_DB,
-        "Tier-2 failure on latents: worst SNR {:.2} dB < {:.0} dB. \
-         First drift: frame={:?}, detail={:?}",
-        worst_snr_latents,
-        TIER2_THRESHOLD_DB,
-        first_drift_frame,
-        first_drift_details
-    );
-    assert!(
-        worst_snr_state >= TIER2_THRESHOLD_DB,
-        "Tier-2 failure on initial_state: worst SNR {:.2} dB < {:.0} dB. \
-         First drift: frame={:?}, detail={:?}",
-        worst_snr_state,
-        TIER2_THRESHOLD_DB,
-        first_drift_frame,
-        first_drift_details
+        all_bit_exact,
+        "RDOVAE encoder is not bit-exact: first drift frame={:?}, detail={:?}; \
+         worst SNR latents={:.2} dB, initial_state={:.2} dB",
+        first_drift_frame, first_drift_details, worst_snr_latents, worst_snr_state
     );
 }

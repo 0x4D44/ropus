@@ -3,7 +3,7 @@
 //!
 //! Tier 1 target (per `wrk_docs/2026.04.19 - HLD - dred-port.md` staging
 //! row 8.5): bit-exact against the xiph C reference on a synthetic input.
-//! Tier 2 fallback: SNR ≥ 60 dB.
+//! Tier 1 is a ratcheted requirement; SNR remains diagnostic context on failure.
 //!
 //! Setup:
 //! - C side: `dred_rdovae_dec.c` linked via `harness-deep-plc/build.rs`,
@@ -240,30 +240,11 @@ fn rdovae_decode_qframe_matches_c_reference() {
         ropus_test_rdovae_dec_state_free(c_state);
     }
 
-    if all_bit_exact {
-        eprintln!("Tier 1 achieved: bit-exact for all {NUM_FRAMES} frames.");
-        return;
-    }
-
-    // Tier-1 miss — fall back to tier-2 SNR check.
-    eprintln!(
-        "Tier 1 drift: first divergence at frame {:?}, detail {:?}",
-        first_drift_frame, first_drift_details
-    );
-    eprintln!(
-        "Tier 2 guard: worst SNR qframe = {:.2} dB",
-        worst_snr_qframe
-    );
-
-    const TIER2_THRESHOLD_DB: f64 = 60.0;
     assert!(
-        worst_snr_qframe >= TIER2_THRESHOLD_DB,
-        "Tier-2 failure on qframe: worst SNR {:.2} dB < {:.0} dB. \
-         First drift: frame={:?}, detail={:?}",
-        worst_snr_qframe,
-        TIER2_THRESHOLD_DB,
-        first_drift_frame,
-        first_drift_details
+        all_bit_exact,
+        "RDOVAE decoder lost Tier-1 bit-exactness: first divergence at frame {:?}, detail {:?}; \
+         worst SNR qframe = {:.2} dB",
+        first_drift_frame, first_drift_details, worst_snr_qframe,
     );
 }
 
@@ -425,17 +406,11 @@ fn decode_qframe_diff_quantised_inputs() {
         ropus_test_rdovae_dec_state_free(c_dec_state);
     }
 
-    if all_bit_exact {
-        eprintln!("Tier 1 achieved: bit-exact on {NUM_FRAMES_QUANT} quantised frames.");
-        return;
-    }
-    const TIER2_THRESHOLD_DB: f64 = 60.0;
     assert!(
-        worst_snr_qframe >= TIER2_THRESHOLD_DB,
-        "Tier-2 failure on qframe (quantised): worst SNR {:.2} dB < {:.0} dB. First drift: {:?}",
-        worst_snr_qframe,
-        TIER2_THRESHOLD_DB,
-        first_drift,
+        all_bit_exact,
+        "RDOVAE decoder lost Tier-1 bit-exactness on quantised frames: \
+         first divergence = {:?}; worst SNR qframe = {:.2} dB",
+        first_drift, worst_snr_qframe,
     );
 }
 
