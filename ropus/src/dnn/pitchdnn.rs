@@ -9,6 +9,8 @@
 //!
 //! Pipeline: IF features + xcorr features → conv2d → dense → GRU → soft argmax → pitch.
 
+use crate::allocation::try_vec_with_len;
+
 use super::core::{
     ACTIVATION_LINEAR, ACTIVATION_TANH, Conv2dLayer, LinearLayer, WeightArray, compute_conv2d,
     compute_generic_dense, compute_generic_gru, conv2d_init, linear_init, parse_weights,
@@ -239,34 +241,51 @@ pub fn init_pitchdnn(arrays: &[WeightArray]) -> Result<PitchDnn, ()> {
 // ===========================================================================
 
 impl PitchDnnState {
+    /// Fallibly create a state with model weights loaded from weight arrays.
+    pub fn try_new(arrays: &[WeightArray]) -> Result<Self, ()> {
+        let model = init_pitchdnn(arrays)?;
+        Self::try_new_with_model(model)
+    }
+
+    /// Fallibly create a state without loading weights.
+    pub fn try_new_empty() -> Result<Self, ()> {
+        Self::try_new_with_model(PitchDnn::default())
+    }
+
+    fn try_new_with_model(model: PitchDnn) -> Result<Self, ()> {
+        Ok(Self {
+            model,
+            gru_state: try_vec_with_len(GRU_1_STATE_SIZE, 0.0)?,
+            xcorr_mem1: try_vec_with_len(XCORR_MEM1_SIZE, 0.0)?,
+            xcorr_mem2: try_vec_with_len(XCORR_MEM2_SIZE, 0.0)?,
+        })
+    }
+
     /// Create a new state with model weights loaded from weight arrays.
     /// Matches C `pitchdnn_init` (non-`USE_WEIGHTS_FILE` path).
     pub fn new(arrays: &[WeightArray]) -> Result<Self, ()> {
-        Ok(Self {
-            model: init_pitchdnn(arrays)?,
-            gru_state: vec![0.0; GRU_1_STATE_SIZE],
-            xcorr_mem1: vec![0.0; XCORR_MEM1_SIZE],
-            xcorr_mem2: vec![0.0; XCORR_MEM2_SIZE],
-        })
+        Self::try_new(arrays)
     }
 
     /// Create a new state without loading weights (for later `load_model()`).
     /// Matches C `pitchdnn_init` (`USE_WEIGHTS_FILE` path).
     pub fn new_empty() -> Self {
-        Self {
-            model: PitchDnn::default(),
-            gru_state: vec![0.0; GRU_1_STATE_SIZE],
-            xcorr_mem1: vec![0.0; XCORR_MEM1_SIZE],
-            xcorr_mem2: vec![0.0; XCORR_MEM2_SIZE],
-        }
+        Self::try_new_empty().expect("PitchDNN state allocation failed")
+    }
+
+    /// Fallibly load model weights while leaving the current model untouched
+    /// until parsing and model construction both succeed.
+    pub fn try_load_model(&mut self, data: &[u8]) -> Result<(), ()> {
+        let arrays = parse_weights(data).map_err(|_| ())?;
+        let model = init_pitchdnn(&arrays)?;
+        self.model = model;
+        Ok(())
     }
 
     /// Load model weights from a serialized binary weight blob.
     /// Matches C `pitchdnn_load_model`. Returns `Ok(())` on success, `Err(-1)` on failure.
     pub fn load_model(&mut self, data: &[u8]) -> Result<(), i32> {
-        let arrays = parse_weights(data)?;
-        self.model = init_pitchdnn(&arrays).map_err(|_| -1)?;
-        Ok(())
+        self.try_load_model(data).map_err(|_| -1)
     }
 
     // =======================================================================

@@ -182,7 +182,10 @@ mod allocation_tests {
     #[test]
     fn encoder_create_reports_inner_allocation_failure() {
         let _lock = ALLOCATION_TEST_LOCK.lock().unwrap();
-        alloc::fail_after(0);
+        // Two CAPI allocations (the inner box and handle storage) are allowed.
+        // The constructor must consume the budget first at a nested codec
+        // allocation and return OPUS_ALLOC_FAIL before either is published.
+        alloc::fail_after(2);
         let _reset = FailpointReset;
 
         let mut error = OPUS_OK;
@@ -191,6 +194,61 @@ mod allocation_tests {
 
         assert!(encoder.is_null());
         assert_eq!(error, OPUS_ALLOC_FAIL);
+    }
+
+    #[test]
+    fn decoder_create_reports_nested_allocation_failure() {
+        let _lock = ALLOCATION_TEST_LOCK.lock().unwrap();
+        // The two outer CAPI allocations are allowed. A fallible nested
+        // decoder allocation must consume the budget and fail first.
+        alloc::fail_after(2);
+        let _reset = FailpointReset;
+
+        let mut error = OPUS_OK;
+        let decoder = unsafe { decoder::opus_decoder_create(48000, 1, &mut error) };
+
+        assert!(decoder.is_null());
+        assert_eq!(error, OPUS_ALLOC_FAIL);
+    }
+
+    #[test]
+    fn decoder_create_reports_embedded_model_allocation_failure() {
+        let _lock = ALLOCATION_TEST_LOCK.lock().unwrap();
+        // The decoder's state graph consumes 30 fallible allocations before
+        // the embedded model is parsed. Allow the model-array list allocation
+        // too, then fail while copying the first record's name. This exercises
+        // the model-loading path rather than only the outer handle staging.
+        alloc::fail_after(31);
+        let _reset = FailpointReset;
+
+        let mut error = OPUS_OK;
+        let decoder = unsafe { decoder::opus_decoder_create(48000, 1, &mut error) };
+
+        assert!(decoder.is_null());
+        assert_eq!(error, OPUS_ALLOC_FAIL);
+    }
+
+    #[test]
+    fn encoder_init_reports_nested_allocation_failure_without_touching_storage() {
+        let _lock = ALLOCATION_TEST_LOCK.lock().unwrap();
+        // One outer state-box allocation is allowed. The nested constructor
+        // must fail before the caller-provided state is published.
+        alloc::fail_after(1);
+        let _reset = FailpointReset;
+
+        let mut storage = std::mem::MaybeUninit::<ropus::opus::encoder::OpusEncoder>::uninit();
+        let size = std::mem::size_of::<ropus::opus::encoder::OpusEncoder>();
+        unsafe { std::ptr::write_bytes(storage.as_mut_ptr() as *mut u8, 0xA5, size) };
+        let before = unsafe { std::slice::from_raw_parts(storage.as_ptr() as *const u8, size) };
+        let before = before.to_vec();
+
+        let result = unsafe {
+            encoder::opus_encoder_init(storage.as_mut_ptr(), 48000, 1, OPUS_APPLICATION_AUDIO)
+        };
+
+        assert_eq!(result, OPUS_ALLOC_FAIL);
+        let after = unsafe { std::slice::from_raw_parts(storage.as_ptr() as *const u8, size) };
+        assert_eq!(after, before.as_slice());
     }
 
     #[test]

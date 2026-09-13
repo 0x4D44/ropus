@@ -9,6 +9,7 @@
 //! [`AnalysisInfo`] for mode / bandwidth / DTX decisions, and forwards it
 //! to the CELT encoder via `CELT_SET_ANALYSIS`.
 
+use crate::allocation::try_vec_with_len;
 use crate::celt::encoder::{
     AnalysisInfo as CeltAnalysisInfo, CeltEncoder, CeltEncoderCtl, LEAK_BANDS as CELT_LEAK_BANDS,
     SILKInfo, celt_encode_with_ec,
@@ -20,7 +21,10 @@ use crate::dnn::dred::{
     DRED_MAX_FRAMES, DRED_MIN_BYTES, DRED_NUM_REDUNDANCY_FRAMES, DREDEnc, compute_quantizer,
 };
 use crate::silk::common::{silk_lin2log, silk_log2lin};
-use crate::silk::encoder::{SilkEncControlStruct, SilkEncoder, silk_encode, silk_init_encoder_top};
+use crate::silk::encoder::{
+    SilkEncControlStruct, SilkEncoder, silk_encode, silk_init_encoder_top,
+    silk_init_encoder_top_try,
+};
 use crate::types::*;
 
 use super::analysis::{
@@ -28,9 +32,10 @@ use super::analysis::{
     tonality_analysis_reset, tonality_get_info,
 };
 use super::decoder::{
-    MODE_CELT_ONLY, MODE_HYBRID, MODE_SILK_ONLY, OPUS_BAD_ARG, OPUS_BANDWIDTH_FULLBAND,
-    OPUS_BANDWIDTH_MEDIUMBAND, OPUS_BANDWIDTH_NARROWBAND, OPUS_BANDWIDTH_SUPERWIDEBAND,
-    OPUS_BANDWIDTH_WIDEBAND, OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR, OPUS_OK,
+    MODE_CELT_ONLY, MODE_HYBRID, MODE_SILK_ONLY, OPUS_ALLOC_FAIL, OPUS_BAD_ARG,
+    OPUS_BANDWIDTH_FULLBAND, OPUS_BANDWIDTH_MEDIUMBAND, OPUS_BANDWIDTH_NARROWBAND,
+    OPUS_BANDWIDTH_SUPERWIDEBAND, OPUS_BANDWIDTH_WIDEBAND, OPUS_BUFFER_TOO_SMALL,
+    OPUS_INTERNAL_ERROR, OPUS_OK,
 };
 use super::repacketizer::{
     OpusExtensionData, OpusRepacketizer, opus_packet_pad, opus_packet_pad_impl,
@@ -1458,10 +1463,9 @@ impl OpusEncoder {
         }
 
         // Initialize sub-encoders
-        let mut silk_enc = SilkEncoder::new();
-        silk_init_encoder_top(&mut silk_enc, channels as usize);
+        let silk_enc = silk_init_encoder_top_try(channels as usize).map_err(|_| OPUS_ALLOC_FAIL)?;
 
-        let celt_enc = CeltEncoder::new(fs, channels).ok_or(OPUS_INTERNAL_ERROR)?;
+        let celt_enc = CeltEncoder::try_new(fs, channels)?;
 
         let encoder_buffer = fs / 100; // 10ms
 
@@ -1536,16 +1540,19 @@ impl OpusEncoder {
             peak_signal_energy: 0,
             nonfinal_frame: 0,
             range_final: 0,
-            delay_buffer: vec![0i16; (encoder_buffer * channels) as usize],
-            tmp_prefill: vec![0i16; (channels * fs / 400) as usize],
-            analysis: TonalityAnalysisState::new_boxed(),
+            delay_buffer: try_vec_with_len((encoder_buffer * channels) as usize, 0i16)
+                .map_err(|_| OPUS_ALLOC_FAIL)?,
+            tmp_prefill: try_vec_with_len((channels * fs / 400) as usize, 0i16)
+                .map_err(|_| OPUS_ALLOC_FAIL)?,
+            analysis: TonalityAnalysisState::try_new_boxed().map_err(|_| OPUS_ALLOC_FAIL)?,
             dred_encoder: None,
             dred_duration: 0,
             dred_q0: 0,
             dred_d_q: 0,
             dred_qmax: 0,
             dred_target_chunks: 0,
-            activity_mem: vec![0u8; 4 * DRED_MAX_FRAMES],
+            activity_mem: try_vec_with_len(4 * DRED_MAX_FRAMES, 0u8)
+                .map_err(|_| OPUS_ALLOC_FAIL)?,
             first_frame_flag: true,
         };
 

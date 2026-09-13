@@ -107,6 +107,8 @@
     clippy::explicit_counter_loop,
 )]
 
+#[doc(hidden)]
+pub mod allocation;
 pub mod celt;
 pub mod dnn;
 pub mod opus;

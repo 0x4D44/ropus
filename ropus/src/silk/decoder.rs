@@ -6,6 +6,7 @@
 //! stereo_MS_to_LR.c, stereo_decode_pred.c, decoder_set_fs.c,
 //! resampler.c, biquad_alt.c, and associated resampler private functions.
 
+use crate::allocation::try_vec_with_len;
 use crate::celt::range_coder::RangeDecoder;
 use crate::silk::common::*;
 use crate::silk::tables::*;
@@ -238,12 +239,16 @@ pub struct SilkDecoderState {
 }
 
 impl SilkDecoderState {
-    pub fn new() -> Self {
+    /// Fallibly allocate one channel's decoder state.
+    pub fn try_new() -> Result<Self, ()> {
+        let exc_q14 = try_vec_with_len(MAX_FRAME_LENGTH, 0i32)?;
+        let out_buf = try_vec_with_len(MAX_FRAME_LENGTH + 2 * MAX_SUB_FRAME_LENGTH, 0i16)?;
+
         let mut state = Self {
             prev_gain_q16: 65536, // Q16 1.0
-            exc_q14: vec![0i32; MAX_FRAME_LENGTH],
+            exc_q14,
             s_lpc_q14_buf: [0; MAX_LPC_ORDER],
-            out_buf: vec![0i16; MAX_FRAME_LENGTH + 2 * MAX_SUB_FRAME_LENGTH],
+            out_buf,
             lag_prev: 100,
             last_gain_index: 10,
             fs_khz: 0,
@@ -275,7 +280,12 @@ impl SilkDecoderState {
         state.s_plc.prev_gain_q16 = [65536, 65536];
         state.s_plc.subfr_length = 20;
         state.s_plc.nb_subfr = 2;
-        state
+        Ok(state)
+    }
+
+    /// Allocate one channel's decoder state using the historical infallible API.
+    pub fn new() -> Self {
+        Self::try_new().expect("SILK decoder state allocation failed")
     }
 
     /// Reset decoder state (preserves OSCE state).
@@ -302,14 +312,20 @@ pub struct SilkDecoder {
 }
 
 impl SilkDecoder {
-    pub fn new() -> Self {
-        Self {
-            channel_state: [SilkDecoderState::new(), SilkDecoderState::new()],
+    /// Fallibly allocate the top-level decoder and both channel states.
+    pub fn try_new() -> Result<Self, ()> {
+        Ok(Self {
+            channel_state: [SilkDecoderState::try_new()?, SilkDecoderState::try_new()?],
             s_stereo: StereoDecState::default(),
             n_channels_api: 1,
             n_channels_internal: 1,
             prev_decode_only_middle: false,
-        }
+        })
+    }
+
+    /// Allocate a top-level decoder using the historical infallible API.
+    pub fn new() -> Self {
+        Self::try_new().expect("SILK decoder allocation failed")
     }
 
     pub fn init(&mut self) {

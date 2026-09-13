@@ -8,6 +8,7 @@
 //! weights; the classical (noise / periodic) PLC is still used for
 //! frames where DNN synthesis isn't selected.
 
+use crate::allocation::try_box;
 use crate::celt::decoder::CeltDecoder;
 use crate::celt::math_ops::celt_exp2;
 use crate::celt::range_coder::RangeDecoder;
@@ -34,6 +35,7 @@ pub const OPUS_BANDWIDTH_FULLBAND: i32 = 1105;
 // Error codes (from opus_defines.h)
 pub const OPUS_OK: i32 = 0;
 pub const OPUS_BAD_ARG: i32 = -1;
+pub const OPUS_ALLOC_FAIL: i32 = -7;
 pub const OPUS_BUFFER_TOO_SMALL: i32 = -2;
 pub const OPUS_INTERNAL_ERROR: i32 = -3;
 pub const OPUS_INVALID_PACKET: i32 = -4;
@@ -536,13 +538,12 @@ impl OpusDecoder {
             return Err(OPUS_BAD_ARG);
         }
 
-        let mut celt_dec = CeltDecoder::new(fs, channels).map_err(|_| OPUS_INTERNAL_ERROR)?;
+        let mut celt_dec = CeltDecoder::try_new(fs, channels)?;
         // Keep the nested CELT decoder's PLC-quality gate in sync with the
         // public Opus decoder state. Without this, a fresh Opus decoder reports
         // complexity 0 while CELT starts at 5 and can take neural PLC by default.
         let _ = celt_dec.set_complexity(0);
-        let mut silk_dec = SilkDecoder::new();
-        silk_dec.init();
+        let silk_dec = SilkDecoder::try_new().map_err(|_| OPUS_ALLOC_FAIL)?;
 
         let dec_control = SilkDecControl {
             n_channels_api: channels as usize,
@@ -571,7 +572,8 @@ impl OpusDecoder {
             prev_redundancy: false,
             last_packet_duration: 0,
             range_final: 0,
-            lpcnet: Box::new(LPCNetPLCState::new()),
+            lpcnet: try_box(LPCNetPLCState::try_new().map_err(|_| OPUS_ALLOC_FAIL)?)
+                .map_err(|_| OPUS_ALLOC_FAIL)?,
         };
 
         // CELT signalling off (Opus handles framing)
@@ -583,21 +585,17 @@ impl OpusDecoder {
         // (`reference/dnn/lpcnet_plc.c:58`), which runs
         // `init_plcmodel(..., plcmodel_arrays)` on the compile-time
         // tables and `celt_assert`s the return. A failure here means the
-        // embedded blob is malformed — a build-config bug, not a runtime
-        // condition — so we `debug_assert!` to surface it in tests and
-        // debug builds rather than silently falling back to classical
-        // PLC. Release builds still leave `loaded=false` on failure so
-        // shipped code keeps decoding, but the loud-fail in CI catches
-        // drift early.
+        // embedded blob is malformed — a build-config bug — or an allocation
+        // failed while parsing it. Both errors use the same fallible seam;
+        // the C ABI must receive OPUS_ALLOC_FAIL rather than a debug-build
+        // panic from an assertion.
         if crate::dnn::embedded_weights::has_embedded_weights() {
             let ret = dec
                 .lpcnet
-                .load_model(crate::dnn::embedded_weights::WEIGHTS_BLOB);
-            debug_assert_eq!(
-                ret, 0,
-                "embedded weight blob is malformed — rebuild from a fresh \
-                 reference/dnn/ tree (cargo run -p fetch-assets -- weights)"
-            );
+                .try_load_model(crate::dnn::embedded_weights::WEIGHTS_BLOB);
+            if ret.is_err() {
+                return Err(OPUS_ALLOC_FAIL);
+            }
         }
 
         Ok(dec)

@@ -27,6 +27,7 @@ use super::rate::{
     BITRES, SPREAD_ICDF, TAPSET_ICDF, TF_SELECT_TABLE, TRIM_ICDF, clt_compute_allocation,
 };
 use super::vq::celt_inner_prod_norm_shift;
+use crate::allocation::try_vec_with_len;
 use crate::types::*;
 
 // ===========================================================================
@@ -3320,30 +3321,42 @@ fn celt_encode_core(
 // ===========================================================================
 
 impl CeltEncoder {
-    /// Create and initialize a new CELT encoder.
+    /// Fallibly create and initialize a new CELT encoder.
     ///
     /// # Parameters
     /// - `sampling_rate`: Sample rate (8000, 12000, 16000, 24000, or 48000)
     /// - `channels`: Number of channels (1 or 2)
     ///
     /// # Returns
-    /// Initialized encoder, or `None` if parameters are invalid.
-    pub fn new(sampling_rate: i32, channels: i32) -> Option<Self> {
+    /// Initialized encoder, or an Opus error code if parameters are invalid or
+    /// a state buffer cannot be allocated.
+    pub fn try_new(sampling_rate: i32, channels: i32) -> Result<Self, i32> {
         if channels < 1 || channels > 2 {
-            return None;
+            return Err(OPUS_BAD_ARG);
         }
 
         let mode = &MODE_48000_960_120;
         let upsample = resampling_factor(sampling_rate);
         if upsample == 0 {
-            return None;
+            return Err(OPUS_BAD_ARG);
         }
 
         let nb_ebands = mode.nb_ebands as usize;
         let overlap = mode.overlap as usize;
         let ch = channels as usize;
 
-        let enc = CeltEncoder {
+        // Keep every heap buffer behind the fallible allocation seam. The
+        // caller may be a C ABI constructor, where allocator exhaustion must
+        // become OPUS_ALLOC_FAIL instead of invoking Rust's aborting OOM path.
+        let in_mem = try_vec_with_len(ch * overlap, 0i32).map_err(|_| -7)?;
+        let prefilter_mem =
+            try_vec_with_len(ch * COMBFILTER_MAXPERIOD as usize, 0i32).map_err(|_| -7)?;
+        let old_band_e = try_vec_with_len(ch * nb_ebands, 0i32).map_err(|_| -7)?;
+        let old_log_e = try_vec_with_len(ch * nb_ebands, GCONST_NEG28).map_err(|_| -7)?;
+        let old_log_e2 = try_vec_with_len(ch * nb_ebands, GCONST_NEG28).map_err(|_| -7)?;
+        let energy_error = try_vec_with_len(ch * nb_ebands, 0i32).map_err(|_| -7)?;
+
+        Ok(CeltEncoder {
             mode,
             channels,
             stream_channels: channels,
@@ -3388,15 +3401,21 @@ impl CeltEncoder {
             energy_mask: None,
             spec_avg: 0,
 
-            in_mem: vec![0; ch * overlap],
-            prefilter_mem: vec![0; ch * COMBFILTER_MAXPERIOD as usize],
-            old_band_e: vec![0; ch * nb_ebands],
-            old_log_e: vec![GCONST_NEG28; ch * nb_ebands],
-            old_log_e2: vec![GCONST_NEG28; ch * nb_ebands],
-            energy_error: vec![0; ch * nb_ebands],
-        };
+            in_mem,
+            prefilter_mem,
+            old_band_e,
+            old_log_e,
+            old_log_e2,
+            energy_error,
+        })
+    }
 
-        Some(enc)
+    /// Create and initialize a new CELT encoder.
+    ///
+    /// This compatibility wrapper preserves the historical `Option` API for
+    /// callers outside fallible C API construction.
+    pub fn new(sampling_rate: i32, channels: i32) -> Option<Self> {
+        Self::try_new(sampling_rate, channels).ok()
     }
 
     /// Reset all encoder state to initial values.

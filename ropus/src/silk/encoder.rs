@@ -9,6 +9,7 @@
 //! process_NLSFs.c, quant_LTP_gains.c, stereo_LR_to_MS.c,
 //! stereo_encode_pred.c, stereo_find_predictor.c, stereo_quant_pred.c
 
+use crate::allocation::try_vec_with_len;
 use crate::celt::range_coder::RangeEncoder;
 use crate::silk::common::*;
 use crate::silk::decoder::{SideInfoIndices, SilkResamplerState};
@@ -252,9 +253,19 @@ pub struct NsqState {
 
 impl Default for NsqState {
     fn default() -> Self {
-        Self {
-            xq: vec![0i16; 2 * MAX_FRAME_LENGTH],
-            s_ltp_shp_q14: vec![0i32; 2 * MAX_FRAME_LENGTH],
+        Self::try_new().expect("SILK NSQ state allocation failed")
+    }
+}
+
+impl NsqState {
+    /// Fallibly allocate the variable-length NSQ state buffers.
+    pub fn try_new() -> Result<Self, ()> {
+        let xq = try_vec_with_len(2 * MAX_FRAME_LENGTH, 0i16)?;
+        let s_ltp_shp_q14 = try_vec_with_len(2 * MAX_FRAME_LENGTH, 0i32)?;
+
+        Ok(Self {
+            xq,
+            s_ltp_shp_q14,
             s_lpc_q14: [0; MAX_SUB_FRAME_LENGTH + NSQ_LPC_BUF_LENGTH],
             s_ar2_q14: [0; MAX_SHAPE_LPC_ORDER],
             s_lf_ar_shp_q14: 0,
@@ -265,7 +276,7 @@ impl Default for NsqState {
             rand_seed: 0,
             prev_gain_q16: 65536,
             rewhite_flag: 0,
-        }
+        })
     }
 }
 
@@ -457,12 +468,18 @@ pub struct SilkEncoderState {
 
 impl Default for SilkEncoderState {
     fn default() -> Self {
+        Self::from_nsq_state(NsqState::default())
+    }
+}
+
+impl SilkEncoderState {
+    fn from_nsq_state(s_nsq: NsqState) -> Self {
         Self {
             in_hp_state: [0; 2],
             variable_hp_smth1_q15: 0,
             variable_hp_smth2_q15: 0,
             s_lp: SilkLpState::default(),
-            s_nsq: NsqState::default(),
+            s_nsq,
             s_vad: SilkVadState::default(),
             resampler_state: SilkResamplerState::default(),
             fs_khz: 0,
@@ -540,6 +557,11 @@ impl Default for SilkEncoderState {
             sum_log_gain_q7: 0,
         }
     }
+
+    /// Fallibly allocate the common encoder state, including the NSQ buffers.
+    pub fn try_new() -> Result<Self, ()> {
+        Ok(Self::from_nsq_state(NsqState::try_new()?))
+    }
 }
 
 /// Per-channel encoder state (fixed-point).
@@ -554,13 +576,23 @@ pub struct SilkEncoderStateFix {
 
 impl Default for SilkEncoderStateFix {
     fn default() -> Self {
-        Self {
-            s_cmn: SilkEncoderState::default(),
+        Self::try_new().expect("SILK encoder state allocation failed")
+    }
+}
+
+impl SilkEncoderStateFix {
+    /// Fallibly allocate one channel's encoder state.
+    pub fn try_new() -> Result<Self, ()> {
+        let s_cmn = SilkEncoderState::try_new()?;
+        let x_buf = try_vec_with_len(2 * MAX_FRAME_LENGTH + LA_SHAPE_MAX, 0i16)?;
+
+        Ok(Self {
+            s_cmn,
             s_shape: SilkShapeStateFix::default(),
-            x_buf: vec![0i16; 2 * MAX_FRAME_LENGTH + LA_SHAPE_MAX],
+            x_buf,
             ltp_corr_q15: 0,
             res_nrg_smth: 0,
-        }
+        })
     }
 }
 
@@ -609,8 +641,9 @@ pub struct SilkEncoder {
 }
 
 impl SilkEncoder {
-    pub fn new() -> Self {
-        Self {
+    /// Fallibly allocate the top-level encoder and both channel states.
+    pub fn try_new() -> Result<Self, ()> {
+        Ok(Self {
             s_stereo: StereoEncState::default(),
             n_bits_used_lbrr: 0,
             n_bits_exceeded: 0,
@@ -621,10 +654,15 @@ impl SilkEncoder {
             allow_bandwidth_switch: 0,
             prev_decode_only_middle: 0,
             state_fxx: [
-                SilkEncoderStateFix::default(),
-                SilkEncoderStateFix::default(),
+                SilkEncoderStateFix::try_new()?,
+                SilkEncoderStateFix::try_new()?,
             ],
-        }
+        })
+    }
+
+    /// Allocate a top-level encoder using the historical infallible API.
+    pub fn new() -> Self {
+        Self::try_new().expect("SILK encoder allocation failed")
     }
 }
 
@@ -7973,9 +8011,7 @@ pub(crate) fn silk_burg_modified(
 
 /// Initialize a single encoder channel.
 /// Matches C: `silk_init_encoder`.
-pub fn silk_init_encoder(ps_enc: &mut SilkEncoderStateFix) -> i32 {
-    *ps_enc = SilkEncoderStateFix::default();
-
+fn silk_init_encoder_in_place(ps_enc: &mut SilkEncoderStateFix) {
     // Initialize HP filter smoother
     let hp_cutoff_q16 = shl32(VARIABLE_HP_MIN_CUTOFF_HZ, 16);
     let log_val = silk_lin2log(hp_cutoff_q16) - (16 << 7);
@@ -7986,6 +8022,13 @@ pub fn silk_init_encoder(ps_enc: &mut SilkEncoderStateFix) -> i32 {
 
     // Initialize VAD
     silk_vad_init(&mut ps_enc.s_cmn.s_vad);
+}
+
+/// Initialize a single encoder channel.
+/// Matches C: `silk_init_encoder`.
+pub fn silk_init_encoder(ps_enc: &mut SilkEncoderStateFix) -> i32 {
+    *ps_enc = SilkEncoderStateFix::default();
+    silk_init_encoder_in_place(ps_enc);
 
     0
 }
@@ -8018,6 +8061,27 @@ pub fn silk_init_encoder_top(enc: &mut SilkEncoder, channels: usize) -> i32 {
     enc.n_channels_internal = 1;
 
     ret
+}
+
+/// Fallibly allocate and initialize a top-level SILK encoder.
+///
+/// `SilkEncoder::try_new` has already allocated fresh channel state, so the
+/// remaining C initialization is applied in place. This keeps the fallible
+/// path away from `silk_init_encoder_top` and its compatibility `Default`
+/// resets, which would allocate replacement buffers.
+pub fn silk_init_encoder_top_try(channels: usize) -> Result<SilkEncoder, ()> {
+    if channels > ENCODER_NUM_CHANNELS {
+        return Err(());
+    }
+
+    let mut enc = SilkEncoder::try_new()?;
+    for n in 0..channels {
+        silk_init_encoder_in_place(&mut enc.state_fxx[n]);
+    }
+    enc.n_channels_api = 1;
+    enc.n_channels_internal = 1;
+
+    Ok(enc)
 }
 
 // ===========================================================================

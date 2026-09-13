@@ -687,23 +687,14 @@ impl TonalityAnalysisState {
     /// `#[repr(C)]` POD `AnalysisInfo`) has an all-zero-byte-pattern for
     /// its logical zero value, so `write_bytes(..., 0, ...)` produces the
     /// same observable state as [`Self::new()`].
+    pub fn try_new_boxed() -> Result<Box<Self>, ()> {
+        crate::allocation::try_box_zeroed()
+    }
+
+    /// Infallible compatibility wrapper for callers outside fallible C API
+    /// construction.
     pub fn new_boxed() -> Box<Self> {
-        let mut slot = Box::<core::mem::MaybeUninit<Self>>::new_uninit();
-        // Safety: `slot` is a Box of exactly `size_of::<Self>()` bytes of
-        // uninitialised but valid-for-writes heap memory. We zero every
-        // byte, which is a valid bit-pattern for every field of `Self`
-        // (all POD: i32 / f32 / u8 arrays + `#[repr(C)]` AnalysisInfo).
-        // Then cast the Box type since `Box::<MaybeUninit<T>>::assume_init`
-        // is still unstable.
-        unsafe {
-            core::ptr::write_bytes(
-                slot.as_mut_ptr() as *mut u8,
-                0,
-                core::mem::size_of::<Self>(),
-            );
-            let raw = Box::into_raw(slot);
-            Box::from_raw(raw as *mut Self)
-        }
+        Self::try_new_boxed().expect("tonality analysis allocation failed")
     }
 }
 

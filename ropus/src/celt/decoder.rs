@@ -16,6 +16,7 @@ use super::quant_bands::{unquant_coarse_energy, unquant_energy_finalise, unquant
 use super::range_coder::RangeDecoder;
 use super::rate::{BITRES, clt_compute_allocation};
 use super::vq::renormalise_vector;
+use crate::allocation::try_vec_with_len;
 use crate::types::*;
 
 // ===========================================================================
@@ -647,11 +648,14 @@ fn prefilter_and_fold(
 // ===========================================================================
 
 impl CeltDecoder {
-    /// Allocate and initialize a new CELT decoder.
+    /// Fallibly allocate and initialize a new CELT decoder.
     ///
     /// `sampling_rate` — output rate (8000/12000/16000/24000/48000).
     /// `channels` — output channels (1 or 2).
-    pub fn new(sampling_rate: i32, channels: i32) -> Result<Self, i32> {
+    ///
+    /// Returns `-1` for invalid parameters and `-7` when a state buffer cannot
+    /// be allocated.
+    pub fn try_new(sampling_rate: i32, channels: i32) -> Result<Self, i32> {
         if channels < 1 || channels > 2 {
             return Err(-1); // OPUS_BAD_ARG
         }
@@ -665,7 +669,18 @@ impl CeltDecoder {
         let overlap = mode.overlap;
         let buf_size = (DECODE_BUFFER_SIZE + overlap) as usize;
 
-        let dec = CeltDecoder {
+        // Stage every variable-length state buffer through the fallible seam;
+        // this constructor is also called below C API handle allocation.
+        let decode_mem = try_vec_with_len(channels as usize * buf_size, 0i32).map_err(|_| -7)?;
+        let old_band_e = try_vec_with_len(2 * nb_ebands, 0i32).map_err(|_| -7)?;
+        let old_log_e = try_vec_with_len(2 * nb_ebands, -gconst(28.0)).map_err(|_| -7)?;
+        let old_log_e2 = try_vec_with_len(2 * nb_ebands, -gconst(28.0)).map_err(|_| -7)?;
+        let background_log_e = try_vec_with_len(2 * nb_ebands, 0i32).map_err(|_| -7)?;
+        let lpc_coef =
+            try_vec_with_len(channels as usize * CELT_LPC_ORDER, 0i32).map_err(|_| -7)?;
+        let plc_pcm = try_vec_with_len(560, 0i16).map_err(|_| -7)?;
+
+        Ok(CeltDecoder {
             mode,
             overlap,
             channels,
@@ -693,22 +708,28 @@ impl CeltDecoder {
             prefilter_and_fold: false,
             preemph_mem_d: [0; 2],
 
-            decode_mem: vec![0i32; channels as usize * buf_size],
-            old_band_e: vec![0i32; 2 * nb_ebands],
-            old_log_e: vec![-gconst(28.0); 2 * nb_ebands],
-            old_log_e2: vec![-gconst(28.0); 2 * nb_ebands],
-            background_log_e: vec![0i32; 2 * nb_ebands],
-            lpc_coef: vec![0i32; channels as usize * CELT_LPC_ORDER],
+            decode_mem,
+            old_band_e,
+            old_log_e,
+            old_log_e2,
+            background_log_e,
+            lpc_coef,
 
             // Worst-case 16 kHz PLC scratch: (n + sinc_order + overlap)/3 plus
             // one LPCNet frame of slack (= PLC_UPDATE * 160). Matches the
             // 560-sample starting allocation in 6822dd6.
-            plc_pcm: vec![0i16; 560],
+            plc_pcm,
             plc_fill: 0,
             plc_preemphasis_mem: 0.0,
-        };
+        })
+    }
 
-        Ok(dec)
+    /// Allocate and initialize a new CELT decoder.
+    ///
+    /// This compatibility wrapper preserves the historical error-code API for
+    /// callers outside fallible C API construction.
+    pub fn new(sampling_rate: i32, channels: i32) -> Result<Self, i32> {
+        Self::try_new(sampling_rate, channels)
     }
 
     /// Reset all dynamic decoder state. Configuration is preserved.

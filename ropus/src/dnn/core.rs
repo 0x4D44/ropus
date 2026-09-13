@@ -8,6 +8,8 @@
 
 use std::f32::consts::PI;
 
+use crate::allocation;
+
 // ===========================================================================
 // Constants
 // ===========================================================================
@@ -956,20 +958,28 @@ fn read_i32_ne(data: &[u8], offset: usize) -> i32 {
     ])
 }
 
-fn bytes_to_f32_vec(data: &[u8]) -> Vec<f32> {
-    data.chunks_exact(4)
-        .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
-        .collect()
+fn bytes_to_f32_vec(data: &[u8]) -> Result<Vec<f32>, ()> {
+    let mut values = allocation::try_vec_with_capacity(data.len() / 4)?;
+    values.extend(
+        data.chunks_exact(4)
+            .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]])),
+    );
+    Ok(values)
 }
 
-fn bytes_to_i8_vec(data: &[u8]) -> Vec<i8> {
-    data.iter().map(|&b| b as i8).collect()
+fn bytes_to_i8_vec(data: &[u8]) -> Result<Vec<i8>, ()> {
+    let mut values = allocation::try_vec_with_capacity(data.len())?;
+    values.extend(data.iter().map(|&b| b as i8));
+    Ok(values)
 }
 
-fn bytes_to_i32_vec(data: &[u8]) -> Vec<i32> {
-    data.chunks_exact(4)
-        .map(|c| i32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
-        .collect()
+fn bytes_to_i32_vec(data: &[u8]) -> Result<Vec<i32>, ()> {
+    let mut values = allocation::try_vec_with_capacity(data.len() / 4)?;
+    values.extend(
+        data.chunks_exact(4)
+            .map(|c| i32::from_ne_bytes([c[0], c[1], c[2], c[3]])),
+    );
+    Ok(values)
 }
 
 /// Parse one weight record from the blob. Advances `offset`.
@@ -1002,11 +1012,11 @@ fn parse_record(data: &[u8], offset: &mut usize) -> Result<WeightArray, i32> {
     // Parse null-terminated name from bytes 20..64
     let name_bytes = &data[base + 20..base + 64];
     let nul_pos = name_bytes.iter().position(|&b| b == 0).unwrap_or(44);
-    let name = String::from_utf8_lossy(&name_bytes[..nul_pos]).into_owned();
+    let name = allocation::try_string_from_utf8_lossy(&name_bytes[..nul_pos]).map_err(|_| -1)?;
 
     let data_start = base + WEIGHT_BLOCK_SIZE;
     let data_end = data_start + size as usize;
-    let array_data = data[data_start..data_end].to_vec();
+    let array_data = allocation::try_vec_from_slice(&data[data_start..data_end]).map_err(|_| -1)?;
 
     *offset = base + WEIGHT_BLOCK_SIZE + block_size as usize;
 
@@ -1022,7 +1032,10 @@ fn parse_record(data: &[u8], offset: &mut usize) -> Result<WeightArray, i32> {
 /// Matches C `parse_weights` from parse_lpcnet_weights.c.
 /// Returns the array on success, or Err(-1) on parse failure.
 pub fn parse_weights(data: &[u8]) -> Result<Vec<WeightArray>, i32> {
-    let mut list = Vec::with_capacity(20);
+    // A record is at least one header wide, so this upper bound prevents a
+    // later infallible Vec growth while retaining the historical minimum.
+    let capacity = 20.max(data.len() / WEIGHT_BLOCK_SIZE);
+    let mut list = allocation::try_vec_with_capacity(capacity).map_err(|_| -1)?;
     let mut offset = 0;
     while offset < data.len() {
         let array = parse_record(data, &mut offset)?;
@@ -1064,7 +1077,7 @@ fn find_idx_check(
     nb_out: usize,
 ) -> Result<(Vec<i32>, usize), ()> {
     let arr = arrays.iter().find(|a| a.name == name).ok_or(())?;
-    let idx = bytes_to_i32_vec(&arr.data);
+    let idx = bytes_to_i32_vec(&arr.data)?;
     let mut total_blocks: usize = 0;
     let mut remaining_outs = nb_out as i32;
     let mut pos: usize = 0;
@@ -1114,11 +1127,11 @@ pub fn linear_init(
 
     if let Some(name) = bias_name {
         let arr = find_array_check(arrays, name, nb_outputs * 4).ok_or(())?;
-        layer.bias = Some(bytes_to_f32_vec(&arr.data));
+        layer.bias = Some(bytes_to_f32_vec(&arr.data)?);
     }
     if let Some(name) = subias_name {
         let arr = find_array_check(arrays, name, nb_outputs * 4).ok_or(())?;
-        layer.subias = Some(bytes_to_f32_vec(&arr.data));
+        layer.subias = Some(bytes_to_f32_vec(&arr.data)?);
     }
 
     if let Some(idx_name) = weights_idx_name {
@@ -1126,34 +1139,34 @@ pub fn linear_init(
         layer.weights_idx = Some(idx_data);
         if let Some(name) = weights_name {
             let arr = find_array_check(arrays, name, SPARSE_BLOCK_SIZE * total_blocks).ok_or(())?;
-            layer.weights = Some(bytes_to_i8_vec(&arr.data));
+            layer.weights = Some(bytes_to_i8_vec(&arr.data)?);
         }
         if let Some(name) = float_weights_name {
             if let Some(arr) = opt_array_check(arrays, name, SPARSE_BLOCK_SIZE * total_blocks * 4)?
             {
-                layer.float_weights = Some(bytes_to_f32_vec(&arr.data));
+                layer.float_weights = Some(bytes_to_f32_vec(&arr.data)?);
             }
         }
     } else {
         if let Some(name) = weights_name {
             let arr = find_array_check(arrays, name, nb_inputs * nb_outputs).ok_or(())?;
-            layer.weights = Some(bytes_to_i8_vec(&arr.data));
+            layer.weights = Some(bytes_to_i8_vec(&arr.data)?);
         }
         if let Some(name) = float_weights_name {
             if let Some(arr) = opt_array_check(arrays, name, nb_inputs * nb_outputs * 4)? {
-                layer.float_weights = Some(bytes_to_f32_vec(&arr.data));
+                layer.float_weights = Some(bytes_to_f32_vec(&arr.data)?);
             }
         }
     }
 
     if let Some(name) = diag_name {
         let arr = find_array_check(arrays, name, nb_outputs * 4).ok_or(())?;
-        layer.diag = Some(bytes_to_f32_vec(&arr.data));
+        layer.diag = Some(bytes_to_f32_vec(&arr.data)?);
     }
     if weights_name.is_some() {
         let sname = scale_name.ok_or(())?;
         let arr = find_array_check(arrays, sname, nb_outputs * 4).ok_or(())?;
-        layer.scale = Some(bytes_to_f32_vec(&arr.data));
+        layer.scale = Some(bytes_to_f32_vec(&arr.data)?);
     }
 
     Ok(layer)
@@ -1180,12 +1193,12 @@ pub fn conv2d_init(
 
     if let Some(name) = bias_name {
         let arr = find_array_check(arrays, name, out_channels * 4).ok_or(())?;
-        layer.bias = Some(bytes_to_f32_vec(&arr.data));
+        layer.bias = Some(bytes_to_f32_vec(&arr.data)?);
     }
     if let Some(name) = float_weights_name {
         let expected = in_channels * out_channels * ktime * kheight * 4;
         if let Some(arr) = opt_array_check(arrays, name, expected)? {
-            layer.float_weights = Some(bytes_to_f32_vec(&arr.data));
+            layer.float_weights = Some(bytes_to_f32_vec(&arr.data)?);
         }
     }
 
@@ -2023,7 +2036,7 @@ mod tests {
         let mut data = Vec::new();
         data.extend_from_slice(&bytes);
         data.extend_from_slice(&(2.5f32).to_ne_bytes());
-        let result = bytes_to_f32_vec(&data);
+        let result = bytes_to_f32_vec(&data).expect("f32 conversion should allocate");
         assert_eq!(result.len(), 2);
         assert!(approx_eq(result[0], 1.5, EPS));
         assert!(approx_eq(result[1], 2.5, EPS));

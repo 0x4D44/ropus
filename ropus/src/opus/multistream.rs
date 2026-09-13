@@ -10,6 +10,7 @@
 //!
 //! Fixed-point path (FIXED_POINT, non-RES24, non-QEXT).
 
+use crate::allocation::{try_vec_from_slice, try_vec_with_capacity, try_vec_with_len};
 use crate::celt::bands::compute_band_energies;
 use crate::celt::encoder::{celt_preemphasis, clt_mdct_forward, get_fft_state};
 use crate::celt::math_ops::{celt_log2, isqrt32};
@@ -18,9 +19,9 @@ use crate::celt::quant_bands::amp2log2;
 use crate::types::*;
 
 use super::decoder::{
-    MAX_FRAMES, MODE_CELT_ONLY, OPUS_BAD_ARG, OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR,
-    OPUS_INVALID_PACKET, OPUS_OK, OPUS_UNIMPLEMENTED, OpusDecoder, opus_packet_get_nb_samples,
-    opus_packet_parse_impl,
+    MAX_FRAMES, MODE_CELT_ONLY, OPUS_ALLOC_FAIL, OPUS_BAD_ARG, OPUS_BUFFER_TOO_SMALL,
+    OPUS_INTERNAL_ERROR, OPUS_INVALID_PACKET, OPUS_OK, OPUS_UNIMPLEMENTED, OpusDecoder,
+    opus_packet_get_nb_samples, opus_packet_parse_impl,
 };
 use super::decoder::{
     OPUS_BANDWIDTH_FULLBAND, OPUS_BANDWIDTH_NARROWBAND, OPUS_BANDWIDTH_SUPERWIDEBAND,
@@ -813,7 +814,7 @@ impl OpusMSEncoder {
 
         let streams: i32;
         let coupled_streams: i32;
-        let mut mapping = vec![0u8; channels as usize];
+        let mut mapping = try_vec_with_len(channels as usize, 0u8).map_err(|_| OPUS_ALLOC_FAIL)?;
         let mut lfe_stream: i32 = -1;
         let mapping_type: MappingType;
 
@@ -929,7 +930,7 @@ impl OpusMSEncoder {
         }
 
         // Create sub-encoders
-        let mut encoders = Vec::with_capacity(streams as usize);
+        let mut encoders = try_vec_with_capacity(streams as usize).map_err(|_| OPUS_ALLOC_FAIL)?;
         for s in 0..streams {
             let ch = if s < coupled_streams { 2 } else { 1 };
             let mut enc = OpusEncoder::new(fs, ch, application)?;
@@ -941,8 +942,9 @@ impl OpusMSEncoder {
 
         let (window_mem, preemph_mem) = if mapping_type == MappingType::Surround {
             (
-                vec![0i32; channels as usize * MAX_OVERLAP],
-                vec![0i32; channels as usize],
+                try_vec_with_len(channels as usize * MAX_OVERLAP, 0i32)
+                    .map_err(|_| OPUS_ALLOC_FAIL)?,
+                try_vec_with_len(channels as usize, 0i32).map_err(|_| OPUS_ALLOC_FAIL)?,
             )
         } else {
             (Vec::new(), Vec::new())
@@ -1625,7 +1627,7 @@ impl OpusMSDecoder {
             return Err(OPUS_BAD_ARG);
         }
 
-        let mut decoders = Vec::with_capacity(streams as usize);
+        let mut decoders = try_vec_with_capacity(streams as usize).map_err(|_| OPUS_ALLOC_FAIL)?;
         for s in 0..streams {
             let ch = if s < coupled_streams { 2 } else { 1 };
             decoders.push(OpusDecoder::new(fs, ch)?);
@@ -2062,12 +2064,17 @@ pub struct MappingMatrix {
 impl MappingMatrix {
     /// Create a new mapping matrix from the given data.
     pub fn new(rows: i32, cols: i32, gain: i32, data: &[i16]) -> Self {
-        Self {
+        Self::try_new(rows, cols, gain, data).expect("mapping matrix allocation failed")
+    }
+
+    /// Fallibly copy a mapping matrix into owned storage.
+    pub fn try_new(rows: i32, cols: i32, gain: i32, data: &[i16]) -> Result<Self, i32> {
+        Ok(Self {
             rows,
             cols,
             gain,
-            data: data.to_vec(),
-        }
+            data: try_vec_from_slice(data).map_err(|_| OPUS_ALLOC_FAIL)?,
+        })
     }
 
     /// Column-major index.
@@ -2180,11 +2187,11 @@ fn get_streams_from_channels(channels: i32, mapping_family: i32) -> Result<(i32,
 /// Get pre-computed mixing matrix for the given ambisonics order.
 fn get_mixing_matrix_for_order(order_plus_one: i32) -> Result<MappingMatrix, i32> {
     match order_plus_one {
-        2 => Ok(MappingMatrix::new(6, 6, 0, &FOA_MIXING_DATA)),
-        3 => Ok(MappingMatrix::new(11, 11, 0, &SOA_MIXING_DATA)),
-        4 => Ok(MappingMatrix::new(18, 18, 0, &TOA_MIXING_DATA)),
-        5 => Ok(MappingMatrix::new(27, 27, 0, &FOURTHOA_MIXING_DATA)),
-        6 => Ok(MappingMatrix::new(38, 38, 0, &FIFTHOA_MIXING_DATA)),
+        2 => MappingMatrix::try_new(6, 6, 0, &FOA_MIXING_DATA),
+        3 => MappingMatrix::try_new(11, 11, 0, &SOA_MIXING_DATA),
+        4 => MappingMatrix::try_new(18, 18, 0, &TOA_MIXING_DATA),
+        5 => MappingMatrix::try_new(27, 27, 0, &FOURTHOA_MIXING_DATA),
+        6 => MappingMatrix::try_new(38, 38, 0, &FIFTHOA_MIXING_DATA),
         _ => Err(OPUS_BAD_ARG),
     }
 }
@@ -2192,11 +2199,11 @@ fn get_mixing_matrix_for_order(order_plus_one: i32) -> Result<MappingMatrix, i32
 /// Get pre-computed demixing matrix for the given ambisonics order.
 fn get_demixing_matrix_for_order(order_plus_one: i32) -> Result<MappingMatrix, i32> {
     match order_plus_one {
-        2 => Ok(MappingMatrix::new(6, 6, 0, &FOA_DEMIXING_DATA)),
-        3 => Ok(MappingMatrix::new(11, 11, 3050, &SOA_DEMIXING_DATA)),
-        4 => Ok(MappingMatrix::new(18, 18, 0, &TOA_DEMIXING_DATA)),
-        5 => Ok(MappingMatrix::new(27, 27, 0, &FOURTHOA_DEMIXING_DATA)),
-        6 => Ok(MappingMatrix::new(38, 38, 0, &FIFTHOA_DEMIXING_DATA)),
+        2 => MappingMatrix::try_new(6, 6, 0, &FOA_DEMIXING_DATA),
+        3 => MappingMatrix::try_new(11, 11, 3050, &SOA_DEMIXING_DATA),
+        4 => MappingMatrix::try_new(18, 18, 0, &TOA_DEMIXING_DATA),
+        5 => MappingMatrix::try_new(27, 27, 0, &FOURTHOA_DEMIXING_DATA),
+        6 => MappingMatrix::try_new(38, 38, 0, &FIFTHOA_DEMIXING_DATA),
         _ => Err(OPUS_BAD_ARG),
     }
 }
@@ -2238,7 +2245,10 @@ impl OpusProjectionEncoder {
         }
 
         // Trivial mapping: each channel maps to itself
-        let mapping: Vec<u8> = (0..channels as u8).collect();
+        let mut mapping = try_vec_with_len(channels as usize, 0u8).map_err(|_| OPUS_ALLOC_FAIL)?;
+        for (i, value) in mapping.iter_mut().enumerate() {
+            *value = i as u8;
+        }
 
         let ms_encoder = OpusMSEncoder::new(
             fs,
@@ -2401,7 +2411,7 @@ impl OpusProjectionDecoder {
 
         // Convert little-endian bytes to i16 with sign extension
         let n_elements = (nb_input_streams * channels) as usize;
-        let mut buf = vec![0i16; n_elements];
+        let mut buf = try_vec_with_len(n_elements, 0i16).map_err(|_| OPUS_ALLOC_FAIL)?;
         for i in 0..n_elements {
             let lo = demixing_matrix_bytes[2 * i] as u32;
             let hi = demixing_matrix_bytes[2 * i + 1] as u32;
@@ -2410,10 +2420,13 @@ impl OpusProjectionDecoder {
             buf[i] = (((s & 0xFFFF) ^ 0x8000).wrapping_sub(0x8000)) as i16;
         }
 
-        let demixing_matrix = MappingMatrix::new(channels, nb_input_streams, 0, &buf);
+        let demixing_matrix = MappingMatrix::try_new(channels, nb_input_streams, 0, &buf)?;
 
         // Trivial mapping: each input channel pairs with a matrix column
-        let mapping: Vec<u8> = (0..channels as u8).collect();
+        let mut mapping = try_vec_with_len(channels as usize, 0u8).map_err(|_| OPUS_ALLOC_FAIL)?;
+        for (i, value) in mapping.iter_mut().enumerate() {
+            *value = i as u8;
+        }
 
         let ms_decoder = OpusMSDecoder::new(fs, channels, streams, coupled_streams, &mapping)?;
 

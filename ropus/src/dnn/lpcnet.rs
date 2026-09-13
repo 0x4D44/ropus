@@ -6,6 +6,8 @@
 //! All computation is IEEE 754 single-precision float unless noted.
 //! Double precision is used where the C reference uses `double`.
 
+use crate::allocation::try_vec_with_len;
+
 use super::core::{
     ACTIVATION_LINEAR, ACTIVATION_SIGMOID, ACTIVATION_TANH, LinearLayer, WeightArray,
     compute_activation, compute_generic_conv1d, compute_generic_dense, compute_generic_gru,
@@ -1189,10 +1191,17 @@ impl Default for PLCNetState {
     /// them here to keep `compute_generic_gru` — which slices
     /// `state[..recurrent_weights.nb_inputs]` — happy on a fresh state.
     fn default() -> Self {
-        Self {
-            gru1_state: vec![0.0; PLC_GRU1_STATE_SIZE],
-            gru2_state: vec![0.0; PLC_GRU2_STATE_SIZE],
-        }
+        Self::try_new().expect("PLC network state allocation failed")
+    }
+}
+
+impl PLCNetState {
+    /// Fallibly create a zeroed PLC GRU state.
+    pub fn try_new() -> Result<Self, ()> {
+        Ok(Self {
+            gru1_state: try_vec_with_len(PLC_GRU1_STATE_SIZE, 0.0)?,
+            gru2_state: try_vec_with_len(PLC_GRU2_STATE_SIZE, 0.0)?,
+        })
     }
 }
 
@@ -1344,25 +1353,42 @@ pub struct PitchDNNState {
 
 impl Default for PitchDNNState {
     fn default() -> Self {
-        Self {
-            inner: super::pitchdnn::PitchDnnState::new_empty(),
-            loaded: false,
-        }
+        Self::try_new().expect("PitchDNN state allocation failed")
     }
 }
 
 impl PitchDNNState {
+    /// Fallibly create an empty PitchDNN state for later model loading.
+    pub fn try_new_empty() -> Result<Self, ()> {
+        Ok(Self {
+            inner: super::pitchdnn::PitchDnnState::try_new_empty()?,
+            loaded: false,
+        })
+    }
+
+    /// Fallible constructor alias for callers that treat this wrapper as a
+    /// state object rather than a specifically empty model holder.
+    pub fn try_new() -> Result<Self, ()> {
+        Self::try_new_empty()
+    }
+
     pub fn init(&mut self) {
         // `new_empty()` already produces the equivalent of C
         // `pitchdnn_init` in the `USE_WEIGHTS_FILE` path.
     }
+
+    /// Fallibly load a model and publish it only after the complete model is
+    /// built. The compatibility `load_model` method below maps this to -1.
+    pub fn try_load_model(&mut self, data: &[u8]) -> Result<(), ()> {
+        self.inner.try_load_model(data)?;
+        self.loaded = true;
+        Ok(())
+    }
+
     pub fn load_model(&mut self, data: &[u8]) -> i32 {
-        match self.inner.load_model(data) {
-            Ok(()) => {
-                self.loaded = true;
-                0
-            }
-            Err(e) => e,
+        match self.try_load_model(data) {
+            Ok(()) => 0,
+            Err(()) => -1,
         }
     }
     /// Build the inner `PitchDnn` model from pre-parsed arrays without
@@ -1387,17 +1413,40 @@ impl PitchDNNState {
 }
 
 /// FARGAN state — delegates to the real implementation in `super::fargan`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct FARGANState {
     inner: super::fargan::FarganState,
 }
 
+impl Default for FARGANState {
+    fn default() -> Self {
+        Self::try_new().expect("FARGAN state allocation failed")
+    }
+}
+
 impl FARGANState {
+    /// Fallibly create an empty FARGAN state for later model loading.
+    pub fn try_new() -> Result<Self, ()> {
+        Ok(Self {
+            inner: super::fargan::FarganState::try_new_empty()?,
+        })
+    }
+
     pub fn init(&mut self) {
         self.inner.init();
     }
+
+    /// Fallibly load a model and publish it only after the complete model is
+    /// built. The compatibility `load_model` method below maps this to -1.
+    pub fn try_load_model(&mut self, data: &[u8]) -> Result<(), ()> {
+        self.inner.try_load_model(data)
+    }
+
     pub fn load_model(&mut self, data: &[u8]) -> i32 {
-        self.inner.load_model(data)
+        match self.try_load_model(data) {
+            Ok(()) => 0,
+            Err(()) => -1,
+        }
     }
     /// Build the inner `FarganModel` from pre-parsed arrays without
     /// mutating state. Caller commits via `apply_loaded_model`.
@@ -1571,8 +1620,18 @@ pub struct LPCNetEncState {
 
 impl Default for LPCNetEncState {
     fn default() -> Self {
-        Self {
-            pitchdnn: PitchDNNState::default(),
+        Self::try_new().expect("LPCNet encoder state allocation failed")
+    }
+}
+
+impl LPCNetEncState {
+    /// Fallibly create a zeroed encoder/feature-extractor state.
+    ///
+    /// The nested PitchDNN state is built through its fallible constructor;
+    /// none of the compatibility `Default` or `init` paths are used here.
+    pub fn try_new() -> Result<Self, ()> {
+        Ok(Self {
+            pitchdnn: PitchDNNState::try_new_empty()?,
             analysis_mem: [0.0; OVERLAP_SIZE],
             mem_preemph: 0.0,
             prev_if: [Cpx::default(); PITCH_IF_MAX_FREQ],
@@ -1588,19 +1647,22 @@ impl Default for LPCNetEncState {
             features: [0.0; NB_TOTAL_FEATURES],
             sig_mem: [0.0; LPC_ORDER],
             burg_cepstrum: [0.0; 2 * NB_BANDS],
-        }
+        })
     }
-}
 
-impl LPCNetEncState {
     pub fn new() -> Self {
-        let mut st = Self::default();
-        st.pitchdnn.init();
-        st
+        Self::try_new().expect("LPCNet encoder state allocation failed")
+    }
+
+    pub fn try_load_model(&mut self, data: &[u8]) -> Result<(), ()> {
+        self.pitchdnn.try_load_model(data)
     }
 
     pub fn load_model(&mut self, data: &[u8]) -> i32 {
-        self.pitchdnn.load_model(data)
+        match self.try_load_model(data) {
+            Ok(()) => 0,
+            Err(()) => -1,
+        }
     }
 
     fn frame_analysis(&mut self, x_out: &mut [Cpx], ex: &mut [f32; NB_BANDS], input: &[f32]) {
@@ -2166,35 +2228,49 @@ pub struct LPCNetPLCState {
 
 impl Default for LPCNetPLCState {
     fn default() -> Self {
-        Self {
+        Self::try_new().expect("LPCNet PLC state allocation failed")
+    }
+}
+
+impl LPCNetPLCState {
+    /// Fallibly create a zeroed PLC state without invoking `init` or `reset`.
+    ///
+    /// All nested runtime state and vectors are staged through their
+    /// fallible constructors before the complete state is published.
+    pub fn try_new() -> Result<Self, ()> {
+        let fargan = FARGANState::try_new()?;
+        let enc = LPCNetEncState::try_new()?;
+        let fec = try_vec_with_len(PLC_MAX_FEC, [0.0; NB_FEATURES])?;
+        let pcm = try_vec_with_len(PLC_BUF_SIZE, 0.0)?;
+        let cont_features = try_vec_with_len(CONT_VECTORS * NB_FEATURES, 0.0)?;
+        let plc_net = PLCNetState::try_new()?;
+        let plc_bak = [PLCNetState::try_new()?, PLCNetState::try_new()?];
+
+        Ok(Self {
             model: PLCModel::default(),
-            fargan: FARGANState::default(),
-            enc: LPCNetEncState::default(),
+            fargan,
+            enc,
             loaded: false,
             arch: 0,
-            fec: vec![[0.0; NB_FEATURES]; PLC_MAX_FEC],
+            fec,
             analysis_gap: true,
             fec_read_pos: 0,
             fec_fill_pos: 0,
             fec_skip: 0,
             analysis_pos: PLC_BUF_SIZE,
             predict_pos: PLC_BUF_SIZE,
-            pcm: vec![0.0; PLC_BUF_SIZE],
+            pcm,
             blend: 0,
             features: [0.0; NB_TOTAL_FEATURES],
-            cont_features: vec![0.0; CONT_VECTORS * NB_FEATURES],
+            cont_features,
             loss_count: 0,
-            plc_net: PLCNetState::default(),
-            plc_bak: [PLCNetState::default(), PLCNetState::default()],
-        }
+            plc_net,
+            plc_bak,
+        })
     }
-}
 
-impl LPCNetPLCState {
     pub fn new() -> Self {
-        let mut st = Self::default();
-        st.init();
-        st
+        Self::try_new().expect("LPCNet PLC state allocation failed")
     }
 
     pub fn init(&mut self) {
@@ -2283,49 +2359,22 @@ impl LPCNetPLCState {
     /// C semantics): the live tarball blob bundles DRED and OSCE
     /// weights we don't yet consume, and rejecting them would break
     /// the runtime path for no benefit.
-    pub fn load_model(&mut self, data: &[u8]) -> i32 {
+    /// Fallibly parse and build every PLC sub-model before committing any of
+    /// them. An error leaves all model fields untouched.
+    pub fn try_load_model(&mut self, data: &[u8]) -> Result<(), ()> {
         // Parse the blob once so every sub-model sees the same arrays
         // without paying the parse cost three times. Keeps behaviour
         // identical to the C reference, which calls `parse_weights`
         // once in `lpcnet_plc_load_model`.
-        let arrays = match parse_weights(data) {
-            Ok(a) => a,
-            Err(e) => {
-                // Parse failure — we haven't mutated state yet, so the
-                // previously-loaded weights stay live. Also clear the
-                // gate: the caller's intent was to swap weights, and
-                // leaving `loaded=true` on a failed swap would be a
-                // lie about which weights are active.
-                self.loaded = false;
-                return e;
-            }
-        };
+        let arrays = parse_weights(data).map_err(|_| ())?;
 
         // Atomic-load: build all three sub-models into locals first;
         // only commit to `self.*` after every build succeeds. This
         // prevents a "chimera" state where (e.g.) new PLC layers
         // coexist with stale FARGAN weights after a mid-load failure.
-        let new_plc_model = match init_plcmodel(&arrays) {
-            Ok(m) => m,
-            Err(()) => {
-                self.loaded = false;
-                return -1;
-            }
-        };
-        let new_pitchdnn_model = match PitchDNNState::try_init(&arrays) {
-            Ok(m) => m,
-            Err(()) => {
-                self.loaded = false;
-                return -1;
-            }
-        };
-        let new_fargan_model = match FARGANState::try_init(&arrays) {
-            Ok(m) => m,
-            Err(()) => {
-                self.loaded = false;
-                return -1;
-            }
-        };
+        let new_plc_model = init_plcmodel(&arrays)?;
+        let new_pitchdnn_model = PitchDNNState::try_init(&arrays)?;
+        let new_fargan_model = FARGANState::try_init(&arrays)?;
 
         // Commit point — past here, `self` is fully-populated with a
         // consistent set of weights. Nothing can fail between the
@@ -2334,7 +2383,19 @@ impl LPCNetPLCState {
         self.enc.pitchdnn.apply_loaded_model(new_pitchdnn_model);
         self.fargan.apply_loaded_model(new_fargan_model);
         self.loaded = true;
-        0
+        Ok(())
+    }
+
+    pub fn load_model(&mut self, data: &[u8]) -> i32 {
+        match self.try_load_model(data) {
+            Ok(()) => 0,
+            Err(()) => {
+                // Keep the existing C-facing contract: failed replacement
+                // clears the gate even though no partial model was committed.
+                self.loaded = false;
+                -1
+            }
+        }
     }
 
     pub fn fec_add(&mut self, features: Option<&[f32]>) {

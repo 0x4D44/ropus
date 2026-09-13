@@ -10,6 +10,8 @@
 //! Double precision is used where the C reference uses `double` (period
 //! computation, exp, float-to-int16 conversion).
 
+use crate::allocation::try_vec_with_len;
+
 use super::core::{
     ACTIVATION_LINEAR, ACTIVATION_SIGMOID, ACTIVATION_TANH, LinearLayer, WeightArray,
     compute_generic_conv1d, compute_generic_dense, compute_generic_gru, compute_glu, linear_init,
@@ -185,18 +187,7 @@ pub struct FarganState {
 
 impl Default for FarganState {
     fn default() -> Self {
-        Self {
-            model: FarganModel::default(),
-            cont_initialized: false,
-            deemph_mem: 0.0,
-            pitch_buf: vec![0.0; PITCH_MAX_PERIOD],
-            cond_conv1_state: vec![0.0; COND_NET_FCONV1_STATE_SIZE],
-            fwc0_mem: vec![0.0; SIG_NET_FWC0_STATE_SIZE],
-            gru1_state: vec![0.0; SIG_NET_GRU1_STATE_SIZE],
-            gru2_state: vec![0.0; SIG_NET_GRU2_STATE_SIZE],
-            gru3_state: vec![0.0; SIG_NET_GRU3_STATE_SIZE],
-            last_period: 0,
-        }
+        Self::try_new_empty().expect("FARGAN state allocation failed")
     }
 }
 
@@ -826,23 +817,49 @@ fn run_fargan_subframe(st: &mut FarganState, pcm: &mut [f32], cond: &[f32], peri
 // ===========================================================================
 
 impl FarganState {
+    /// Fallibly create a zeroed state without loading model weights.
+    ///
+    /// Keep every runtime buffer staged through the shared allocation seam so
+    /// callers constructing a larger codec state can report allocation failure
+    /// instead of reaching an infallible `Vec` allocation.
+    pub fn try_new_empty() -> Result<Self, ()> {
+        Self::try_new_with_model(FarganModel::default())
+    }
+
+    /// Fallibly create a state with model weights loaded from weight arrays.
+    pub fn try_new(arrays: &[WeightArray]) -> Result<Self, ()> {
+        let model = init_fargan(arrays)?;
+        Self::try_new_with_model(model)
+    }
+
+    fn try_new_with_model(model: FarganModel) -> Result<Self, ()> {
+        Ok(Self {
+            model,
+            cont_initialized: false,
+            deemph_mem: 0.0,
+            pitch_buf: try_vec_with_len(PITCH_MAX_PERIOD, 0.0)?,
+            cond_conv1_state: try_vec_with_len(COND_NET_FCONV1_STATE_SIZE, 0.0)?,
+            fwc0_mem: try_vec_with_len(SIG_NET_FWC0_STATE_SIZE, 0.0)?,
+            gru1_state: try_vec_with_len(SIG_NET_GRU1_STATE_SIZE, 0.0)?,
+            gru2_state: try_vec_with_len(SIG_NET_GRU2_STATE_SIZE, 0.0)?,
+            gru3_state: try_vec_with_len(SIG_NET_GRU3_STATE_SIZE, 0.0)?,
+            last_period: 0,
+        })
+    }
+
     /// Create a new state with model weights loaded from weight arrays.
     ///
     /// Equivalent to C's `fargan_init` (non-`USE_WEIGHTS_FILE` path).
     /// Zeros all state, loads model weights.
     pub fn new(arrays: &[WeightArray]) -> Result<Self, ()> {
-        let model = init_fargan(arrays)?;
-        Ok(Self {
-            model,
-            ..Default::default()
-        })
+        Self::try_new(arrays)
     }
 
     /// Create a new empty state (no model weights).
     ///
     /// Used when weights will be loaded separately via `load_model`.
     pub fn new_empty() -> Self {
-        Self::default()
+        Self::try_new_empty().expect("FARGAN state allocation failed")
     }
 
     /// Initialize/reset state.
@@ -865,16 +882,18 @@ impl FarganState {
     /// Matches C `fargan_load_model`.
     /// Returns 0 on success, -1 on failure.
     pub fn load_model(&mut self, data: &[u8]) -> i32 {
-        match parse_weights(data) {
-            Ok(arrays) => match init_fargan(&arrays) {
-                Ok(model) => {
-                    self.model = model;
-                    0
-                }
-                Err(()) => -1,
-            },
-            Err(_) => -1,
+        match self.try_load_model(data) {
+            Ok(()) => 0,
+            Err(()) => -1,
         }
+    }
+
+    /// Fallibly load model weights without publishing a partial model.
+    pub fn try_load_model(&mut self, data: &[u8]) -> Result<(), ()> {
+        let arrays = parse_weights(data).map_err(|_| ())?;
+        let model = init_fargan(&arrays)?;
+        self.model = model;
+        Ok(())
     }
 
     /// Prime state from known PCM history and feature vectors.
