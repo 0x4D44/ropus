@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00014 — Fuzz inventory warnings count unchecked targets as passed in HTML
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** full-test/html-report
 - **Raised:** 2026-08-14T15:50:29Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T041555Z-db56fe5c
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00014-run-fix-20260913T041555Z-db56fe5c
-- **Owner base:** 94da478fa598473af57fef3627085e6dba5e923b
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T04:15:55Z
-- **Owner until:** 2026-09-13T06:15:55Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T15:50:29Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh)
+- **State history:** Open (2026-08-14T15:50:29Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T04:23:34Z, deltic:auto role=fix run=fix-20260913T041555Z-db56fe5c branch=task/bug-ROP-BUG-CRUCIBLE-00014-run-fix-20260913T041555Z-db56fe5c code=f2f14943deefd32b595c7c50b77a8aa47bcaab75 gate=manual)
 
 ## Observation
 
