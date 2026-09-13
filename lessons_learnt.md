@@ -1,3 +1,5 @@
+- Headless CLI success exceptions must assert stdout invariants before returning; use the deterministic formatter seam for nonempty line coverage (`ropusplay/tests/cli.rs:87`).
+
 - Ogg page size is not a packet bound: `ropusinfo` must check continued-packet budgets before retaining laces (`ropus-tools-core/src/commands/info.rs:100`).
 
 - Shell-out tests need one finite helper that drains both pipes and kills/reaps the process tree; `Command::output()` can wait forever (`ropusplay/tests/cli.rs:21`).

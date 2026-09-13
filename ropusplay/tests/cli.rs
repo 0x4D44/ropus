@@ -84,6 +84,23 @@ fn join_reader(reader: JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Vec<u8>> {
         .map_err(|_| io::Error::other("child output reader panicked"))?
 }
 
+fn assert_no_device_failure_stdout(output: &Output, description: &str) {
+    assert!(
+        output.stdout.is_empty(),
+        "{description} must keep stdout empty on the no-device branch; stdout={:?} stderr={:?}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output
+            .stdout
+            .iter()
+            .all(|&byte| byte >= 0x20 && !(0x80..=0x9F).contains(&byte)),
+        "{description} must not emit terminal controls on stdout; stdout={:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
 fn terminate_process_tree(child: &mut Child) {
     let pid = child.id().to_string();
 
@@ -172,13 +189,22 @@ fn list_devices_prints_lines_and_exits_zero() {
             lower.contains("no output devices available"),
             "only the structured no-device outcome may be accepted; stderr={stderr:?}"
         );
+        assert_no_device_failure_stdout(&out, "ropusplay --list-devices");
         return;
     }
 
-    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+    let lines: Vec<&str> = stdout.lines().collect();
     assert!(
         !lines.is_empty(),
         "expected at least one device line on stdout; stdout={stdout:?} stderr={stderr:?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.is_empty()),
+        "device listing must contain exactly one non-empty name per line; stdout={stdout:?}"
+    );
+    assert!(
+        stdout.ends_with('\n'),
+        "device listing must end with a newline; stdout={stdout:?}"
     );
 }
 
@@ -204,6 +230,7 @@ fn list_devices_without_quiet_has_no_banner_pollution() {
                 .contains("no output devices available"),
             "only the structured no-device outcome may be accepted; stderr={stderr:?}"
         );
+        assert_no_device_failure_stdout(&out, "ropusplay --no-color --list-devices");
         return;
     }
 
