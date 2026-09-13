@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-mdopus coordinator - Orchestrates Claude and Codex for Opus C->Rust port.
+ropus coordinator - Orchestrates Claude and Codex for Opus C->Rust port.
 
 Usage:
     python coordinator.py run                # Run all phases sequentially
@@ -37,9 +37,9 @@ ROOT = Path(__file__).resolve().parent.parent
 REFERENCE = ROOT / "reference"
 ASSETS = ROOT / "wrk_docs" / "design_docs"
 TOOLS = ROOT / "tools"
-NOTES = ROOT / "notes"
+NOTES = ROOT / "wrk_journals"
 LOGS = ROOT / "logs"
-SRC = ROOT / "src"
+SRC = ROOT / "ropus" / "src"
 STATE_FILE = ROOT / "tools" / "coordinator_state.json"
 
 # ---------------------------------------------------------------------------
@@ -407,7 +407,7 @@ PROMPTS["implement_module"] = textwrap.dedent("""\
     - HLD: wrk_docs/design_docs/hld.md
     - C reference files (in reference/): {file_list}
     - Already implemented modules: {completed_modules}
-    - Rust module path: src/{rust_module}.rs
+    - Rust module path: ropus/src/{rust_module}.rs
 
     ## Requirements
     1. **Bit-exact output** matching the C reference - this is non-negotiable
@@ -435,7 +435,7 @@ PROMPTS["review_module"] = textwrap.dedent("""\
     Review the Rust implementation of the **{module_name}** module against
     the C reference.
 
-    Rust implementation: src/{rust_module}.rs
+    Rust implementation: ropus/src/{rust_module}.rs
     C reference files: {file_list}
 
     ## Check for
@@ -462,14 +462,14 @@ PROMPTS["review_module"] = textwrap.dedent("""\
 """)
 
 PROMPTS["test_harness"] = textwrap.dedent("""\
-    Build a test comparison harness for the mdopus project. This is a Rust
+    Build a test comparison harness for the ropus project. This is a Rust
     binary that links the C reference opus library via FFI and compares its
     output against our Rust implementation.
 
     ## Structure
-    - `tests/harness/build.rs` - Build script that compiles C reference via cc crate
-    - `tests/harness/bindings.rs` - Manual FFI bindings to key C functions
-    - `tests/harness/main.rs` - CLI comparison tool
+    - `harness/build.rs` - Build script that compiles C reference via cc crate
+    - `harness/src/bindings.rs` - Manual FFI bindings to key C functions
+    - `harness/src/main.rs` - CLI comparison tool
 
     ## CLI interface
     ```
@@ -510,7 +510,7 @@ PROMPTS["fix_errors"] = textwrap.dedent("""\
     ```
 
     ## Files
-    - Rust implementation: src/{rust_module}.rs
+    - Rust implementation: ropus/src/{rust_module}.rs
     - C reference: {file_list}
     - Architecture doc: wrk_docs/design_docs/{module_name}_architecture.md
 
@@ -1069,7 +1069,7 @@ def phase_integrate(state: dict, log: logging.Logger) -> bool:
     # Run full comparison suite
     log.info("  Running full comparison suite...")
     test_result = subprocess.run(
-        ["cargo", "test", "--test", "integration", "--", "--nocapture"],
+        ["cargo", "test", "-p", "ropus-harness", "--", "--nocapture"],
         cwd=str(ROOT), capture_output=True, text=True, timeout=600,
         encoding="utf-8", errors="replace",
     )
@@ -1114,7 +1114,7 @@ def cmd_run(args):
         state["started_at"] = datetime.now().isoformat()
         save_state(state)
 
-    log.info(f"mdopus coordinator starting at {datetime.now().isoformat()}")
+    log.info(f"ropus coordinator starting at {datetime.now().isoformat()}")
     log.info(f"Project root: {ROOT}")
     log.info(f"State: {json.dumps(state, indent=2)}")
 
@@ -1180,7 +1180,7 @@ def cmd_resume(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="mdopus coordinator - multi-agent Opus C->Rust port"
+        description="ropus coordinator - multi-agent Opus C->Rust port"
     )
     sub = parser.add_subparsers(dest="command")
 
