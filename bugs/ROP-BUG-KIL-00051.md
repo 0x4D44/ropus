@@ -6,15 +6,15 @@
 - **Area:** ropus/opus-extensions
 - **Raised:** 2026-08-22T08:28:39Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T153038Z-20cdcb0a
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00051-run-verify-20260913T153038Z-20cdcb0a
+- **Owner base:** c45299db08e96d55a4162b7214c8f9222f001b06
+- **Owner fingerprint:** sha256:4d32a5c2d0b86de1afe060c94540bc9e1de2f5b9e3654859fdd5e9336b694a4d
+- **Owner since:** 2026-09-13T15:30:38Z
+- **Owner until:** 2026-09-13T17:30:38Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
