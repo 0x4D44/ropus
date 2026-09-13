@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00014 — Coordinator checkpoint writes can corrupt resumable state
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** tools/coordinator-state
 - **Raised:** 2026-08-13T17:17:41Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T043331Z-bb6ca5a0
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00014-run-fix-20260913T043331Z-bb6ca5a0
-- **Owner base:** 3a89a2c481589f96bb9abcf1f6ac706cbde9d1d6
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T04:33:31Z
-- **Owner until:** 2026-09-13T06:33:31Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-13T17:17:41Z, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-08-13T17:17:41Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T04:41:58Z, deltic:auto role=fix run=fix-20260913T043331Z-bb6ca5a0 branch=task/bug-ROP-BUG-KILN-00014-run-fix-20260913T043331Z-bb6ca5a0 code=aa6227ab4a3df7170c488ef633d787e207d201f0 gate=manual)
 
 ## Observation
 
