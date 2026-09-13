@@ -1,3 +1,5 @@
+- Duration scans must advance from proven Ogg page boundaries; CRC-valid `OggS` bytes inside payloads are not physical pages (`ropus-tools-core/src/container/ogg.rs:374`).
+
 - TPDF dither needs full-width uniform draws before differencing; one-bit RNG noise only shifts an already-rounded sample (`ropus-tools-core/src/audio/dither.rs:65`).
 
 - FFI callbacks must snapshot reader-owned strings before re-entry; end the borrow before callbacks so seek/decode/one-shot close cannot resume through it (`ropus-fb2k/src/lib.rs:324`).
