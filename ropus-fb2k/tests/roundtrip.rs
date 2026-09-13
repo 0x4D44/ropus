@@ -474,7 +474,7 @@ fn seek_to_zero_succeeds() {
 }
 
 // ---------------------------------------------------------------------------
-// INFO_ONLY flag is accepted and populates duration via reverse-scan.
+// INFO_ONLY flag is accepted and populates duration via the duration scan.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -717,10 +717,10 @@ fn decode_next_reports_bytes_consumed_correctly() {
 #[test]
 fn decode_propagates_abort() {
     // Build a fixture and let `open` complete first (it performs several
-    // read calls: 2 pages + one 128 KiB reverse-scan), then flip `abort`
+    // read calls: 2 pages + one 128 KiB duration scan), then flip `abort`
     // *after* open so decode_next is the thing that trips. Directly
     // asserting on a fixed `abort_after_n_reads` value was flaky — the
-    // reverse-scan's read-count depends on file size and buffer chunking.
+    // duration-scan's read-count depends on file size and buffer chunking.
     let bytes = build_opus_fixture_with_audio_packets("ropus-fb2k-test", &[], 20, None);
     let io = MemIo::new(bytes);
     let fb2k_io = io.io();
@@ -794,7 +794,7 @@ fn decode_rejects_small_buffer() {
 }
 
 // ---------------------------------------------------------------------------
-// info populates total_samples via reverse-scan of the last granule.
+// info populates total_samples via the duration scan of the last granule.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -835,10 +835,10 @@ fn duration_ignores_fake_eos_header_inside_payload() {
     let mut bytes =
         build_opus_fixture_with_audio_packets("ropus-fb2k-test", &[], PACKETS, Some(PRE_SKIP));
 
-    // This has the right capture/version/serial and an EOS flag, but its
-    // zero checksum is invalid. Embed it in the real final page payload after
-    // updating that page's lacing and CRC; the old byte-by-byte scan trusted
-    // the payload bytes as a new final page.
+    // This has the right capture/version/serial, an EOS flag, and a valid
+    // checksum. Embed it in the real final page payload after updating that
+    // page's lacing and CRC; only a scan that understands physical page
+    // boundaries can distinguish it from the real EOS page.
     let mut fake = Vec::with_capacity(27);
     fake.extend_from_slice(b"OggS");
     fake.push(0);
@@ -848,6 +848,7 @@ fn duration_ignores_fake_eos_header_inside_payload() {
     fake.extend_from_slice(&0u32.to_le_bytes());
     fake.extend_from_slice(&0u32.to_le_bytes());
     fake.push(0);
+    set_ogg_page_crc(&mut fake, 0);
     let page_start = bytes
         .windows(4)
         .rposition(|window| window == b"OggS")
@@ -940,20 +941,18 @@ fn info_populates_nominal_bitrate() {
 }
 
 // ---------------------------------------------------------------------------
-// Open is bounded by a small constant number of reads — we read the first
-// two Ogg pages + a single 128-KiB reverse-scan for the last granule, NOT
-// the whole file. An accidental regression to a full-file page-walk would
-// produce O(file_size / buffer_size) reads and trip this ceiling.
+// Ordinary open uses a bounded number of reads — the first two Ogg pages plus
+// one 128-KiB tail scan. Ambiguous page-shaped payloads deliberately fall
+// back to a boundary-anchored walk, so this fast-path test uses a clean file.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn open_uses_bounded_reads() {
     // Observed < 10 in practice; 20 gives some slack for ogg buffer size
-    // changes but catches an accidental full-file scan (which would read
-    // hundreds of times on a 20-packet fixture).
+    // changes while keeping the ordinary tail path comfortably bounded.
     //
-    // The INFO_ONLY flag is passed because the reverse-scan behaviour is
-    // what's under test; today both open paths reverse-scan identically,
+    // The INFO_ONLY flag is passed because the duration-scan behaviour is
+    // what's under test; today both open paths use the same duration scan,
     // so the flag is incidental to the assertion (and the test will stay
     // meaningful when the flag starts differentiating).
     let bytes = build_opus_fixture_with_audio_packets("ropus-fb2k-test", &[], 20, Some(312));

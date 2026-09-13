@@ -5,9 +5,10 @@
 //! * open an Ogg Opus stream,
 //! * parse `OpusHead` (rejecting channel_mapping != 0 up front),
 //! * parse `OpusTags`,
-//! * reverse-scan the final Ogg page to learn total duration and
-//!   average bitrate (seekable inputs only — unseekable streams open
-//!   successfully with zero duration and `-1` bitrate),
+//! * scan the final Ogg page for total duration and average bitrate, using a
+//!   bounded tail pass with an anchored fallback for ambiguous page-shaped
+//!   payloads (seekable inputs only — unseekable streams open successfully
+//!   with zero duration and `-1` bitrate),
 //! * drive a lazily-constructed `OpusDecoder` for `decode_next`,
 //! * expose the fields `RopusFb2kInfo` needs plus the parsed tags,
 //! * `seek(sample_pos)` with 80 ms pre-roll per RFC 7845 §4.2 — page index
@@ -24,6 +25,8 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{Read, Seek, SeekFrom};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ogg::reading::{BasePacketReader, OggPage, PageParser};
 use ropus::OpusDecoder;
@@ -255,6 +258,9 @@ impl<R: Read + Seek> BoundedPacketReader<R> {
     }
 }
 
+#[cfg(test)]
+static CRC_BYTES_PROCESSED: AtomicUsize = AtomicUsize::new(0);
+
 /// Parsed `OpusHead` fields we carry forward. Matches the RFC 7845 sec. 5.1
 /// layout (little-endian multi-byte fields, channel_mapping_family at the
 /// end of the 19-byte prefix).
@@ -395,7 +401,7 @@ pub(crate) struct OggOpusReader<R: Read + Seek> {
     /// re-walk the tag list on every metadata query.
     replaygain: ReplayGainInfo,
     /// Serial of the logical bitstream we latched onto on page 1. Used to
-    /// filter the reverse-scan and the page-index walk to the right stream
+    /// filter the duration scan and the page-index walk to the right stream
     /// (matches the pattern in `ropus-cli/src/container/ogg.rs`).
     stream_serial: u32,
     /// Bounded packet reader kept alive for the decode loop. It stays seated
@@ -403,16 +409,16 @@ pub(crate) struct OggOpusReader<R: Read + Seek> {
     /// while the lazy page-index scan temporarily owns the underlying reader.
     packet_reader: Option<BoundedPacketReader<R>>,
     /// Byte offset of the first audio page — i.e. the stream position right
-    /// after the OpusTags page was consumed. The page-index walk starts
-    /// here. Cached at open time because we temporarily drop the
-    /// `PacketReader` for the reverse-scan.
+    /// after the OpusTags page was consumed. The page-index walk and the
+    /// ambiguity fallback start here. Cached at open time because we
+    /// temporarily drop the `PacketReader` for the duration scan.
     audio_start_offset: u64,
     /// Total file size as advertised by the IO `size` callback. `None` for
     /// unseekable / unknown-size streams. Used by the page-index walk as a
     /// bound (otherwise we have no stop condition for the scan).
     file_size: Option<u64>,
     /// Total decoded samples per channel after pre-skip trim, derived from a
-    /// reverse-scan of the last Ogg page's absolute granule position. `0`
+    /// duration scan of the last Ogg page's absolute granule position. `0`
     /// can mean either unknown or a known zero-length post-skip stream; use
     /// `eos_abs_pos` to distinguish those cases.
     total_samples: u64,
@@ -478,14 +484,15 @@ impl<R: Read + Seek> fmt::Debug for OggOpusReader<R> {
 
 impl<R: Read + Seek> OggOpusReader<R> {
     /// Open a stream. Reads the first two Ogg pages (OpusHead, OpusTags)
-    /// and, if the IO supports seeking with a known size, reverse-scans
-    /// from EOF for the last page's granule position to populate
-    /// `total_samples` and `nominal_bitrate`.
+    /// and, if the IO supports seeking with a known size, scans the tail for
+    /// the last page's granule position to populate `total_samples` and
+    /// `nominal_bitrate`. Ambiguous tail candidates are checked by a forward
+    /// walk from the known first-audio-page boundary.
     ///
     /// `flags` is accepted for both the info-only fast path and the full
-    /// decode path; both paths currently reverse-scan identically. A future
-    /// release will replace the full path with a streaming page-walk that
-    /// also populates the seek index.
+    /// decode path; both paths currently use the same bounded scan and
+    /// ambiguity fallback. A future release may use the flag to skip further
+    /// work.
     ///
     /// `file_size_hint` is the total stream length in bytes if the IO layer
     /// knows it (from the `size` callback), or `None` for live streams. It's
@@ -1228,9 +1235,10 @@ fn scan_pages<R: Read + Seek>(
     Ok(entries)
 }
 
-/// Scan the last 128 KiB of the stream for the last Ogg page whose serial
-/// matches `target_serial`; from its granule position compute total decoded
-/// samples (post-pre-skip), the absolute EOS granule, and average bitrate.
+/// Find the last Ogg page whose serial matches `target_serial`; from its
+/// granule position compute total decoded samples (post-pre-skip), the
+/// absolute EOS granule, and average bitrate. Ordinary tails use a bounded
+/// candidate scan; ambiguous tails use a boundary-anchored page walk.
 ///
 /// Sibling to `ropus-cli/src/container/ogg.rs::read_last_granule` — the same
 /// RFC 3533 bit-twiddling; deliberately copied rather than shared because
@@ -1249,7 +1257,8 @@ fn compute_duration_and_bitrate<R: Read + Seek>(
     file_size: u64,
 ) -> Result<(u64, i32, Option<u64>), ReaderError> {
     let saved_pos = reader.stream_position().map_err(classify_io_error)?;
-    let absgp = read_last_granule(reader, target_serial, file_size).map_err(classify_io_error)?;
+    let absgp = read_last_granule(reader, target_serial, file_size, saved_pos)
+        .map_err(classify_io_error)?;
     // Best-effort restore so PacketReader's view of the stream is unchanged.
     // If the restore fails the caller will surface the next IO error on its
     // next read — we can't do anything more useful here.
@@ -1283,29 +1292,29 @@ fn compute_duration_and_bitrate<R: Read + Seek>(
     Ok((total_samples, bitrate, Some(absgp)))
 }
 
-/// Reverse-scan for the absolute granule position of the last Ogg page
-/// belonging to `target_serial`. Returns `Ok(None)` if the granule is the
-/// unknown-sentinel (`0xFFFF_FFFF_FFFF_FFFF`) or no matching page is found
-/// in the trailing 128 KiB. `file_size` is passed in rather than re-derived
-/// from `Seek::seek(End(0))` because `CallbackReader` already cached it at
-/// construction and another round-trip through the callback is pointless.
-// NOTE: this is a line-for-line copy of ropus-cli's read_last_granule. Duplication
-// is intentional for now; once the seek path lands, post-release cleanup should
-// factor both copies into a shared helper (likely in `ropus::container::ogg`).
-// Do NOT sync bug-fixes manually — when that sync need arises, do the extraction
-// instead.
+/// Find the absolute granule position of the target stream's EOS page.
+/// `start_offset` is the known physical boundary immediately after the
+/// OpusTags page. The bounded tail pass handles ordinary files; overlapping
+/// structurally-valid candidates make the tail ambiguous, so those files use
+/// a forward page walk from that anchor instead of trusting any byte offset.
+///
+/// Returns `Ok(None)` if the EOS granule is unknown, no complete matching page
+/// is found, or the tail is malformed. `file_size` is passed in rather than
+/// re-derived from `Seek::seek(End(0))` because `CallbackReader` already
+/// cached it at construction and another round-trip through the callback is
+/// pointless.
 fn read_last_granule<R: Read + Seek>(
     reader: &mut R,
     target_serial: u32,
     file_size: u64,
+    start_offset: u64,
 ) -> std::io::Result<Option<u64>> {
     /// Absolute cap on how far back we scan. RFC 3533 limits an Ogg page to
     /// ~65 KiB (27-byte header + 255 × 255 lacing bytes), so 128 KiB reliably
     /// spans a max-sized final page even with trailing junk.
     const SCAN_WINDOW: u64 = 128 * 1024;
-    const HEADER_LEN: usize = 27;
 
-    if file_size < HEADER_LEN as u64 {
+    if file_size < OGG_HEADER_LEN as u64 {
         return Ok(None);
     }
 
@@ -1316,31 +1325,146 @@ fn read_last_granule<R: Read + Seek>(
     let mut buf = vec![0u8; read_len as usize];
     reader.read_exact(&mut buf)?;
 
-    // Walk back byte-by-byte for the b"OggS" capture pattern. A candidate is
-    // trusted only after its complete page extent, flags, stream serial, and
-    // CRC validate; this prevents header-shaped bytes in packet/trailing data
-    // from becoming a fabricated duration.
-    let mut i = buf.len().saturating_sub(4);
-    loop {
-        if let Some((absgp, is_eos)) = parse_duration_page(&buf, i, target_serial)
-            && is_eos
+    // First collect structurally complete candidates without calculating any
+    // CRCs. A valid page found inside another candidate is ambiguous: it may
+    // be a page-shaped packet payload, not a physical boundary. In that case
+    // the anchored walk below proves every boundary and performs one CRC per
+    // physical page, keeping adversarial candidate density linear.
+    let mut candidates = Vec::new();
+    for (start, window) in buf.windows(4).enumerate() {
+        if window == OGG_CAPTURE
+            && let Some(candidate) = parse_duration_page(&buf, start)
         {
+            candidates.push(candidate);
+        }
+    }
+
+    let mut furthest_end = 0;
+    for candidate in &candidates {
+        if candidate.start < furthest_end {
+            return read_last_granule_from_anchor(reader, target_serial, file_size, start_offset);
+        }
+        furthest_end = furthest_end.max(candidate.end);
+    }
+
+    // With no overlapping extents, CRC work is bounded by the tail buffer's
+    // size. Check candidates from the end so the latest EOS wins, as it does
+    // for a valid Ogg logical stream.
+    for candidate in candidates.iter().rev() {
+        if candidate.serial != target_serial || !candidate.is_eos {
+            continue;
+        }
+        let expected_crc = u32::from_le_bytes([
+            buf[candidate.start + 22],
+            buf[candidate.start + 23],
+            buf[candidate.start + 24],
+            buf[candidate.start + 25],
+        ]);
+        if ogg_page_crc32(&buf[candidate.start..candidate.end]) != expected_crc {
+            continue;
+        }
+        if candidate.absgp == UNKNOWN_GRANULE {
+            return Ok(None);
+        }
+        return Ok(Some(candidate.absgp));
+    }
+
+    Ok(None)
+}
+
+/// Forward-scan pages from a known physical boundary. The lacing table is
+/// trusted only after the complete page CRC validates, so a page-shaped byte
+/// sequence inside a payload is never treated as a boundary.
+fn read_last_granule_from_anchor<R: Read + Seek>(
+    reader: &mut R,
+    target_serial: u32,
+    file_size: u64,
+    start_offset: u64,
+) -> std::io::Result<Option<u64>> {
+    if start_offset > file_size || file_size - start_offset < OGG_HEADER_LEN as u64 {
+        return Ok(None);
+    }
+
+    reader.seek(SeekFrom::Start(start_offset))?;
+    let mut offset = start_offset;
+    let mut header = [0u8; OGG_HEADER_LEN];
+    let mut lacing = [0u8; 255];
+    let mut page = Vec::new();
+
+    loop {
+        if file_size - offset < OGG_HEADER_LEN as u64 {
+            return Ok(None);
+        }
+        match reader.read_exact(&mut header) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(e) => return Err(e),
+        }
+
+        if &header[..4] != OGG_CAPTURE || header[4] != 0 || header[5] & !0x07 != 0 {
+            return Ok(None);
+        }
+
+        let segment_count = header[26] as usize;
+        match reader.read_exact(&mut lacing[..segment_count]) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(e) => return Err(e),
+        }
+        let payload_len: usize = lacing[..segment_count]
+            .iter()
+            .map(|&segment| segment as usize)
+            .sum();
+        let page_len = OGG_HEADER_LEN + segment_count + payload_len;
+        let next_offset = match offset.checked_add(page_len as u64) {
+            Some(next) if next <= file_size => next,
+            _ => return Ok(None),
+        };
+
+        page.clear();
+        page.extend_from_slice(&header);
+        page.extend_from_slice(&lacing[..segment_count]);
+        page.resize(page_len, 0);
+        let payload_start = OGG_HEADER_LEN + segment_count;
+        match reader.read_exact(&mut page[payload_start..]) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(e) => return Err(e),
+        }
+
+        let expected_crc = u32::from_le_bytes([header[22], header[23], header[24], header[25]]);
+        if ogg_page_crc32(&page) != expected_crc {
+            return Ok(None);
+        }
+
+        if header[14..18] == target_serial.to_le_bytes() && header[5] & 0x04 != 0 {
+            let absgp = u64::from_le_bytes([
+                header[6], header[7], header[8], header[9], header[10], header[11], header[12],
+                header[13],
+            ]);
             if absgp == UNKNOWN_GRANULE {
                 return Ok(None);
             }
             return Ok(Some(absgp));
         }
-        if i == 0 {
-            return Ok(None);
-        }
-        i -= 1;
+
+        offset = next_offset;
     }
 }
 
-/// Validate an Ogg page candidate from the reverse duration window. Returning
-/// only selected-stream pages keeps the scan's caller small; `is_eos` lets the
-/// caller enforce the rule that duration comes from a complete EOS page.
-fn parse_duration_page(buf: &[u8], start: usize, target_serial: u32) -> Option<(u64, bool)> {
+#[derive(Clone, Copy)]
+struct DurationPageCandidate {
+    start: usize,
+    end: usize,
+    serial: u32,
+    absgp: u64,
+    is_eos: bool,
+}
+
+/// Parse the extent and identity fields of a page-shaped byte sequence. CRC
+/// validation is deliberately separate so a dense set of overlapping
+/// candidates cannot trigger repeated O(page_size) work.
+fn parse_duration_page(buf: &[u8], start: usize) -> Option<DurationPageCandidate> {
     if start.checked_add(27)? > buf.len()
         || &buf[start..start + 4] != OGG_CAPTURE
         || buf[start + 4] != 0
@@ -1360,10 +1484,6 @@ fn parse_duration_page(buf: &[u8], start: usize, target_serial: u32) -> Option<(
         buf[start + 16],
         buf[start + 17],
     ]);
-    if serial != target_serial {
-        return None;
-    }
-
     let absgp = u64::from_le_bytes([
         buf[start + 6],
         buf[start + 7],
@@ -1389,23 +1509,21 @@ fn parse_duration_page(buf: &[u8], start: usize, target_serial: u32) -> Option<(
         return None;
     }
 
-    let expected_crc = u32::from_le_bytes([
-        buf[start + 22],
-        buf[start + 23],
-        buf[start + 24],
-        buf[start + 25],
-    ]);
-    if ogg_page_crc32(&buf[start..page_end]) != expected_crc {
-        return None;
-    }
-
-    Some((absgp, header_type & 0x04 != 0))
+    Some(DurationPageCandidate {
+        start,
+        end: page_end,
+        serial,
+        absgp,
+        is_eos: header_type & 0x04 != 0,
+    })
 }
 
 /// Compute the RFC 3533 Ogg CRC. The checksum field is treated as zero while
 /// calculating, matching the writer and the `ogg` crate's page parser.
 fn ogg_page_crc32(page: &[u8]) -> u32 {
     const POLY: u32 = 0x04C1_1DB7;
+    #[cfg(test)]
+    CRC_BYTES_PROCESSED.fetch_add(page.len(), Ordering::Relaxed);
     let mut crc = 0u32;
     for (idx, &byte) in page.iter().enumerate() {
         let byte = if (22..26).contains(&idx) { 0 } else { byte };
@@ -1583,5 +1701,72 @@ mod tests {
             Err(err) => err,
         };
         assert!(matches!(err, ReaderError::InvalidStream(_)));
+    }
+
+    #[test]
+    fn duration_scan_stays_linear_under_candidate_density() {
+        const SERIAL: u32 = 0xC0DE_C0DE;
+        const PAGE_COUNT: usize = 512;
+
+        let mut bytes = Vec::with_capacity(PAGE_COUNT * 283);
+        for sequence in 0..PAGE_COUNT as u32 {
+            let mut payload = vec![0xA5; 255];
+            for offset in (0..=224).step_by(32) {
+                payload[offset..offset + 4].copy_from_slice(OGG_CAPTURE);
+                payload[offset + 4] = 0;
+                payload[offset + 5] = 0;
+                payload[offset + 6..offset + 14].fill(0);
+                payload[offset + 14..offset + 18].copy_from_slice(&SERIAL.to_le_bytes());
+                payload[offset + 18..offset + 22].copy_from_slice(&sequence.to_le_bytes());
+                payload[offset + 22..offset + 26].fill(0);
+                payload[offset + 26] = 1;
+                payload[offset + 27] = 255;
+            }
+            bytes.extend_from_slice(&build_test_ogg_page(
+                sequence as u64,
+                SERIAL,
+                sequence,
+                0,
+                &payload,
+            ));
+        }
+
+        // Ignore the CRC work needed to construct the fixture itself.
+        CRC_BYTES_PROCESSED.store(0, Ordering::Relaxed);
+        let mut cursor = Cursor::new(bytes.clone());
+        let got =
+            read_last_granule(&mut cursor, SERIAL, bytes.len() as u64, 0).expect("scan succeeds");
+
+        assert!(got.is_none(), "no physical page carries EOS");
+        let crc_bytes = CRC_BYTES_PROCESSED.load(Ordering::Relaxed);
+        assert!(
+            crc_bytes <= bytes.len() * 2,
+            "CRC work must stay linear in physical input: processed {crc_bytes} bytes for {} input bytes",
+            bytes.len()
+        );
+    }
+
+    fn build_test_ogg_page(
+        granule: u64,
+        serial: u32,
+        sequence: u32,
+        header_type: u8,
+        payload: &[u8],
+    ) -> Vec<u8> {
+        assert!(payload.len() <= u8::MAX as usize);
+        let mut page = Vec::with_capacity(OGG_HEADER_LEN + 1 + payload.len());
+        page.extend_from_slice(OGG_CAPTURE);
+        page.push(0);
+        page.push(header_type);
+        page.extend_from_slice(&granule.to_le_bytes());
+        page.extend_from_slice(&serial.to_le_bytes());
+        page.extend_from_slice(&sequence.to_le_bytes());
+        page.extend_from_slice(&0u32.to_le_bytes());
+        page.push(1);
+        page.push(payload.len() as u8);
+        page.extend_from_slice(payload);
+        let crc = ogg_page_crc32(&page);
+        page[22..26].copy_from_slice(&crc.to_le_bytes());
+        page
     }
 }
