@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00054 — Clap parse errors echo terminal controls from argv
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropusdec/cli-output
 - **Raised:** 2026-08-22T09:55:50Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T073325Z-269e9feb
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00054-run-fix-20260913T073325Z-269e9feb
-- **Owner base:** 3ee6106f3636b462a3d7389a70142c3c6a3b7c6a
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T07:33:25Z
-- **Owner until:** 2026-09-13T09:33:25Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T09:55:50Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-22T09:55:50Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T07:53:28Z, deltic:auto role=fix run=fix-20260913T073325Z-269e9feb branch=task/bug-ROP-BUG-KIL-00054-run-fix-20260913T073325Z-269e9feb code=3ab884d7f9e9a63c100c910481feca98a739e51f gate=manual)
 
 ## Observation
 
