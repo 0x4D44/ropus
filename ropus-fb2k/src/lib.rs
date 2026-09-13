@@ -384,6 +384,18 @@ fn emit_tag(cb: TagCb, ctx: *mut c_void, key: &str, value: &str) -> bool {
 /// can never drift.
 use crate::reader::MAX_FRAME_SAMPLES_PER_CH as MIN_OUT_SAMPLES_PER_CH;
 
+/// Validate the caller-declared interleaved span without constructing a Rust
+/// slice. `from_raw_parts_mut` requires the complete slice to fit within
+/// `isize::MAX` bytes, even though the decoder only writes one frame.
+fn checked_interleaved_len(max_samples_per_ch: usize, channels: usize) -> Option<usize> {
+    if channels == 0 {
+        return None;
+    }
+    let total_samples = max_samples_per_ch.checked_mul(channels)?;
+    let max_f32_elements = isize::MAX as usize / std::mem::size_of::<f32>();
+    (total_samples <= max_f32_elements).then_some(total_samples)
+}
+
 /// Decode the next Opus packet into the caller's interleaved float buffer.
 ///
 /// Returns samples-per-channel written (`> 0`), `0` at clean end-of-stream,
@@ -423,11 +435,26 @@ pub unsafe extern "C" fn ropus_fb2k_decode_next(
         // SAFETY: `r` came from `ropus_fb2k_open`, still valid per caller.
         let reader = unsafe { &mut *r };
         let channels = reader.inner.channels() as usize;
-        // SAFETY: header contract says `out_interleaved` has room for
-        // `max_samples_per_ch * channels` f32 values.
-        let out_slice = unsafe {
-            std::slice::from_raw_parts_mut(out_interleaved, max_samples_per_ch * channels)
+        let Some(_total_output_samples) = checked_interleaved_len(max_samples_per_ch, channels)
+        else {
+            set_last_error_with_code(
+                "out buffer size is not representable as a Rust slice",
+                ROPUS_FB2K_BAD_ARG,
+            );
+            return ROPUS_FB2K_BAD_ARG;
         };
+
+        // `decode_next` writes at most one Opus frame, so a bounded span is
+        // sufficient even when the caller supplies a much larger capacity.
+        // The full caller-declared span above is still validated because its
+        // size is untrusted FFI input and must never wrap or exceed Rust's
+        // slice byte-size limit.
+        let bounded_output_samples = MIN_OUT_SAMPLES_PER_CH * channels;
+        // SAFETY: the header contract guarantees room for
+        // `max_samples_per_ch * channels` f32 values, and the minimum-capacity
+        // check above guarantees that includes this bounded span.
+        let out_slice =
+            unsafe { std::slice::from_raw_parts_mut(out_interleaved, bounded_output_samples) };
 
         match reader.inner.decode_next(out_slice, max_samples_per_ch) {
             Ok((n, bytes)) => {
@@ -539,4 +566,40 @@ pub(crate) fn test_panic_should_fire() -> bool {
 #[unsafe(no_mangle)]
 pub extern "C" fn ropus_fb2k_test_set_panic_flag(on: bool) {
     PANIC_FLAG.with(|c| c.set(on));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checked_interleaved_len_rejects_overflow_and_byte_limit() {
+        assert!(checked_interleaved_len(usize::MAX, 1).is_none());
+        assert!(checked_interleaved_len(usize::MAX / 2 + 1, 2).is_none());
+
+        let max_f32_elements = isize::MAX as usize / std::mem::size_of::<f32>();
+        let over_stereo_limit = max_f32_elements / 2 + 1;
+        assert!(checked_interleaved_len(over_stereo_limit, 2).is_none());
+        assert!(checked_interleaved_len(1, 0).is_none());
+    }
+
+    #[test]
+    fn checked_interleaved_len_accepts_exact_representable_boundary() {
+        assert_eq!(
+            checked_interleaved_len(MIN_OUT_SAMPLES_PER_CH, 1),
+            Some(MIN_OUT_SAMPLES_PER_CH)
+        );
+        assert_eq!(
+            checked_interleaved_len(MIN_OUT_SAMPLES_PER_CH, 2),
+            Some(MIN_OUT_SAMPLES_PER_CH * 2)
+        );
+
+        let max_f32_elements = isize::MAX as usize / std::mem::size_of::<f32>();
+        let max_stereo_samples = max_f32_elements / 2;
+        assert_eq!(
+            checked_interleaved_len(max_stereo_samples, 2),
+            Some(max_stereo_samples * 2)
+        );
+        assert!(checked_interleaved_len(max_stereo_samples + 1, 2).is_none());
+    }
 }

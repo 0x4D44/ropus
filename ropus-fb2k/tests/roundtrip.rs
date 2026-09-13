@@ -756,6 +756,41 @@ fn decode_returns_zero_at_eof() {
 }
 
 // ---------------------------------------------------------------------------
+// decode_next must reject hostile caller capacities before constructing the
+// interleaved output slice. The FFI case below wraps
+// `max_samples_per_ch * 2` to zero on a stereo stream; pure arithmetic helper
+// tests in `src/lib.rs` cover the byte-size boundary without constructing an
+// impossible slice.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn decode_rejects_output_capacity_multiplication_wrap() {
+    let (_io, handle) = open_from_bytes(minimal_opus_fixture().to_vec());
+    assert!(!handle.is_null());
+
+    let mut output = vec![0.0f32; 5760 * 2];
+    let mut bytes_consumed = 0u64;
+    let max_samples_per_ch = usize::MAX / 2 + 1;
+    let rc = unsafe {
+        ropus_fb2k::ropus_fb2k_decode_next(
+            handle,
+            output.as_mut_ptr(),
+            max_samples_per_ch,
+            &mut bytes_consumed,
+        )
+    };
+    assert_eq!(rc, ROPUS_FB2K_BAD_ARG);
+    assert_eq!(
+        unsafe { ropus_fb2k::ropus_fb2k_last_error_code() },
+        ROPUS_FB2K_BAD_ARG,
+        "capacity multiplication wrap must be reported as BAD_ARG: {}",
+        last_error_string()
+    );
+
+    unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+}
+
+// ---------------------------------------------------------------------------
 // decode_next's `out_bytes_consumed` parameter, summed across every call until
 // EOF, must equal the total encoded packet-payload bytes the underlying Ogg
 // stream carries (i.e. every audio packet's `data.len()` from page 3 onward,

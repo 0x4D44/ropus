@@ -98,7 +98,9 @@ typedef void (*RopusFb2kTagCb)(void* ctx, const char* key, const char* value);
 int ropus_fb2k_read_tags(RopusFb2kReader*, RopusFb2kTagCb cb, void* ctx);
 
 /* Decode next packet into caller buffer (interleaved float, 48 kHz).
- * `max_samples_per_ch` must be >= 5760 (120 ms, the longest Opus frame).
+ * `max_samples_per_ch` must be >= 5760 (120 ms, the longest Opus frame) and
+ * small enough that the interleaved `float` span is representable as a Rust
+ * slice; an overflowing or overlarge capacity returns `ROPUS_FB2K_BAD_ARG`.
  * Returns samples-per-channel decoded, 0 on EOF, negative on error.
  *
  * `out_bytes_consumed` is required (non-null; a null pointer returns
