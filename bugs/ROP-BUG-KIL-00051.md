@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00051 — Extension generation trusts negative frame counts and short payload spans
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** ropus/opus-extensions
 - **Raised:** 2026-08-22T08:28:39Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T070347Z-0cbf3f34
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00051-run-fix-20260913T070347Z-0cbf3f34
-- **Owner base:** dcf876aa15efc1089f9567df3cab75446dd3411c
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T07:03:47Z
-- **Owner until:** 2026-09-13T09:03:47Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T08:28:39Z, raised via `deltic bugs new` model=gpt-5.6-sol@max)
+- **State history:** Open (2026-08-22T08:28:39Z, raised via `deltic bugs new` model=gpt-5.6-sol@max) -> Fixed (2026-09-13T07:21:39Z, deltic:auto role=fix run=fix-20260913T070347Z-0cbf3f34 branch=task/bug-ROP-BUG-KIL-00051-run-fix-20260913T070347Z-0cbf3f34 code=80d762b57ac42d298dcb75f9535b8b2a831ccfb8 gate=manual)
 
 ## Observation
 
