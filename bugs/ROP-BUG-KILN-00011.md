@@ -6,15 +6,15 @@
 - **Area:** tools/fetch-fb2k-sdk
 - **Raised:** 2026-08-13T17:17:39Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T173158Z-79e6bae1
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KILN-00011-run-verify-20260913T173158Z-79e6bae1
+- **Owner base:** 327ebddbe51dbb0a72c22a3fae839be5ede08848
+- **Owner fingerprint:** sha256:dd946f60f13192bd8f55e5945e4339f619a7e7499f5c3329c4aad6bfc66ec1ef
+- **Owner since:** 2026-09-13T17:31:58Z
+- **Owner until:** 2026-09-13T19:31:58Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
