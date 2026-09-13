@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00005 — C ABI scratch buffers allocate before frame-size validation
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Could
 - **Severity:** Medium
 - **Area:** capi/frame-size-allocation
 - **Raised:** 2026-08-14T14:26:39Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T033334Z-41a4b194
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00005-run-fix-20260913T033334Z-41a4b194
-- **Owner base:** cca1598d93b60007c0fee5ac716f5e45723af50e
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T03:33:34Z
-- **Owner until:** 2026-09-13T05:33:34Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T14:26:39Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-14T14:26:39Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T03:47:46Z, deltic:auto role=fix run=fix-20260913T033334Z-41a4b194 branch=task/bug-ROP-BUG-CRUCIBLE-00005-run-fix-20260913T033334Z-41a4b194 code=8b51233d92cf326d07f5e3944b28223f5f0a01c2 gate=manual)
 
 ## Observation
 
