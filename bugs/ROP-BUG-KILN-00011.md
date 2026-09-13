@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00011 — foobar2000 SDK fetch authenticates only by byte length
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** tools/fetch-fb2k-sdk
 - **Raised:** 2026-08-13T17:17:39Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T173158Z-79e6bae1
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00011-run-verify-20260913T173158Z-79e6bae1
-- **Owner base:** 327ebddbe51dbb0a72c22a3fae839be5ede08848
-- **Owner fingerprint:** sha256:dd946f60f13192bd8f55e5945e4339f619a7e7499f5c3329c4aad6bfc66ec1ef
-- **Owner since:** 2026-09-13T17:31:58Z
-- **Owner until:** 2026-09-13T19:31:58Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-13T17:17:39Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T22:58:17Z, deltic:auto role=fix run=fix-20260912T224610Z-86e5a93a branch=task/bug-ROP-BUG-KILN-00011-run-fix-20260912T224610Z-86e5a93a code=5906099df304b499f495f3cdc896d2fa77b30a8b gate=manual)
+- **State history:** Open (2026-08-13T17:17:39Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T22:58:17Z, deltic:auto role=fix run=fix-20260912T224610Z-86e5a93a branch=task/bug-ROP-BUG-KILN-00011-run-fix-20260912T224610Z-86e5a93a code=5906099df304b499f495f3cdc896d2fa77b30a8b gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=5906099df304b499f495f3cdc896d2fa77b30a8b)
 
 ## Observation
 
@@ -49,4 +49,8 @@ Validation evidence:
   -Force` run against the official archive also passed the pinned digest and
   extracted-layout checks.
 
+### Independent verification summary (2026-09-13)
+
+- Re-ran `test_same_length_wrong_archive_fails_before_replacing_sdk`; the tampered archive was rejected without replacement, and Python/PowerShell validation passed.
+- A red control disabled the SHA-256 mismatch guard; the same-length tampered-archive assertion failed, and the fix was restored.
 ## Notes

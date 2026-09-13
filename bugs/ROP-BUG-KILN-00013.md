@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00013 — Benchmark sweep parser no longer matches harness output
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** tools/bench-sweep
 - **Raised:** 2026-08-13T17:17:40Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T173814Z-3e0df040
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00013-run-verify-20260913T173814Z-3e0df040
-- **Owner base:** 997602a3e1e7862b5da988080689b8efa1bdb85f
-- **Owner fingerprint:** sha256:c400359b79b99e880d0f1f26df3cc01b20de4884052220243f674e39539ab8b6
-- **Owner since:** 2026-09-13T17:38:14Z
-- **Owner until:** 2026-09-13T19:38:14Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-13T17:17:40Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T23:18:28Z, deltic:auto role=fix run=fix-20260912T231226Z-df922e2e branch=task/bug-ROP-BUG-KILN-00013-run-fix-20260912T231226Z-df922e2e code=ceb21caa6c1638619319fee2d06b2681288231b4 gate=manual)
+- **State history:** Open (2026-08-13T17:17:40Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T23:18:28Z, deltic:auto role=fix run=fix-20260912T231226Z-df922e2e branch=task/bug-ROP-BUG-KILN-00013-run-fix-20260912T231226Z-df922e2e code=ceb21caa6c1638619319fee2d06b2681288231b4 gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=ceb21caa6c1638619319fee2d06b2681288231b4)
 
 ## Observation
 
@@ -48,4 +48,8 @@ Validation evidence:
   not available because the repository lacks `reference/celt/bands.c`; the
   focused fake-binary harness supplied the captured current-format output.
 
+### Independent verification summary (2026-09-13)
+
+- Re-ran the four benchmark-sweep parser tests; all passed, with shell/Python validation also passing.
+- A red control restored the legacy grep gate; `test_current_table_is_parsed_into_summary` failed before parsing the current table, and the fix was restored.
 ## Notes

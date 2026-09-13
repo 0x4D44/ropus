@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00009 — Long fuzz launchers hide worker failures and accept unsafe durations
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** tools/fuzz-launchers
 - **Raised:** 2026-08-13T17:17:38Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T172538Z-a86ea38f
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00009-run-verify-20260913T172538Z-a86ea38f
-- **Owner base:** ae9cda9f35207db29a7cdf4b59afc0ab75e9b687
-- **Owner fingerprint:** sha256:ce1e0413037c9fed29ebd40bc271be2f5855033d160cb64f6e37fbb2fab38c09
-- **Owner since:** 2026-09-13T17:25:38Z
-- **Owner until:** 2026-09-13T19:25:38Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-13T17:17:38Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T22:35:45Z, deltic:auto role=fix run=fix-20260912T222100Z-8af8029e branch=task/bug-ROP-BUG-KILN-00009-run-fix-20260912T222100Z-8af8029e code=10a0102dd42c1184ceacb6f7749e69677744d55d gate=manual)
+- **State history:** Open (2026-08-13T17:17:38Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T22:35:45Z, deltic:auto role=fix run=fix-20260912T222100Z-8af8029e branch=task/bug-ROP-BUG-KILN-00009-run-fix-20260912T222100Z-8af8029e code=10a0102dd42c1184ceacb6f7749e69677744d55d gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=10a0102dd42c1184ceacb6f7749e69677744d55d)
 
 ## Observation
 
@@ -47,4 +47,8 @@ Validation evidence:
   four tests, covering both launchers, mixed outcomes, success, bounds, and injection-shaped input.
 - Normalized `bash -n` parses passed for both launcher scripts.
 
+### Independent verification summary (2026-09-13)
+
+- Re-ran `python -m unittest -v tools.test_fuzz_launchers`; all 4 tests passed, covering both launchers, mixed outcomes, bounds, and injection-shaped input.
+- Red controls hid worker failure and disabled duration bounds; the mixed-outcome and invalid-duration regressions failed, and the fixes were restored.
 ## Notes

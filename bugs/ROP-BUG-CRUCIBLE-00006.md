@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00006 — Full-test child processes can run forever
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** full-test/subprocess-supervision
 - **Raised:** 2026-08-14T15:50:22Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T171250Z-d0b24109
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00006-run-verify-20260913T171250Z-d0b24109
-- **Owner base:** 1bf2254c7b724f861acdd61f9067b3a7fe6a96f8
-- **Owner fingerprint:** sha256:88aad1f7371d5784a019985455d10cca34bda6f5cb7da3bb6b9f0ce0705dbdb6
-- **Owner since:** 2026-09-13T17:12:50Z
-- **Owner until:** 2026-09-13T19:12:50Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T15:50:22Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-12T21:06:54Z, deltic:auto role=fix run=fix-20260912T205144Z-5d46f11b branch=task/bug-ROP-BUG-CRUCIBLE-00006-run-fix-20260912T205144Z-5d46f11b code=eed31d60f719892a6adaefa5cd65493bd559cd77 gate=manual)
+- **State history:** Open (2026-08-14T15:50:22Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-12T21:06:54Z, deltic:auto role=fix run=fix-20260912T205144Z-5d46f11b branch=task/bug-ROP-BUG-CRUCIBLE-00006-run-fix-20260912T205144Z-5d46f11b code=eed31d60f719892a6adaefa5cd65493bd559cd77 gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=eed31d60f719892a6adaefa5cd65493bd559cd77)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at origin/main bb54eb50. C:\worktrees\ropus\20260814-REV-ROP-CDX@C
 
 ## Fix
 
-<unfixed — raised only>
+### Independent verification summary (2026-09-13)
+
+- Re-ran `hanging_child_is_killed_and_reports_a_distinct_timeout`; the full-test package gate passed all 244 tests.
+- A red control cleared the timeout classification flag; the hanging-child regression failed, and the fix was restored.
 
 ## Notes

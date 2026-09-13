@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00009 — Malformed benchmark output is treated as a successful default result
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** full-test/benchmark-reporting
 - **Raised:** 2026-08-14T15:50:24Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T172357Z-b4ec0e9a
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00009-run-verify-20260913T172357Z-b4ec0e9a
-- **Owner base:** 165a553aa9836e506df356edbf001ad713f9655a
-- **Owner fingerprint:** sha256:1948cb78448e2da559a8d54f2cdfe0d1dab7d7874ced79c928828c47d483383e
-- **Owner since:** 2026-09-13T17:23:57Z
-- **Owner until:** 2026-09-13T19:23:57Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T15:50:24Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-12T23:28:08Z, deltic:auto role=fix run=fix-20260912T232023Z-645ea5f3 branch=task/bug-ROP-BUG-CRUCIBLE-00009-run-fix-20260912T232023Z-645ea5f3 code=954c6d6979d4d830cecead7357721b351d317f69 gate=manual)
+- **State history:** Open (2026-08-14T15:50:24Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-12T23:28:08Z, deltic:auto role=fix run=fix-20260912T232023Z-645ea5f3 branch=task/bug-ROP-BUG-CRUCIBLE-00009-run-fix-20260912T232023Z-645ea5f3 code=954c6d6979d4d830cecead7357721b351d317f69 gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=954c6d6979d4d830cecead7357721b351d317f69)
 
 ## Observation
 
@@ -49,4 +49,8 @@ Verification:
   failed with `partial successful output must be anomalous`. The guard was then
   restored and the focused suite passed.
 
+### Independent verification summary (2026-09-13)
+
+- Re-ran the incomplete-successful benchmark regressions; the focused benchmark tests and the full-test package gate passed.
+- A red control disabled the incomplete-output classifier; the regression failed its `partial successful output must be anomalous` assertion, and the fix was restored.
 ## Notes

@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00002 — Projection decoder size query accepts impossible stream counts
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** capi/projection-size
 - **Raised:** 2026-08-14T14:26:12Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T165936Z-ba8cd0e4
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00002-run-verify-20260913T165936Z-ba8cd0e4
-- **Owner base:** e49328672b56c17c19d0ccf67afe6665b765001a
-- **Owner fingerprint:** sha256:ed4300e6b48cabd9a77163bcd7e3a2d6f68978ac8ee633b29ecdef0dd6feeba9
-- **Owner since:** 2026-09-13T16:59:36Z
-- **Owner until:** 2026-09-13T18:59:36Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T14:26:12Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T03:08:29Z, deltic:auto role=fix run=fix-20260913T030213Z-4e80ff37 branch=task/bug-ROP-BUG-CRUCIBLE-00002-run-fix-20260913T030213Z-4e80ff37 code=4efc3d4282c44912ff37bcf5330993558c413600 gate=manual)
+- **State history:** Open (2026-08-14T14:26:12Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T03:08:29Z, deltic:auto role=fix run=fix-20260913T030213Z-4e80ff37 branch=task/bug-ROP-BUG-CRUCIBLE-00002-run-fix-20260913T030213Z-4e80ff37 code=4efc3d4282c44912ff37bcf5330993558c413600 gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=4efc3d4282c44912ff37bcf5330993558c413600)
 
 ## Observation
 
@@ -27,6 +27,9 @@ opus_projection_decoder_get_size validates only streams >= 1, coupled_streams <=
 
 ## Fix
 
-<unfixed — raised only>
+### Independent verification summary (2026-09-13)
+
+- Re-ran `projection_decoder_size_rejects_impossible_stream_counts` and `projection_decoder_size_checks_storage_size_overflow`; the C-API gate passed 21 Rust tests and 1 C test.
+- A red control relaxed the projection stream-count and checked-size validation; the invalid-dimension/overflow boundary assertions failed, and the fix was restored.
 
 ## Notes

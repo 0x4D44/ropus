@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00010 — Benchmark runner ignores custom Cargo target directories
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** full-test/benchmark-launch
 - **Raised:** 2026-08-14T15:50:25Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T172717Z-25306b39
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00010-run-verify-20260913T172717Z-25306b39
-- **Owner base:** 5cc71d585e72f1396f56642ef91ebca3f6c5bcce
-- **Owner fingerprint:** sha256:60b32756ad82a44eb3f999e9de22681f5272de0b6080a8c3d3dd6946f1bc44cb
-- **Owner since:** 2026-09-13T17:27:17Z
-- **Owner until:** 2026-09-13T19:27:17Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T15:50:25Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T03:55:37Z, deltic:auto role=fix run=fix-20260913T034834Z-f0420b73 branch=task/bug-ROP-BUG-CRUCIBLE-00010-run-fix-20260913T034834Z-f0420b73 code=77730451a2c7b312ea1582ed4fbc84eb823958f5 gate=manual)
+- **State history:** Open (2026-08-14T15:50:25Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T03:55:37Z, deltic:auto role=fix run=fix-20260913T034834Z-f0420b73 branch=task/bug-ROP-BUG-CRUCIBLE-00010-run-fix-20260913T034834Z-f0420b73 code=77730451a2c7b312ea1582ed4fbc84eb823958f5 gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=77730451a2c7b312ea1582ed4fbc84eb823958f5)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at origin/main bb54eb50. C:\worktrees\ropus\20260814-REV-ROP-CDX@C
 
 ## Fix
 
-<unfixed — raised only>
+### Independent verification summary (2026-09-13)
+
+- Re-ran `custom_target_dir_is_resolved_from_workspace_root`; the full-test package gate passed all 244 tests.
+- A red control ignored the configured Cargo target directory; the custom-target path assertion failed, and the fix was restored.
 
 ## Notes

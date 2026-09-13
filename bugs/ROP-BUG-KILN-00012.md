@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00012 — PGO benchmark does not measure the profile-guided binary
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** tools/pgo
 - **Raised:** 2026-08-13T17:17:39Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T173459Z-376bc6ad
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00012-run-verify-20260913T173459Z-376bc6ad
-- **Owner base:** d3c047b2ee2a428f40f3d521c89b6df1532673fd
-- **Owner fingerprint:** sha256:c620830ac2ece353ab148f08f2de7ce1ed5fed11e66dcc9256c681042a680556
-- **Owner since:** 2026-09-13T17:34:59Z
-- **Owner until:** 2026-09-13T19:34:59Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-13T17:17:39Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T23:10:39Z, deltic:auto role=fix run=fix-20260912T230146Z-5d89dcd9 branch=task/bug-ROP-BUG-KILN-00012-run-fix-20260912T230146Z-5d89dcd9 code=05b5c28bb2809135d28c9f8adefa1556a44521ad gate=manual)
+- **State history:** Open (2026-08-13T17:17:39Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T23:10:39Z, deltic:auto role=fix run=fix-20260912T230146Z-5d89dcd9 branch=task/bug-ROP-BUG-KILN-00012-run-fix-20260912T230146Z-5d89dcd9 code=05b5c28bb2809135d28c9f8adefa1556a44521ad gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=05b5c28bb2809135d28c9f8adefa1556a44521ad)
 
 ## Observation
 
@@ -51,4 +51,8 @@ Validation evidence:
   ropus-compare` also completed successfully; only the repository's existing
   missing-reference/DNN-data warnings were emitted.
 
+### Independent verification summary (2026-09-13)
+
+- Re-ran `test_builds_and_measures_the_selected_pgo_binary_directly`; it passed with the expected direct baseline/training/PGO invocations, and script validation passed.
+- A red control restored `cargo run` measurement; the test observed extra Cargo invocations and failed, so the fix was restored.
 ## Notes

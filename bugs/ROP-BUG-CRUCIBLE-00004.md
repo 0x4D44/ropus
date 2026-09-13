@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00004 — Extension shims abort on large caller capacities
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Could
 - **Severity:** Medium
 - **Area:** capi/extensions-allocation
 - **Raised:** 2026-08-14T14:26:28Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T170525Z-2cfb73d6
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00004-run-verify-20260913T170525Z-2cfb73d6
-- **Owner base:** 34fe75e8e9ec932254b5435593647da83136d320
-- **Owner fingerprint:** sha256:b92fa1b337fedb4fa0522d1e411da4b0f1b547973dff6dc66bcdc95a29d97259
-- **Owner since:** 2026-09-13T17:05:25Z
-- **Owner until:** 2026-09-13T19:05:25Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T14:26:28Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T03:32:43Z, deltic:auto role=fix run=fix-20260913T031705Z-c7a149f8 branch=task/bug-ROP-BUG-CRUCIBLE-00004-run-fix-20260913T031705Z-c7a149f8 code=177fb542895f8ff33963f4da87b5e12523ce02c0 gate=manual)
+- **State history:** Open (2026-08-14T14:26:28Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T03:32:43Z, deltic:auto role=fix run=fix-20260913T031705Z-c7a149f8 branch=task/bug-ROP-BUG-CRUCIBLE-00004-run-fix-20260913T031705Z-c7a149f8 code=177fb542895f8ff33963f4da87b5e12523ce02c0 gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=177fb542895f8ff33963f4da87b5e12523ce02c0)
 
 ## Observation
 
@@ -27,6 +27,9 @@ The extension parse, parse_ext, and generate shims allocate temporary Vec storag
 
 ## Fix
 
-<unfixed — raised only>
+### Independent verification summary (2026-09-13)
+
+- Re-ran the extension and repacketizer allocation-failure and large-capacity regressions; the C-API gate passed 21 Rust tests and 1 C test.
+- A red control bypassed the temporary-allocation bound; the large-capacity regression failed, and the fix was restored.
 
 ## Notes

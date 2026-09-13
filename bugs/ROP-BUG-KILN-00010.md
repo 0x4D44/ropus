@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00010 — Trace fixer crashes in build-failure recovery
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** tools/trace-fix
 - **Raised:** 2026-08-13T17:17:38Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T172849Z-00993d86
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00010-run-verify-20260913T172849Z-00993d86
-- **Owner base:** ce1aeb4a01c2418ce5fbc6cb83810fc79e248c6b
-- **Owner fingerprint:** sha256:62a4189236af2bedf9c834061b4a9f1d4a57c546b87646d63350b588f9ef55bc
-- **Owner since:** 2026-09-13T17:28:49Z
-- **Owner until:** 2026-09-13T19:28:49Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-13T17:17:38Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T22:44:29Z, deltic:auto role=fix run=fix-20260912T223742Z-7a97ad5d branch=task/bug-ROP-BUG-KILN-00010-run-fix-20260912T223742Z-7a97ad5d code=52c8d7e03e75a1d87ae1e5483b1b006b1b001a91 gate=manual)
+- **State history:** Open (2026-08-13T17:17:38Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T22:44:29Z, deltic:auto role=fix run=fix-20260912T223742Z-7a97ad5d branch=task/bug-ROP-BUG-KILN-00010-run-fix-20260912T223742Z-7a97ad5d code=52c8d7e03e75a1d87ae1e5483b1b006b1b001a91 gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=52c8d7e03e75a1d87ae1e5483b1b006b1b001a91)
 
 ## Observation
 
@@ -42,4 +42,8 @@ Validation evidence:
 - `python -m py_compile tools/trace_fix.py tools/test_trace_fix.py` passed, and
   the source contains no `invoke_claude` reference.
 
+### Independent verification summary (2026-09-13)
+
+- Re-ran `python -m unittest -v tools.test_trace_fix tools.test_checkpoint`; all 6 tests passed, with Python compilation also passing.
+- A red control restored the undefined `invoke_claude` recovery calls; both recovery tests failed with the observed NameError, and the fix was restored.
 ## Notes

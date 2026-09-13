@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00003 — Encoder size queries ignore mapping-family validity
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** capi/encoder-size
 - **Raised:** 2026-08-14T14:26:19Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T170203Z-b30c50a7
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00003-run-verify-20260913T170203Z-b30c50a7
-- **Owner base:** 0bc40fd5b093f9f3f075758509bcc05ae5f517b3
-- **Owner fingerprint:** sha256:98aa0c7d0d1f2cc4764f4ffe4239f827805980594e70ef4e0e605afcc8b48197
-- **Owner since:** 2026-09-13T17:02:03Z
-- **Owner until:** 2026-09-13T19:02:03Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T14:26:19Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T03:16:11Z, deltic:auto role=fix run=fix-20260913T030923Z-b691a808 branch=task/bug-ROP-BUG-CRUCIBLE-00003-run-fix-20260913T030923Z-b691a808 code=5e28a369f43a655078477042d7cc03a311008ea6 gate=manual)
+- **State history:** Open (2026-08-14T14:26:19Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T03:16:11Z, deltic:auto role=fix run=fix-20260913T030923Z-b691a808 branch=task/bug-ROP-BUG-CRUCIBLE-00003-run-fix-20260913T030923Z-b691a808 code=5e28a369f43a655078477042d7cc03a311008ea6 gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=5e28a369f43a655078477042d7cc03a311008ea6)
 
 ## Observation
 
@@ -27,6 +27,9 @@ opus_multistream_surround_encoder_get_size discards mapping_family at C:\worktre
 
 ## Fix
 
-<unfixed — raised only>
+### Independent verification summary (2026-09-13)
+
+- Re-ran `surround_encoder_size_matches_mapping_family_and_channel_domain` and `projection_encoder_size_matches_mapping_family_and_channel_domain`; the C-API gate passed 21 Rust tests and 1 C test.
+- A red control disabled mapping-family/channel-domain validation; the invalid configuration assertions failed, and the fix was restored.
 
 ## Notes

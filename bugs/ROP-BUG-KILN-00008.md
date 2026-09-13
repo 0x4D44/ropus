@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00008 — Fuzz runner reports all clear after fuzzer failure
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** tools/fuzz-runner
 - **Raised:** 2026-08-13T17:17:37Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T172218Z-5f010d45
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00008-run-verify-20260913T172218Z-5f010d45
-- **Owner base:** 0d38b7d0908452fb1287c960e4ed63f984938c6c
-- **Owner fingerprint:** sha256:235cf2e36226f66859b2f52d998843d95fbd20ca3e4d35adfcf7d8548f8c1e62
-- **Owner since:** 2026-09-13T17:22:18Z
-- **Owner until:** 2026-09-13T19:22:18Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-13T17:17:37Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T22:17:41Z, deltic:auto role=fix run=fix-20260912T220200Z-dc7a268b branch=task/bug-ROP-BUG-KILN-00008-run-fix-20260912T220200Z-dc7a268b code=75ae57c27f69e412188a328c19f56a4962a229a8 gate=manual)
+- **State history:** Open (2026-08-13T17:17:37Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T22:17:41Z, deltic:auto role=fix run=fix-20260912T220200Z-dc7a268b branch=task/bug-ROP-BUG-KILN-00008-run-fix-20260912T220200Z-dc7a268b code=75ae57c27f69e412188a328c19f56a4962a229a8 gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=75ae57c27f69e412188a328c19f56a4962a229a8)
 
 ## Observation
 
@@ -45,4 +45,8 @@ Validation evidence:
 - A normalized `bash -n` parse passed, and the PowerShell runner rejected
   `--no-diff` with exit status 1 before starting cargo.
 
+### Independent verification summary (2026-09-13)
+
+- Re-ran `python -m unittest -v tools.test_fuzz_run`; all 4 tests passed.
+- Red controls restored artifact-only success and ignored `--no-diff`; the child-failure and pre-start rejection tests failed, and both fixes were restored.
 ## Notes

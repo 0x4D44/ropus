@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00011 — Oversized corpus output is fully buffered after rejection
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** full-test/corpus-resource-bounds
 - **Raised:** 2026-08-14T15:50:26Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T173019Z-cda669d0
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00011-run-verify-20260913T173019Z-cda669d0
-- **Owner base:** 148ee3b9f74db92f5d948c6efe21c55684c2a6a9
-- **Owner fingerprint:** sha256:2cf38f54ed484c6a114533c744ee33ab7c442df33f294f21fd558d52f497d328
-- **Owner since:** 2026-09-13T17:30:19Z
-- **Owner until:** 2026-09-13T19:30:19Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T15:50:26Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-12T23:37:29Z, deltic:auto role=fix run=fix-20260912T233205Z-c8473729 branch=task/bug-ROP-BUG-CRUCIBLE-00011-run-fix-20260912T233205Z-c8473729 code=33c0a0442aad8b19d4b96ea420653b32873138e6 gate=manual)
+- **State history:** Open (2026-08-14T15:50:26Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-12T23:37:29Z, deltic:auto role=fix run=fix-20260912T233205Z-c8473729 branch=task/bug-ROP-BUG-CRUCIBLE-00011-run-fix-20260912T233205Z-c8473729 code=33c0a0442aad8b19d4b96ea420653b32873138e6 gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=33c0a0442aad8b19d4b96ea420653b32873138e6)
 
 ## Observation
 
@@ -47,4 +47,8 @@ Verification:
   failed with `oversized output must not reach the payload hasher`. The guard
   was restored and the focused suite passed.
 
+### Independent verification summary (2026-09-13)
+
+- Re-ran `oversized_generated_output_skips_payload_hashing`; the full-test package gate passed all 244 tests.
+- A red control restored unconditional payload hashing; the sparse oversized-output oracle failed, and the fix was restored.
 ## Notes

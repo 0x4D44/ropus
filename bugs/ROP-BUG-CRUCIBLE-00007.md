@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00007 — Release preflight launches Unix-only wrappers on Windows
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** full-test/windows-preflight
 - **Raised:** 2026-08-14T15:50:23Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T171654Z-39eb0d9f
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00007-run-verify-20260913T171654Z-39eb0d9f
-- **Owner base:** 0a5fdd7055de8bee41cf2157828a5d3f0851d8b2
-- **Owner fingerprint:** sha256:81330dbae452fb258e048f17c9146ab8c3970aa358252d13d27caf708e52781d
-- **Owner since:** 2026-09-13T17:16:54Z
-- **Owner until:** 2026-09-13T19:16:54Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T15:50:23Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-12T21:27:35Z, deltic:auto role=fix run=fix-20260912T210409Z-0ca7c43d branch=task/bug-ROP-BUG-CRUCIBLE-00007-run-fix-20260912T210409Z-0ca7c43d code=a57b406 gate=manual)
+- **State history:** Open (2026-08-14T15:50:23Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-12T21:27:35Z, deltic:auto role=fix run=fix-20260912T210409Z-0ca7c43d branch=task/bug-ROP-BUG-CRUCIBLE-00007-run-fix-20260912T210409Z-0ca7c43d code=a57b406 gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=a57b406)
 
 ## Observation
 
@@ -49,4 +49,8 @@ restored before commit.
 
 Fix provenance: local commit `de4d7e3`; integrated fix commit `a57b406`.
 
+### Independent verification summary (2026-09-13)
+
+- Re-ran the native PowerShell command-shape, environment, and bounded release-preflight regressions; `cargo test -p full-test --locked` passed all 244 tests, and the Windows fuzz runner listed all 14 targets.
+- A red control restored the Unix `timeout`/`bash` and `timeout`/`env` wrappers; the command-shape and environment assertions failed, and the fix was restored.
 ## Notes

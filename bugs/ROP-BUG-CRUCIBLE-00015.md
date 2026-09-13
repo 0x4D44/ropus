@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00015 — Ambisonics parse failures render as zero failures in HTML
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Could
 - **Severity:** Low
 - **Area:** full-test/html-report
 - **Raised:** 2026-08-14T15:50:30Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T174302Z-d501c7b2
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00015-run-verify-20260913T174302Z-d501c7b2
-- **Owner base:** 93dd47f07642563c45766ccaf4123006cdd72149
-- **Owner fingerprint:** sha256:81c51531733d9bd26460feeb33efdfda50936d5995739c999d2d1eca92650164
-- **Owner since:** 2026-09-13T17:43:02Z
-- **Owner until:** 2026-09-13T19:43:02Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T15:50:30Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T04:29:12Z, deltic:auto role=fix run=fix-20260913T042425Z-28ef7170 branch=task/bug-ROP-BUG-CRUCIBLE-00015-run-fix-20260913T042425Z-28ef7170 code=f1d39d9fecbcfd47d9afd9ac3e55801171a6d472 gate=manual)
+- **State history:** Open (2026-08-14T15:50:30Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-13T04:29:12Z, deltic:auto role=fix run=fix-20260913T042425Z-28ef7170 branch=task/bug-ROP-BUG-CRUCIBLE-00015-run-fix-20260913T042425Z-28ef7170 code=f1d39d9fecbcfd47d9afd9ac3e55801171a6d472 gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=f1d39d9fecbcfd47d9afd9ac3e55801171a6d472)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at origin/main bb54eb50. A missing or malformed ambisonics summary
 
 ## Fix
 
-<unfixed — raised only>
+### Independent verification summary (2026-09-13)
+
+- Re-ran `phase_summary_marks_ambisonics_no_summary_failure`; the full-test package gate passed all 244 tests.
+- A red control ignored the overall Ambisonics failure when no order rows existed; the phase-summary regression failed, and the fix was restored.
 
 ## Notes

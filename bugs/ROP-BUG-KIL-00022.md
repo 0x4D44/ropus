@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00022 — Tier-2 SNR oracles accept degenerate identical or silent output as passing
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-deep-plc/tests
 - **Raised:** 2026-08-19T10:46:14Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T174420Z-dd05eb33
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00022-run-verify-20260913T174420Z-dd05eb33
-- **Owner base:** a3e2df8ff7a75b9a8be1e3684c50aa1031bd8aa2
-- **Owner fingerprint:** sha256:5fa64c0ba17bf88e0197214726b73a41d9a16f636d42ac162cc43e7b28bd65d1
-- **Owner since:** 2026-09-13T17:44:20Z
-- **Owner until:** 2026-09-13T19:44:20Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-19T10:46:14Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T00:34:45Z, deltic:auto role=fix run=fix-20260913T002411Z-a6538224 branch=task/bug-ROP-BUG-KIL-00022-run-fix-20260913T002411Z-a6538224 code=45442c80dc736b6fa5c7f833a288c750b984d7fe gate=manual)
+- **State history:** Open (2026-08-19T10:46:14Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T00:34:45Z, deltic:auto role=fix run=fix-20260913T002411Z-a6538224 branch=task/bug-ROP-BUG-KIL-00022-run-fix-20260913T002411Z-a6538224 code=45442c80dc736b6fa5c7f833a288c750b984d7fe gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=45442c80dc736b6fa5c7f833a288c750b984d7fe)
 
 ## Observation
 
@@ -47,4 +47,8 @@ Verification:
 - Red proof: temporarily restored the old zero-noise `INFINITY` behavior in both helpers. The identical non-silent and both-silent regression tests failed with `left: inf` and `right: -inf`. The fixed guards were restored before the green runs.
 - Test setup fetched the pinned C reference and DNN weights with `cargo run -p fetch-assets -- all`.
 
+### Independent verification summary (2026-09-13)
+
+- With the pinned C reference and DNN weights provisioned, re-ran the four degenerate-SNR tests and the full tier-2/nonzero-DRED set; all 9 tests passed, including both release gates.
+- Red controls restored `INFINITY` for identical/both-silent DRED output and disabled the tier-2 degenerate guard; the focused assertions failed, and both fixes were restored.
 ## Notes

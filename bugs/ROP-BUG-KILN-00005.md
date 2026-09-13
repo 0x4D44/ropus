@@ -1,25 +1,25 @@
 # ROP-BUG-KILN-00005 — Integration fix loop persists stale pre-fix results
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** tools/integration-results
 - **Raised:** 2026-08-13T17:17:36Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T171101Z-61bee2ad
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KILN-00005-run-verify-20260913T171101Z-61bee2ad
-- **Owner base:** b584433645a0a1d493670a68f877a9ebd18a4211
-- **Owner fingerprint:** sha256:945657d10e7a0dbc48217d23280bfd912bc9b1d59af83b6f5caf61e2a7660042
-- **Owner since:** 2026-09-13T17:11:01Z
-- **Owner until:** 2026-09-13T19:11:01Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-13T17:17:36Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T21:49:12Z, deltic:auto role=fix run=fix-20260912T214538Z-0291dd54 branch=task/bug-ROP-BUG-KILN-00005-run-fix-20260912T214538Z-0291dd54 code=c1ed1b7016405e6261d08d8a189f0e60aae808fe gate=manual)
+- **State history:** Open (2026-08-13T17:17:36Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-12T21:49:12Z, deltic:auto role=fix run=fix-20260912T214538Z-0291dd54 branch=task/bug-ROP-BUG-KILN-00005-run-fix-20260912T214538Z-0291dd54 code=c1ed1b7016405e6261d08d8a189f0e60aae808fe gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=c1ed1b7016405e6261d08d8a189f0e60aae808fe)
 
 ## Observation
 
@@ -45,4 +45,8 @@ Validation evidence:
 - `$null | deltic timeout 120 python -m py_compile tools/integrate.py
   tools/bisect_fix.py tools/test_integrity.py` passed.
 
+### Independent verification summary (2026-09-13)
+
+- Re-ran `test_fix_loop_updates_caller_results_after_retest`; the integrity and checkpoint gates passed all 16 tests.
+- A red control rebound the retest result list locally; the caller-result regression failed, and the fix was restored.
 ## Notes

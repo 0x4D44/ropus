@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00005 — C ABI scratch buffers allocate before frame-size validation
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Could
 - **Severity:** Medium
 - **Area:** capi/frame-size-allocation
 - **Raised:** 2026-08-14T14:26:39Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T170908Z-01c46e63
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00005-run-verify-20260913T170908Z-01c46e63
-- **Owner base:** 92c024fe72ae7caadde34cadae824d3a109ffd9c
-- **Owner fingerprint:** sha256:df225ba81764d63b894afedb46e35cfcc10717af98f7008a10bf8e6b6e511902
-- **Owner since:** 2026-09-13T17:09:08Z
-- **Owner until:** 2026-09-13T19:09:08Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T14:26:39Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T03:47:46Z, deltic:auto role=fix run=fix-20260913T033334Z-41a4b194 branch=task/bug-ROP-BUG-CRUCIBLE-00005-run-fix-20260913T033334Z-41a4b194 code=8b51233d92cf326d07f5e3944b28223f5f0a01c2 gate=manual)
+- **State history:** Open (2026-08-14T14:26:39Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T03:47:46Z, deltic:auto role=fix run=fix-20260913T033334Z-41a4b194 branch=task/bug-ROP-BUG-CRUCIBLE-00005-run-fix-20260913T033334Z-41a4b194 code=8b51233d92cf326d07f5e3944b28223f5f0a01c2 gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=8b51233d92cf326d07f5e3944b28223f5f0a01c2)
 
 ## Observation
 
@@ -27,6 +27,9 @@ opus_multistream_decode_float sizes and allocates an i16 scratch Vec from the ra
 
 ## Fix
 
-<unfixed — raised only>
+### Independent verification summary (2026-09-13)
+
+- Re-ran the multistream and projection float/decode scratch-allocation regressions; the C-API gate passed 21 Rust tests and 1 C test.
+- A red control bypassed the root fallible scratch-allocation seam; the oversized-frame allocation regression failed, and the fix was restored.
 
 ## Notes

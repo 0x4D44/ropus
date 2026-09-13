@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00001 — C ABI allocation failure reporting misses nested codec construction
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Could
 - **Severity:** Medium
 - **Area:** capi/allocation-errors
 - **Raised:** 2026-08-14T14:26:03Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T162538Z-1e023779
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00001-run-verify-20260913T162538Z-1e023779
-- **Owner base:** 4b719646f75cc93b6e24100b321288d9206f6e4f
-- **Owner fingerprint:** sha256:2f781e9c0ea50f07fdbf7f60df87c16222f69c9097a915212089c3a045670280
-- **Owner since:** 2026-09-13T16:25:38Z
-- **Owner until:** 2026-09-13T18:25:38Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T14:26:03Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T03:01:22Z, deltic:auto role=fix run=fix-20260913T022358Z-e9856244 branch=task/bug-ROP-BUG-CRUCIBLE-00001-run-fix-20260913T022358Z-e9856244 code=a4a5fd4f70c850e7420fb44a36e44849da77b0c2 gate=manual)
+- **State history:** Open (2026-08-14T14:26:03Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T03:01:22Z, deltic:auto role=fix run=fix-20260913T022358Z-e9856244 branch=task/bug-ROP-BUG-CRUCIBLE-00001-run-fix-20260913T022358Z-e9856244 code=a4a5fd4f70c850e7420fb44a36e44849da77b0c2 gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=a4a5fd4f70c850e7420fb44a36e44849da77b0c2)
 
 ## Observation
 
@@ -27,6 +27,9 @@ CAPI create/init wrappers call OpusEncoder::new, OpusDecoder::new, multistream c
 
 ## Fix
 
-<unfixed — raised only>
+### Independent verification summary (2026-09-13)
+
+- Re-ran the C-API allocation-failure regressions, including encoder and decoder nested construction, embedded-model loading, in-place init, multistream construction, and projection parameter publication; `cargo test -p capi --locked` passed 21 Rust tests and 1 C test.
+- A red control disabled the failpoint's zero-budget branch; all 14 allocation tests failed (the first assertion poisoned the shared lock for the remainder), and the guard was restored before the green gate.
 
 ## Notes

@@ -1,25 +1,25 @@
 # ROP-BUG-CRUCIBLE-00008 — Fuzz sanity can pass without verified target results
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Must
 - **Severity:** High
 - **Area:** full-test/fuzz-gate
 - **Raised:** 2026-08-14T15:50:23Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T172043Z-dbd8eda0
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00008-run-verify-20260913T172043Z-dbd8eda0
-- **Owner base:** dd67a22ba0c87480528e4f6bd1735e96ea39e4e3
-- **Owner fingerprint:** sha256:a80295bb2036e698d1face448b381471972fb6028ea7d4c6c5f8dbc1594736e9
-- **Owner since:** 2026-09-13T17:20:43Z
-- **Owner until:** 2026-09-13T19:20:43Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-14T15:50:23Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-12T21:22:11Z, deltic:auto role=fix run=fix-20260912T210803Z-0eec838b branch=task/bug-ROP-BUG-CRUCIBLE-00008-run-fix-20260912T210803Z-0eec838b code=4ffb5a4b78ed7a76673a9ac3606743495ce4ada6 gate=manual)
+- **State history:** Open (2026-08-14T15:50:23Z, raised via `deltic bugs new` model=gpt-5.6-sol@xhigh) -> Fixed (2026-09-12T21:22:11Z, deltic:auto role=fix run=fix-20260912T210803Z-0eec838b branch=task/bug-ROP-BUG-CRUCIBLE-00008-run-fix-20260912T210803Z-0eec838b code=4ffb5a4b78ed7a76673a9ac3606743495ce4ada6 gate=manual) -> Closed (2026-09-13T17:49:57Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=4ffb5a4b78ed7a76673a9ac3606743495ce4ada6)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review at origin/main bb54eb50. C:\worktrees\ropus\20260814-REV-ROP-CDX@C
 
 ## Fix
 
-<unfixed — raised only>
+### Independent verification summary (2026-09-13)
+
+- Re-ran the complete, incomplete, duplicate, and malformed fuzz-sanity report regressions; `cargo test -p full-test --locked` passed all 244 tests.
+- A red control relaxed zero-output or incomplete-target validation; the sanity oracle failed, and the fix was restored.
 
 ## Notes
