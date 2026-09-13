@@ -6,15 +6,15 @@
 - **Area:** ropus-tools-core/info-validation
 - **Raised:** 2026-08-22T07:33:50Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T062451Z-83212381
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00046-run-fix-20260913T062451Z-83212381
+- **Owner base:** 61f6deffde0e684a9634439ecae462af18cd573c
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T06:24:51Z
+- **Owner until:** 2026-09-13T08:24:51Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
