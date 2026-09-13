@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00026 — RDOVAE Tier-1 gates silently downgrade to 60 dB Tier-2 on bit-exactness loss
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-deep-plc/tests
 - **Raised:** 2026-08-19T10:46:20Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T014914Z-c13c2589
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00026-run-fix-20260913T014914Z-c13c2589
-- **Owner base:** afb9481b525121ddfd07fd3903f2b4a1e0ec2505
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T01:49:14Z
-- **Owner until:** 2026-09-13T03:49:14Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-19T10:46:20Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-19T10:46:20Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T01:56:31Z, deltic:auto role=fix run=fix-20260913T014914Z-c13c2589 branch=task/bug-ROP-BUG-KIL-00026-run-fix-20260913T014914Z-c13c2589 code=cb5279e90751d6c7431f43c90c01dafacb4e0835 gate=manual)
 
 ## Observation
 
