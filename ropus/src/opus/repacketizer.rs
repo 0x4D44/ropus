@@ -704,6 +704,32 @@ pub fn opus_packet_extensions_parse<'a>(
 // Extension generation internals
 // ===========================================================================
 
+fn validate_extension_descriptor(ext: &OpusExtensionData) -> i32 {
+    if ext.id < 3 || ext.id > 127 || ext.len < 0 {
+        return OPUS_BAD_ARG;
+    }
+    let payload_len = ext.len as usize;
+    if payload_len > ext.data.len() || (ext.id < 32 && ext.len > 1) {
+        return OPUS_BAD_ARG;
+    }
+    0
+}
+
+fn extension_payload_size(ext: &OpusExtensionData, last: bool) -> Result<i32, i32> {
+    if validate_extension_descriptor(ext) < 0 {
+        return Err(OPUS_BAD_ARG);
+    }
+    if ext.id < 32 {
+        return Ok(ext.len);
+    }
+    let length_bytes = if last {
+        0
+    } else {
+        1i32.checked_add(ext.len / 255).ok_or(OPUS_BAD_ARG)?
+    };
+    length_bytes.checked_add(ext.len).ok_or(OPUS_BAD_ARG)
+}
+
 /// Write an extension payload (excluding ID byte) to `buf`.
 /// When `dry_run` is true, no bytes are written but position is tracked.
 /// Returns new position or negative error code.
@@ -716,33 +742,44 @@ fn write_extension_payload(
     ext: &OpusExtensionData,
     last: bool,
 ) -> i32 {
-    debug_assert!(ext.id >= 3 && ext.id <= 127);
+    if validate_extension_descriptor(ext) < 0 || len < 0 || pos < 0 || pos > len {
+        return OPUS_BAD_ARG;
+    }
+    let payload_size = match extension_payload_size(ext, last) {
+        Ok(size) => size,
+        Err(error) => return error,
+    };
+    let end = match pos.checked_add(payload_size) {
+        Some(end) => end,
+        None => return OPUS_BAD_ARG,
+    };
+    if end > len {
+        return OPUS_BUFFER_TOO_SMALL;
+    }
+    if !dry_run && end as usize > buf.len() {
+        return OPUS_BUFFER_TOO_SMALL;
+    }
+
     if ext.id < 32 {
-        // Short extension: payload is 0 or 1 bytes
-        if ext.len < 0 || ext.len > 1 {
-            return OPUS_BAD_ARG;
-        }
+        // Short extension: payload is 0 or 1 bytes.
         if ext.len > 0 {
-            if len - pos < ext.len {
-                return OPUS_BUFFER_TOO_SMALL;
-            }
             if !dry_run {
                 buf[pos as usize] = ext.data[0];
             }
             pos += 1;
         }
     } else {
-        // Long extension
-        if ext.len < 0 {
-            return OPUS_BAD_ARG;
-        }
-        // If last, no length encoding needed (L=0 mode)
-        let length_bytes = if last { 0 } else { 1 + ext.len / 255 };
-        if len - pos < length_bytes + ext.len {
-            return OPUS_BUFFER_TOO_SMALL;
-        }
+        // Long extension.
+        let length_bytes = if last {
+            0
+        } else {
+            match 1i32.checked_add(ext.len / 255) {
+                Some(length_bytes) => length_bytes,
+                None => return OPUS_BAD_ARG,
+            }
+        };
         if !last {
-            // Lacing-encoded length
+            // Lacing-encoded length.
             for _ in 0..ext.len / 255 {
                 if !dry_run {
                     buf[pos as usize] = 255;
@@ -756,9 +793,15 @@ fn write_extension_payload(
         }
         if !dry_run {
             let p = pos as usize;
-            buf[p..p + ext.len as usize].copy_from_slice(&ext.data[..ext.len as usize]);
+            let payload_end = match p.checked_add(ext.len as usize) {
+                Some(payload_end) => payload_end,
+                None => return OPUS_BAD_ARG,
+            };
+            buf[p..payload_end].copy_from_slice(&ext.data[..ext.len as usize]);
         }
         pos += ext.len;
+        debug_assert_eq!(pos, end);
+        debug_assert_eq!(length_bytes + ext.len, payload_size);
     }
     pos
 }
@@ -774,10 +817,26 @@ fn write_extension(
     ext: &OpusExtensionData,
     last: bool,
 ) -> i32 {
-    if len - pos < 1 {
+    if validate_extension_descriptor(ext) < 0 || len < 0 || pos < 0 || pos > len {
+        return OPUS_BAD_ARG;
+    }
+    let payload_size = match extension_payload_size(ext, last) {
+        Ok(size) => size,
+        Err(error) => return error,
+    };
+    let end = match pos
+        .checked_add(1)
+        .and_then(|pos| pos.checked_add(payload_size))
+    {
+        Some(end) => end,
+        None => return OPUS_BAD_ARG,
+    };
+    if end > len {
         return OPUS_BUFFER_TOO_SMALL;
     }
-    debug_assert!(ext.id >= 3 && ext.id <= 127);
+    if !dry_run && end as usize > buf.len() {
+        return OPUS_BUFFER_TOO_SMALL;
+    }
     // ID byte: (id << 1) + L, where L depends on extension type
     let l_bit = if ext.id < 32 {
         ext.len // 0 or 1
@@ -790,7 +849,9 @@ fn write_extension(
         buf[pos as usize] = ((ext.id << 1) + l_bit) as u8;
     }
     pos += 1;
-    write_extension_payload(buf, dry_run, len, pos, ext, last)
+    let result = write_extension_payload(buf, dry_run, len, pos, ext, last);
+    debug_assert!(result >= 0 && result == end);
+    result
 }
 
 /// Serialize extensions into bytes. `data` may be `None` for dry-run (size query).
@@ -803,12 +864,50 @@ pub fn opus_packet_extensions_generate(
     nb_frames: i32,
     pad: bool,
 ) -> i32 {
-    debug_assert!(len >= 0);
-    if nb_frames > MAX_FRAMES as i32 {
+    if len < 0 || !(0..=MAX_FRAMES as i32).contains(&nb_frames) {
         return OPUS_BAD_ARG;
     }
+    if data
+        .as_ref()
+        .is_some_and(|output| len as usize > output.len())
+    {
+        return OPUS_BUFFER_TOO_SMALL;
+    }
 
-    let nb_ext = extensions.len() as i32;
+    if i32::try_from(extensions.len()).is_err() {
+        return OPUS_BAD_ARG;
+    }
+    for ext in extensions {
+        if validate_extension_descriptor(ext) < 0 {
+            return OPUS_BAD_ARG;
+        }
+    }
+
+    // Validate the complete write using the same traversal before touching the
+    // caller's output buffer. This catches logical capacity failures without
+    // leaving an already-written prefix behind.
+    if data.is_some() {
+        let required = opus_packet_extensions_generate_impl(None, len, extensions, nb_frames, pad);
+        if required < 0 {
+            return required;
+        }
+    }
+
+    opus_packet_extensions_generate_impl(data, len, extensions, nb_frames, pad)
+}
+
+fn opus_packet_extensions_generate_impl(
+    data: Option<&mut [u8]>,
+    len: i32,
+    extensions: &[OpusExtensionData],
+    nb_frames: i32,
+    pad: bool,
+) -> i32 {
+    let nb_ext = match i32::try_from(extensions.len()) {
+        Ok(count) => count,
+        Err(_) => return OPUS_BAD_ARG,
+    };
+
     let mut frame_min_idx = [nb_ext; MAX_FRAMES];
     let mut frame_max_idx = [0i32; MAX_FRAMES];
     let mut frame_repeat_idx = [0i32; MAX_FRAMES];
@@ -819,7 +918,7 @@ pub fn opus_packet_extensions_generate(
         if f < 0 || f >= nb_frames {
             return OPUS_BAD_ARG;
         }
-        if extensions[i as usize].id < 3 || extensions[i as usize].id > 127 {
+        if validate_extension_descriptor(&extensions[i as usize]) < 0 {
             return OPUS_BAD_ARG;
         }
         let fu = f as usize;
@@ -889,7 +988,10 @@ pub fn opus_packet_extensions_generate(
                         }
                         frame_repeat_idx[g2] = j;
                     }
-                    repeat_count += 1;
+                    repeat_count = match repeat_count.checked_add(1) {
+                        Some(count) => count,
+                        None => return OPUS_BAD_ARG,
+                    };
                     frame_repeat_idx[f] = i;
                 }
                 i += 1;
@@ -903,7 +1005,7 @@ pub fn opus_packet_extensions_generate(
                 // Insert separator when frame changes
                 if f as i32 != curr_frame {
                     let diff = f as i32 - curr_frame;
-                    if len - pos < 2 {
+                    if len.checked_sub(pos).is_none_or(|remaining| remaining < 2) {
                         return OPUS_BUFFER_TOO_SMALL;
                     }
                     if diff == 1 {
@@ -936,14 +1038,24 @@ pub fn opus_packet_extensions_generate(
                 if pos < 0 {
                     return pos;
                 }
-                written += 1;
+                written = match written.checked_add(1) {
+                    Some(count) => count,
+                    None => return OPUS_BAD_ARG,
+                };
 
                 // Handle repeat mechanism
                 if repeat_count > 0 && frame_repeat_idx[f] == i {
-                    let nb_repeated = repeat_count * (nb_frames - (f as i32 + 1));
-                    let last = written + nb_repeated == nb_ext
+                    let nb_repeated = match repeat_count.checked_mul(nb_frames - (f as i32 + 1)) {
+                        Some(count) => count,
+                        None => return OPUS_BAD_ARG,
+                    };
+                    let written_with_repeated = match written.checked_add(nb_repeated) {
+                        Some(count) => count,
+                        None => return OPUS_BAD_ARG,
+                    };
+                    let last = written_with_repeated == nb_ext
                         || (last_long_idx < 0 && i + 1 >= frame_max_idx[f]);
-                    if len - pos < 1 {
+                    if len.checked_sub(pos).is_none_or(|remaining| remaining < 1) {
                         return OPUS_BUFFER_TOO_SMALL;
                     }
                     // Repeat indicator: ID=2, L=!last
@@ -967,7 +1079,10 @@ pub fn opus_packet_extensions_generate(
                                 if pos < 0 {
                                     return pos;
                                 }
-                                written += 1;
+                                written = match written.checked_add(1) {
+                                    Some(count) => count,
+                                    None => return OPUS_BAD_ARG,
+                                };
                             }
                             j += 1;
                         }
@@ -985,14 +1100,20 @@ pub fn opus_packet_extensions_generate(
 
     // Pad with 0x01 bytes by prepending (shifting existing data forward)
     if pad && pos < len {
-        let padding = (len - pos) as usize;
+        let padding = match len.checked_sub(pos) {
+            Some(padding) => padding as usize,
+            None => return OPUS_BAD_ARG,
+        };
         if !dry_run {
             buf.copy_within(0..pos as usize, padding);
             for idx in 0..padding {
                 buf[idx] = 0x01;
             }
         }
-        pos += padding as i32;
+        pos = match pos.checked_add(padding as i32) {
+            Some(pos) => pos,
+            None => return OPUS_BAD_ARG,
+        };
     }
     pos
 }
@@ -2663,6 +2784,92 @@ mod tests {
             opus_packet_extensions_generate(Some(&mut short), 1, &[valid], 1, false),
             OPUS_BUFFER_TOO_SMALL
         );
+    }
+
+    #[test]
+    fn test_packet_extensions_generate_rejects_negative_frame_count() {
+        assert_eq!(
+            opus_packet_extensions_generate(None, 64, &[], -1, false),
+            OPUS_BAD_ARG
+        );
+    }
+
+    #[test]
+    fn test_packet_extensions_generate_rejects_short_payload() {
+        let short_payload = OpusExtensionData {
+            id: 5,
+            frame: 0,
+            data: &[],
+            len: 1,
+        };
+        assert_eq!(
+            opus_packet_extensions_generate(None, 64, &[short_payload], 1, false),
+            OPUS_BAD_ARG
+        );
+    }
+
+    #[test]
+    fn test_packet_extensions_generate_rejects_claimed_length() {
+        let claimed_length = OpusExtensionData {
+            id: 40,
+            frame: 0,
+            data: &[0x11],
+            len: 2,
+        };
+        assert_eq!(
+            opus_packet_extensions_generate(None, 64, &[claimed_length], 1, false),
+            OPUS_BAD_ARG
+        );
+    }
+
+    #[test]
+    fn test_packet_extensions_generate_rejects_invalid_args_without_partial_output() {
+        let valid = OpusExtensionData {
+            id: 5,
+            frame: 0,
+            data: &[0x11],
+            len: 1,
+        };
+        let invalid = OpusExtensionData {
+            id: 40,
+            frame: 0,
+            data: &[],
+            len: 1,
+        };
+        let mut output = [0xA5u8; 8];
+        let output_len = output.len() as i32;
+        assert_eq!(
+            opus_packet_extensions_generate(
+                Some(&mut output),
+                output_len,
+                &[valid, invalid],
+                1,
+                false,
+            ),
+            OPUS_BAD_ARG
+        );
+        assert_eq!(output, [0xA5u8; 8]);
+
+        let mut short_output = [0x5Au8; 1];
+        let short_output_len = short_output.len() as i32;
+        assert_eq!(
+            opus_packet_extensions_generate(
+                Some(&mut short_output),
+                short_output_len,
+                &[valid],
+                1,
+                false,
+            ),
+            OPUS_BUFFER_TOO_SMALL
+        );
+        assert_eq!(short_output, [0x5Au8; 1]);
+
+        let mut claimed_output = [0x3Cu8; 1];
+        assert_eq!(
+            opus_packet_extensions_generate(Some(&mut claimed_output), 2, &[valid], 1, false,),
+            OPUS_BUFFER_TOO_SMALL
+        );
+        assert_eq!(claimed_output, [0x3Cu8; 1]);
     }
 
     #[test]
