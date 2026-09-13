@@ -6,15 +6,15 @@
 - **Area:** capi/encoder-size
 - **Raised:** 2026-08-14T14:26:19Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T030923Z-b691a808
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00003-run-fix-20260913T030923Z-b691a808
+- **Owner base:** eab0924f97279ef4c472584a03fbc1d80f632443
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T03:09:23Z
+- **Owner until:** 2026-09-13T05:09:23Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
