@@ -20,7 +20,7 @@ use ropus::opus::extensions::{
     opus_packet_extensions_parse as r_parse, opus_packet_extensions_parse_ext as r_parse_ext,
 };
 
-use crate::{OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, ffi_guard};
+use crate::{OPUS_ALLOC_FAIL, OPUS_BAD_ARG, OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR, ffi_guard};
 
 /// C-facing extension descriptor. Layout must match the reference
 /// `opus_extension_data` struct (see `reference/src/opus_private.h:68-73`).
@@ -40,6 +40,21 @@ pub struct OpusExtensionDataC {
     pub frame: c_int,
     pub data: *const u8,
     pub len: i32,
+}
+
+fn try_empty_extensions<'a>(capacity: usize) -> Result<Vec<RExt<'a>>, ()> {
+    if capacity == 0 {
+        return Ok(Vec::new());
+    }
+    crate::alloc::try_vec_with_len(
+        capacity,
+        RExt {
+            id: 0,
+            frame: 0,
+            data: &[],
+            len: 0,
+        },
+    )
 }
 
 // -------------------- count --------------------
@@ -143,16 +158,15 @@ pub unsafe extern "C" fn opus_packet_extensions_parse(
         let slice = unsafe { std::slice::from_raw_parts(data, len as usize) };
         // Per-call heap allocation: `cap` can reach ~9552 in
         // `test_random_extensions_parse`, too large for the stack.
-        let mut out = vec![
-            RExt {
-                id: 0,
-                frame: 0,
-                data: &[],
-                len: 0,
-            };
-            cap as usize
-        ];
-        let mut count = cap;
+        // A packet cannot contain more extension records than bytes. Keep the
+        // caller's larger capacity for the C-visible contract, but avoid
+        // allocating a duplicate array for impossible entries.
+        let capacity = (cap as usize).min(slice.len());
+        let mut out = match try_empty_extensions(capacity) {
+            Ok(out) => out,
+            Err(()) => return OPUS_ALLOC_FAIL,
+        };
+        let mut count = capacity as i32;
         let ret = r_parse(slice, len, &mut out, &mut count, nb_frames);
         // Determine how many entries were actually filled.
         // On OPUS_BUFFER_TOO_SMALL, ropus does NOT write back *count; the
@@ -161,7 +175,7 @@ pub unsafe extern "C" fn opus_packet_extensions_parse(
         // touching `*nb_extensions`). On success/error, ropus wrote `count`
         // to our local.
         let filled = if ret == crate::OPUS_BUFFER_TOO_SMALL {
-            cap
+            capacity as i32
         } else {
             count
         };
@@ -257,16 +271,15 @@ pub unsafe extern "C" fn opus_packet_extensions_parse_ext(
         } else {
             &[][..]
         };
-        let mut out = vec![
-            RExt {
-                id: 0,
-                frame: 0,
-                data: &[],
-                len: 0,
-            };
-            cap as usize
-        ];
-        let mut count = cap;
+        // A packet cannot contain more extension records than bytes. Keep the
+        // caller's larger capacity for the C-visible contract, but avoid
+        // allocating a duplicate array for impossible entries.
+        let capacity = (cap as usize).min(slice.len());
+        let mut out = match try_empty_extensions(capacity) {
+            Ok(out) => out,
+            Err(()) => return OPUS_ALLOC_FAIL,
+        };
+        let mut count = capacity as i32;
         let ret = r_parse_ext(slice, len, &mut out, &mut count, frame_counts, nb_frames);
         // parse_ext scatters writes by per-frame index, so on
         // OPUS_BUFFER_TOO_SMALL some indices are left uninitialised — but
@@ -313,16 +326,32 @@ pub unsafe extern "C" fn opus_packet_extensions_generate(
         if nb_extensions > 0 && extensions.is_null() {
             return OPUS_BAD_ARG;
         }
-        if nb_frames < 0 {
+        if !(0..=48).contains(&nb_frames) {
             return OPUS_BAD_ARG;
         }
         if len > 0 && data.is_null() {
             return OPUS_BAD_ARG;
         }
+        if nb_extensions > 0 && nb_frames == 0 {
+            return OPUS_BAD_ARG;
+        }
+        let max_extensions = (len as usize)
+            .checked_mul(nb_frames as usize)
+            .unwrap_or(usize::MAX);
+        if nb_extensions as usize > max_extensions {
+            return OPUS_BUFFER_TOO_SMALL;
+        }
         // Snapshot C-side extensions into Rust slices. Extension payloads
         // borrowed via `*const u8` must remain live for the duration of the
         // call — the C test stacks them, so that invariant holds.
-        let mut owned: Vec<RExt<'static>> = Vec::with_capacity(nb_extensions.max(0) as usize);
+        let mut owned = if nb_extensions == 0 {
+            Vec::new()
+        } else {
+            match crate::alloc::try_vec_with_capacity(nb_extensions as usize) {
+                Ok(owned) => owned,
+                Err(()) => return OPUS_ALLOC_FAIL,
+            }
+        };
         for i in 0..nb_extensions as usize {
             let raw = unsafe { &*extensions.add(i) };
             // A negative length is illegal input; preserve the C semantics

@@ -44,3 +44,7 @@ pub(crate) unsafe fn dealloc_layout(ptr: *mut u8, layout: Layout) {
 pub(crate) fn try_vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, ()> {
     allocation::try_vec_with_capacity(capacity)
 }
+
+pub(crate) fn try_vec_with_len<T: Clone>(len: usize, value: T) -> Result<Vec<T>, ()> {
+    allocation::try_vec_with_len(len, value)
+}

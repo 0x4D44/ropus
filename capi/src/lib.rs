@@ -303,6 +303,207 @@ mod allocation_tests {
         assert_eq!(streams, 111);
         assert_eq!(coupled_streams, 222);
     }
+
+    #[test]
+    fn extension_shims_report_temporary_allocation_failure() {
+        let _lock = ALLOCATION_TEST_LOCK.lock().unwrap();
+        let _reset = FailpointReset;
+        let packet = [0x06u8];
+        let mut extension = extensions::OpusExtensionDataC {
+            id: 0,
+            frame: 0,
+            data: std::ptr::null(),
+            len: 0,
+        };
+
+        let mut capacity = 1;
+        alloc::fail_after(0);
+        assert_eq!(
+            unsafe {
+                extensions::opus_packet_extensions_parse(
+                    packet.as_ptr(),
+                    packet.len() as i32,
+                    &mut extension,
+                    &mut capacity,
+                    1,
+                )
+            },
+            OPUS_ALLOC_FAIL
+        );
+
+        alloc::clear_failpoint();
+        capacity = 1;
+        alloc::fail_after(0);
+        assert_eq!(
+            unsafe {
+                extensions::opus_packet_extensions_parse_ext(
+                    packet.as_ptr(),
+                    packet.len() as i32,
+                    &mut extension,
+                    &mut capacity,
+                    &1,
+                    1,
+                )
+            },
+            OPUS_ALLOC_FAIL
+        );
+
+        alloc::clear_failpoint();
+        let mut output = [0u8; 4000];
+        let output_capacity = output.len() as i32;
+        alloc::fail_after(0);
+        assert_eq!(
+            unsafe {
+                extensions::opus_packet_extensions_generate(
+                    output.as_mut_ptr(),
+                    output_capacity,
+                    &extension,
+                    1,
+                    1,
+                    0,
+                )
+            },
+            OPUS_ALLOC_FAIL
+        );
+    }
+
+    #[test]
+    fn extension_shims_bound_large_caller_counts() {
+        let _lock = ALLOCATION_TEST_LOCK.lock().unwrap();
+        let packet = [0x06u8];
+        let mut extension = extensions::OpusExtensionDataC {
+            id: 0,
+            frame: 0,
+            data: std::ptr::null(),
+            len: 0,
+        };
+        let mut capacity = i32::MAX;
+        let ret = unsafe {
+            extensions::opus_packet_extensions_parse(
+                packet.as_ptr(),
+                packet.len() as i32,
+                &mut extension,
+                &mut capacity,
+                1,
+            )
+        };
+        assert_eq!(ret, OPUS_OK);
+        assert_eq!(capacity, 1);
+
+        capacity = i32::MAX;
+        let ret = unsafe {
+            extensions::opus_packet_extensions_parse_ext(
+                packet.as_ptr(),
+                packet.len() as i32,
+                &mut extension,
+                &mut capacity,
+                &1,
+                1,
+            )
+        };
+        assert_eq!(ret, OPUS_OK);
+        assert_eq!(capacity, 1);
+
+        let mut output = [0u8; 1];
+        let ret = unsafe {
+            extensions::opus_packet_extensions_generate(
+                output.as_mut_ptr(),
+                output.len() as i32,
+                &extension,
+                i32::MAX,
+                1,
+                0,
+            )
+        };
+        assert_eq!(ret, OPUS_BUFFER_TOO_SMALL);
+    }
+
+    #[test]
+    fn repacketizer_extension_shim_reports_temporary_allocation_failure() {
+        let _lock = ALLOCATION_TEST_LOCK.lock().unwrap();
+        let mut encoder =
+            ropus::opus::encoder::OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        let pcm = [16384i16; 960];
+        let mut packet = [0u8; 4000];
+        let packet_capacity = packet.len() as i32;
+        let packet_len = encoder
+            .encode(&pcm, 960, &mut packet, packet_capacity)
+            .unwrap();
+        let rp = unsafe { repacketizer::opus_repacketizer_create() };
+        assert!(!rp.is_null());
+        assert_eq!(
+            unsafe { repacketizer::opus_repacketizer_cat(rp, packet.as_ptr(), packet_len) },
+            OPUS_OK
+        );
+
+        let extension = extensions::OpusExtensionDataC {
+            id: 3,
+            frame: 0,
+            data: std::ptr::null(),
+            len: 0,
+        };
+        let mut output = [0u8; 4000];
+        let output_capacity = output.len() as i32;
+        alloc::fail_after(0);
+        let _reset = FailpointReset;
+        assert_eq!(
+            unsafe {
+                repacketizer::opus_repacketizer_out_range_impl(
+                    rp,
+                    0,
+                    1,
+                    output.as_mut_ptr(),
+                    output_capacity,
+                    0,
+                    0,
+                    &extension,
+                    1,
+                )
+            },
+            OPUS_ALLOC_FAIL
+        );
+    }
+
+    #[test]
+    fn repacketizer_extension_shim_bounds_large_caller_count() {
+        let _lock = ALLOCATION_TEST_LOCK.lock().unwrap();
+        let mut encoder =
+            ropus::opus::encoder::OpusEncoder::new(48000, 1, OPUS_APPLICATION_AUDIO).unwrap();
+        let pcm = [16384i16; 960];
+        let mut packet = [0u8; 4000];
+        let packet_capacity = packet.len() as i32;
+        let packet_len = encoder
+            .encode(&pcm, 960, &mut packet, packet_capacity)
+            .unwrap();
+        let rp = unsafe { repacketizer::opus_repacketizer_create() };
+        assert!(!rp.is_null());
+        assert_eq!(
+            unsafe { repacketizer::opus_repacketizer_cat(rp, packet.as_ptr(), packet_len) },
+            OPUS_OK
+        );
+
+        let extension = extensions::OpusExtensionDataC {
+            id: 3,
+            frame: 0,
+            data: std::ptr::null(),
+            len: 0,
+        };
+        let mut output = [0u8; 1];
+        let ret = unsafe {
+            repacketizer::opus_repacketizer_out_range_impl(
+                rp,
+                0,
+                1,
+                output.as_mut_ptr(),
+                output.len() as i32,
+                0,
+                0,
+                &extension,
+                i32::MAX,
+            )
+        };
+        assert_eq!(ret, OPUS_BUFFER_TOO_SMALL);
+    }
 }
 
 #[cfg(test)]

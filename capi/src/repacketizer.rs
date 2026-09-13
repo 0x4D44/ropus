@@ -35,7 +35,10 @@ use std::ptr;
 
 use ropus::opus::repacketizer::OpusRepacketizer;
 
-use crate::{OPUS_BAD_ARG, OPUS_INTERNAL_ERROR, OPUS_OK, ffi_guard, state_free};
+use crate::{
+    OPUS_ALLOC_FAIL, OPUS_BAD_ARG, OPUS_BUFFER_TOO_SMALL, OPUS_INTERNAL_ERROR, OPUS_OK, ffi_guard,
+    state_free,
+};
 
 /// C-facing opaque repacketizer type. Named to match `OpusRepacketizer` in the
 /// reference public headers; the test stack-allocates it by size from
@@ -299,13 +302,30 @@ pub unsafe extern "C" fn opus_repacketizer_out_range_impl(
         let Some(inner) = (unsafe { resolve_handle_ref(rp) }) else {
             return OPUS_BAD_ARG;
         };
+        if begin >= end || end as usize > inner.get_nb_frames() as usize {
+            return OPUS_BAD_ARG;
+        }
+        let frame_count = (end - begin) as usize;
+        let max_extensions = (maxlen as usize)
+            .checked_mul(frame_count)
+            .unwrap_or(usize::MAX);
+        if nb_extensions as usize > max_extensions {
+            return OPUS_BUFFER_TOO_SMALL;
+        }
         let out = unsafe { std::slice::from_raw_parts_mut(data, maxlen as usize) };
 
         // Translate C extensions into borrowed Rust slices. The caller
         // guarantees the payload memory outlives this call (stack-allocated
         // in the test).
         use ropus::opus::extensions::OpusExtensionData as RExt;
-        let mut owned: Vec<RExt<'static>> = Vec::with_capacity(nb_extensions as usize);
+        let mut owned = if nb_extensions == 0 {
+            Vec::new()
+        } else {
+            match crate::alloc::try_vec_with_capacity(nb_extensions as usize) {
+                Ok(owned) => owned,
+                Err(()) => return OPUS_ALLOC_FAIL,
+            }
+        };
         for i in 0..nb_extensions as usize {
             let raw = unsafe { &*extensions.add(i) };
             let slice: &'static [u8] = if raw.len > 0 && !raw.data.is_null() {
