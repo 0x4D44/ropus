@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00049 — Packet and repacketizer lengths can exceed Rust slice bounds
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** ropus/opus-packet
 - **Raised:** 2026-08-22T08:28:17Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T064739Z-6d8940d7
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00049-run-fix-20260913T064739Z-6d8940d7
-- **Owner base:** e6bd8720afe6486d4d13e6589501c2bf5902ffe1
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T06:47:39Z
-- **Owner until:** 2026-09-13T08:47:39Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T08:28:17Z, raised via `deltic bugs new` model=gpt-5.6-sol@max)
+- **State history:** Open (2026-08-22T08:28:17Z, raised via `deltic bugs new` model=gpt-5.6-sol@max) -> Fixed (2026-09-13T07:02:54Z, deltic:auto role=fix run=fix-20260913T064739Z-6d8940d7 branch=task/bug-ROP-BUG-KIL-00049-run-fix-20260913T064739Z-6d8940d7 code=2a9229badbdd69cc290a3d01835939068fdfe846 gate=manual)
 
 ## Observation
 
