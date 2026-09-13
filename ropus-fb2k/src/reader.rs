@@ -59,9 +59,9 @@ const SUPPORTED_MAPPING_FAMILY: u8 = 0;
 /// pre-roll before returning real audio to the caller.
 pub(crate) const PRE_ROLL_SAMPLES: u64 = 3_840;
 
-/// Ogg page sentinel for "granule unknown" (RFC 3533 §6). Reverse-scan and
-/// index walk both treat pages carrying this value as continuation pages
-/// that don't advance the timeline.
+/// Ogg page sentinel for "granule unknown" (RFC 3533 §6). Unknown granules
+/// do not advance the accumulated timeline, but are independent of the Ogg
+/// continued-packet flag used to decide whether a page is safe to seek to.
 const UNKNOWN_GRANULE: u64 = 0xFFFF_FFFF_FFFF_FFFF;
 
 /// Ogg page capture pattern per RFC 3533 §6.
@@ -71,6 +71,10 @@ const OGG_CAPTURE: &[u8; 4] = b"OggS";
 /// serial + seq + crc + segment_count).
 const OGG_HEADER_LEN: usize = 27;
 const MAX_CAPTURE_SEARCH_BYTES: usize = 150 * 1024;
+
+/// Bound the memory used by the lazy seek index. Once full, the index keeps
+/// every other safe page start and doubles its granule stride in place.
+const MAX_PAGE_INDEX_ENTRIES: usize = 4096;
 
 /// RFC 7845 §6 recommends that an Ogg Opus demuxer accept family-0 packets up
 /// to 61,440 bytes. This is larger than the encoder's 7,650-byte buffer and
@@ -370,9 +374,9 @@ impl From<TagError> for ReaderError {
 /// `next_sample_abs_pos = entry.start_granule` directly after repositioning
 /// the reader — no off-by-one reasoning required.
 ///
-/// Continuation pages (granule == `0xFFFF_FFFF_FFFF_FFFF`) are NOT indexed
-/// — they don't advance the timeline on their own, and seeking into one
-/// would land the decoder mid-packet.
+/// Pages with the continued-packet header flag are NOT indexed — seeking into
+/// one would land the decoder mid-packet. An unknown granule is separate from
+/// that flag and does not by itself make a page unsafe to index.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PageIndexEntry {
     pub(crate) start_granule: u64,
@@ -1143,13 +1147,19 @@ impl<R: Read + Seek> OggOpusReader<R> {
     }
 }
 
-/// Walk Ogg pages between `start_offset` and `file_size`, recording
-/// `(start_granule, byte_offset)` pairs for pages whose serial matches
-/// `target_serial` and whose granule is not the "unknown" sentinel.
+/// Walk Ogg pages between `start_offset` and `file_size`, recording a bounded
+/// sparse set of safe `(start_granule, byte_offset)` pairs for pages whose
+/// serial matches `target_serial`.
 ///
 /// `start_granule` is the accumulated end-granule of the *previous* matching
 /// page (0 for the first). This matches the semantics `seek` wants:
 /// "where is the decoder cursor BEFORE this page's packets are decoded?"
+///
+/// Pages with the continued-packet flag are not safe restart points. A page
+/// with an unknown granule can still be a safe restart point; it simply does
+/// not advance `running_granule`. The selected stream's first EOS page ends
+/// the walk, including when another serial or trailing same-serial pages
+/// follow it.
 ///
 /// An IO error tagged with `AbortTag` (via `CallbackReader::check_abort`)
 /// bubbles up as `ReaderError::Aborted`, so a long walk on a big file can
@@ -1165,7 +1175,7 @@ fn scan_pages<R: Read + Seek>(
     file_size: u64,
     target_serial: u32,
 ) -> Result<Vec<PageIndexEntry>, ReaderError> {
-    let mut entries: Vec<PageIndexEntry> = Vec::new();
+    let mut entries: Vec<PageIndexEntry> = Vec::with_capacity(MAX_PAGE_INDEX_ENTRIES);
     if start_offset >= file_size {
         return Ok(entries);
     }
@@ -1177,9 +1187,14 @@ fn scan_pages<R: Read + Seek>(
     let mut header = [0u8; OGG_HEADER_LEN];
     let mut offset = start_offset;
     let mut running_granule: u64 = 0;
+    let mut eligible_ordinal: u64 = 0;
+    let mut stride: u64 = 1;
 
     loop {
-        if offset + OGG_HEADER_LEN as u64 > file_size {
+        let Some(header_end) = offset.checked_add(OGG_HEADER_LEN as u64) else {
+            break;
+        };
+        if header_end > file_size {
             break;
         }
 
@@ -1201,6 +1216,7 @@ fn scan_pages<R: Read + Seek>(
             header[13],
         ]);
         let serial = u32::from_le_bytes([header[14], header[15], header[16], header[17]]);
+        let header_type = header[5];
         let page_segments = header[26] as usize;
 
         // Read the lacing table for payload length. `page_segments` is
@@ -1213,22 +1229,71 @@ fn scan_pages<R: Read + Seek>(
             Err(e) => return Err(classify_io_error(e)),
         }
         let payload_len: usize = lacing_slice.iter().map(|&b| b as usize).sum();
-        let page_total = OGG_HEADER_LEN + page_segments + payload_len;
+        let Some(page_total) = OGG_HEADER_LEN
+            .checked_add(page_segments)
+            .and_then(|size| size.checked_add(payload_len))
+        else {
+            break;
+        };
 
-        // Only index pages of our stream. Chained-stream support would
-        // detect a second OpusHead and stop here (HLD §2 out-of-scope).
-        // Continuation pages (absgp == UNKNOWN_GRANULE) don't advance the
-        // timeline on their own; we skip them without updating
-        // `running_granule`.
-        if serial == target_serial && absgp != UNKNOWN_GRANULE {
-            entries.push(PageIndexEntry {
-                start_granule: running_granule,
-                byte_offset: offset,
-            });
-            running_granule = absgp;
+        let selected_stream = serial == target_serial;
+        if selected_stream {
+            // Only page starts that do not begin with a continued packet are
+            // safe decoder restart points. Keep unknown-granule pages when
+            // they are safe starts; their start position is the last known
+            // granule rather than an invented timeline advance.
+            if header_type & 0x01 == 0 {
+                let ordinal = eligible_ordinal;
+                eligible_ordinal = eligible_ordinal.checked_add(1).ok_or_else(|| {
+                    ReaderError::InvalidStream("page index ordinal overflow".into())
+                })?;
+
+                if ordinal % stride == 0 {
+                    if entries.len() == MAX_PAGE_INDEX_ENTRIES {
+                        // Thin the existing entries in place. The retained
+                        // entries are already ordered and correspond to
+                        // ordinals divisible by the current stride.
+                        let old_len = entries.len();
+                        let mut write = 0;
+                        for read in (0..old_len).step_by(2) {
+                            let entry = entries[read];
+                            entries[write] = entry;
+                            write += 1;
+                        }
+                        entries.truncate(write);
+                        stride = stride.checked_mul(2).ok_or_else(|| {
+                            ReaderError::InvalidStream("page index stride overflow".into())
+                        })?;
+                    }
+
+                    // The current ordinal may have become ineligible after
+                    // thinning. Reconsider it under the new stride instead
+                    // of pushing beyond the fixed capacity.
+                    if ordinal % stride == 0 {
+                        entries.push(PageIndexEntry {
+                            start_granule: running_granule,
+                            byte_offset: offset,
+                        });
+                    }
+                }
+            }
+
+            // Every known granule contributes to the timeline, including a
+            // continued page or an anchor omitted during sparse thinning.
+            if absgp != UNKNOWN_GRANULE {
+                running_granule = absgp;
+            }
         }
 
-        let next_offset = offset + page_total as u64;
+        // Do not let another serial's EOS, or pages after this stream's EOS,
+        // enter the index.
+        if selected_stream && header_type & 0x04 != 0 {
+            break;
+        }
+
+        let Some(next_offset) = offset.checked_add(page_total as u64) else {
+            break;
+        };
         if next_offset <= offset || next_offset > file_size {
             break;
         }
@@ -1775,6 +1840,101 @@ mod tests {
         );
     }
 
+    #[test]
+    fn page_index_is_sparse_and_stops_at_selected_eos() {
+        const SERIAL: u32 = 0xC0DE_C0DE;
+        const OTHER_SERIAL: u32 = 0xABCD_EF01;
+        const PAGE_COUNT: usize = MAX_PAGE_INDEX_ENTRIES * 4 + 1;
+        const PAGE_SIZE: usize = OGG_HEADER_LEN + 2;
+
+        let mut bytes = Vec::with_capacity((PAGE_COUNT + 2) * PAGE_SIZE);
+        for sequence in 0..PAGE_COUNT as u32 {
+            let is_eos = sequence as usize + 1 == PAGE_COUNT;
+            bytes.extend_from_slice(&build_index_test_page(
+                sequence as u64 + 1,
+                SERIAL,
+                sequence,
+                if is_eos { 0x04 } else { 0 },
+                &[0xA5],
+            ));
+        }
+        let selected_eos_offset = (PAGE_COUNT - 1) as u64 * PAGE_SIZE as u64;
+
+        // Neither page may enter the index: the selected stream ended above,
+        // and another serial's EOS must not terminate the selected scan.
+        bytes.extend_from_slice(&build_index_test_page(
+            PAGE_COUNT as u64 + 100,
+            SERIAL,
+            PAGE_COUNT as u32,
+            0,
+            &[0xA5],
+        ));
+        bytes.extend_from_slice(&build_index_test_page(1, OTHER_SERIAL, 0, 0x04, &[0xA5]));
+
+        let mut cursor = Cursor::new(bytes.clone());
+        let entries =
+            scan_pages(&mut cursor, 0, bytes.len() as u64, SERIAL).expect("valid pages must scan");
+
+        assert_eq!(
+            cursor.position(),
+            selected_eos_offset + (OGG_HEADER_LEN + 1) as u64,
+            "scanner must stop after the selected EOS lacing table"
+        );
+        assert!(entries.len() <= MAX_PAGE_INDEX_ENTRIES);
+        assert!(entries.capacity() <= MAX_PAGE_INDEX_ENTRIES);
+        assert_eq!(entries[0].start_granule, 0);
+        assert_eq!(entries[0].byte_offset, 0);
+
+        for pair in entries.windows(2) {
+            assert!(pair[0].byte_offset < pair[1].byte_offset);
+            assert!(pair[0].start_granule <= pair[1].start_granule);
+        }
+        for entry in &entries {
+            let ordinal = entry.byte_offset as usize / PAGE_SIZE;
+            assert!(ordinal < PAGE_COUNT, "trailing page entered the index");
+            assert_eq!(entry.byte_offset, ordinal as u64 * PAGE_SIZE as u64);
+            assert_eq!(
+                entry.start_granule, ordinal as u64,
+                "retained anchor has the wrong exact starting granule"
+            );
+        }
+
+        // The final selected page remains reachable after thinning, proving
+        // that collection continued through the stream instead of keeping a
+        // bounded prefix only.
+        let last = entries.last().expect("EOS page must be indexed");
+        assert_eq!(last.byte_offset, selected_eos_offset);
+        assert_eq!(last.start_granule, (PAGE_COUNT - 1) as u64);
+        assert!(entries.len() < PAGE_COUNT);
+    }
+
+    #[test]
+    fn page_index_separates_unknown_granule_from_continuation_flag() {
+        const SERIAL: u32 = 0xC0DE_C0DE;
+        const PAGE_SIZE: u64 = (OGG_HEADER_LEN + 2) as u64;
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&build_index_test_page(
+            UNKNOWN_GRANULE,
+            SERIAL,
+            0,
+            0,
+            &[0xA5],
+        ));
+        bytes.extend_from_slice(&build_index_test_page(960, SERIAL, 1, 0x01, &[0xA5]));
+        bytes.extend_from_slice(&build_index_test_page(1920, SERIAL, 2, 0x04, &[0xA5]));
+
+        let mut cursor = Cursor::new(bytes.clone());
+        let entries =
+            scan_pages(&mut cursor, 0, bytes.len() as u64, SERIAL).expect("valid pages must scan");
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].byte_offset, 0);
+        assert_eq!(entries[0].start_granule, 0);
+        assert_eq!(entries[1].byte_offset, 2 * PAGE_SIZE);
+        assert_eq!(entries[1].start_granule, 960);
+    }
+
     fn build_test_ogg_page(
         granule: u64,
         serial: u32,
@@ -1796,6 +1956,31 @@ mod tests {
         page.extend_from_slice(payload);
         let crc = ogg_page_crc32(&page);
         page[22..26].copy_from_slice(&crc.to_le_bytes());
+        page
+    }
+
+    /// Build the minimal page shape needed by `scan_pages`. The scanner only
+    /// reads headers and lacing values, so keeping the checksum zero avoids
+    /// sharing the duration test's CRC instrumentation across parallel tests.
+    fn build_index_test_page(
+        granule: u64,
+        serial: u32,
+        sequence: u32,
+        header_type: u8,
+        payload: &[u8],
+    ) -> Vec<u8> {
+        assert!(payload.len() <= u8::MAX as usize);
+        let mut page = Vec::with_capacity(OGG_HEADER_LEN + 1 + payload.len());
+        page.extend_from_slice(OGG_CAPTURE);
+        page.push(0);
+        page.push(header_type);
+        page.extend_from_slice(&granule.to_le_bytes());
+        page.extend_from_slice(&serial.to_le_bytes());
+        page.extend_from_slice(&sequence.to_le_bytes());
+        page.extend_from_slice(&0u32.to_le_bytes());
+        page.push(1);
+        page.push(payload.len() as u8);
+        page.extend_from_slice(payload);
         page
     }
 }
