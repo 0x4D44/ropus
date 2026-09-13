@@ -6,15 +6,15 @@
 - **Area:** tools/fetch-assets
 - **Raised:** 2026-08-13T17:17:37Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T171849Z-c75da419
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KILN-00007-run-verify-20260913T171849Z-c75da419
+- **Owner base:** be5671a69a0e0784671c8a31d5321f8c76439d21
+- **Owner fingerprint:** sha256:ba5335e07da95cea32d51c64dd4303e675065bd591154616edffa7f54cb437ea
+- **Owner since:** 2026-09-13T17:18:49Z
+- **Owner until:** 2026-09-13T19:18:49Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
