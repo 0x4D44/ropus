@@ -422,15 +422,13 @@ fn read_wav(path: &PathBuf) -> Wav {
     }
 }
 
-fn weights_or_skip() -> bool {
-    if WEIGHTS_BLOB.is_empty() {
-        eprintln!(
-            "dred_lpcnet_feature_drift: WEIGHTS_BLOB empty -- skipping. \
-             Run `cargo run -p fetch-assets -- all` to populate."
-        );
-        return false;
-    }
-    true
+/// Require an embedded DRED weight blob so this differential test cannot
+/// compile and pass without performing any comparisons.
+fn require_weights() {
+    assert!(
+        !WEIGHTS_BLOB.is_empty(),
+        "DRED LPCNet feature differential requires embedded weights; run `cargo run -p fetch-assets -- all`"
+    );
 }
 
 fn vectors_path(name: &str) -> PathBuf {
@@ -443,9 +441,7 @@ fn vectors_path(name: &str) -> PathBuf {
 
 #[test]
 fn test_dred_lpcnet_feature_drift_is_bounded_against_c_reference() {
-    if !weights_or_skip() {
-        return;
-    }
+    require_weights();
 
     let path = vectors_path(FIXTURE_NAME);
     let wav = read_wav(&path);

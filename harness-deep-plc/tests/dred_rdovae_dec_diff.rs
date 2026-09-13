@@ -129,25 +129,18 @@ fn first_divergent(a: &[f32], b: &[f32]) -> Option<(usize, f32, f32)> {
     None
 }
 
-/// Guard against running without an embedded DRED weight blob — if
-/// `fetch-assets -- weights` wasn't run the crate compiles but the test
-/// has nothing to compare. Emit a loud skip, don't silently pass.
-fn weights_or_skip() -> bool {
-    if WEIGHTS_BLOB.is_empty() {
-        eprintln!(
-            "dred_rdovae_dec_diff: WEIGHTS_BLOB empty — skipping. \
-             Run `cargo run -p fetch-assets -- all` to populate."
-        );
-        return false;
-    }
-    true
+/// Require an embedded DRED weight blob so these differential tests cannot
+/// compile and pass without performing any comparisons.
+fn require_weights() {
+    assert!(
+        !WEIGHTS_BLOB.is_empty(),
+        "DRED RDOVAE decoder differential requires embedded weights; run `cargo run -p fetch-assets -- all`"
+    );
 }
 
 #[test]
 fn rdovae_decode_qframe_matches_c_reference() {
-    if !weights_or_skip() {
-        return;
-    }
+    require_weights();
 
     // --- C side model + state ---
     // SAFETY: shim returns a heap-allocated struct, or NULL on failure.
@@ -275,9 +268,7 @@ fn rdovae_decode_qframe_matches_c_reference() {
 /// tier-1 even on the constrained-input manifold.
 #[test]
 fn decode_qframe_diff_quantised_inputs() {
-    if !weights_or_skip() {
-        return;
-    }
+    require_weights();
 
     // --- Rust + C encoder side (to produce realistic unquantised latents). ---
     let arrays = parse_weights(WEIGHTS_BLOB).expect("parse_weights WEIGHTS_BLOB");

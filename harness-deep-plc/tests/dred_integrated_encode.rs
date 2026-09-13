@@ -102,12 +102,13 @@ fn vectors_path(name: &str) -> PathBuf {
         .join(name)
 }
 
-fn weights_or_skip(tag: &str) -> bool {
-    if WEIGHTS_BLOB.is_empty() {
-        eprintln!("{tag}: WEIGHTS_BLOB empty — skipping. Run `cargo run -p fetch-assets -- all`.");
-        return false;
-    }
-    true
+/// Require an embedded DRED weight blob so these differential tests cannot
+/// compile and pass without performing any comparisons.
+fn require_weights() {
+    assert!(
+        !WEIGHTS_BLOB.is_empty(),
+        "DRED integrated differential requires embedded weights; run `cargo run -p fetch-assets -- all`"
+    );
 }
 
 /// Validate one C parser result and report whether it carried DRED. A zero
@@ -294,9 +295,7 @@ fn encode_c_frames(samples: &[i16], channels: i32, num_frames: usize) -> Vec<Vec
 
 #[test]
 fn rust_encoded_packets_parse_on_c_reference() {
-    if !weights_or_skip("dred_integrated_encode") {
-        return;
-    }
+    require_weights();
 
     let wav_path = vectors_path("48000hz_mono_sine440.wav");
     let wav = read_wav(&wav_path);
@@ -352,9 +351,7 @@ fn rust_encoded_packets_parse_on_c_reference() {
 
 #[test]
 fn c_encoded_packets_parse_with_rust_decoder() {
-    if !weights_or_skip("dred_integrated_encode") {
-        return;
-    }
+    require_weights();
 
     let wav_path = vectors_path("48000hz_mono_sine440.wav");
     let wav = read_wav(&wav_path);
@@ -402,9 +399,7 @@ fn c_encoded_packets_parse_with_rust_decoder() {
 
 #[test]
 fn rust_encoder_decoder_dred_roundtrip() {
-    if !weights_or_skip("dred_integrated_encode") {
-        return;
-    }
+    require_weights();
 
     let wav_path = vectors_path("48000hz_mono_sine440.wav");
     let wav = read_wav(&wav_path);

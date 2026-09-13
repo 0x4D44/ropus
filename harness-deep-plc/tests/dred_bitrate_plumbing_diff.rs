@@ -115,12 +115,13 @@ fn vectors_path(name: &str) -> PathBuf {
         .join(name)
 }
 
-fn weights_or_skip(tag: &str) -> bool {
-    if WEIGHTS_BLOB.is_empty() {
-        eprintln!("{tag}: WEIGHTS_BLOB empty — skipping. Run `cargo run -p fetch-assets -- all`.");
-        return false;
-    }
-    true
+/// Require an embedded DRED weight blob so this differential test cannot
+/// compile and pass without performing any comparisons.
+fn require_weights() {
+    assert!(
+        !WEIGHTS_BLOB.is_empty(),
+        "DRED bitrate-plumbing differential requires embedded weights; run `cargo run -p fetch-assets -- all`"
+    );
 }
 
 fn encode_rust_frames(samples: &[i16]) -> Vec<Vec<u8>> {
@@ -192,9 +193,7 @@ fn encode_c_frames(samples: &[i16]) -> Vec<Vec<u8>> {
 
 #[test]
 fn cross_precision_silk_packet_envelope_is_bounded() {
-    if !weights_or_skip("dred_bitrate_plumbing_diff") {
-        return;
-    }
+    require_weights();
 
     let wav_path = vectors_path("48000hz_mono_sine440.wav");
     let wav = read_wav(&wav_path);
