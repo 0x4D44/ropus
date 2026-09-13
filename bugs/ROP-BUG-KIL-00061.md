@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00061 — ropusplay CLI tests can wait forever on child processes
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropusplay/tests
 - **Raised:** 2026-08-22T12:55:34Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T141503Z-a056b67d
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00061-run-fix-20260913T141503Z-a056b67d
-- **Owner base:** 7ef00c4ae45f4b7ff38329d45424f4d71a54386f
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T14:15:03Z
-- **Owner until:** 2026-09-13T16:15:03Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T12:55:34Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-22T12:55:34Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T14:16:46Z, deltic:auto role=fix run=fix-20260913T141503Z-a056b67d branch=task/bug-ROP-BUG-KIL-00061-run-fix-20260913T141503Z-a056b67d code=a05a40fe2446f74ae1cbe488e03f98eca11fa744 gate=manual)
 
 ## Observation
 
