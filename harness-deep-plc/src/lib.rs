@@ -188,6 +188,7 @@ unsafe extern "C" {
     ) -> c_int;
     fn peek_decode_mem_stride(opus_st: *const OpusDecoder) -> c_int;
     fn peek_decode_mem_capacity(opus_st: *const OpusDecoder) -> c_int;
+    fn peek_celt_layout_is_valid(opus_st: *const OpusDecoder) -> c_int;
     fn peek_old_band_e(
         opus_st: *const OpusDecoder,
         offset: c_int,
@@ -347,6 +348,10 @@ impl CRefFloatDecoder {
         if err != OPUS_OK {
             unsafe { opus_decoder_destroy(ptr) };
             return Err(err);
+        }
+        if unsafe { peek_celt_layout_is_valid(ptr) } != 1 {
+            unsafe { opus_decoder_destroy(ptr) };
+            return Err(OPUS_BAD_ARG);
         }
 
         let capacities = unsafe {

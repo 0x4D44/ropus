@@ -11,11 +11,23 @@
  * via the same header include path. The reference tree itself stays read-only.
  */
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
+#include <stddef.h>
+
 #include "opus_types.h"
 #include "opus_defines.h"
 #include "arch.h"
 #include "modes.h"
+#include "celt_lpc.h"
+#include "freq.h"
 #include "structs.h" /* silk_decoder_state + silk_PLC_struct */
+
+#ifndef ENABLE_DEEP_PLC
+#error "the deep-PLC peek mirror requires ENABLE_DEEP_PLC from config.h"
+#endif
 
 /*
  * silk_decoder super-struct (from dec_API.c:47-56). Not exposed in a public
@@ -27,6 +39,10 @@
  */
 
 /* ---- CELT private layout ------------------------------------------------- */
+#define PEEK_DECODE_BUFFER_SIZE DEC_PITCH_BUF_SIZE
+#define PEEK_PLC_UPDATE_FRAMES 4
+#define PEEK_PLC_UPDATE_SAMPLES (PEEK_PLC_UPDATE_FRAMES * FRAME_SIZE)
+
 /*
  * Mirror of `struct OpusCustomDecoder` from celt_decoder.c:87 — only the prefix
  * up to `_decode_mem[1]`. We don't use this to write, only to compute offsets
@@ -64,15 +80,51 @@ typedef struct PeekCeltHdr {
     celt_sig preemph_memD[2];
 
 #ifdef ENABLE_DEEP_PLC
-    /* PLC_UPDATE_SAMPLES = PLC_UPDATE_FRAMES * FRAME_SIZE = 4 * 160 = 640
-     * (celt_decoder.c:81-82, FRAME_SIZE defined in dnn/freq.h). */
-    opus_int16 plc_pcm[640 /* PLC_UPDATE_SAMPLES */];
+    opus_int16 plc_pcm[PEEK_PLC_UPDATE_SAMPLES];
     int plc_fill;
     float plc_preemphasis_mem;
 #endif
 
     celt_sig _decode_mem[1];
 } PeekCeltHdr;
+
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(_MSC_VER)
+#define PEEK_STATIC_ASSERT(condition, name) _Static_assert(condition, #name)
+#else
+/* MSVC's C compiler does not accept C11 _Static_assert in this build. */
+#define PEEK_STATIC_ASSERT(condition, name) \
+    typedef char name[(condition) ? 1 : -1]
+#endif
+PEEK_STATIC_ASSERT(sizeof(celt_sig) == sizeof(float), peek_celt_sig_must_be_float);
+PEEK_STATIC_ASSERT(sizeof(celt_glog) == sizeof(float), peek_celt_glog_must_be_float);
+PEEK_STATIC_ASSERT(
+    PEEK_PLC_UPDATE_SAMPLES == 4 * FRAME_SIZE,
+    peek_plc_update_storage_must_track_dnn_frames
+);
+PEEK_STATIC_ASSERT(
+    sizeof(((PeekCeltHdr *)0)->plc_pcm)
+        == PEEK_PLC_UPDATE_SAMPLES * sizeof(opus_int16),
+    peek_plc_storage_size_must_match_frame_count
+);
+
+/* Check the private mirror against the reference allocation formula. The
+ * reference keeps OpusCustomDecoder private, but celt_decoder_get_size()
+ * includes its real sizeof() and every trailing array. A mismatch means a
+ * reference layout change would make these diagnostic offsets unsafe. */
+static int peek_celt_layout_matches_reference(const PeekCeltHdr *h) {
+    if (h == NULL || h->mode == NULL || h->channels <= 0 || h->overlap < 0
+        || h->mode->nbEBands <= 0) {
+        return 0;
+    }
+    size_t decode_samples = (size_t)h->channels
+        * (PEEK_DECODE_BUFFER_SIZE + (size_t)h->overlap);
+    size_t expected = sizeof(PeekCeltHdr)
+        + (decode_samples - 1) * sizeof(celt_sig)
+        + 4u * 2u * (size_t)h->mode->nbEBands * sizeof(celt_glog)
+        + (size_t)h->channels * CELT_LPC_ORDER * sizeof(opus_val16);
+    int reference_size = celt_decoder_get_size(h->channels);
+    return reference_size >= 0 && expected == (size_t)reference_size;
+}
 
 /*
  * OpusDecoder shape from src/opus_decoder.c:65. Only the prefix is fixed;
@@ -95,8 +147,6 @@ static int peek_valid_range(int offset, int count, int capacity, const void *out
     return offset >= 0 && count >= 0 && offset <= capacity
         && count <= capacity - offset && (count == 0 || out != NULL);
 }
-
-#define PEEK_DECODE_BUFFER_SIZE 2048
 
 int peek_celt_channels(const void *celt_st) {
     const PeekCeltHdr *h = (const PeekCeltHdr *)celt_st;
@@ -145,17 +195,6 @@ int peek_celt_old_log_e(const void *celt_st, int offset, int count, float *out) 
     const PeekCeltHdr *h = (const PeekCeltHdr *)celt_st;
     int nb = h->mode->nbEBands;
     const celt_glog *base = peek_celt_trailing_base(h) + 2 * nb;
-    if (!peek_valid_range(offset, count, 2 * nb, out)) return OPUS_BAD_ARG;
-    for (int i = 0; i < count; i++) {
-        out[i] = (float)base[offset + i];
-    }
-    return count;
-}
-
-int peek_celt_old_log_e2(const void *celt_st, int offset, int count, float *out) {
-    const PeekCeltHdr *h = (const PeekCeltHdr *)celt_st;
-    int nb = h->mode->nbEBands;
-    const celt_glog *base = peek_celt_trailing_base(h) + 4 * nb;
     if (!peek_valid_range(offset, count, 2 * nb, out)) return OPUS_BAD_ARG;
     for (int i = 0; i < count; i++) {
         out[i] = (float)base[offset + i];
@@ -261,6 +300,12 @@ static const void *silk_from_opus(const void *opus_st) {
     const char *base = (const char *)opus_st;
     int off = peek_opus_silk_offset(opus_st);
     return (const void *)(base + off);
+}
+
+int peek_celt_layout_is_valid(const void *opus_st) {
+    return peek_celt_layout_matches_reference(
+        (const PeekCeltHdr *)celt_from_opus(opus_st)
+    );
 }
 
 int peek_decode_mem(const void *opus_st, int offset, int count, float *out) {

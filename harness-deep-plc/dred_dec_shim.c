@@ -7,6 +7,10 @@
  * The shim owns the struct allocations (malloc/free). Rust treats both
  * handles as opaque `void*`. */
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 #include <stdlib.h>
 #include <string.h>
 

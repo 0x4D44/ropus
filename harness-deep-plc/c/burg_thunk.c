@@ -13,6 +13,10 @@
  * `wrk_docs/2026.05.07 - HLD - burg-cepstrum-pow-fix.md`.
  */
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 #include "freq.h"
 #include "opus_defines.h"
 
