@@ -1,3 +1,5 @@
+- Child-process tests need concurrent pipe drains plus kill-and-reap deadlines; wait_with_output alone can wedge (ropusdec/tests/cli.rs:run_child_with_timeout).
+
 - Public DNN FEC queues must validate exact feature width and capacity before copying (ropus/src/dnn/lpcnet.rs:fec_add).
 
 - Low-level Opus calls can panic on short slices; check frame products and use fallible temps (`ropus/src/opus/decoder.rs`).

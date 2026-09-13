@@ -9,10 +9,11 @@
 //! exposes `commands::encode`) to produce a valid Ogg Opus stream, then pipes
 //! that stream into `ropusdec -` and checks the output format on stdout.
 
-use std::io::Write;
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ropus_tools_core::commands;
 use ropus_tools_core::options::EncodeOptions;
@@ -122,6 +123,259 @@ fn temp_path(tag: &str, extension: &str) -> PathBuf {
     ))
 }
 
+const CHILD_TIMEOUT: Duration = Duration::from_secs(30);
+const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+#[derive(Debug)]
+enum ChildCapture {
+    Completed(Output),
+    TimedOut(Output),
+}
+
+fn run_child(command: &mut Command, input: Option<&[u8]>) -> io::Result<ChildCapture> {
+    run_child_with_timeout(command, input, CHILD_TIMEOUT)
+}
+
+fn run_child_with_timeout(
+    command: &mut Command,
+    input: Option<&[u8]>,
+    timeout: Duration,
+) -> io::Result<ChildCapture> {
+    configure_process_group(command);
+    command
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+
+    let stdin_thread = input.map(|bytes| {
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "child stdin was not piped"));
+        let bytes = bytes.to_vec();
+        thread::spawn(move || {
+            let mut stdin = stdin?;
+            stdin.write_all(&bytes)
+        })
+    });
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "child stdout was not piped"));
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "child stderr was not piped"));
+    let (stdout, stderr) = match (stdout, stderr) {
+        (Ok(stdout), Ok(stderr)) => (stdout, stderr),
+        (Err(error), _) | (_, Err(error)) => {
+            let _ = terminate_process_tree(&mut child);
+            if let Some(stdin_thread) = stdin_thread {
+                let _ = stdin_thread.join();
+            }
+            return Err(error);
+        }
+    };
+
+    let stdout_thread = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut stdout = stdout;
+        stdout.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    });
+    let stderr_thread = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut stderr = stderr;
+        stderr.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    });
+
+    let deadline = Instant::now() + timeout;
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if Instant::now() >= deadline => {
+                timed_out = true;
+                break terminate_process_tree(&mut child);
+            }
+            Ok(None) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                thread::sleep(remaining.min(CHILD_POLL_INTERVAL));
+            }
+            Err(error) => {
+                let cleanup = terminate_process_tree(&mut child);
+                let _ = join_output_reader(stdout_thread);
+                let _ = join_output_reader(stderr_thread);
+                if let Some(stdin_thread) = stdin_thread {
+                    let _ = stdin_thread.join();
+                }
+                return Err(combine_wait_error(error, cleanup));
+            }
+        }
+    }?;
+
+    if let Some(stdin_thread) = stdin_thread {
+        stdin_thread
+            .join()
+            .map_err(|_| io::Error::other("child stdin writer panicked"))??;
+    }
+    let output = Output {
+        status,
+        stdout: join_output_reader(stdout_thread)?,
+        stderr: join_output_reader(stderr_thread)?,
+    };
+    Ok(if timed_out {
+        ChildCapture::TimedOut(output)
+    } else {
+        ChildCapture::Completed(output)
+    })
+}
+
+fn run_child_expect_complete(command: &mut Command, input: Option<&[u8]>) -> Output {
+    match run_child(command, input).expect("run child") {
+        ChildCapture::Completed(output) => output,
+        ChildCapture::TimedOut(output) => panic!(
+            "child timed out after {CHILD_TIMEOUT:?}; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    }
+}
+
+fn combine_wait_error(wait_error: io::Error, cleanup: io::Result<ExitStatus>) -> io::Error {
+    match cleanup {
+        Ok(_) => wait_error,
+        Err(cleanup_error) => io::Error::other(format!(
+            "failed while waiting for child: {wait_error}; cleanup also failed: {cleanup_error}"
+        )),
+    }
+}
+
+fn terminate_process_tree(child: &mut Child) -> io::Result<ExitStatus> {
+    let tree_error = kill_process_tree(child.id()).err();
+    if let Some(tree_error) = tree_error {
+        let direct_error = child.kill().err();
+        let status = child.wait();
+        return match status {
+            Ok(status) => Err(io::Error::other(format!(
+                "process-tree cleanup failed: {tree_error}; direct child was reaped with {status}{}",
+                direct_error
+                    .as_ref()
+                    .map(|error| format!("; direct kill also failed: {error}"))
+                    .unwrap_or_default()
+            ))),
+            Err(wait_error) => Err(io::Error::other(format!(
+                "process-tree cleanup failed: {tree_error}; waiting for direct child also failed: \
+                 {wait_error}{}",
+                direct_error
+                    .as_ref()
+                    .map(|error| format!("; direct kill also failed: {error}"))
+                    .unwrap_or_default()
+            ))),
+        };
+    }
+    child.wait()
+}
+
+#[cfg(unix)]
+fn configure_process_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn configure_process_group(_command: &mut Command) {}
+
+#[cfg(unix)]
+fn kill_process_tree(pid: u32) -> io::Result<()> {
+    let group = format!("-{pid}");
+    let status = Command::new("kill")
+        .args(["-KILL", &group])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "kill process group for child {pid} exited with {status}"
+        )))
+    }
+}
+
+#[cfg(windows)]
+fn kill_process_tree(pid: u32) -> io::Result<()> {
+    let status = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "taskkill for child {pid} exited with {status}"
+        )))
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn kill_process_tree(pid: u32) -> io::Result<()> {
+    Err(io::Error::other(format!(
+        "process-tree termination is unsupported for child {pid}"
+    )))
+}
+
+fn join_output_reader(handle: thread::JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Vec<u8>> {
+    handle
+        .join()
+        .map_err(|_| io::Error::other("child output reader panicked"))?
+}
+
+#[test]
+fn hanging_helper_child() {
+    if std::env::var_os("ROPUSDEC_HANG_HELPER").is_some() {
+        loop {
+            thread::sleep(Duration::from_secs(60));
+        }
+    }
+}
+
+#[test]
+fn child_timeout_kills_and_reaps_hanging_helper() {
+    let mut command = Command::new(std::env::current_exe().expect("locate test binary"));
+    command
+        .args(["--exact", "hanging_helper_child"])
+        .env("ROPUSDEC_HANG_HELPER", "1");
+    let started = Instant::now();
+    let result = run_child_with_timeout(&mut command, None, Duration::from_millis(100))
+        .expect("supervisor should return a timeout");
+
+    match result {
+        ChildCapture::TimedOut(output) => {
+            assert!(
+                !output.status.success(),
+                "hanging helper unexpectedly succeeded"
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "timeout took too long: {:?}",
+                started.elapsed()
+            );
+        }
+        ChildCapture::Completed(output) => {
+            panic!("hanging helper completed unexpectedly: {:?}", output.status);
+        }
+    }
+}
+
 #[test]
 fn stdin_opus_to_stdout_wav() {
     // Build a known Opus stream in-process, then pipe it to `ropusdec - -o -`.
@@ -129,23 +383,9 @@ fn stdin_opus_to_stdout_wav() {
     // offset 8..12. Stderr absorbs banner/progress text.
     let opus = encode_sine_to_opus_bytes("stdin_wav");
 
-    let mut child = Command::new(ropusdec_bin())
-        .arg("--no-color")
-        .arg("-")
-        .arg("-o")
-        .arg("-")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn ropusdec");
-
-    {
-        let mut stdin = child.stdin.take().expect("stdin piped");
-        stdin.write_all(&opus).expect("write opus into child stdin");
-    }
-
-    let output = child.wait_with_output().expect("wait_with_output");
+    let mut command = Command::new(ropusdec_bin());
+    command.args(["--no-color", "-", "-o", "-"]);
+    let output = run_child_expect_complete(&mut command, Some(&opus));
     assert!(
         output.status.success(),
         "ropusdec exited {:?}; stderr:\n{}",
@@ -178,22 +418,9 @@ fn stdin_opus_to_stdout_with_o_attached() {
     // WAV byte stream. Mirrors the ropusenc `-o-` regression.
     let opus = encode_sine_to_opus_bytes("stdin_o_attached");
 
-    let mut child = Command::new(ropusdec_bin())
-        .arg("--no-color")
-        .arg("-")
-        .arg("-o-")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn ropusdec");
-
-    {
-        let mut stdin = child.stdin.take().expect("stdin piped");
-        stdin.write_all(&opus).expect("write opus into child stdin");
-    }
-
-    let output = child.wait_with_output().expect("wait_with_output");
+    let mut command = Command::new(ropusdec_bin());
+    command.args(["--no-color", "-", "-o-"]);
+    let output = run_child_expect_complete(&mut command, Some(&opus));
     assert!(
         output.status.success(),
         "ropusdec exited {:?}; stderr:\n{}",
@@ -222,20 +449,9 @@ fn stdin_after_value_option_uses_clean_implicit_stdout() {
     // byte zero with no banner prefix.
     let opus = encode_sine_to_opus_bytes("stdin_after_rate");
 
-    let mut child = Command::new(ropusdec_bin())
-        .args(["--no-color", "--rate", "44100", "-"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn ropusdec");
-
-    {
-        let mut stdin = child.stdin.take().expect("stdin piped");
-        stdin.write_all(&opus).expect("write opus into child stdin");
-    }
-
-    let output = child.wait_with_output().expect("wait_with_output");
+    let mut command = Command::new(ropusdec_bin());
+    command.args(["--no-color", "--rate", "44100", "-"]);
+    let output = run_child_expect_complete(&mut command, Some(&opus));
     assert!(
         output.status.success(),
         "ropusdec exited {:?}; stderr:\n{}",
@@ -262,25 +478,9 @@ fn stdout_raw_float_has_no_header() {
     // (sizeof f32 × 1-channel mono output).
     let opus = encode_sine_to_opus_bytes("raw_float");
 
-    let mut child = Command::new(ropusdec_bin())
-        .arg("--no-color")
-        .arg("--raw")
-        .arg("--float")
-        .arg("-")
-        .arg("-o")
-        .arg("-")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn ropusdec");
-
-    {
-        let mut stdin = child.stdin.take().expect("stdin piped");
-        stdin.write_all(&opus).expect("write opus into child stdin");
-    }
-
-    let output = child.wait_with_output().expect("wait_with_output");
+    let mut command = Command::new(ropusdec_bin());
+    command.args(["--no-color", "--raw", "--float", "-", "-o", "-"]);
+    let output = run_child_expect_complete(&mut command, Some(&opus));
     assert!(
         output.status.success(),
         "ropusdec exited {:?}; stderr:\n{}",
@@ -311,27 +511,15 @@ fn quiet_success_suppresses_informational_output() {
     let opus = encode_sine_to_opus_bytes("quiet_success");
     let output_path = temp_path("quiet_success", "wav");
 
-    let mut child = Command::new(ropusdec_bin())
-        .args([
-            "--quiet",
-            "--no-color",
-            "-",
-            "-o",
-            output_path.to_str().expect("temporary path is UTF-8"),
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn quiet ropusdec");
-    child
-        .stdin
-        .take()
-        .expect("stdin piped")
-        .write_all(&opus)
-        .expect("write Opus into child stdin");
-
-    let result = child.wait_with_output().expect("wait for quiet ropusdec");
+    let mut command = Command::new(ropusdec_bin());
+    command.args([
+        "--quiet",
+        "--no-color",
+        "-",
+        "-o",
+        output_path.to_str().expect("temporary path is UTF-8"),
+    ]);
+    let result = run_child_expect_complete(&mut command, Some(&opus));
     assert!(
         result.status.success(),
         "quiet decode failed: stderr={:?}",
@@ -356,16 +544,15 @@ fn quiet_success_suppresses_informational_output() {
 #[test]
 fn quiet_failure_preserves_errors_without_progress_reports() {
     let output_path = temp_path("quiet_failure", "wav");
-    let result = Command::new(ropusdec_bin())
-        .args([
-            "--quiet",
-            "--no-color",
-            "missing-ropusdec-input.opus",
-            "-o",
-            output_path.to_str().expect("temporary path is UTF-8"),
-        ])
-        .output()
-        .expect("spawn failing quiet ropusdec");
+    let mut command = Command::new(ropusdec_bin());
+    command.args([
+        "--quiet",
+        "--no-color",
+        "missing-ropusdec-input.opus",
+        "-o",
+        output_path.to_str().expect("temporary path is UTF-8"),
+    ]);
+    let result = run_child_expect_complete(&mut command, None);
 
     assert!(!result.status.success(), "missing input must fail");
     assert!(
