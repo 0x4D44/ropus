@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00058 — Closed progress pipes can panic and abort or misreport encoding
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropusenc/cli-output
 - **Raised:** 2026-08-22T11:25:51Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T082236Z-5e65a9c7
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00058-run-fix-20260913T082236Z-5e65a9c7
-- **Owner base:** 6fd4004c380e9d067164b5785778d703dffe0a53
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T08:22:36Z
-- **Owner until:** 2026-09-13T10:22:36Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T11:25:51Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-22T11:25:51Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T09:16:37Z, deltic:auto role=fix run=fix-20260913T082236Z-5e65a9c7 branch=task/bug-ROP-BUG-KIL-00058-run-fix-20260913T082236Z-5e65a9c7 code=9252c99f3df1de964b4a96219e63240f34ed20c4 gate=manual)
 
 ## Observation
 
