@@ -24,6 +24,28 @@ use std::path::PathBuf;
 
 const DRED_BITRATE_SOURCE_FNV1A64: u64 = 0x6196_d129_4721_914a;
 
+// Every data source compiled by this harness must be present before the
+// friendly `no_reference` downgrade is selected. A partial weights extraction
+// otherwise passes the old three-file probe and fails later inside cc-rs.
+const REQUIRED_REFERENCE_SOURCES: &[&str] = &[
+    "celt/bands.c",
+    "src/mlp_data.c",
+    "dnn/fargan_data.c",
+    "dnn/plc_data.c",
+    "dnn/pitchdnn_data.c",
+    "dnn/dred_rdovae_enc_data.c",
+    "dnn/dred_rdovae_dec_data.c",
+    "dnn/dred_rdovae_stats_data.c",
+];
+
+fn missing_reference_sources(reference_root: &Path) -> Vec<&'static str> {
+    REQUIRED_REFERENCE_SOURCES
+        .iter()
+        .copied()
+        .filter(|source| !reference_root.join(source).exists())
+        .collect()
+}
+
 fn register_reference_sources(
     build: &mut cc::Build,
     reference_root: &Path,
@@ -75,23 +97,12 @@ fn main() {
 
     // Always declare the cfg so rustc's cfg-checking accepts the gate.
     println!("cargo:rustc-check-cfg=cfg(no_reference)");
-    println!(
-        "cargo:rerun-if-changed={}",
-        ref_dir.join("celt/bands.c").display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        ref_dir.join("dnn/fargan_data.c").display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        ref_dir.join("dnn/plc_data.c").display()
-    );
+    for source in REQUIRED_REFERENCE_SOURCES {
+        println!("cargo:rerun-if-changed={}", ref_dir.join(source).display());
+    }
 
-    if !ref_dir.join("celt/bands.c").exists()
-        || !ref_dir.join("dnn/fargan_data.c").exists()
-        || !ref_dir.join("dnn/plc_data.c").exists()
-    {
+    let missing_sources = missing_reference_sources(&ref_dir);
+    if !missing_sources.is_empty() {
         // Missing either the C reference source or the DNN weights
         // tarball. Downgrade from the historical hard panic to a cfg
         // flag + warning so `cargo build` at the workspace root
@@ -101,9 +112,10 @@ fn main() {
         println!("cargo:rustc-cfg=no_reference");
         println!(
             "cargo:warning=ropus-harness-deep-plc: reference sources or DNN weights missing under {} — \
-             float-mode FFI is disabled. Run `cargo run -p fetch-assets -- all` to enable (needs both \
-             the C reference and the DNN weights tarball).",
-            ref_dir.display()
+             float-mode FFI is disabled. Missing: {}. Run `cargo run -p fetch-assets -- all` to enable \
+             the complete C reference and DNN weights set.",
+            ref_dir.display(),
+            missing_sources.join(", "),
         );
         return;
     }
