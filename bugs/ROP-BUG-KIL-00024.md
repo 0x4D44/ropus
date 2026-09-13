@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00024 — DRED shim FFI lacks buffer-length and CTL contracts
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-deep-plc/shims
 - **Raised:** 2026-08-19T10:46:15Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T005227Z-5f1b8f6f
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00024-run-fix-20260913T005227Z-5f1b8f6f
-- **Owner base:** 57fe500aa08ef8b3df322cf694d08e954ff91bbf
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T00:52:27Z
-- **Owner until:** 2026-09-13T02:52:27Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-19T10:46:15Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-19T10:46:15Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T01:24:32Z, deltic:auto role=fix run=fix-20260913T005227Z-5f1b8f6f branch=task/bug-ROP-BUG-KIL-00024-run-fix-20260913T005227Z-5f1b8f6f code=a6fb603321c1b6d5e651638bd0f418915cddb8ce gate=manual)
 
 ## Observation
 
