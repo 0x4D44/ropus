@@ -27,6 +27,23 @@ Static review of harness-deep-plc/ at the current worktree head. Nine live (non-
 
 ## Fix
 
-<unfixed — raised only>
+Implemented in six `harness-deep-plc/tests/` files and integrated at code
+commit `0959774e1aaf2ad36f99b259509a1657de843b57`.
+
+- Replaced `weights_or_skip` with a `require_weights` assertion in the six
+  files containing the nine live DRED differential gates.
+- An empty `WEIGHTS_BLOB` now fails the test with an actionable
+  `fetch-assets -- all` message instead of returning from `#[test]` and being
+  reported as a pass.
+- The already-ignored `dred_encode_payload_diff` test remains unchanged; the
+  nine non-ignored gates named in the observation are all covered.
+
+Verification:
+
+- `$null | deltic timeout 1200 cargo test -p ropus-harness-deep-plc --test dred_rdovae_enc_diff --test dred_rdovae_dec_diff --test dred_lpcnet_feature_drift --test dred_integrated_encode --test dred_bitrate_plumbing_nonzero_diff --test dred_bitrate_plumbing_diff` — 27 passed, 0 failed, including all nine affected gates.
+- `$null | deltic timeout 900 cargo check -p ropus-harness-deep-plc` — passed.
+- `cargo fmt --all -- --check` and `git diff --check` — passed.
+- Red proof: temporarily added an intentional `#error` to `ropus/build/gen_weights_blob.c`, forcing an empty embedded blob. `dred_rdovae_enc_diff` then failed at `require_weights` (4 support tests passed, the differential gate failed). The generator was restored before the green validation.
+- Test setup fetched the pinned C reference and DNN weights with `cargo run -p fetch-assets -- all`.
 
 ## Notes
