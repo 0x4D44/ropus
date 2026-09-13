@@ -12,7 +12,9 @@
 
 mod common;
 
+use std::ffi::CStr;
 use std::io::Cursor;
+use std::os::raw::{c_char, c_int, c_void};
 
 use ogg::reading::PacketReader;
 use ogg::writing::{PacketWriteEndInfo, PacketWriter};
@@ -29,7 +31,7 @@ use common::{
 
 use ropus_fb2k::{
     ROPUS_FB2K_ABORTED, ROPUS_FB2K_BAD_ARG, ROPUS_FB2K_INVALID_STREAM, ROPUS_FB2K_IO,
-    ROPUS_FB2K_UNSUPPORTED, RopusFb2kInfo,
+    ROPUS_FB2K_UNSUPPORTED, RopusFb2kInfo, RopusFb2kIo, RopusFb2kReader,
 };
 
 // ---------------------------------------------------------------------------
@@ -531,6 +533,164 @@ fn metadata_block_picture_is_filtered_from_callback() {
     );
 
     unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+}
+
+// ---------------------------------------------------------------------------
+// Tag callbacks may re-enter the same handle. The callback must not observe
+// an overlapping Rust borrow while seek/decode mutate the reader.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn read_tags_callback_can_seek_and_decode_same_handle() {
+    let bytes = build_opus_fixture_with_audio_packets("vendor", &[("ARTIST", "Alice")], 5, None);
+    let (_io, handle) = open_from_bytes(bytes);
+    assert!(!handle.is_null(), "valid fixture must parse");
+
+    let mut ctx = ReentrantMutationContext {
+        handle,
+        pairs: Vec::new(),
+        callback_count: 0,
+        seek_rc: c_int::MIN,
+        decode_rc: c_int::MIN,
+    };
+    let rc = unsafe {
+        ropus_fb2k::ropus_fb2k_read_tags(
+            handle,
+            Some(reentrant_mutation_cb),
+            &mut ctx as *mut ReentrantMutationContext as *mut c_void,
+        )
+    };
+
+    assert_eq!(rc, 0, "reentrant read_tags must succeed");
+    assert_eq!(ctx.seek_rc, 0, "seek from the tag callback must succeed");
+    assert!(
+        ctx.decode_rc > 0,
+        "decode from the tag callback must produce audio, got {}",
+        ctx.decode_rc
+    );
+    assert_eq!(ctx.callback_count, 2, "vendor plus one user tag expected");
+    assert!(
+        ctx.pairs
+            .iter()
+            .any(|(key, value)| key == "ARTIST" && value == "Alice")
+    );
+
+    unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+}
+
+// ---------------------------------------------------------------------------
+// Closing a handle from the first callback must not make later callbacks
+// read freed reader-owned strings. Replacing the freed allocation gives the
+// pre-fix implementation a deterministic stale-handle witness.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn read_tags_callback_can_close_handle_without_losing_snapshot() {
+    let original_bytes = build_opus_fixture(
+        "original-vendor",
+        &[("ARTIST", "ORIGINAL"), ("TITLE", "ORIGINAL")],
+    );
+    let replacement_bytes = build_opus_fixture(
+        "replacement-vendor",
+        &[("ARTIST", "REPLACED"), ("TITLE", "REPLACED")],
+    );
+    let (_original_io, handle) = open_from_bytes(original_bytes);
+    assert!(!handle.is_null(), "original fixture must parse");
+    let replacement_io = MemIo::new(replacement_bytes);
+
+    let mut ctx = CloseAndReplaceContext {
+        original: handle,
+        replacement_io: replacement_io.io(),
+        replacement: std::ptr::null_mut(),
+        pairs: Vec::new(),
+        close_done: false,
+    };
+    let rc = unsafe {
+        ropus_fb2k::ropus_fb2k_read_tags(
+            handle,
+            Some(close_and_replace_cb),
+            &mut ctx as *mut CloseAndReplaceContext as *mut c_void,
+        )
+    };
+
+    assert_eq!(rc, 0, "read_tags must finish from its owned snapshot");
+    assert!(
+        ctx.close_done,
+        "the callback must close the original handle"
+    );
+    assert!(
+        ctx.pairs
+            .iter()
+            .any(|(key, value)| key == "ARTIST" && value == "ORIGINAL"),
+        "original tag was lost after callback close: {:?}",
+        ctx.pairs
+    );
+    assert!(
+        ctx.pairs.iter().all(|(_, value)| value != "REPLACED"),
+        "callback stream switched to the replacement handle: {:?}",
+        ctx.pairs
+    );
+
+    if !ctx.replacement.is_null() {
+        unsafe { ropus_fb2k::ropus_fb2k_close(ctx.replacement) };
+    }
+}
+
+struct ReentrantMutationContext {
+    handle: *mut RopusFb2kReader,
+    pairs: Vec<(String, String)>,
+    callback_count: usize,
+    seek_rc: c_int,
+    decode_rc: c_int,
+}
+
+extern "C" fn reentrant_mutation_cb(ctx: *mut c_void, key: *const c_char, value: *const c_char) {
+    let state = unsafe { &mut *(ctx as *mut ReentrantMutationContext) };
+    if state.callback_count == 0 {
+        state.seek_rc = unsafe { ropus_fb2k::ropus_fb2k_seek(state.handle, 0) };
+        let mut output = vec![0.0f32; 5760 * 2];
+        let mut bytes_consumed = 0u64;
+        state.decode_rc = unsafe {
+            ropus_fb2k::ropus_fb2k_decode_next(
+                state.handle,
+                output.as_mut_ptr(),
+                5760,
+                &mut bytes_consumed,
+            )
+        };
+    }
+    state.callback_count += 1;
+    let key = unsafe { CStr::from_ptr(key) }
+        .to_string_lossy()
+        .into_owned();
+    let value = unsafe { CStr::from_ptr(value) }
+        .to_string_lossy()
+        .into_owned();
+    state.pairs.push((key, value));
+}
+
+struct CloseAndReplaceContext {
+    original: *mut RopusFb2kReader,
+    replacement_io: RopusFb2kIo,
+    replacement: *mut RopusFb2kReader,
+    pairs: Vec<(String, String)>,
+    close_done: bool,
+}
+
+extern "C" fn close_and_replace_cb(ctx: *mut c_void, key: *const c_char, value: *const c_char) {
+    let state = unsafe { &mut *(ctx as *mut CloseAndReplaceContext) };
+    if !state.close_done {
+        unsafe { ropus_fb2k::ropus_fb2k_close(state.original) };
+        state.close_done = true;
+        state.replacement = unsafe { ropus_fb2k::ropus_fb2k_open(&state.replacement_io, 0) };
+    }
+    let key = unsafe { CStr::from_ptr(key) }
+        .to_string_lossy()
+        .into_owned();
+    let value = unsafe { CStr::from_ptr(value) }
+        .to_string_lossy()
+        .into_owned();
+    state.pairs.push((key, value));
 }
 
 // ---------------------------------------------------------------------------

@@ -320,6 +320,12 @@ pub unsafe extern "C" fn ropus_fb2k_get_info(
 ///
 /// Also emits a synthetic `("VENDOR", vendor_string)` entry first so the
 /// caller doesn't need two separate APIs to learn who encoded the file.
+///
+/// The callback may re-enter `seek` or `decode_next` on this handle. It may
+/// also close the handle once; after doing so it must not use or close the
+/// handle again. All callback data is copied before the first callback and
+/// `read_tags` never accesses the handle after callbacks begin, so this
+/// lifetime rule remains valid even when the callback closes the handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ropus_fb2k_read_tags(
     r: *mut RopusFb2kReader,
@@ -332,24 +338,29 @@ pub unsafe extern "C" fn ropus_fb2k_read_tags(
             return ROPUS_FB2K_BAD_ARG;
         }
         let cb = cb.unwrap();
-        // SAFETY: `r` came from `ropus_fb2k_open`, still valid per caller.
-        let reader = unsafe { &*r };
-
-        // Emit the vendor string as a synthetic tag first.
-        if !emit_tag(cb, ctx, "VENDOR", reader.inner.vendor()) {
-            set_last_error_with_code(
-                "read_tags: tag contained interior NUL",
-                ROPUS_FB2K_INVALID_STREAM,
+        // Snapshot every callback pair in a separate scope. The reader
+        // borrow ends before the first callback, so callbacks may safely
+        // re-enter mutating APIs (or close this handle once) without
+        // overlapping the borrow below. The callback loop only touches these
+        // owned strings and never dereferences `r` again.
+        let callback_tags: Vec<(String, String)> = {
+            // SAFETY: `r` came from `ropus_fb2k_open` and is valid for this
+            // snapshot. No reference derived from it escapes this block.
+            let reader = unsafe { &*r };
+            let mut tags = Vec::with_capacity(reader.inner.tags().comments.len() + 1);
+            tags.push(("VENDOR".to_owned(), reader.inner.vendor().to_owned()));
+            tags.extend(
+                reader
+                    .inner
+                    .tags()
+                    .iter()
+                    .filter(|(k, _)| !FILTERED_TAG_KEYS.iter().any(|f| k.eq_ignore_ascii_case(f)))
+                    .map(|(k, v)| (k.to_owned(), v.to_owned())),
             );
-            return ROPUS_FB2K_INVALID_STREAM;
-        }
+            tags
+        };
 
-        for (k, v) in reader.inner.tags().iter() {
-            // Keep this boundary filter as a defensive compatibility guard;
-            // the parser already omits cover-art values before retention.
-            if FILTERED_TAG_KEYS.iter().any(|f| k.eq_ignore_ascii_case(f)) {
-                continue;
-            }
+        for (k, v) in &callback_tags {
             if !emit_tag(cb, ctx, k, v) {
                 set_last_error_with_code(
                     "read_tags: tag contained interior NUL",

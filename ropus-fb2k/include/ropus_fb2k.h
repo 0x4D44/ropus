@@ -93,7 +93,14 @@ int ropus_fb2k_get_info(RopusFb2kReader*, RopusFb2kInfo* out);
 
 /* Tag enumeration. Keys are uppercased (per vorbis_comment convention);
  * values are UTF-8, null-terminated, valid only for the duration of the
- * callback. METADATA_BLOCK_PICTURE is filtered out (see scope). */
+ * callback. METADATA_BLOCK_PICTURE is filtered out (see scope).
+ *
+ * The callback may re-enter ropus_fb2k_seek() or
+ * ropus_fb2k_decode_next() on this handle. It may also call
+ * ropus_fb2k_close() once; after doing so it must not use or close the
+ * handle again. Rust snapshots all tag data before the first callback and
+ * does not access the handle after callbacks begin, so later callbacks still
+ * receive the original metadata even when the first callback closes it. */
 typedef void (*RopusFb2kTagCb)(void* ctx, const char* key, const char* value);
 int ropus_fb2k_read_tags(RopusFb2kReader*, RopusFb2kTagCb cb, void* ctx);
 
