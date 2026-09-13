@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00035 — fb2k decodes zero-octet Ogg audio packets as PLC
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** ropus-fb2k/malformed-audio
 - **Raised:** 2026-08-22T06:10:44Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T045820Z-394d7194
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00035-run-fix-20260913T045820Z-394d7194
-- **Owner base:** 5edc20247d0e5bea40c24bbe99bc7e29a36213ea
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T04:58:20Z
-- **Owner until:** 2026-09-13T06:58:20Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T06:10:44Z, raised via `deltic bugs new` model=gpt-5.6-sol@high)
+- **State history:** Open (2026-08-22T06:10:44Z, raised via `deltic bugs new` model=gpt-5.6-sol@high) -> Fixed (2026-09-13T05:12:03Z, deltic:auto role=fix run=fix-20260913T045820Z-394d7194 branch=task/bug-ROP-BUG-KIL-00035-run-fix-20260913T045820Z-394d7194 code=737a1ef597985d986a58c27d594a90300f8a230d gate=manual)
 
 ## Observation
 
