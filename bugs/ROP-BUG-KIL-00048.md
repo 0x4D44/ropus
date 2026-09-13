@@ -6,15 +6,15 @@
 - **Area:** ropus-tools-core/path-safety
 - **Raised:** 2026-08-22T07:33:52Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T064335Z-3cad2e56
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00048-run-fix-20260913T064335Z-3cad2e56
+- **Owner base:** 302a189f1c9c9b856aba2b5dfc38546c8010de6e
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T06:43:35Z
+- **Owner until:** 2026-09-13T08:43:35Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
