@@ -6,15 +6,15 @@
 - **Area:** full-test/html-report
 - **Raised:** 2026-08-14T15:50:30Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T042425Z-28ef7170
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-CRUCIBLE-00015-run-fix-20260913T042425Z-28ef7170
+- **Owner base:** 2045230d1eaa7ed20ea346721ff8d871cff756e5
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T04:24:25Z
+- **Owner until:** 2026-09-13T06:24:25Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
