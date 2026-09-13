@@ -234,6 +234,71 @@ fn decode_rejects_audio_packet_one_byte_over_import_limit() {
     unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
 }
 
+// ---------------------------------------------------------------------------
+// RFC 7845 treats a zero-octet Ogg Opus audio packet as malformed. It must
+// not reach OpusDecoder::decode_float, whose empty-slice contract requests
+// packet-loss concealment and would fabricate samples.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn decode_rejects_empty_ogg_audio_packet() {
+    let mut bytes = Vec::new();
+    let mut writer = PacketWriter::new(&mut bytes);
+    writer
+        .write_packet(
+            build_opus_head(2, 48_000, 312),
+            FIXTURE_STREAM_SERIAL,
+            PacketWriteEndInfo::EndPage,
+            0,
+        )
+        .expect("write OpusHead");
+    writer
+        .write_packet(
+            common::build_opus_tags("ropus-fb2k-test", &[]),
+            FIXTURE_STREAM_SERIAL,
+            PacketWriteEndInfo::EndPage,
+            0,
+        )
+        .expect("write OpusTags");
+    writer
+        .write_packet(
+            Vec::new(),
+            FIXTURE_STREAM_SERIAL,
+            PacketWriteEndInfo::EndStream,
+            312,
+        )
+        .expect("write empty audio packet");
+    drop(writer);
+
+    let (_io, handle) = open_from_bytes(bytes);
+    assert!(
+        !handle.is_null(),
+        "valid headers must open: {}",
+        last_error_string()
+    );
+
+    let mut output = vec![0.0f32; 5760 * 2];
+    let mut bytes_consumed = 0u64;
+    let rc = unsafe {
+        ropus_fb2k::ropus_fb2k_decode_next(handle, output.as_mut_ptr(), 5760, &mut bytes_consumed)
+    };
+    assert_eq!(
+        rc, ROPUS_FB2K_INVALID_STREAM,
+        "empty audio packet must be rejected, not decoded as PLC"
+    );
+    assert_eq!(
+        unsafe { ropus_fb2k::ropus_fb2k_last_error_code() },
+        ROPUS_FB2K_INVALID_STREAM
+    );
+    assert!(
+        last_error_string().contains("empty Ogg Opus audio packet"),
+        "last error should identify the malformed packet: {}",
+        last_error_string()
+    );
+
+    unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+}
+
 #[test]
 fn open_enforces_metadata_packet_budget_at_public_boundary() {
     const MAX_METADATA_PACKET_BYTES: usize = 1024 * 1024;

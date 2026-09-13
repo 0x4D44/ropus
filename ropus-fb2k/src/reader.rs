@@ -746,6 +746,11 @@ impl<R: Read + Seek> OggOpusReader<R> {
                 self.selected_stream_eos = true;
                 return Ok((0, 0));
             }
+            if pkt.data.is_empty() {
+                return Err(ReaderError::InvalidStream(
+                    "empty Ogg Opus audio packet".into(),
+                ));
+            }
             let packet_is_last_in_stream = pkt.last_in_stream();
 
             let decoded = decoder
