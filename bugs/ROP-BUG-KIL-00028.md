@@ -6,15 +6,15 @@
 - **Area:** harness-deep-plc/tests
 - **Raised:** 2026-08-19T10:46:21Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T150937Z-72ec299d
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00028-run-verify-20260913T150937Z-72ec299d
+- **Owner base:** f3963d17a22be1c90232f3c95c00db9b401eeb96
+- **Owner fingerprint:** sha256:f685256c04a1407e573295bfe084b36ed9ea501ca1bb48473aa366ae87ba926a
+- **Owner since:** 2026-09-13T15:09:37Z
+- **Owner until:** 2026-09-13T17:09:37Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
