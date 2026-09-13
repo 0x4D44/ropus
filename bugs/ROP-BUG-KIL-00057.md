@@ -6,15 +6,15 @@
 - **Area:** ropus-tools-core/decode-diagnostics
 - **Raised:** 2026-08-22T11:25:39Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T075442Z-340b3010
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00057-run-fix-20260913T075442Z-340b3010
+- **Owner base:** 5783bccf951b25104fa8b555f9980dc254e99eed
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T07:54:42Z
+- **Owner until:** 2026-09-13T09:54:42Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
