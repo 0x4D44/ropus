@@ -7,6 +7,7 @@
 //!   3. `--query KEY` (-q): one named value, no banner, no decoration. Intended
 //!      for shell pipelines; stricter than `--quiet --no-color`.
 
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{BufReader, IsTerminal, Read, Seek};
 
@@ -15,9 +16,7 @@ use colored::*;
 
 use ropus::{DecodeMode, Decoder as RopusDecoder};
 
-use ogg::reading::PacketReader;
-
-use crate::consts::OPUS_SR;
+use crate::consts::{MAX_PACKET_BYTES, OPUS_SR};
 use crate::container::ogg::{
     GranuleGap, OpusHead, OpusTags, detect_granule_gaps, parse_opus_head, read_last_granule,
     read_page_granules, validate_opus_audio_packet, validate_opus_header_stream,
@@ -96,6 +95,364 @@ impl SampleCount {
             }
         }
     }
+}
+
+/// Maximum packet sizes accepted by the info reader.
+///
+/// OpusHead is fixed-size for the channel mapping family supported by this
+/// crate. Tags are deliberately finite because they are user-controlled text;
+/// audio packets are bounded by the largest packet our encoder can produce.
+const MAX_OPUS_HEAD_PACKET_BYTES: usize = 19;
+const MAX_OPUS_TAGS_PACKET_BYTES: usize = 1024 * 1024;
+const MAX_HEADER_PENDING_BYTES: usize = MAX_OPUS_TAGS_PACKET_BYTES;
+
+#[derive(Debug)]
+struct InfoPacket {
+    data: Vec<u8>,
+    stream_serial: u32,
+}
+
+impl InfoPacket {
+    fn stream_serial(&self) -> u32 {
+        self.stream_serial
+    }
+}
+
+/// Page-streamed Ogg packet reader for info plans.
+///
+/// `ogg::reading::PacketReader` keeps every continued packet in a growing
+/// overlap cache before a caller can validate it. This reader parses one
+/// physical page at a time, discards unrelated logical streams, and checks the
+/// selected packet's role-specific budget before copying a lace into it.
+struct BoundedPacketReader<R: Read> {
+    source: R,
+    target_serial: Option<u32>,
+    pending: Option<Vec<u8>>,
+    other_pending: HashMap<u32, Vec<u8>>,
+    packet_count: u64,
+    ready: VecDeque<InfoPacket>,
+}
+
+impl<R: Read> BoundedPacketReader<R> {
+    fn new(source: R) -> Self {
+        Self {
+            source,
+            target_serial: None,
+            pending: None,
+            other_pending: HashMap::new(),
+            packet_count: 0,
+            ready: VecDeque::new(),
+        }
+    }
+
+    fn for_serial(source: R, target_serial: u32) -> Self {
+        Self {
+            target_serial: Some(target_serial),
+            ..Self::new(source)
+        }
+    }
+
+    fn packet_limit(packet_count: u64) -> usize {
+        match packet_count {
+            0 => MAX_OPUS_HEAD_PACKET_BYTES,
+            1 => MAX_OPUS_TAGS_PACKET_BYTES,
+            _ => MAX_PACKET_BYTES,
+        }
+    }
+
+    fn read_packet(&mut self) -> Result<Option<InfoPacket>> {
+        loop {
+            if let Some(packet) = self.ready.pop_front() {
+                return Ok(Some(packet));
+            }
+
+            let Some(page) = self.read_page()? else {
+                if self.pending.is_some() {
+                    return Err(anyhow!("truncated continued Ogg packet"));
+                }
+                return Ok(None);
+            };
+
+            let serial = page.serial;
+            if self.target_serial.is_none() {
+                // As with PacketReader, the first packet in a normal Opus file
+                // identifies the stream. Selecting the first page serial also
+                // avoids retaining arbitrary pre-header multiplexed streams.
+                self.target_serial = Some(serial);
+            }
+            if self.target_serial == Some(serial) {
+                self.process_page(serial, page.header_type, &page.lacing, &page.body)?;
+            }
+        }
+    }
+
+    /// Read the next packet while the header pair is being established. The
+    /// second packet must be surfaced even when a malformed/multiplexed file
+    /// puts it on another logical stream, so callers can reject that pair.
+    fn read_header_packet(&mut self) -> Result<Option<InfoPacket>> {
+        loop {
+            if let Some(packet) = self.ready.pop_front() {
+                return Ok(Some(packet));
+            }
+            let Some(page) = self.read_page()? else {
+                return Ok(None);
+            };
+            if self.target_serial == Some(page.serial) {
+                self.process_page(page.serial, page.header_type, &page.lacing, &page.body)?;
+            } else if self.packet_count == 1 {
+                self.process_other_header_page(&page)?;
+            }
+        }
+    }
+
+    fn process_other_header_page(&mut self, page: &InfoPage) -> Result<()> {
+        let continued = page.header_type & 0x01 != 0;
+        if continued != self.other_pending.contains_key(&page.serial) {
+            return Err(anyhow!("invalid Ogg continued-packet flag"));
+        }
+        let pending_len = self.other_pending.get(&page.serial).map_or(0, Vec::len);
+        Self::check_lacing_budget(1, pending_len, &page.lacing)?;
+        let other_pending_bytes = self.other_pending.values().map(Vec::len).sum::<usize>();
+        let mut final_pending_len = pending_len;
+        for &lace in &page.lacing {
+            final_pending_len = final_pending_len
+                .checked_add(lace as usize)
+                .ok_or_else(|| anyhow!("header continuation size overflow"))?;
+            if lace < 255 {
+                final_pending_len = 0;
+            }
+        }
+        let total_after_page = other_pending_bytes
+            .saturating_sub(pending_len)
+            .checked_add(final_pending_len)
+            .ok_or_else(|| anyhow!("header continuation size overflow"))?;
+        if total_after_page > MAX_HEADER_PENDING_BYTES {
+            return Err(anyhow!("header continuation memory budget exceeded"));
+        }
+
+        let mut offset = 0usize;
+        if !continued && !page.lacing.is_empty() {
+            self.other_pending.insert(page.serial, Vec::new());
+        }
+        for (index, &lace) in page.lacing.iter().enumerate() {
+            let lace_len = lace as usize;
+            let packet = self
+                .other_pending
+                .get_mut(&page.serial)
+                .ok_or_else(|| anyhow!("missing Ogg packet continuation"))?;
+            packet.extend_from_slice(&page.body[offset..offset + lace_len]);
+            offset += lace_len;
+            if lace < 255 {
+                let data = self
+                    .other_pending
+                    .remove(&page.serial)
+                    .expect("pending packet exists");
+                self.ready.push_back(InfoPacket {
+                    data,
+                    stream_serial: page.serial,
+                });
+                if index + 1 < page.lacing.len() {
+                    self.other_pending.insert(page.serial, Vec::new());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn process_page(
+        &mut self,
+        serial: u32,
+        header_type: u8,
+        lacing: &[u8],
+        body: &[u8],
+    ) -> Result<()> {
+        let continued = header_type & 0x01 != 0;
+        if continued != self.pending.is_some() {
+            return Err(anyhow!("invalid Ogg continued-packet flag"));
+        }
+        self.check_page_budget(lacing)?;
+
+        let mut offset = 0usize;
+        let mut lace_index = 0usize;
+        if !continued && !lacing.is_empty() {
+            self.pending = Some(Vec::new());
+        }
+        while lace_index < lacing.len() {
+            let lace_len = lacing[lace_index] as usize;
+            self.append_pending(&body[offset..offset + lace_len])?;
+            offset += lace_len;
+            lace_index += 1;
+            if lace_len < 255 {
+                self.finish_pending(serial);
+                if lace_index < lacing.len() {
+                    self.pending = Some(Vec::new());
+                }
+            }
+        }
+        debug_assert_eq!(offset, body.len());
+        Ok(())
+    }
+
+    fn check_page_budget(&self, lacing: &[u8]) -> Result<()> {
+        let packet_len = self.pending.as_ref().map_or(0, Vec::len);
+        Self::check_lacing_budget(self.packet_count, packet_len, lacing)
+    }
+
+    fn check_lacing_budget(
+        mut packet_count: u64,
+        mut packet_len: usize,
+        lacing: &[u8],
+    ) -> Result<()> {
+        for &lace in lacing {
+            let lace_len = lace as usize;
+            let limit = Self::packet_limit(packet_count);
+            packet_len = packet_len
+                .checked_add(lace_len)
+                .ok_or_else(|| anyhow!("Ogg packet length overflow"))?;
+            if packet_len > limit {
+                return Err(anyhow!(
+                    "Ogg packet {} exceeds info limit of {} bytes",
+                    packet_count,
+                    limit
+                ));
+            }
+            if lace < 255 {
+                packet_count += 1;
+                packet_len = 0;
+            }
+        }
+        Ok(())
+    }
+
+    fn append_pending(&mut self, bytes: &[u8]) -> Result<()> {
+        let limit = Self::packet_limit(self.packet_count);
+        let pending = self
+            .pending
+            .as_mut()
+            .ok_or_else(|| anyhow!("missing Ogg packet continuation"))?;
+        if bytes.len() > limit.saturating_sub(pending.len()) {
+            return Err(anyhow!(
+                "Ogg packet {} exceeds info limit of {} bytes",
+                self.packet_count,
+                limit
+            ));
+        }
+        pending.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    fn finish_pending(&mut self, serial: u32) {
+        let data = self
+            .pending
+            .take()
+            .expect("finished packet must be pending");
+        self.ready.push_back(InfoPacket {
+            data,
+            stream_serial: serial,
+        });
+        self.packet_count += 1;
+    }
+
+    fn read_page(&mut self) -> Result<Option<InfoPage>> {
+        let Some(header) = self.read_header()? else {
+            return Ok(None);
+        };
+        if header[4] != 0 {
+            return Err(anyhow!(
+                "unsupported Ogg stream structure version {}",
+                header[4]
+            ));
+        }
+
+        let segment_count = header[26] as usize;
+        let mut lacing = vec![0u8; segment_count];
+        self.source
+            .read_exact(&mut lacing)
+            .context("reading Ogg lacing table")?;
+        let serial = u32::from_le_bytes([header[14], header[15], header[16], header[17]]);
+        if self.target_serial.is_none() {
+            self.target_serial = Some(serial);
+        }
+        if self.target_serial == Some(serial) {
+            let continued = header[5] & 0x01 != 0;
+            if continued != self.pending.is_some() {
+                return Err(anyhow!("invalid Ogg continued-packet flag"));
+            }
+            // The lacing table gives us the exact bytes that would be added
+            // to each packet, so reject before allocating the page body.
+            self.check_page_budget(&lacing)?;
+        }
+        let body_len = lacing.iter().map(|&lace| lace as usize).sum::<usize>();
+        let mut body = vec![0u8; body_len];
+        self.source
+            .read_exact(&mut body)
+            .context("reading Ogg page body")?;
+
+        let mut page = Vec::with_capacity(27 + segment_count + body_len);
+        page.extend_from_slice(&header);
+        page.extend_from_slice(&lacing);
+        page.extend_from_slice(&body);
+        let expected = u32::from_le_bytes([header[22], header[23], header[24], header[25]]);
+        if ogg_crc32(&page) != expected {
+            return Err(anyhow!("Ogg page checksum mismatch"));
+        }
+
+        Ok(Some(InfoPage {
+            serial,
+            header_type: header[5],
+            lacing,
+            body,
+        }))
+    }
+
+    fn read_header(&mut self) -> Result<Option<[u8; 27]>> {
+        let mut capture = [0u8; 4];
+        let mut filled = 0usize;
+        loop {
+            let n = self.source.read(&mut capture[filled..filled + 1])?;
+            if n == 0 {
+                if filled == 0 {
+                    return Ok(None);
+                }
+                return Err(anyhow!("truncated Ogg capture pattern"));
+            }
+            filled += 1;
+            if filled == capture.len() {
+                if &capture == b"OggS" {
+                    let mut header = [0u8; 27];
+                    header[..4].copy_from_slice(&capture);
+                    self.source.read_exact(&mut header[4..])?;
+                    return Ok(Some(header));
+                }
+                capture.copy_within(1.., 0);
+                filled = 3;
+            }
+        }
+    }
+}
+
+struct InfoPage {
+    serial: u32,
+    header_type: u8,
+    lacing: Vec<u8>,
+    body: Vec<u8>,
+}
+
+fn ogg_crc32(page: &[u8]) -> u32 {
+    const POLY: u32 = 0x04c1_1db7;
+    let mut crc = 0u32;
+    for (index, &byte) in page.iter().enumerate() {
+        let byte = if (22..26).contains(&index) { 0 } else { byte };
+        crc ^= u32::from(byte) << 24;
+        for _ in 0..8 {
+            crc = if crc & 0x8000_0000 != 0 {
+                (crc << 1) ^ POLY
+            } else {
+                crc << 1
+            };
+        }
+    }
+    crc
 }
 
 /// Validate a query key without opening its input file.
@@ -184,7 +541,7 @@ fn collect_summary(input: &std::path::Path, retain_packets: bool) -> Result<Info
     let file =
         File::open(input).with_context(|| format!("opening {}", escape_terminal_path(input)))?;
     let file_len = file.metadata().ok().map(|m| m.len()).unwrap_or(0);
-    let mut reader = PacketReader::new(BufReader::new(file));
+    let mut reader = BoundedPacketReader::new(BufReader::new(file));
 
     let head_pkt = reader.read_packet()?.ok_or_else(|| anyhow!("empty file"))?;
     let head = parse_opus_head(&head_pkt.data)?;
@@ -193,7 +550,7 @@ fn collect_summary(input: &std::path::Path, retain_packets: bool) -> Result<Info
     let target_serial = head_pkt.stream_serial();
 
     let tags_pkt = reader
-        .read_packet()?
+        .read_header_packet()?
         .ok_or_else(|| anyhow!("expected OpusTags packet, got end of stream"))?;
     validate_opus_header_stream(target_serial, tags_pkt.stream_serial())?;
     let tags = OpusTags::parse(&tags_pkt.data).context("parsing OpusTags packet")?;
@@ -455,7 +812,7 @@ fn read_head(input: &std::path::Path) -> Result<(OpusHead, u32, u64)> {
 }
 
 fn read_head_from<R: Read + Seek>(source: R) -> Result<(OpusHead, u32)> {
-    let mut reader = PacketReader::new(BufReader::new(source));
+    let mut reader = BoundedPacketReader::new(BufReader::new(source));
     let head_pkt = reader.read_packet()?.ok_or_else(|| anyhow!("empty file"))?;
     let head = parse_opus_head(&head_pkt.data)?;
     Ok((head, head_pkt.stream_serial()))
@@ -467,12 +824,12 @@ fn read_head_and_tags(input: &std::path::Path) -> Result<(OpusHead, OpusTags, u3
     let file =
         File::open(input).with_context(|| format!("opening {}", escape_terminal_path(input)))?;
     let file_len = file.metadata().ok().map(|m| m.len()).unwrap_or(0);
-    let mut reader = PacketReader::new(BufReader::new(file));
+    let mut reader = BoundedPacketReader::new(BufReader::new(file));
     let head_pkt = reader.read_packet()?.ok_or_else(|| anyhow!("empty file"))?;
     let head = parse_opus_head(&head_pkt.data)?;
     let target_serial = head_pkt.stream_serial();
     let tags_pkt = reader
-        .read_packet()?
+        .read_header_packet()?
         .ok_or_else(|| anyhow!("expected OpusTags packet, got end of stream"))?;
     validate_opus_header_stream(target_serial, tags_pkt.stream_serial())?;
     let tags = OpusTags::parse(&tags_pkt.data).context("parsing OpusTags packet")?;
@@ -495,7 +852,7 @@ fn query_sample_count(input: &std::path::Path, head: OpusHead, target_serial: u3
             .checked_sub(head.pre_skip as u64)
             .ok_or_else(|| anyhow!("final granule {absgp} is before pre-skip {}", head.pre_skip))?
     } else {
-        decode_sample_count(input, head)?
+        decode_sample_count(input, head, target_serial)?
     };
     Ok(sample_count)
 }
@@ -506,10 +863,10 @@ fn query_sample_count(input: &std::path::Path, head: OpusHead, target_serial: u3
 fn validate_query_packets(input: &std::path::Path, target_serial: u32) -> Result<()> {
     let file =
         File::open(input).with_context(|| format!("opening {}", escape_terminal_path(input)))?;
-    let mut reader = PacketReader::new(BufReader::new(file));
+    let mut reader = BoundedPacketReader::for_serial(BufReader::new(file), target_serial);
     let _head_pkt = reader.read_packet()?.ok_or_else(|| anyhow!("empty file"))?;
     let tags_pkt = reader
-        .read_packet()?
+        .read_header_packet()?
         .ok_or_else(|| anyhow!("expected OpusTags packet, got end of stream"))?;
     validate_opus_header_stream(target_serial, tags_pkt.stream_serial())?;
 
@@ -526,15 +883,15 @@ fn validate_query_packets(input: &std::path::Path, target_serial: u32) -> Result
 
 /// Slow duration fallback for truncated streams. This decodes packets in a
 /// bounded-memory loop and does not retain their TOCs or tag strings.
-fn decode_sample_count(input: &std::path::Path, head: OpusHead) -> Result<u64> {
+fn decode_sample_count(input: &std::path::Path, head: OpusHead, target_serial: u32) -> Result<u64> {
     let file =
         File::open(input).with_context(|| format!("opening {}", escape_terminal_path(input)))?;
-    let mut reader = PacketReader::new(BufReader::new(file));
+    let mut reader = BoundedPacketReader::for_serial(BufReader::new(file), target_serial);
     // Skip OpusHead and OpusTags; the first packet is validated against the
     // caller's head, while the tags payload is intentionally not parsed.
     let head_pkt = reader.read_packet()?.ok_or_else(|| anyhow!("empty file"))?;
     let tags_pkt = reader
-        .read_packet()?
+        .read_header_packet()?
         .ok_or_else(|| anyhow!("expected OpusTags packet, got end of stream"))?;
     validate_opus_header_stream(head_pkt.stream_serial(), tags_pkt.stream_serial())?;
 
@@ -705,6 +1062,67 @@ mod tests {
         (output.into_inner(), 27 + 1 + head.len())
     }
 
+    fn build_page(serial: u32, sequence: u32, header_type: u8, lacing: &[u8]) -> Vec<u8> {
+        let body_len = lacing.iter().map(|&lace| lace as usize).sum::<usize>();
+        let mut page = Vec::with_capacity(27 + lacing.len() + body_len);
+        page.extend_from_slice(b"OggS");
+        page.push(0);
+        page.push(header_type);
+        page.extend_from_slice(&0u64.to_le_bytes());
+        page.extend_from_slice(&serial.to_le_bytes());
+        page.extend_from_slice(&sequence.to_le_bytes());
+        page.extend_from_slice(&0u32.to_le_bytes());
+        page.push(lacing.len() as u8);
+        page.extend_from_slice(lacing);
+        page.extend(std::iter::repeat_n(0xA5, body_len));
+        let crc = ogg_crc32(&page);
+        page[22..26].copy_from_slice(&crc.to_le_bytes());
+        page
+    }
+
+    fn append_packet(output: &mut Vec<u8>, serial: u32, sequence: &mut u32, length: usize) {
+        let mut remaining = length;
+        let mut first_page = true;
+        while remaining > 0 {
+            let chunk = remaining.min(255);
+            let mut header_type = if first_page { 0x02 } else { 0x01 };
+            remaining -= chunk;
+            if remaining == 0 {
+                header_type |= 0x04;
+            }
+            let lacing = if chunk == 255 && remaining == 0 {
+                // A zero-length lace terminates a packet whose size is an
+                // exact multiple of 255.
+                vec![255, 0]
+            } else {
+                vec![chunk as u8]
+            };
+            output.extend_from_slice(&build_page(serial, *sequence, header_type, &lacing));
+            *sequence += 1;
+            first_page = false;
+        }
+    }
+
+    fn stream_with_audio_packet(length: usize) -> Vec<u8> {
+        let serial = 0xABCD_1234;
+        let mut output = Vec::new();
+        let mut sequence = 0;
+        append_packet(&mut output, serial, &mut sequence, 19);
+        append_packet(&mut output, serial, &mut sequence, 16);
+        append_packet(&mut output, serial, &mut sequence, length);
+        output
+    }
+
+    fn stream_with_packet_lengths(lengths: &[usize]) -> Vec<u8> {
+        let serial = 0xABCD_1234;
+        let mut output = Vec::new();
+        let mut sequence = 0;
+        for &length in lengths {
+            append_packet(&mut output, serial, &mut sequence, length);
+        }
+        output
+    }
+
     #[test]
     fn query_key_is_validated_without_opening_input() {
         let error = validate_query_key("gargle").expect_err("unknown key must fail");
@@ -730,5 +1148,117 @@ mod tests {
         assert_eq!(head.channels, 1);
         assert_eq!(serial, 0xC0DE_C0DE);
         assert_eq!(reader.inner.position() as usize, first_page_len);
+    }
+
+    #[test]
+    fn bounded_reader_accepts_head_packet_at_limit() {
+        let bytes = stream_with_packet_lengths(&[MAX_OPUS_HEAD_PACKET_BYTES]);
+        let mut reader = BoundedPacketReader::new(Cursor::new(bytes));
+        assert_eq!(
+            reader.read_packet().unwrap().unwrap().data.len(),
+            MAX_OPUS_HEAD_PACKET_BYTES
+        );
+    }
+
+    #[test]
+    fn bounded_reader_rejects_oversized_head_packet() {
+        let bytes = stream_with_packet_lengths(&[MAX_OPUS_HEAD_PACKET_BYTES + 1]);
+        let mut reader = BoundedPacketReader::new(Cursor::new(bytes));
+        let error = match reader.read_packet() {
+            Err(error) => error,
+            Ok(Some(_)) => panic!("OpusHead over budget must be rejected"),
+            Ok(None) => panic!("OpusHead packet disappeared"),
+        };
+        assert!(error.to_string().contains("packet 0"));
+    }
+
+    #[test]
+    fn bounded_reader_accepts_tags_packet_at_limit() {
+        let bytes = stream_with_packet_lengths(&[19, MAX_OPUS_TAGS_PACKET_BYTES]);
+        let mut reader = BoundedPacketReader::new(Cursor::new(bytes));
+        assert_eq!(reader.read_packet().unwrap().unwrap().data.len(), 19);
+        assert_eq!(
+            reader.read_packet().unwrap().unwrap().data.len(),
+            MAX_OPUS_TAGS_PACKET_BYTES
+        );
+    }
+
+    #[test]
+    fn bounded_reader_rejects_oversized_tags_packet() {
+        let bytes = stream_with_packet_lengths(&[19, MAX_OPUS_TAGS_PACKET_BYTES + 1]);
+        let mut reader = BoundedPacketReader::new(Cursor::new(bytes));
+        reader.read_packet().unwrap().unwrap();
+        let error = match reader.read_packet() {
+            Err(error) => error,
+            Ok(Some(_)) => panic!("OpusTags over budget must be rejected"),
+            Ok(None) => panic!("OpusTags packet disappeared"),
+        };
+        assert!(error.to_string().contains("packet 1"));
+    }
+
+    #[test]
+    fn bounded_reader_accepts_audio_packet_at_limit_across_continued_pages() {
+        let bytes = stream_with_audio_packet(MAX_PACKET_BYTES);
+        let mut reader = BoundedPacketReader::new(Cursor::new(bytes));
+        assert_eq!(reader.read_packet().unwrap().unwrap().data.len(), 19);
+        assert_eq!(reader.read_packet().unwrap().unwrap().data.len(), 16);
+        assert_eq!(
+            reader.read_packet().unwrap().unwrap().data.len(),
+            MAX_PACKET_BYTES
+        );
+    }
+
+    #[test]
+    fn bounded_reader_rejects_oversized_continued_audio_packet() {
+        let bytes = stream_with_audio_packet(MAX_PACKET_BYTES + 1);
+        let mut reader = BoundedPacketReader::new(Cursor::new(bytes));
+        reader.read_packet().unwrap().unwrap();
+        reader.read_packet().unwrap().unwrap();
+        let error = match reader.read_packet() {
+            Err(error) => error,
+            Ok(Some(_)) => panic!("audio packet over budget must be rejected"),
+            Ok(None) => panic!("audio packet disappeared"),
+        };
+        assert!(error.to_string().contains("exceeds info limit"));
+    }
+
+    #[test]
+    fn bounded_reader_skips_interleaved_logical_stream_pages() {
+        let target = 0xABCD_1234;
+        let other = 0x1020_3040;
+        let mut bytes = Vec::new();
+        let mut target_sequence = 0;
+        let mut other_sequence = 0;
+        append_packet(&mut bytes, target, &mut target_sequence, 19);
+        append_packet(&mut bytes, other, &mut other_sequence, 64);
+        append_packet(&mut bytes, target, &mut target_sequence, 16);
+        append_packet(&mut bytes, other, &mut other_sequence, 64);
+        append_packet(&mut bytes, target, &mut target_sequence, 1);
+
+        let mut reader = BoundedPacketReader::for_serial(Cursor::new(bytes), target);
+        assert_eq!(reader.read_packet().unwrap().unwrap().data.len(), 19);
+        assert_eq!(reader.read_packet().unwrap().unwrap().data.len(), 16);
+        assert_eq!(reader.read_packet().unwrap().unwrap().data.len(), 1);
+    }
+
+    #[test]
+    fn header_reader_tracks_interleaved_non_target_continuations_by_serial() {
+        let target = 0xABCD_1234;
+        let pending_other = 0x1020_3040;
+        let completed_other = 0x5060_7080;
+        let mut bytes = Vec::new();
+        let mut target_sequence = 0;
+        append_packet(&mut bytes, target, &mut target_sequence, 19);
+        bytes.extend_from_slice(&build_page(pending_other, 0, 0x02, &[255]));
+        bytes.extend_from_slice(&build_page(completed_other, 0, 0x02, &[16]));
+
+        let mut reader = BoundedPacketReader::new(Cursor::new(bytes));
+        reader.read_packet().unwrap().unwrap();
+        let packet = reader
+            .read_header_packet()
+            .unwrap()
+            .expect("completed interleaved header packet");
+        assert_eq!(packet.stream_serial(), completed_other);
+        assert_eq!(packet.data.len(), 16);
     }
 }
