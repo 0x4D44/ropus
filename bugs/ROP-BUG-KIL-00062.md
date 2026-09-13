@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00062 — Headless device-list tests bypass stdout invariants
 
-- **State:** Open
+- **State:** Fixed
 - **Priority:** Should
 - **Severity:** Low
 - **Area:** ropusplay/tests
 - **Raised:** 2026-08-22T12:55:38Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** fix
-- **Owner run:** fix-20260913T141805Z-60a7ec1e
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00062-run-fix-20260913T141805Z-60a7ec1e
-- **Owner base:** a1cde3b320a635db3e4372d435336ed4e56b3429
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
 - **Owner fingerprint:** -
-- **Owner since:** 2026-09-13T14:18:05Z
-- **Owner until:** 2026-09-13T16:18:05Z
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-22T12:55:38Z, raised via `deltic bugs new`)
+- **State history:** Open (2026-08-22T12:55:38Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T14:34:50Z, deltic:auto role=fix run=fix-20260913T141805Z-60a7ec1e branch=task/bug-ROP-BUG-KIL-00062-run-fix-20260913T141805Z-60a7ec1e code=677ad6eea5075315fd045606a35641a44976caf7 gate=manual)
 
 ## Observation
 
