@@ -6,15 +6,15 @@
 - **Area:** ropus-fb2k/ogg-scan
 - **Raised:** 2026-08-22T06:10:44Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
+- **Owner:** deltic:manual
+- **Owner role:** fix
+- **Owner run:** fix-20260913T044247Z-1ac01d52
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00034-run-fix-20260913T044247Z-1ac01d52
+- **Owner base:** 1cb8a3ee117fdbfb8f6c9567e6f7aac2295bf2ca
 - **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner since:** 2026-09-13T04:42:47Z
+- **Owner until:** 2026-09-13T06:42:47Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
