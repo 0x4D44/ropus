@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00024 — DRED shim FFI lacks buffer-length and CTL contracts
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-deep-plc/shims
 - **Raised:** 2026-08-19T10:46:15Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T150714Z-5b836479
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00024-run-verify-20260913T150714Z-5b836479
-- **Owner base:** e94ce1b71080bdd56a6e6a108b7f7e950c49ea07
-- **Owner fingerprint:** sha256:f70afbcf9f5a9beebd12ae772a313cd13e5c97eddfe8e5d2b79c9ba20bb91d23
-- **Owner since:** 2026-09-13T15:07:14Z
-- **Owner until:** 2026-09-13T17:07:14Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-19T10:46:15Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T01:24:32Z, deltic:auto role=fix run=fix-20260913T005227Z-5f1b8f6f branch=task/bug-ROP-BUG-KIL-00024-run-fix-20260913T005227Z-5f1b8f6f code=a6fb603321c1b6d5e651638bd0f418915cddb8ce gate=manual)
+- **State history:** Open (2026-08-19T10:46:15Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T01:24:32Z, deltic:auto role=fix run=fix-20260913T005227Z-5f1b8f6f branch=task/bug-ROP-BUG-KIL-00024-run-fix-20260913T005227Z-5f1b8f6f code=a6fb603321c1b6d5e651638bd0f418915cddb8ce gate=manual) -> Closed (2026-09-13T16:28:29Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=a6fb603321c1b6d5e651638bd0f418915cddb8ce)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review. The DRED test-shim FFI surface has no length or configuration con
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13, independent verifier)
+
+- The CAPI allocation/FFI regression gate passed with 21 Rust tests and its C test, alongside the focused deep-PLC checks and the full-test 244-test gate.
+- Red control: changing the C-copy length rejection result in `capi/src/projection.rs` from `OPUS_BAD_ARG` to `OPUS_OK` made `c_copy_helpers_reject_negative_and_oversized_lengths` fail (`expected -1, got 0`). The mutation was restored.
 
 ## Notes

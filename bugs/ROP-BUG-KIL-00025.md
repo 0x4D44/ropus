@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00025 — peek.c layout mirror compiles without config.h and has no drift guard
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-deep-plc/shims
 - **Raised:** 2026-08-19T10:46:15Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T150754Z-99031c44
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00025-run-verify-20260913T150754Z-99031c44
-- **Owner base:** 314bde176b5656869a326401c804b10ed2fbf58c
-- **Owner fingerprint:** sha256:ff3c3ef3706743eec1cd0f60bffdeda3a92ea77a2693c53b6ea1a3088a9e2c02
-- **Owner since:** 2026-09-13T15:07:54Z
-- **Owner until:** 2026-09-13T17:07:54Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-19T10:46:15Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T01:47:53Z, deltic:auto role=fix run=fix-20260913T012600Z-05633c07 branch=task/bug-ROP-BUG-KIL-00025-run-fix-20260913T012600Z-05633c07 code=57d33ac9f8d38de0adc600f1d25a9f9ce9ab449b gate=manual)
+- **State history:** Open (2026-08-19T10:46:15Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T01:47:53Z, deltic:auto role=fix run=fix-20260913T012600Z-05633c07 branch=task/bug-ROP-BUG-KIL-00025-run-fix-20260913T012600Z-05633c07 code=57d33ac9f8d38de0adc600f1d25a9f9ce9ab449b gate=manual) -> Closed (2026-09-13T16:28:29Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=57d33ac9f8d38de0adc600f1d25a9f9ce9ab449b)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review. harness-deep-plc/c/peek.c hand-mirrors the private `OpusCustomDec
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13, independent verifier)
+
+- The deep-PLC/CAPI focused gates and package checks passed, including the layout-sensitive C shim checks.
+- Red control: changing `PEEK_PLC_UPDATE_FRAMES` from 4 to 3 made the C layout/static checks fail at compile time with the negative-subscript/static-assert diagnostic. The mutation was restored.
 
 ## Notes

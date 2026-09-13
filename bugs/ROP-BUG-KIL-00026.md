@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00026 — RDOVAE Tier-1 gates silently downgrade to 60 dB Tier-2 on bit-exactness loss
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-deep-plc/tests
 - **Raised:** 2026-08-19T10:46:20Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T150828Z-2aba283c
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00026-run-verify-20260913T150828Z-2aba283c
-- **Owner base:** 61b88c7e35ee3970be1250b4b88f434640ca3b79
-- **Owner fingerprint:** sha256:c135ca7fb10889ba612ee1e4d7bf7c2fb57fcbd78cc3ff635ad697bd9129d528
-- **Owner since:** 2026-09-13T15:08:28Z
-- **Owner until:** 2026-09-13T17:08:28Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-19T10:46:20Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T01:56:31Z, deltic:auto role=fix run=fix-20260913T014914Z-c13c2589 branch=task/bug-ROP-BUG-KIL-00026-run-fix-20260913T014914Z-c13c2589 code=cb5279e90751d6c7431f43c90c01dafacb4e0835 gate=manual)
+- **State history:** Open (2026-08-19T10:46:20Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T01:56:31Z, deltic:auto role=fix run=fix-20260913T014914Z-c13c2589 branch=task/bug-ROP-BUG-KIL-00026-run-fix-20260913T014914Z-c13c2589 code=cb5279e90751d6c7431f43c90c01dafacb4e0835 gate=manual) -> Closed (2026-09-13T16:28:29Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=cb5279e90751d6c7431f43c90c01dafacb4e0835)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review. The RDOVAE differential gates claim Tier-1 (bit-exact) status —
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13, independent verifier)
+
+- The RDOVAE encode/decode differential targets passed, including the Tier-1 assertions and focused helper checks; package gates were green.
+- Red control: adding `1e-6` to the C latent input made the focused encoder comparison fail bit-exactness. The mutation was restored.
 
 ## Notes

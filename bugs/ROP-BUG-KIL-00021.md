@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00021 — DRED differential gates skip-and-pass when WEIGHTS_BLOB is empty
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** High
 - **Area:** harness-deep-plc/tests
 - **Raised:** 2026-08-19T10:45:49Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T143625Z-73e3b84e
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00021-run-verify-20260913T143625Z-73e3b84e
-- **Owner base:** aef200b719fc910da03d66843da9f19ad9206332
-- **Owner fingerprint:** sha256:feae18b8ec84847e21d77075273c84ad3907da7626396db395b08ee7ff74c543
-- **Owner since:** 2026-09-13T14:36:25Z
-- **Owner until:** 2026-09-13T16:36:25Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-19T10:45:49Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T00:22:10Z, deltic:auto role=fix run=fix-20260913T001300Z-29800934 branch=task/bug-ROP-BUG-KIL-00021-run-fix-20260913T001300Z-29800934 code=0959774e1aaf2ad36f99b259509a1657de843b57 gate=manual)
+- **State history:** Open (2026-08-19T10:45:49Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T00:22:10Z, deltic:auto role=fix run=fix-20260913T001300Z-29800934 branch=task/bug-ROP-BUG-KIL-00021-run-fix-20260913T001300Z-29800934 code=0959774e1aaf2ad36f99b259509a1657de843b57 gate=manual) -> Closed (2026-09-13T16:28:29Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=0959774e1aaf2ad36f99b259509a1657de843b57)
 
 ## Observation
 
@@ -45,5 +45,10 @@ Verification:
 - `cargo fmt --all -- --check` and `git diff --check` — passed.
 - Red proof: temporarily added an intentional `#error` to `ropus/build/gen_weights_blob.c`, forcing an empty embedded blob. `dred_rdovae_enc_diff` then failed at `require_weights` (4 support tests passed, the differential gate failed). The generator was restored before the green validation.
 - Test setup fetched the pinned C reference and DNN weights with `cargo run -p fetch-assets -- all`.
+
+### Verification summary (2026-09-13, independent verifier)
+
+- Re-ran the six DRED differential targets named in the observation: 27 tests passed, including all nine formerly silent skip gates; `cargo check -p ropus-harness-deep-plc`, `cargo fmt --all -- --check`, and `git diff --check` passed.
+- Red control: adding `#error` to `ropus/build/gen_weights_blob.c` produced an empty weights blob and made `dred_rdovae_enc_diff` fail at `require_weights` instead of passing silently. The mutation was restored.
 
 ## Notes

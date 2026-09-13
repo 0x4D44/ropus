@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00023 — Bit-exact differential gates accept shared NaN and silently truncate on length mismatch
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Should
 - **Severity:** Medium
 - **Area:** harness-deep-plc/tests
 - **Raised:** 2026-08-19T10:46:14Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T150641Z-383407bf
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00023-run-verify-20260913T150641Z-383407bf
-- **Owner base:** 5a530137863a57135a2304453ed58d1f4d8de7c2
-- **Owner fingerprint:** sha256:8dfd208dd90c2700eb8b5d9f9dd97bb2d5eaa421c93680fb3d640c96e1a2ca03
-- **Owner since:** 2026-09-13T15:06:41Z
-- **Owner until:** 2026-09-13T17:06:41Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-19T10:46:14Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T00:48:35Z, deltic:auto role=fix run=fix-20260913T003640Z-30a2db99 branch=task/bug-ROP-BUG-KIL-00023-run-fix-20260913T003640Z-30a2db99 code=c0715f0560034ad0fec0130c652d9ce808d718b7 gate=manual)
+- **State history:** Open (2026-08-19T10:46:14Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T00:48:35Z, deltic:auto role=fix run=fix-20260913T003640Z-30a2db99 branch=task/bug-ROP-BUG-KIL-00023-run-fix-20260913T003640Z-30a2db99 code=c0715f0560034ad0fec0130c652d9ce808d718b7 gate=manual) -> Closed (2026-09-13T16:28:29Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=c0715f0560034ad0fec0130c652d9ce808d718b7)
 
 ## Observation
 
@@ -48,5 +48,10 @@ Verification:
 - `$null | deltic timeout 900 cargo check -p ropus-harness-deep-plc`, `cargo fmt --all -- --check`, and `git diff --check` — passed.
 - Red proof: temporarily removed the finite guard from the Burg helper; its same-NaN and unequal-length `#[should_panic]` tests failed. Removing the integrated finite-slice guard also made `all_nan_fec_features_are_rejected` fail at the weaker all-zero assertion. Both guards were restored before the green suite.
 - Test setup fetched the pinned C reference and DNN weights with `cargo run -p fetch-assets -- all`.
+
+### Verification summary (2026-09-13, independent verifier)
+
+- Re-ran the DRED decode, DRED encode, Burg cepstral, and integrated-DRED targets: 32 tests passed, with the pre-existing ignored encoder parity test unchanged; `cargo check`, `cargo fmt --all -- --check`, and `git diff --check` passed.
+- Red control: removing the encoder comparison's `assert_finite_pair` guard made its focused comparison fail on the bit-exact assertion. The mutation was restored.
 
 ## Notes

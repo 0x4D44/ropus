@@ -1,25 +1,25 @@
 # ROP-BUG-KIL-00028 — LPCNet drift-lock bounds are host-architecture-specific despite scalar-only claim
 
-- **State:** Fixed
+- **State:** Closed
 - **Priority:** Could
 - **Severity:** Medium
 - **Area:** harness-deep-plc/tests
 - **Raised:** 2026-08-19T10:46:21Z
 - **Discovery source:** Agent
-- **Owner:** deltic:manual
-- **Owner role:** verify
-- **Owner run:** verify-20260913T150937Z-72ec299d
-- **Owner host:** CRUCIBLE
-- **Owner branch:** task/bug-ROP-BUG-KIL-00028-run-verify-20260913T150937Z-72ec299d
-- **Owner base:** f3963d17a22be1c90232f3c95c00db9b401eeb96
-- **Owner fingerprint:** sha256:f685256c04a1407e573295bfe084b36ed9ea501ca1bb48473aa366ae87ba926a
-- **Owner since:** 2026-09-13T15:09:37Z
-- **Owner until:** 2026-09-13T17:09:37Z
+- **Owner:** -
+- **Owner role:** -
+- **Owner run:** -
+- **Owner host:** -
+- **Owner branch:** -
+- **Owner base:** -
+- **Owner fingerprint:** -
+- **Owner since:** -
+- **Owner until:** -
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
 - **Attempts:** fix=0, doubt=0, indeterminate=0
-- **State history:** Open (2026-08-19T10:46:21Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T02:22:32Z, deltic:auto role=fix run=fix-20260913T020444Z-d46a930b branch=task/bug-ROP-BUG-KIL-00028-run-fix-20260913T020444Z-d46a930b code=cdd1b1f3d81794f4318a2a86016bf76cc4653dfb gate=manual)
+- **State history:** Open (2026-08-19T10:46:21Z, raised via `deltic bugs new`) -> Fixed (2026-09-13T02:22:32Z, deltic:auto role=fix run=fix-20260913T020444Z-d46a930b branch=task/bug-ROP-BUG-KIL-00028-run-fix-20260913T020444Z-d46a930b code=cdd1b1f3d81794f4318a2a86016bf76cc4653dfb gate=manual) -> Closed (2026-09-13T16:28:29Z, independent two-eyes verification model=codex@xhigh, verifier=CRUCIBLE, fixer=deltic:auto, fix=cdd1b1f3d81794f4318a2a86016bf76cc4653dfb)
 
 ## Observation
 
@@ -27,6 +27,9 @@ Static review. harness-deep-plc/config.h:26-28 claims "Keep SIMD off in this har
 
 ## Fix
 
-<unfixed — raised only>
+### Verification summary (2026-09-13, independent verifier)
+
+- The scalar/SIMD layout and LPCNet drift focused checks passed with the repository package gates.
+- Red control: forcing the incompatible SSE2/scalar macro combination made `cargo check -p ropus-harness-deep-plc` fail at the C scalar-branch `#error`. The mutation was restored.
 
 ## Notes
