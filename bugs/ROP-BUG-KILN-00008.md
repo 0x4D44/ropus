@@ -6,15 +6,15 @@
 - **Area:** tools/fuzz-runner
 - **Raised:** 2026-08-13T17:17:37Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T145805Z-f2ae4044
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KILN-00008-run-verify-20260913T145805Z-f2ae4044
+- **Owner base:** f0c2c4a5250eed228928d61d2ca6e0ca0420f9a7
+- **Owner fingerprint:** sha256:235cf2e36226f66859b2f52d998843d95fbd20ca3e4d35adfcf7d8548f8c1e62
+- **Owner since:** 2026-09-13T14:58:05Z
+- **Owner until:** 2026-09-13T16:58:05Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
