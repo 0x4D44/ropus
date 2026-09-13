@@ -6,15 +6,15 @@
 - **Area:** ropus-fb2k/truncation
 - **Raised:** 2026-08-22T06:10:45Z
 - **Discovery source:** Agent
-- **Owner:** -
-- **Owner role:** -
-- **Owner run:** -
-- **Owner host:** -
-- **Owner branch:** -
-- **Owner base:** -
-- **Owner fingerprint:** -
-- **Owner since:** -
-- **Owner until:** -
+- **Owner:** deltic:manual
+- **Owner role:** verify
+- **Owner run:** verify-20260913T152305Z-8b88270d
+- **Owner host:** CRUCIBLE
+- **Owner branch:** task/bug-ROP-BUG-KIL-00036-run-verify-20260913T152305Z-8b88270d
+- **Owner base:** 0efb79f8f717fe08e48a8fa48afe81cdb967d03c
+- **Owner fingerprint:** sha256:6b8571da44f186ad2487a734e5787978d61f2a090f3f3ebb96e191a6cdd4472e
+- **Owner since:** 2026-09-13T15:23:05Z
+- **Owner until:** 2026-09-13T17:23:05Z
 - **Verify retry after:** -
 - **Held branch:** -
 - **Legacy fixed run:** -
