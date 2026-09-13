@@ -1994,6 +1994,83 @@ fn rg_track_gain_r128() {
 }
 
 #[test]
+fn rg_r128_raw_i16_boundaries_are_accepted() {
+    for (raw, expected) in [("-32768", -123.0f32), ("32767", 132.99609375f32)] {
+        let bytes = build_opus_fixture("v", &[("R128_TRACK_GAIN", raw)]);
+        let (_io, handle) = open_from_bytes(bytes);
+        assert!(!handle.is_null(), "fixture with {raw} must open");
+
+        let mut info = zeroed_info();
+        assert_eq!(
+            unsafe { ropus_fb2k::ropus_fb2k_get_info(handle, &mut info) },
+            0
+        );
+        assert!(
+            (info.rg_track_gain - expected).abs() < 1e-3,
+            "raw {raw} should convert to {expected} dB, got {}",
+            info.rg_track_gain
+        );
+
+        unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+    }
+}
+
+#[test]
+fn rg_r128_invalid_raw_forms_are_nan() {
+    for raw in ["-32769", "32768", " -1280", "-1280 ", "0000000"] {
+        let bytes = build_opus_fixture("v", &[("R128_TRACK_GAIN", raw)]);
+        let (_io, handle) = open_from_bytes(bytes);
+        assert!(!handle.is_null(), "fixture with {raw:?} must open");
+
+        let mut info = zeroed_info();
+        assert_eq!(
+            unsafe { ropus_fb2k::ropus_fb2k_get_info(handle, &mut info) },
+            0
+        );
+        assert!(
+            info.rg_track_gain.is_nan(),
+            "invalid raw R128 value {raw:?} must be NaN, got {}",
+            info.rg_track_gain
+        );
+
+        unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+    }
+}
+
+#[test]
+fn rg_duplicate_r128_gain_tags_are_nan() {
+    let bytes = build_opus_fixture(
+        "v",
+        &[
+            ("R128_TRACK_GAIN", "-1280"),
+            ("R128_TRACK_GAIN", "0"),
+            ("R128_ALBUM_GAIN", "-1280"),
+            ("R128_ALBUM_GAIN", "0"),
+        ],
+    );
+    let (_io, handle) = open_from_bytes(bytes);
+    assert!(!handle.is_null());
+
+    let mut info = zeroed_info();
+    assert_eq!(
+        unsafe { ropus_fb2k::ropus_fb2k_get_info(handle, &mut info) },
+        0
+    );
+    assert!(
+        info.rg_track_gain.is_nan(),
+        "duplicate R128 track gain must be NaN, got {}",
+        info.rg_track_gain
+    );
+    assert!(
+        info.rg_album_gain.is_nan(),
+        "duplicate R128 album gain must be NaN, got {}",
+        info.rg_album_gain
+    );
+
+    unsafe { ropus_fb2k::ropus_fb2k_close(handle) };
+}
+
+#[test]
 fn rg_legacy_overrides_r128() {
     let bytes = build_opus_fixture(
         "v",

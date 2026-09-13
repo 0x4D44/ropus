@@ -246,19 +246,29 @@ impl ReplayGainInfo {
 ///   playback).
 pub(crate) fn extract_replaygain(tags: &ParsedTags) -> ReplayGainInfo {
     let mut rg = ReplayGainInfo::nan();
+    let mut r128_track_gain_seen = false;
+    let mut r128_album_gain_seen = false;
 
     // First pass: R128 tags. These are the canonical Opus form, so we
     // populate from them first; the legacy pass below then overrides.
     for (key, value) in tags.iter() {
         match key {
             "R128_TRACK_GAIN" => {
-                if let Some(v) = parse_r128_gain(value) {
-                    rg.track_gain = v;
+                if r128_track_gain_seen {
+                    // A duplicate is invalid metadata; never choose one of
+                    // the values based on comment order.
+                    rg.track_gain = f32::NAN;
+                } else {
+                    r128_track_gain_seen = true;
+                    rg.track_gain = parse_r128_gain(value).unwrap_or(f32::NAN);
                 }
             }
             "R128_ALBUM_GAIN" => {
-                if let Some(v) = parse_r128_gain(value) {
-                    rg.album_gain = v;
+                if r128_album_gain_seen {
+                    rg.album_gain = f32::NAN;
+                } else {
+                    r128_album_gain_seen = true;
+                    rg.album_gain = parse_r128_gain(value).unwrap_or(f32::NAN);
                 }
             }
             "R128_TRACK_PEAK" => {
@@ -310,17 +320,14 @@ pub(crate) fn extract_replaygain(tags: &ParsedTags) -> ReplayGainInfo {
 
 /// Parse `R128_*_GAIN`: string-encoded signed integer in Q7.8 dB relative
 /// to R128 -23 LUFS. Add +5 dB to land on the ReplayGain -18 LUFS reference.
-/// Returns `None` on parse failure, non-finite result, or out-of-range
-/// value (outside ±127 dB — matches libopusfile's R128 clamp; a value
-/// outside this range is almost certainly file corruption, and rejecting
-/// NaN/Inf alone would still accept `i32::MIN` → ≈-8.4 million dB).
+/// Returns `None` unless `s` is an ASCII decimal signed integer in the raw
+/// signed-16-bit range and is at most six characters long.
 fn parse_r128_gain(s: &str) -> Option<f32> {
-    let raw: i32 = s.trim().parse().ok()?;
-    let gain = raw as f32 / R128_Q78_DIVISOR + R128_TO_RG_OFFSET_DB;
-    if !gain.is_finite() || !(-127.0..=127.0).contains(&gain) {
+    if s.len() > 6 || !s.is_ascii() {
         return None;
     }
-    Some(gain)
+    let raw: i16 = s.parse().ok()?;
+    Some(raw as f32 / R128_Q78_DIVISOR + R128_TO_RG_OFFSET_DB)
 }
 
 /// Parse `REPLAYGAIN_*_GAIN`: legacy string, e.g. `"-6.75 dB"` or `"-6.75"`.
@@ -579,38 +586,36 @@ mod tests {
     }
 
     #[test]
-    fn r128_gain_out_of_range_is_none() {
-        // i32::MIN through Q7.8 conversion ≈ -8.4 million dB, which is
-        // almost certainly file corruption. We reject rather than emit
-        // a catastrophic gain value. Matches libopusfile's R128 clamp.
-        let extreme = i32::MIN.to_string();
-        assert!(parse_r128_gain(&extreme).is_none(), "i32::MIN must reject");
+    fn r128_gain_requires_exact_raw_i16_grammar() {
+        assert_eq!(parse_r128_gain("-32768"), Some(-123.0));
+        assert_eq!(parse_r128_gain("32767"), Some(132.99609375));
 
-        let extreme_pos = i32::MAX.to_string();
-        assert!(
-            parse_r128_gain(&extreme_pos).is_none(),
-            "i32::MAX must reject"
-        );
+        for value in ["-32769", "32768", " -1280", "-1280 ", "0000000", "é"] {
+            assert!(
+                parse_r128_gain(value).is_none(),
+                "invalid R128 value {value:?} must reject"
+            );
+        }
+    }
 
-        // Values just outside the ±127 dB window also reject. 127 dB
-        // plus the +5 dB RG offset pre-subtraction: raw = (122 dB) * 256
-        // = 31_232 is just inside, and one past that clamp is out.
-        // In practice, anything beyond ~±32k Q7.8 maps outside ±127 dB.
-        let just_out = (128 * 256 + 1).to_string(); // > 128 dB raw
-        assert!(
-            parse_r128_gain(&just_out).is_none(),
-            "value outside ±127 dB window must reject"
-        );
-
-        // Confirm normal values still work as a sanity check.
-        assert!(parse_r128_gain("-1280").is_some());
+    #[test]
+    fn duplicate_r128_gain_does_not_overwrite_first_value() {
+        let parsed = tags_from(&[
+            ("R128_TRACK_GAIN", "-1280"),
+            ("R128_TRACK_GAIN", "0"),
+            ("R128_ALBUM_GAIN", "-1280"),
+            ("R128_ALBUM_GAIN", "0"),
+        ]);
+        let rg = extract_replaygain(&parsed);
+        assert!(rg.track_gain.is_nan());
+        assert!(rg.album_gain.is_nan());
     }
 
     #[test]
     fn extract_rg_r128_extreme_gain_is_nan() {
-        // End-to-end: a corrupted R128_TRACK_GAIN value surfaces as NaN in
-        // the extracted RG struct, not as a catastrophic finite gain.
-        let parsed = tags_from(&[("R128_TRACK_GAIN", &i32::MIN.to_string())]);
+        // End-to-end: a raw value outside the RFC 7845 i16 range surfaces as
+        // NaN in the extracted RG struct, not as a finite gain.
+        let parsed = tags_from(&[("R128_TRACK_GAIN", "-32769")]);
         let rg = extract_replaygain(&parsed);
         assert!(rg.track_gain.is_nan());
     }
