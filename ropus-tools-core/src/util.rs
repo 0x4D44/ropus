@@ -1,5 +1,7 @@
 //! Miscellaneous small helpers shared by multiple commands.
 
+use std::ffi::OsString;
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -97,6 +99,131 @@ pub fn reject_input_output_alias(input: &Path, output: &Path) -> Result<()> {
     }
     if paths_refer_to_same_file(input, output)? {
         bail!("input and output refer to the same file; choose a different output path");
+    }
+    Ok(())
+}
+
+/// A regular-file destination that is committed only after the complete output
+/// has flushed successfully. The temporary lives beside the final path so the
+/// final rename is atomic on the same filesystem.
+pub(crate) struct AtomicOutput {
+    output_path: PathBuf,
+    temp_path: PathBuf,
+    committed: bool,
+}
+
+impl AtomicOutput {
+    pub(crate) fn create(output_path: &Path) -> Result<(Self, File)> {
+        let parent = output_path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let file_name = output_path.file_name().ok_or_else(|| {
+            anyhow::anyhow!("output path {} has no file name", output_path.display())
+        })?;
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let pid = std::process::id();
+
+        for attempt in 0..100u32 {
+            let mut temp_name = OsString::from(".");
+            temp_name.push(file_name);
+            temp_name.push(format!(".ropus-tmp-{pid}-{timestamp}-{attempt}"));
+            let temp_path = parent.join(temp_name);
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp_path)
+            {
+                Ok(file) => {
+                    return Ok((
+                        Self {
+                            output_path: output_path.to_path_buf(),
+                            temp_path,
+                            committed: false,
+                        },
+                        file,
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "creating temporary output beside {}",
+                            crate::ui::escape_terminal_path(output_path)
+                        )
+                    });
+                }
+            }
+        }
+        bail!(
+            "could not create a unique temporary output beside {}",
+            crate::ui::escape_terminal_path(output_path)
+        )
+    }
+
+    pub(crate) fn commit(mut self) -> Result<()> {
+        atomic_replace(&self.temp_path, &self.output_path)?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for AtomicOutput {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_file(&self.temp_path);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn atomic_replace(temp_path: &Path, output_path: &Path) -> Result<()> {
+    std::fs::rename(temp_path, output_path).with_context(|| {
+        format!(
+            "replacing output {} with flushed temporary",
+            crate::ui::escape_terminal_path(output_path)
+        )
+    })
+}
+
+#[cfg(windows)]
+fn atomic_replace(temp_path: &Path, output_path: &Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    unsafe extern "system" {
+        #[link_name = "MoveFileExW"]
+        fn move_file_ex_w(from: *const u16, to: *const u16, flags: u32) -> i32;
+    }
+
+    let from: Vec<u16> = temp_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let to: Vec<u16> = output_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+    let replaced = unsafe {
+        move_file_ex_w(
+            from.as_ptr(),
+            to.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if replaced == 0 {
+        return Err(std::io::Error::last_os_error()).with_context(|| {
+            format!(
+                "replacing output {} with flushed temporary",
+                crate::ui::escape_terminal_path(output_path)
+            )
+        });
     }
     Ok(())
 }

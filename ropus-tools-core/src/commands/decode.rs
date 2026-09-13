@@ -26,9 +26,7 @@ use ogg::reading::PacketReader;
 use crate::audio::decode::gain_db_to_q8;
 use crate::audio::dither::{DITHER_SEED, PACKET_LOSS_SEED, Xorshift32, quantize_to_i16};
 use crate::audio::resample::resample;
-use crate::audio::wav::{
-    write_wav_float32, write_wav_float32_to, write_wav_pcm16, write_wav_pcm16_to,
-};
+use crate::audio::wav::{write_wav_float32_to, write_wav_pcm16_to};
 use crate::consts::OPUS_SR;
 use crate::container::ogg::{
     OpusTags, UNKNOWN_GRANULE, parse_opus_head, validate_opus_audio_packet,
@@ -38,7 +36,7 @@ use crate::container::toc::decode_toc;
 use crate::options::{DecodeOptions, OutputPolicy};
 use crate::ui::{escape_terminal_path, escape_terminal_text, format_num, heading, ok};
 use crate::util::{
-    channel_count_to_ropus, is_stdio_sentinel, noncolliding_default_output,
+    AtomicOutput, channel_count_to_ropus, is_stdio_sentinel, noncolliding_default_output,
     reject_input_output_alias,
 };
 
@@ -92,6 +90,20 @@ pub fn decode(opts: DecodeOptions) -> Result<()> {
 }
 
 pub fn decode_with_policy(opts: DecodeOptions, policy: OutputPolicy) -> Result<()> {
+    decode_with_policy_after_alias(opts, policy, || {})
+}
+
+/// Run decode with a callback immediately after the input/output identity
+/// preflight. Tests use this narrow seam to model a concurrent replacement of
+/// the destination before the eventual output transaction begins.
+fn decode_with_policy_after_alias<F>(
+    opts: DecodeOptions,
+    policy: OutputPolicy,
+    after_alias: F,
+) -> Result<()>
+where
+    F: FnOnce(),
+{
     // Validate all public option values before opening the input or creating
     // the output. This keeps GUI/plugin callers on the same safe boundary as
     // the Clap wrapper and prevents invalid options from consuming a stream.
@@ -133,6 +145,7 @@ pub fn decode_with_policy(opts: DecodeOptions, policy: OutputPolicy) -> Result<(
     };
     let output_is_stdout = is_stdio_sentinel(&output_path);
     reject_input_output_alias(&opts.input, &output_path)?;
+    after_alias();
 
     // Progress/banner lines. Gated on output-sink so that piping bytes to
     // stdout doesn't mix with the banner text.
@@ -497,9 +510,10 @@ enum OutputData<'a> {
     Float(&'a [f32]),
 }
 
-/// Open the output sink (locked stdout or a newly-created file) and invoke
-/// the caller-supplied closure with a mutable `Write` reference. Consolidates
-/// the four raw-or-WAV × path-or-stdout combinations into one flush point.
+/// Open the output sink (locked stdout or a transactional regular file) and
+/// invoke the caller-supplied closure with a mutable `Write` reference.
+/// Consolidates the four raw-or-WAV × path-or-stdout combinations into one
+/// flush point while preserving an existing destination on write failure.
 fn with_output_sink<F>(output: &Path, output_is_stdout: bool, body: F) -> Result<()>
 where
     F: FnOnce(&mut dyn Write) -> Result<()>,
@@ -510,11 +524,12 @@ where
         body(&mut w)?;
         w.flush()?;
     } else {
-        let f = File::create(output)
-            .with_context(|| format!("creating {}", escape_terminal_path(output)))?;
-        let mut w = BufWriter::new(f);
+        let (atomic_output, file) = AtomicOutput::create(output)?;
+        let mut w = BufWriter::new(file);
         body(&mut w)?;
         w.flush()?;
+        drop(w);
+        atomic_output.commit()?;
     }
     Ok(())
 }
@@ -534,32 +549,18 @@ fn write_output_samples(
             }
             Ok(())
         }),
-        (OutputData::I16(samples), false) => {
-            if output_is_stdout {
-                with_output_sink(output, true, |w| {
-                    write_wav_pcm16_to(w, samples, sample_rate, channels).context("writing WAV")
-                })
-            } else {
-                write_wav_pcm16(output, samples, sample_rate, channels).context("writing WAV")
-            }
-        }
+        (OutputData::I16(samples), false) => with_output_sink(output, output_is_stdout, |w| {
+            write_wav_pcm16_to(w, samples, sample_rate, channels).context("writing WAV")
+        }),
         (OutputData::Float(samples), true) => with_output_sink(output, output_is_stdout, |w| {
             for s in samples {
                 w.write_all(&s.to_le_bytes())?;
             }
             Ok(())
         }),
-        (OutputData::Float(samples), false) => {
-            if output_is_stdout {
-                with_output_sink(output, true, |w| {
-                    write_wav_float32_to(w, samples, sample_rate, channels)
-                        .context("writing float WAV")
-                })
-            } else {
-                write_wav_float32(output, samples, sample_rate, channels)
-                    .context("writing float WAV")
-            }
-        }
+        (OutputData::Float(samples), false) => with_output_sink(output, output_is_stdout, |w| {
+            write_wav_float32_to(w, samples, sample_rate, channels).context("writing float WAV")
+        }),
     }
 }
 
@@ -608,6 +609,11 @@ fn report_and_return(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
+    use std::path::{Path, PathBuf};
+
+    use crate::options::EncodeOptions;
+    use crate::{Application, FrameDuration, Signal};
 
     #[test]
     fn packet_duration_samples_reads_single_frame_duration() {
@@ -715,5 +721,163 @@ mod tests {
         assert!(error.to_string().contains("same file"));
         assert_eq!(std::fs::read(&path).expect("read input"), original);
         std::fs::remove_file(path).expect("remove input");
+    }
+
+    fn test_path(label: &str, extension: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after Unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "ropus_decode_{label}_{}_{}.{}",
+            std::process::id(),
+            nonce,
+            extension
+        ))
+    }
+
+    fn write_test_opus(path: &Path) {
+        let wav = test_path("race-input", "wav");
+        crate::audio::wav::write_wav_pcm16(&wav, &[0; 960], 48_000, 1)
+            .expect("write decode race WAV fixture");
+        crate::commands::encode_with_policy(
+            EncodeOptions {
+                input: wav.clone(),
+                output: Some(path.to_path_buf()),
+                bitrate: Some(64_000),
+                complexity: None,
+                application: Application::Audio,
+                vbr: true,
+                vbr_constraint: false,
+                signal: Signal::Auto,
+                frame_duration: FrameDuration::Ms20,
+                expect_loss: 0,
+                downmix_to_mono: false,
+                serial: None,
+                picture_path: None,
+                vendor: "decode-race-test".to_owned(),
+                comments: Vec::new(),
+            },
+            OutputPolicy { quiet: true },
+        )
+        .expect("encode decode race fixture");
+        std::fs::remove_file(wav).expect("remove decode race WAV fixture");
+    }
+
+    fn replace_output_with_source_alias(input: &Path, output: &Path, prior: &Path) {
+        std::fs::rename(output, prior).expect("move prior output aside");
+        std::fs::hard_link(input, output).expect("install raced hard-link alias");
+    }
+
+    #[test]
+    fn decode_success_after_raced_alias_preserves_source_and_prior_output() {
+        let input = test_path("race-success-input", "opus");
+        let output = test_path("race-success-output", "wav");
+        let prior = test_path("race-success-prior", "wav");
+        write_test_opus(&input);
+        let source_before = std::fs::read(&input).expect("read source before race");
+        let prior_bytes = b"prior destination must survive".to_vec();
+        std::fs::write(&output, &prior_bytes).expect("write prior destination");
+
+        decode_with_policy_after_alias(
+            DecodeOptions {
+                input: input.clone(),
+                output: Some(output.clone()),
+                float: false,
+                raw: false,
+                rate: None,
+                gain_db: 0.0,
+                dither: false,
+                packet_loss_pct: 0,
+            },
+            OutputPolicy { quiet: true },
+            || replace_output_with_source_alias(&input, &output, &prior),
+        )
+        .expect("decode should publish through a temporary output");
+
+        assert_eq!(
+            std::fs::read(&input).expect("read source after race"),
+            source_before
+        );
+        assert_eq!(
+            std::fs::read(&prior).expect("read prior destination"),
+            prior_bytes
+        );
+        let output_bytes = std::fs::read(&output).expect("read decoded output");
+        assert_eq!(
+            &output_bytes[..4],
+            b"RIFF",
+            "published output must be a WAV"
+        );
+        assert_ne!(
+            output_bytes, source_before,
+            "output must no longer be the source alias"
+        );
+
+        std::fs::remove_file(input).expect("remove source");
+        std::fs::remove_file(output).expect("remove decoded output");
+        std::fs::remove_file(prior).expect("remove prior destination");
+    }
+
+    struct FailAfterNBytes<'a> {
+        inner: &'a mut dyn Write,
+        remaining: usize,
+    }
+
+    impl Write for FailAfterNBytes<'_> {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.remaining == 0 {
+                return Err(io::Error::other("injected output write failure"));
+            }
+            let allowed = buf.len().min(self.remaining);
+            let written = self.inner.write(&buf[..allowed])?;
+            self.remaining -= written;
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.inner.flush()
+        }
+    }
+
+    #[test]
+    fn decode_write_failure_after_raced_alias_preserves_source_and_prior_output() {
+        let input = test_path("race-failure-input", "opus");
+        let output = test_path("race-failure-output", "raw");
+        let prior = test_path("race-failure-prior", "raw");
+        let source_bytes = b"source bytes must survive injected failure".to_vec();
+        let prior_bytes = b"prior destination must survive injected failure".to_vec();
+        std::fs::write(&input, &source_bytes).expect("write source");
+        std::fs::write(&output, &prior_bytes).expect("write prior destination");
+        reject_input_output_alias(&input, &output).expect("preflight should pass before race");
+        replace_output_with_source_alias(&input, &output, &prior);
+
+        let error = with_output_sink(&output, false, |writer| {
+            let mut failing = FailAfterNBytes {
+                inner: writer,
+                remaining: 4,
+            };
+            failing.write_all(b"partial output")?;
+            Ok(())
+        })
+        .expect_err("injected output failure must be reported");
+        assert!(format!("{error:#}").contains("injected output write failure"));
+        assert_eq!(
+            std::fs::read(&input).expect("read source after failure"),
+            source_bytes
+        );
+        assert_eq!(
+            std::fs::read(&prior).expect("read prior after failure"),
+            prior_bytes
+        );
+        assert_eq!(
+            std::fs::read(&output).expect("read raced output after failure"),
+            source_bytes,
+            "failed output must leave the raced source alias untouched"
+        );
+
+        std::fs::remove_file(input).expect("remove source");
+        std::fs::remove_file(output).expect("remove raced output");
+        std::fs::remove_file(prior).expect("remove prior destination");
     }
 }

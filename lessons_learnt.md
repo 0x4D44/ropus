@@ -1,3 +1,5 @@
+- Decode regular-file outputs must use a same-directory temp and post-flush rename; alias preflight cannot stop later replacement (`ropus-tools-core/src/util.rs:107`).
+
 - OpusHead and OpusTags must share a logical stream serial; validate the pair before trusting metadata (`ropus-tools-core/src/container/ogg.rs:240`).
 
 - Duration scans must advance from proven Ogg page boundaries; CRC-valid `OggS` bytes inside payloads are not physical pages (`ropus-tools-core/src/container/ogg.rs:374`).
